@@ -932,7 +932,7 @@ scenes.platform = () => platformRun(null);
 scenes.platform_edge = () => platformRun('front edge');
 
 /** The way off the arrival platform, as the `cross` scene; with `ballAfterMs` a dragon fireball is dropped on the body that long after the first `go` began (`cross_ball`). */
-async function crossRun(ballAfterMs: number | null, natural = false, freshDragon = true): Promise<Record<string, unknown>> {
+async function crossRun(ballAfterMs: number | null, natural = false, freshDragon = true, onPerch = false, thinkMs = 0): Promise<Record<string, unknown>> {
   // The way off the arrival platform: the island lies some tens of blocks off over the void, and the body stands on 5 x 5 of obsidian. A planner's `go` with blocks to lay over the gap and a place on the island for its end,
   // as many times as it takes (the hand may take 120 s). The dragon is kept over the island, high up (nothing here is a fight); what is measured is whether the body gets over, how long it takes and what it costs in blocks.
   await protect(false);
@@ -944,7 +944,7 @@ async function crossRun(ballAfterMs: number | null, natural = false, freshDragon
   try {
     await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
     await ask(`${END} fill 98 48 -2 102 48 2 obsidian`); await ask(`${END} fill 98 49 -2 102 53 2 air`);
-    if (natural) { await ask(`${END} fill 71 44 -4 99 56 4 air replace minecraft:cobblestone`); await gear(['stone_sword', 'cobblestone 64', 'water_bucket']); await wearIron(); }
+    if (natural) { await ask(`${END} fill 60 40 -8 99 70 8 air replace minecraft:cobblestone`); /* every block an earlier crossing laid (r22: after the first, the crossings laid 6 blocks, not 14: part of the first one's way was still there) */ await gear(['stone_sword', 'cobblestone 64', 'water_bucket']); await wearIron(); }
     else { await gear(['diamond_sword', 'cobblestone 64', 'cobblestone 64', 'cobblestone 64']); await wear(); }
     await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
     for (let attempt = 0; attempt < 6; attempt++) {
@@ -1000,7 +1000,11 @@ async function crossRun(ballAfterMs: number | null, natural = false, freshDragon
     });
     const calls: Array<{ lines: string[]; ok: boolean; ms: number }> = [];
     let reached = false;
+    // onPerch: the dragon is sent to land (phase 2) as the crossing begins: from then until it flies again (landing approach, landing, the perch: some 45 s) it does not strafe
+    if (onPerch) await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 2`);
     for (let call = 0; call < 4 && !reached && actorDeaths === deathsBefore; call++) {
+      // thinkMs: the head's turn (it reads the observation and answers; the probe, which answers at once, is harsher than the head: r25 re-issued the `go` 0.3 s after a reflex had stopped it, and walked back into the cloud)
+      if (thinkMs > 0) await sleep(thinkMs);
       const going = act([{ do: 'go', to: target, canPlace: ['cobblestone'], maxPlace: 100, seconds: 120 }], 135);
       if (call === 0 && ballAfterMs !== null) {
         await sleep(ballAfterMs);
@@ -1029,6 +1033,20 @@ async function crossRun(ballAfterMs: number | null, natural = false, freshDragon
 }
 scenes.cross = () => crossRun(null);
 scenes.cross_ball = () => crossRun(9000);
+scenes.cross_think = async () => {
+  // The crossing with the head's own pace: a turn of 6 s before the first `go` (the first answer after the arrival) and after every stop (the reflex stops it, the head reads the result and answers). Sixteen crossings, the dragon on its own cycle.
+  const trials: Array<Record<string, unknown>> = [];
+  for (let n = 0; n < 16; n++) { const trial = await crossRun(null, true, n === 0, false, 6000); log(`CROSS_THINK #${n + 1}: ${JSON.stringify({ ...trial, timeline: undefined, profile: undefined }).slice(0, 1500)}`); trials.push(trial); }
+  const lows = trials.map(trial => Number(trial.lowestHealth ?? NaN));
+  return { trials, summary: { n: trials.length, reached: trials.filter(trial => trial.reached === true).length, died: trials.filter(trial => trial.died === true).length, hurt: lows.filter(low => low < 19.9).length, lowest: Math.min(...lows), healthLostTotal: round(trials.reduce((sum, trial) => sum + (20 - Number(trial.lowestHealth ?? 20)), 0), 1) } };
+};
+scenes.cross_perch = async () => {
+  // The same crossing, begun as the dragon is sent to land (the protocol for the head: cross while the dragon is landing or perched, when it does not strafe). Eight crossings.
+  const trials: Array<Record<string, unknown>> = [];
+  for (let n = 0; n < 8; n++) { const trial = await crossRun(null, true, true, true); log(`CROSS_PERCH #${n + 1}: ${JSON.stringify({ ...trial, timeline: undefined, profile: undefined }).slice(0, 1500)}`); trials.push(trial); }
+  const lows = trials.map(trial => Number(trial.lowestHealth ?? NaN));
+  return { trials, summary: { n: trials.length, reached: trials.filter(trial => trial.reached === true).length, died: trials.filter(trial => trial.died === true).length, hurt: lows.filter(low => low < 19.9).length, lowest: Math.min(...lows) } };
+};
 scenes.cross_natural = async () => {
   // The way off the arrival platform to the island with the dragon NOT kept away (round 7 of the sprint's questions: the crossing was only measured with the dragon parked high, and with a ball summoned on the body):
   // the same `go` with blocks to lay, the dragon flying its own pattern and strafing the body (it did, every 26 s, on the platform: PLATFORM_SOAK). Sixteen crossings, the bridge of the one before taken away and the dragon left to its own cycle after the first; what each cost in health and blocks,
@@ -1243,6 +1261,42 @@ scenes.charge_nbt = async () => {
   }
   await restoreDragon();
   return { trials };
+};
+
+scenes.crystals_bow = async () => {
+  // Every crystal that is not caged, shot one after the other from one place on the island's flat ground (15 m from the podium, where every pillar is 30 to 55 m off), the dragon awake and flying its own pattern, the
+  // reflex on, iron armour: how long each takes (the body's side only: the draw, the flight, the answer; the head's own thinking between two acts is not here), whether the arrow's way was free, what the body lost.
+  // Asked for the survival-first review (2026-11-03): the crystals take a part of the 15 to 20 minutes of the fight, and the body stands in the open while it shoots.
+  await protect(false);
+  releaseReflex();
+  await flatten(); await gear(['stone_sword', 'bow', 'arrow 64', 'cobblestone 64']); await wearIron();
+  await restoreDragon(); await sleep(1500);
+  await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+  await standAt(0.5, g, 15.5); await sleep(2500);
+  const here = () => actor.entity.position;
+  const view0 = endView();
+  const crystals0 = loadedCrystals(view0).map(c => ({ ...c, distance: round(Math.hypot(here().x - c.x, here().y - c.y, here().z - c.z), 1)! }));
+  log(`CRYSTALS_BOW in sight: ${JSON.stringify(crystals0)} remaining ${view0?.crystals?.remaining}`);
+  const healthBefore = Number(actor.health), deathsBefore = actorDeaths, lowest = trackMinHealth(), ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
+  const startedAt = Date.now();
+  const shots: Array<Record<string, unknown>> = [];
+  const open = crystals0.filter(c => c.caged === false).sort((a, b) => a.distance - b.distance);
+  for (const crystal of open) {
+    if (actorDeaths > deathsBefore) break;
+    const t0 = Date.now(), remainingBefore = endView()?.crystals?.remaining ?? null;
+    const run = await act([{ do: 'shoot', target: `#${crystal.id}` }], 25);
+    shots.push({ id: crystal.id, distance: crystal.distance, ms: Date.now() - t0, ok: run.ok, line: (run.lines[0] ?? '').slice(0, 220), remainingBefore, remainingAfter: endView()?.crystals?.remaining ?? null, health: round(Number(actor.health), 1), at: [round(here().x, 1), round(here().z, 1)] });
+  }
+  const view1 = endView();
+  const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
+  const result = {
+    seconds: round((Date.now() - startedAt) / 1000, 1), crystalsSeen: crystals0.length, caged: crystals0.filter(c => c.caged === true).length, unknownCage: crystals0.filter(c => c.caged === null).length,
+    shotsTried: shots.length, broken: shots.filter(shot => shot.remainingAfter !== null && shot.remainingBefore !== null && (shot.remainingAfter as number) < (shot.remainingBefore as number)).length,
+    remainingNow: view1?.crystals?.remaining ?? null, healthLost: round(healthBefore - Number(actor.health), 1), lowest: lowest.stop(), died: actorDeaths > deathsBefore, shots,
+    ledger: entries.slice(0, 12).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 110)}`),
+  };
+  log(`CRYSTALS_BOW result: ${JSON.stringify(result).slice(0, 3000)}`);
+  return result;
 };
 
 scenes.tower = async () => {
