@@ -1,0 +1,1064 @@
+{
+  "about": "The End fields of the observation (state.world: dragon, crystals, perch, dragonBreath, dragonFireballs) as the isolated lab made them with the body's own code. Regenerate: run the probe scenes enter,observe (backend/scripts/lab/run-end-fight.sh), then split-end-observation.mjs on its report.json.",
+  "startedAt": "2026-11-02T11:06:19.564Z",
+  "situations": [
+    {
+      "label": "arrival",
+      "note": "just arrived on the obsidian platform: the dragon and the crystals are not in sight yet",
+      "capturedAt": "2026-11-02T11:06:26.425Z",
+      "expected": {
+        "crystals": {
+          "remaining": 10,
+          "gone": 0,
+          "caged": 0,
+          "list": [],
+          "unseen": [
+            {
+              "x": 42,
+              "z": 0
+            },
+            {
+              "x": 33,
+              "z": 24
+            },
+            {
+              "x": 12,
+              "z": 39
+            },
+            {
+              "x": -13,
+              "z": 39
+            },
+            {
+              "x": -34,
+              "z": 24
+            },
+            {
+              "x": -42,
+              "z": -1
+            },
+            {
+              "x": -34,
+              "z": -25
+            },
+            {
+              "x": -13,
+              "z": -40
+            },
+            {
+              "x": 12,
+              "z": -40
+            },
+            {
+              "x": 33,
+              "z": -25
+            }
+          ]
+        },
+        "dragonBreath": [],
+        "dragonFireballs": 0
+      }
+    },
+    {
+      "label": "dragon_flying",
+      "note": "the dragon flying its pattern near the island (phase 0 or 1); the body in the arena; the crystals the view distance lets it see",
+      "capturedAt": "2026-11-02T11:06:34.873Z",
+      "expected": {
+        "dragon": {
+          "id": 53,
+          "health": 200,
+          "phase": 0,
+          "phaseName": "holding_pattern",
+          "phaseFor": 7.9,
+          "perched": false,
+          "position": {
+            "x": -38.5,
+            "y": 93.7,
+            "z": 39.7
+          },
+          "yaw": 0.3,
+          "distance": 52.6,
+          "headReach": null,
+          "strike": false
+        },
+        "crystals": {
+          "remaining": 10,
+          "gone": 0,
+          "caged": 2,
+          "list": [
+            {
+              "id": 49,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 80,
+                "z": 24.5
+              },
+              "distance": 34.8
+            },
+            {
+              "id": 46,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 86,
+                "z": 39.5
+              },
+              "distance": 36.3
+            },
+            {
+              "id": 47,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 98,
+                "z": 39.5
+              },
+              "distance": 47.6
+            },
+            {
+              "id": 44,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 89,
+                "z": 24.5
+              },
+              "distance": 48.1
+            },
+            {
+              "id": 48,
+              "caged": false,
+              "position": {
+                "x": -41.5,
+                "y": 95,
+                "z": -0.5
+              },
+              "distance": 49
+            },
+            {
+              "id": 50,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 83,
+                "z": -24.5
+              },
+              "distance": 49.4
+            },
+            {
+              "id": 45,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 77,
+                "z": -24.5
+              },
+              "distance": 54.6
+            },
+            {
+              "id": 43,
+              "caged": false,
+              "position": {
+                "x": 42.5,
+                "y": 92,
+                "z": 0.5
+              },
+              "distance": 56.6
+            },
+            {
+              "id": 51,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 104,
+                "z": -39.5
+              },
+              "distance": 65.2
+            },
+            {
+              "id": 52,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 101,
+                "z": -39.5
+              },
+              "distance": 65.5
+            }
+          ],
+          "unseen": []
+        },
+        "perch": {
+          "x": 0.5,
+          "y": 68,
+          "z": 0.5
+        },
+        "dragonBreath": [],
+        "dragonFireballs": 0
+      }
+    },
+    {
+      "label": "dragon_perched_out_of_reach",
+      "note": "the dragon on the perch (phase 6) turned to the body, 13 blocks out: headPosition given, strike false",
+      "capturedAt": "2026-11-02T11:06:43.538Z",
+      "expected": {
+        "dragon": {
+          "id": 53,
+          "health": 200,
+          "phase": 6,
+          "phaseName": "sitting_scanning",
+          "phaseFor": 0,
+          "perched": true,
+          "position": {
+            "x": 0.5,
+            "y": 68,
+            "z": 0.5
+          },
+          "yaw": 5.5,
+          "headPosition": {
+            "x": -3.9,
+            "y": 67.5,
+            "z": 5.3
+          },
+          "distance": 13.3,
+          "headReach": 8.4,
+          "strike": false
+        },
+        "crystals": {
+          "remaining": 10,
+          "gone": 0,
+          "caged": 2,
+          "list": [
+            {
+              "id": 46,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 86,
+                "z": 39.5
+              },
+              "distance": 36.7
+            },
+            {
+              "id": 49,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 80,
+                "z": 24.5
+              },
+              "distance": 39.2
+            },
+            {
+              "id": 44,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 89,
+                "z": 24.5
+              },
+              "distance": 42.9
+            },
+            {
+              "id": 47,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 98,
+                "z": 39.5
+              },
+              "distance": 44.6
+            },
+            {
+              "id": 45,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 77,
+                "z": -24.5
+              },
+              "distance": 51.8
+            },
+            {
+              "id": 43,
+              "caged": false,
+              "position": {
+                "x": 42.5,
+                "y": 92,
+                "z": 0.5
+              },
+              "distance": 52.1
+            },
+            {
+              "id": 48,
+              "caged": false,
+              "position": {
+                "x": -41.5,
+                "y": 95,
+                "z": -0.5
+              },
+              "distance": 54
+            },
+            {
+              "id": 50,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 83,
+                "z": -24.5
+              },
+              "distance": 54.2
+            },
+            {
+              "id": 52,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 101,
+                "z": -39.5
+              },
+              "distance": 65.5
+            },
+            {
+              "id": 51,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 104,
+                "z": -39.5
+              },
+              "distance": 67.4
+            }
+          ],
+          "unseen": []
+        },
+        "perch": {
+          "x": 0.5,
+          "y": 68,
+          "z": 0.5
+        },
+        "dragonBreath": [],
+        "dragonFireballs": 0
+      }
+    },
+    {
+      "label": "dragon_perched_in_reach",
+      "note": "the dragon on the perch, the body 3.5 blocks from the head box: strike true",
+      "capturedAt": "2026-11-02T11:06:44.941Z",
+      "expected": {
+        "dragon": {
+          "id": 53,
+          "health": 200,
+          "phase": 6,
+          "phaseName": "sitting_scanning",
+          "phaseFor": 1.4,
+          "perched": true,
+          "position": {
+            "x": 0.5,
+            "y": 68,
+            "z": 0.5
+          },
+          "yaw": 5.6,
+          "headPosition": {
+            "x": -3.5,
+            "y": 67.5,
+            "z": 5.6
+          },
+          "distance": 11,
+          "headReach": 3.4,
+          "strike": true
+        },
+        "crystals": {
+          "remaining": 10,
+          "gone": 0,
+          "caged": 2,
+          "list": [
+            {
+              "id": 49,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 80,
+                "z": 24.5
+              },
+              "distance": 35.5
+            },
+            {
+              "id": 46,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 86,
+                "z": 39.5
+              },
+              "distance": 38.9
+            },
+            {
+              "id": 50,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 83,
+                "z": -24.5
+              },
+              "distance": 46.5
+            },
+            {
+              "id": 48,
+              "caged": false,
+              "position": {
+                "x": -41.5,
+                "y": 95,
+                "z": -0.5
+              },
+              "distance": 47.6
+            },
+            {
+              "id": 44,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 89,
+                "z": 24.5
+              },
+              "distance": 49.8
+            },
+            {
+              "id": 47,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 98,
+                "z": 39.5
+              },
+              "distance": 50
+            },
+            {
+              "id": 45,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 77,
+                "z": -24.5
+              },
+              "distance": 53.1
+            },
+            {
+              "id": 43,
+              "caged": false,
+              "position": {
+                "x": 42.5,
+                "y": 92,
+                "z": 0.5
+              },
+              "distance": 56.8
+            },
+            {
+              "id": 51,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 104,
+                "z": -39.5
+              },
+              "distance": 62.5
+            },
+            {
+              "id": 52,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 101,
+                "z": -39.5
+              },
+              "distance": 63.1
+            }
+          ],
+          "unseen": []
+        },
+        "perch": {
+          "x": 0.5,
+          "y": 68,
+          "z": 0.5
+        },
+        "dragonBreath": [],
+        "dragonFireballs": 0
+      }
+    },
+    {
+      "label": "crystals_near_caged_and_open",
+      "note": "an open crystal 8.5 blocks off and a caged one (bars on four sides and a roof) 7.4 blocks off, both within the blast reach: blast given; the natural crystals far off",
+      "capturedAt": "2026-11-02T11:06:50.467Z",
+      "expected": {
+        "dragon": {
+          "id": 53,
+          "health": 200,
+          "phase": 10,
+          "phaseName": "hovering",
+          "phaseFor": 0,
+          "perched": false,
+          "position": {
+            "x": 0.7,
+            "y": 131.1,
+            "z": -0.5
+          },
+          "yaw": 3.5,
+          "distance": 67.9,
+          "headReach": null,
+          "strike": false
+        },
+        "crystals": {
+          "remaining": 10,
+          "gone": 0,
+          "caged": 3,
+          "list": [
+            {
+              "id": 213,
+              "caged": true,
+              "blast": 8.6,
+              "position": {
+                "x": -6.5,
+                "y": 65,
+                "z": 6.5
+              },
+              "distance": 7.7
+            },
+            {
+              "id": 212,
+              "caged": false,
+              "blast": 7.4,
+              "position": {
+                "x": 0.5,
+                "y": 65,
+                "z": 17.5
+              },
+              "distance": 8.1
+            },
+            {
+              "id": 46,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 86,
+                "z": 39.5
+              },
+              "distance": 39.4
+            },
+            {
+              "id": 49,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 80,
+                "z": 24.5
+              },
+              "distance": 40.5
+            },
+            {
+              "id": 44,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 89,
+                "z": 24.5
+              },
+              "distance": 44
+            },
+            {
+              "id": 47,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 98,
+                "z": 39.5
+              },
+              "distance": 46.9
+            },
+            {
+              "id": 45,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 77,
+                "z": -24.5
+              },
+              "distance": 49.1
+            },
+            {
+              "id": 43,
+              "caged": false,
+              "position": {
+                "x": 42.5,
+                "y": 92,
+                "z": 0.5
+              },
+              "distance": 51.3
+            },
+            {
+              "id": 50,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 83,
+                "z": -24.5
+              },
+              "distance": 51.7
+            },
+            {
+              "id": 48,
+              "caged": false,
+              "position": {
+                "x": -41.5,
+                "y": 95,
+                "z": -0.5
+              },
+              "distance": 53.2
+            }
+          ],
+          "unseen": []
+        },
+        "perch": {
+          "x": 0.5,
+          "y": 68,
+          "z": 0.5
+        },
+        "dragonBreath": [],
+        "dragonFireballs": 0
+      }
+    },
+    {
+      "label": "breath_cloud_just_seen",
+      "note": "a cloud the dragon's fireball laid on the body, as first seen (the client has not been told its radius yet: radius 7, the radius the body keeps clear of)",
+      "capturedAt": "2026-11-02T11:06:52.782Z",
+      "expected": {
+        "dragon": {
+          "id": 53,
+          "health": 200,
+          "phase": 10,
+          "phaseName": "hovering",
+          "phaseFor": 2.3,
+          "perched": false,
+          "position": {
+            "x": 5.6,
+            "y": 126.7,
+            "z": -0.1
+          },
+          "yaw": 3.3,
+          "distance": 64.7,
+          "headReach": null,
+          "strike": false
+        },
+        "crystals": {
+          "remaining": 10,
+          "gone": 0,
+          "caged": 2,
+          "list": [
+            {
+              "id": 49,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 80,
+                "z": 24.5
+              },
+              "distance": 34.8
+            },
+            {
+              "id": 46,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 86,
+                "z": 39.5
+              },
+              "distance": 36.3
+            },
+            {
+              "id": 47,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 98,
+                "z": 39.5
+              },
+              "distance": 47.6
+            },
+            {
+              "id": 44,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 89,
+                "z": 24.5
+              },
+              "distance": 48.1
+            },
+            {
+              "id": 48,
+              "caged": false,
+              "position": {
+                "x": -41.5,
+                "y": 95,
+                "z": -0.5
+              },
+              "distance": 49
+            },
+            {
+              "id": 50,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 83,
+                "z": -24.5
+              },
+              "distance": 49.4
+            },
+            {
+              "id": 45,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 77,
+                "z": -24.5
+              },
+              "distance": 54.6
+            },
+            {
+              "id": 43,
+              "caged": false,
+              "position": {
+                "x": 42.5,
+                "y": 92,
+                "z": 0.5
+              },
+              "distance": 56.6
+            },
+            {
+              "id": 51,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 104,
+                "z": -39.5
+              },
+              "distance": 65.2
+            },
+            {
+              "id": 52,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 101,
+                "z": -39.5
+              },
+              "distance": 65.5
+            }
+          ],
+          "unseen": []
+        },
+        "perch": {
+          "x": 0.5,
+          "y": 68,
+          "z": 0.5
+        },
+        "dragonBreath": [
+          {
+            "x": -5.5,
+            "y": 64,
+            "z": 11.5,
+            "radius": 7,
+            "dangerRadius": 7
+          }
+        ],
+        "dragonFireballs": 0
+      }
+    },
+    {
+      "label": "breath_cloud_growing",
+      "note": "the same cloud a second and a half later: its own radius (about 3.1, growing to 7)",
+      "capturedAt": "2026-11-02T11:06:54.283Z",
+      "expected": {
+        "dragon": {
+          "id": 53,
+          "health": 200,
+          "phase": 10,
+          "phaseName": "hovering",
+          "phaseFor": 3.8,
+          "perched": false,
+          "position": {
+            "x": 0.4,
+            "y": 131.2,
+            "z": 1.3
+          },
+          "yaw": 0.2,
+          "distance": 68.1,
+          "headReach": null,
+          "strike": false
+        },
+        "crystals": {
+          "remaining": 10,
+          "gone": 0,
+          "caged": 2,
+          "list": [
+            {
+              "id": 49,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 80,
+                "z": 24.5
+              },
+              "distance": 34.5
+            },
+            {
+              "id": 46,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 86,
+                "z": 39.5
+              },
+              "distance": 36.7
+            },
+            {
+              "id": 47,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 98,
+                "z": 39.5
+              },
+              "distance": 48.2
+            },
+            {
+              "id": 48,
+              "caged": false,
+              "position": {
+                "x": -41.5,
+                "y": 95,
+                "z": -0.5
+              },
+              "distance": 48.3
+            },
+            {
+              "id": 50,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 83,
+                "z": -24.5
+              },
+              "distance": 48.5
+            },
+            {
+              "id": 44,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 89,
+                "z": 24.5
+              },
+              "distance": 48.9
+            },
+            {
+              "id": 45,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 77,
+                "z": -24.5
+              },
+              "distance": 54.7
+            },
+            {
+              "id": 43,
+              "caged": false,
+              "position": {
+                "x": 42.5,
+                "y": 92,
+                "z": 0.5
+              },
+              "distance": 57.1
+            },
+            {
+              "id": 51,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 104,
+                "z": -39.5
+              },
+              "distance": 64.6
+            },
+            {
+              "id": 52,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 101,
+                "z": -39.5
+              },
+              "distance": 65.2
+            }
+          ],
+          "unseen": []
+        },
+        "perch": {
+          "x": 0.5,
+          "y": 68,
+          "z": 0.5
+        },
+        "dragonBreath": [
+          {
+            "x": -5.5,
+            "y": 64,
+            "z": 11.5,
+            "radius": 3.1,
+            "dangerRadius": 7
+          }
+        ],
+        "dragonFireballs": 0
+      }
+    },
+    {
+      "label": "fireball_in_flight",
+      "note": "a dragon fireball in the air, aimed at the body from 20 blocks off",
+      "capturedAt": "2026-11-02T11:06:59.074Z",
+      "expected": {
+        "dragon": {
+          "id": 53,
+          "health": 200,
+          "phase": 10,
+          "phaseName": "hovering",
+          "phaseFor": 8.6,
+          "perched": false,
+          "position": {
+            "x": -0.2,
+            "y": 127.9,
+            "z": -1.5
+          },
+          "yaw": 5.7,
+          "distance": 64.3,
+          "headReach": null,
+          "strike": false
+        },
+        "crystals": {
+          "remaining": 10,
+          "gone": 0,
+          "caged": 2,
+          "list": [
+            {
+              "id": 49,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 80,
+                "z": 24.5
+              },
+              "distance": 39.4
+            },
+            {
+              "id": 46,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 86,
+                "z": 39.5
+              },
+              "distance": 42.3
+            },
+            {
+              "id": 50,
+              "caged": true,
+              "position": {
+                "x": -33.5,
+                "y": 83,
+                "z": -24.5
+              },
+              "distance": 45.8
+            },
+            {
+              "id": 45,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 77,
+                "z": -24.5
+              },
+              "distance": 48.8
+            },
+            {
+              "id": 44,
+              "caged": false,
+              "position": {
+                "x": 33.5,
+                "y": 89,
+                "z": 24.5
+              },
+              "distance": 48.9
+            },
+            {
+              "id": 48,
+              "caged": false,
+              "position": {
+                "x": -41.5,
+                "y": 95,
+                "z": -0.5
+              },
+              "distance": 49.3
+            },
+            {
+              "id": 47,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 98,
+                "z": 39.5
+              },
+              "distance": 51.4
+            },
+            {
+              "id": 43,
+              "caged": false,
+              "position": {
+                "x": 42.5,
+                "y": 92,
+                "z": 0.5
+              },
+              "distance": 54
+            },
+            {
+              "id": 52,
+              "caged": false,
+              "position": {
+                "x": 12.5,
+                "y": 101,
+                "z": -39.5
+              },
+              "distance": 59.7
+            },
+            {
+              "id": 51,
+              "caged": false,
+              "position": {
+                "x": -12.5,
+                "y": 104,
+                "z": -39.5
+              },
+              "distance": 60.1
+            }
+          ],
+          "unseen": []
+        },
+        "perch": {
+          "x": 0.5,
+          "y": 68,
+          "z": 0.5
+        },
+        "dragonBreath": [],
+        "dragonFireballs": 1
+      }
+    }
+  ]
+}

@@ -65,6 +65,10 @@ export interface StepOutcome {
     crossedDimension?: true;
     /** A go: what it dug and laid and how far it walked (the hands that use go for the way, `mine`, count on it). */
     work?: { dug: number; placed: number; steps: number; redraws: number };
+    /** The End (2026-11-02), kept in the body's records only (the act's line says it in words): blows at the dragon, a crystal shot or struck, a bed that blew. */
+    dragon?: { blows: number; landed: number; parts: Record<string, number>; dead?: boolean };
+    crystal?: { id: number; destroyed: boolean; distance: number };
+    bed?: { exploded: boolean; distance: number | null; damage: number | null };
     /** A vertical: the ores that showed on its way (told, never followed), 8 at most. */
   };
 }

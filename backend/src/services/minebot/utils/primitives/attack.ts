@@ -16,6 +16,9 @@ import { bestMeleeWeapon } from '../floorReflexes.js';
 import { equipToHandVerified } from '../equipVerified.js';
 import { scanLoadedBlocks } from '../loadedBlockScan.js';
 import { HOVERING_SHOOTERS, ShooterWatch, StrikeGate, strikeHold } from '../huntBlaze.js';
+import { isDragonTarget, strikeDragon } from './dragonStrike.js';
+import { endDragonOf } from '../dragonState.js';
+import { isCrystalTarget, strikeCrystal } from './crystalStrike.js';
 
 const { goals } = pathfinder;
 
@@ -59,8 +62,38 @@ export function alreadyDead(bot: any, id: number, who?: any): StepOutcome | null
     progress: { unit: 'blow', done: 0, left: 0 } };
 }
 
+/** The seconds an attack may run: the hand's `until`/`maxSeconds`, at most MAX_SECONDS. */
+const limitOf = (args: AttackArgs): number => Math.min(MAX_SECONDS, typeof args.until === 'number' && args.until > 0 ? args.until : args.maxSeconds && args.maxSeconds > 0 ? args.maxSeconds : MAX_SECONDS) * 1000;
+
+/**
+ * The ender dragon, when the hand names it (by kind, or by the id of the entity that is one): its blows go to its parts and only while it is
+ * on the perch (utils/primitives/dragonStrike), in either mode. Null for every other creature.
+ */
+function dragonNamed(bot: any, target: string | number | undefined): { dragon: any | null; named: boolean } {
+  if (isDragonTarget(target)) return { dragon: endDragonOf(bot), named: true };
+  const id = creatureIdOf(target);
+  const entity = id === null ? null : bot.entities?.[id];
+  return entity?.name === 'ender_dragon' ? { dragon: entity, named: true } : { dragon: null, named: false };
+}
+
+/** An end crystal the hand names (by kind: the nearest within 64 m; or by the id of one). */
+function crystalNamed(bot: any, target: string | number): any | null {
+  if (isCrystalTarget(typeof target === 'string' ? target : undefined)) return findEntity(bot, 'end_crystal', 64);
+  const id = creatureIdOf(target);
+  const entity = id === null ? null : bot.entities?.[id];
+  return entity?.name === 'end_crystal' ? entity : null;
+}
+
 export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
+  const dragon = args.target === undefined ? { dragon: null, named: false } : dragonNamed(bot, args.target);
+  if (dragon.named) {
+    if (!dragon.dragon) return stopped(bot, 'target_not_found', 'ender_dragon が読み込まれていない（見えていない。エンドに居るか、近づいてから）');
+    return strikeDragon(ctx, dragon.dragon, limitOf(args));
+  }
+  // An end crystal: one blow, and only when its blast leaves the body its health (utils/primitives/crystalStrike).
+  const crystal = args.target === undefined ? null : crystalNamed(bot, args.target);
+  if (crystal) return strikeCrystal(ctx, crystal);
   if (args.mode === 'hold') return holdAndStrike(ctx, args);
   if (args.target === undefined) return stopped(bot, 'invalid_input', 'attack には target（#id か名前）が要る');
   deathLedgerOf(bot);
