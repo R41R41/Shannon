@@ -1256,6 +1256,7 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
   const fixtureSetupMs = Date.now() - fixtureAt;
   const start = Date.now(), endAt = start + 1_500_000, deathsBefore = deaths, pearlStart = packClient().ender_pearl ?? 0;
   const rows: any[] = [], seen = new Set<number>(), candidatesSeen = new Set<number>(), killed = new Set<number>();
+  let exploreStep = 0;
   const roofs = new Set<string>(), usedRoofs = new Set<string>(), attempted = new Map<number, number>(), visited = new Set<string>();
   const keyOf = (c: Cell) => `${c.x},${c.y},${c.z}`;
   const xyz = (p: Cell) => ({ x: p.x, y: p.y, z: p.z });
@@ -1341,14 +1342,14 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
     }
   };
   /** A small clearing observed in loaded blocks, with a level 5x5 floor. Rank by real eye rays AFTER the nine roof caps exist, then open horizons. */
-  const chooseClearing = (relocate: boolean) => {
+  const chooseClearing = (relocate: boolean, wide = false) => {
     const p = actor.entity.position as Vec3, read0 = bodyReader(actor), cache = new Map<string, ReturnType<BlockReader>>();
     const read: BlockReader = (x, y, z) => { const k = `${x},${y},${z}`; if (!cache.has(k)) cache.set(k, read0(x, y, z)); return cache.get(k)!; };
     const world = roofWorldOf(actor), options: Array<{ cell: Cell; visible: number; horizons: number; distance: number }> = [];
-    const radius = relocate ? 16 : 7;
+    const radius = relocate || wide ? 16 : 7;
     for (let dx = -radius; dx <= radius; dx++) for (let dz = -radius; dz <= radius; dz++) {
       const distance = Math.hypot(Math.floor(p.x) + dx + 0.5 - p.x, Math.floor(p.z) + dz + 0.5 - p.z);
-      if (distance > (relocate ? 15.5 : 7) || (relocate && distance < 8.5)) continue;
+      if (distance > (relocate || wide ? 15.5 : 7) || (relocate && !wide && distance < 8.5)) continue;
       for (let dy = -2; dy <= 2; dy++) {
         const c = { x: Math.floor(p.x) + dx, y: Math.floor(p.y + 0.001) + dy, z: Math.floor(p.z) + dz };
         if (visited.has(keyOf(c))) continue;
@@ -1360,7 +1361,7 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
         }
         if (!flat) continue;
         const plan = planRoof(world, c, undefined, undefined, true);
-        if (plan.problems.length || (packClient().cobblestone ?? 0) < plan.placements.length || (relocate && plan.caps === 0)) continue;
+        if (plan.problems.length || (packClient().cobblestone ?? 0) < plan.placements.length || (relocate && !wide && plan.caps === 0)) continue;
         const future: BlockReader = (x, y, z) => y === c.y + 2 && Math.abs(x - c.x) <= 1 && Math.abs(z - c.z) <= 1 ? { name: 'cobblestone', solid: true } : read(x, y, z);
         const from = { x: c.x + 0.5, y: c.y, z: c.z + 0.5 }, visible = candidateList(from, future).length;
         let horizons = 0;
@@ -1422,7 +1423,7 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
       if (candidates.length || hostile.length) noCandidateSince = null; else noCandidateSince ??= Date.now();
       const relocation = !hostile.length && noCandidateSince !== null && Date.now() - noCandidateSince >= 17_500;
       if ((!roof || relocation) && !hostile.length) {
-        const choice = chooseClearing(!!roof);
+        const choice: { cell: Cell; visible: number; horizons: number; distance: number } | null = chooseClearing(!!roof) ?? (roof ? null : chooseClearing(false, true));
         row.kind = 'site'; row.choice = choice; row.relocation = relocation;
         if (choice && remaining() >= 13_000) {
           const before = actor.entity.position.clone(); visited.add(keyOf(choice.cell));
@@ -1431,6 +1432,18 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
           if (run.ok && Math.floor(actor.entity.position.x) === choice.cell.x && Math.floor(actor.entity.position.z) === choice.cell.z
             && Math.abs(actor.entity.position.y - choice.cell.y) < 0.1) { roof = choice.cell; noCandidateSince = null; }
           else row.reason = 'walk_not_arrived';
+        } else if (!roof && remaining() >= 13_000) {
+          // The stand-in explores: no level 5x5 clearing within 16 m of here, so it walks about 10 m along the next compass direction (a standable cell on observed ground) and looks again.
+          row.reason = 'no_loaded_clearing_explore'; exploreStep++;
+          const p0 = actor.entity.position as Vec3, angle = (exploreStep % 8) * Math.PI / 4, rd = bodyReader(actor);
+          let goal: Cell | null = null;
+          for (const len of [10, 8, 6, 12]) for (const dy of [0, -1, 1, -2, 2, -3, 3]) {
+            const c = { x: Math.floor(p0.x + len * Math.cos(angle)), y: Math.floor(p0.y + 0.001) + dy, z: Math.floor(p0.z + len * Math.sin(angle)) };
+            const f = rd(c.x, c.y - 1, c.z), a = rd(c.x, c.y, c.z), h = rd(c.x, c.y + 1, c.z);
+            if (!goal && f?.solid && a && h && !a.solid && !h.solid && !/lava|water|magma|fire|leaves|cactus/u.test(`${f.name} ${a.name} ${h.name}`)) goal = c;
+          }
+          if (goal) { const run = await doAct(`roof-explore#${row.i}`, [walk(goal)], 13, true); row.lines = run.lines; row.position = xyz(actor.entity.position); }
+          else await pause(1000);
         } else { row.reason = 'no_loaded_clearing_or_blocks'; await pause(1000); }
         clock.siteAndMoveMs += Date.now() - at; continue;
       }
