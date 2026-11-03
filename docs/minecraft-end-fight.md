@@ -348,3 +348,20 @@ phase 5/6/7の着座中だけ、観測した `perch` の中心から水平2〜3.
 最終結果：関連7ファイル（`minecraftDragonCloudEscape`、`minecraftDragonFight`、`minecraftFleeSafety`、`minecraftFleeThirdRound`、`minecraftFloorReflexes`、`goDragonCloud`、`minecraftDragonRoute`）の **223件成功・既存3件skip**。追加分は17件で、通常退避を開始した後に候補が尽きても縮退へ移ることも確認した。実行はbackendから既存Vitestで上記ファイルを指定し、`--maxWorkers=1 --minWorkers=1 --silent`。既存の `SHANNON_ISOLATED_MINEBOT_PROBE=true` とダミー値をプロセス内だけに渡し、共有.env・DB・外部サービスへ接続していない。
 
 型検査はbackendのtsconfigをTypeScript compiler APIで解決し、`files` を変更した `floorReflexes.ts`・`dragonDanger.ts`・追加試験の3ファイルに限定、`noEmit=true`・`incremental=false` で各ファイルの構文／semantic診断を確認して **0件**。依存先自身の診断と全体ビルドは対象外。`git diff --check` 成功。ラボ・VM・本体起動・Notion更新・commit/pushは実施せず、指定コピー内の実装2・試験1・資料1ファイルだけを変更した。`.codex-material/` は参照・変更していない。
+
+## 竜の倒し方：盆地の近接（S1、2026-11-03、PC の WSL）
+
+条件：反射 on、石の剣・盾・鉄の防具・丸石 64、結晶はコマンドで全部消去、竜は体力 200・自然の周期、25 分の枠。場面 `dragon_kill_basin_walk`（`scripts/minecraft-end-fight-probe.ts` の `basinAssist('walk')`）。tp は一切無し（待ち場へも盆地へも体が `go`）。
+
+| 版 | 結果 |
+|---|---|
+| 位置を tp で与えた基準線（r103 剣の窓だけ／r105・r108 盆地で座っている間ずっと） | 684 秒／452 秒／269 秒で撃破、死亡 0、最低体力 20／20／16 |
+| 体が歩く版、座っている翼の反射あり・離陸後も盆地に残る（r111〜r122） | 撃破 1（r113）、死亡 多数。離陸の翼で打ち上げ（r115/r116/r119）、エンダーマン、首の接触 |
+| 翼の押しを道でも反射でも避ける版（r123〜r125） | 竜に触れず 25 分（盆地の足場へ翼の押しの外の道が無い） |
+| **座っている翼の押しは危険に数えない・道も通る・座りが終わったら盆地を出る（r126〜r129）** | **4 回中 4 回撃破・死亡 0**：385／550 秒（普通の兜、最低体力 14／16）、546／386 秒（くり抜きかぼちゃ、最低体力 3.3／2.0） |
+
+手順（頭が選ぶ形）：(1) `dragon.yaw` の横 10〜14 m の足場で待つ（着地 phase 3 の約 3 秒後に決める）。(2) `dragon.phase` が 6 になったら `dragon.approach.basin` の先頭へ `go`（約 2.5〜3.5 秒）。(3) 座っている間 `attack`（target ender_dragon）を続ける。座っている間に受けた傷が最大体力の 25%（50）を超えると竜は飛び立ち、実測の 1 回の座りの減りは 43〜55。(4) phase が 5/6/7 でなくなったらすぐ、その向きの横 10〜14 m の待ち場へ `go`（離陸の翼で盆地に残った体が約 20 ブロック打ち上げられて落下死した）。phase の長さ（r108、100 ms 記録）：6＝1.1〜1.3 秒、7＝2.0 秒、5＝約 10 秒、着地 3＝約 8〜12 秒。
+
+体の変更：観測 `dragon.approach.basin`（任意）、`go` が座っている竜の翼の押しを道の除外から外す、`dragonDanger.ts` が座っている竜の翼の押しを危険に数えない（頭・首・息・火の玉・着地・離陸の判定は変えない）、`floorReflexes.ts` の雲の中の縮退（通常の退避が尽きた時だけ、雲の外へ最短）、`go` の道探しが停止の合図で止まる。
+カボチャ（`dragon_kill_basin_walk_pumpkin`）：エンダーマンの怒りを避けるが鉄兜の防具 2 点を失い、最低体力が下がったので既定にしない。
+未測：結晶の区間（檻・柱）からの通し、頭（LLM）が手順を選べるか、エンダーマンの近接が重なった時（r109・r114・r117・r118 の死因）。
