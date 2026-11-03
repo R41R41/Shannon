@@ -29,7 +29,7 @@ export function chainShot(view: ChainView, crystal: ChainCrystal, cageOpened = f
 /** All physical work still belongs to existing hands, including route search and the live shot refusal. */
 export const chainHands = {
   go: (to: P3, seconds = 60, range = 0.5): ActHand => ({ do: 'go', to: chainCell(to), range, maxDig: 0, maxPlace: 0, maxDrop: 1, seconds }),
-  crossing: (to: P3): ActHand => ({ do: 'go', to: chainCell(to), range: 0.5, canPlace: ['cobblestone'], maxPlace: 64, maxDig: 0, seconds: 120 }),
+  crossing: (to: P3): ActHand => ({ do: 'go', to: chainCell(to), range: 1.5, canPlace: ['cobblestone'], maxPlace: 100, maxDig: 0, seconds: 120 }),
   up: (toY: number): ActHand => ({ do: 'vertical', dir: 'up', shape: 'pillar', toY: Math.floor(toY), canDig: ['none'], canPlace: ['cobblestone'], maxPlace: 64, maxDig: 0, liquid: 'stop', seconds: 60 }),
   down: (toY: number): ActHand => ({ do: 'vertical', dir: 'down', shape: 'shaft', toY: Math.floor(toY), canDig: ['cobblestone'], canPlace: ['none'], maxDig: 64, maxPlace: 0, liquid: 'stop', seconds: 60 }),
   dig: (at: P3[]): ActHand => ({ do: 'dig', at, tool: 'iron_pickaxe', collect: false }),

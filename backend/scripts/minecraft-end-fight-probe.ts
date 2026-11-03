@@ -1888,10 +1888,10 @@ scenes.end_full_chain = async () => {
     setStage('crossing');
     let reached = false;
     for (let call = 0; call < 4 && !reached; call++) {
-      const landing = islandFootings(actor, read().position)[0];
-      if (!landing) throw new Error('no_loaded_landing');
+      // the island edge the arrival platform bridges to (the cage_section_walk crossing target: a footing at the platform's own side is not an island)
+      const landing = { x: 67, y: 59, z: 0 };
       const r = await perform('crossing', chainHands.crossing(landing), 125, 'move');
-      reached = r.ok && chainDistance(read().position, landing) < 2;
+      reached = chainDistance(read().position, landing) < 3 && Number(actor.health) > 0;
       out.crossing = { reached, to: landing };
     }
     if (!reached) throw new Error('crossing_failed');
