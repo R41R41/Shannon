@@ -860,6 +860,12 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const wait = cells[c.waiting[0]];
   note(`probe text: ${String(json.text ?? '').slice(0, 700)}`);
   note(`probe text tail: ${String(json.text ?? '').slice(700, 1500)}; stand cells in the plan: ${(c.build as any[]).filter(row => row[4] !== null && row[4] !== undefined).length} of ${c.build.length}; groups ${new Set((c.build as any[]).map(row => row[5])).size}`);
+  {
+    const reasons: Record<string, number> = {};
+    for (const row of c.build as any[]) { const why = (json.standFacts as any[])?.[(json.facts as any[])[row[0]][6]]?.[0] ?? (row[4] === null ? '?' : 'stand'); reasons[String(why)] = (reasons[String(why)] ?? 0) + 1; }
+    const ys = (c.build as any[]).map(row => cells[(json.facts as any[])[row[0]][0]][1]);
+    note(`why no standing cell, per placement: ${JSON.stringify(reasons)}; placement heights ${Math.min(...ys)}..${Math.max(...ys)}; spawner y ${spawnerCell.y}; body at ${actor.entity.position.floored().toString()}`);
+  }
   note(`lane candidate ${c.direction}: required ${JSON.stringify(c.required)}; waiting cell ${wait.slice(0, 3)}; ${c.build.length} placements; spawn spaces ${json.spawn?.spaces}; blazes in the count box ${json.blaze?.count}`);
   // the probe's own order and groups (each placement: the cell, its part, the cell to stand in and the number of its group)
   const placementsOf = (cand: any, table: any[], factTable: any[]) => (cand.build as Array<[number, number, number | null, number, number | null, number | null]>)
