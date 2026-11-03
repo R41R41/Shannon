@@ -1149,7 +1149,9 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     const standCells = (c.build as any[]).filter(row => row[4] !== null && row[4] !== undefined).length;
     let out = 'no attack cell', back = 'not tried';
     if (attackCell) {
-      const goOut = await act('check: out to the attack cell', [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 15, canPlace: ['cobblestone'], maxPlace: 10, onFail: 'continue' }], 30, { accept: ['blaze'] });
+      // (the path search may run out of its 1.5 s slice: the same go is said again, up to three times)
+      let goOut = await act('check: out to the attack cell', [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 15, canPlace: ['cobblestone'], maxPlace: 10, onFail: 'continue' }], 30, { accept: ['blaze'] });
+      for (let tryNo = 2; tryNo <= 3 && !/着いた/u.test(goOut.lines.join(' ')); tryNo++) goOut = await act('check: out to the attack cell', [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 15, canPlace: ['cobblestone'], maxPlace: 10, onFail: 'continue' }], 30, { accept: ['blaze'] });
       out = /着いた/u.test(goOut.lines.join(' ')) ? 'reached' : `failed: ${goOut.lines.join(' ').slice(0, 140)}`;
       if (out === 'reached') { const padded = await padAround({ x: attackCell.x, y: attackCell.y, z: attackCell.z }, 2, 'attack'); out += ` (pad ${padded.placed}/${padded.wanted})`; }
       for (let tryNo = 1; tryNo <= 3; tryNo++) {
@@ -1204,7 +1206,8 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
             if (b && /fire/u.test(b.name)) fires.push({ x: attackCell.x + dx, y: attackCell.y + dy, z: attackCell.z + dz });
           }
           if (fires.length) { const put = await act('put the fire out at the attack cell', [{ do: 'dig', at: fires, collect: false, onFail: 'continue' }], 20, { accept: ['blaze'] }); note(`fire put out at the attack cell: ${put.lines.join(' | ').slice(0, 140)}`); }
-          const goOut = await act(`out#${++outs}`, [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 15, canPlace: ['cobblestone'], maxPlace: 10, onFail: 'continue' }], 30, { accept: ['blaze'] });
+          let goOut = await act(`out#${++outs}`, [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 15, canPlace: ['cobblestone'], maxPlace: 10, onFail: 'continue' }], 30, { accept: ['blaze'] });
+          for (let tryNo = 2; tryNo <= 3 && !/着いた/u.test(goOut.lines.join(' ')) && hp() >= 14 && !disconnected; tryNo++) goOut = await act(`out#${outs}.${tryNo}`, [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 15, canPlace: ['cobblestone'], maxPlace: 10, onFail: 'continue' }], 30, { accept: ['blaze'] });
           if (!attackPadded && /着いた/u.test(goOut.lines.join(' '))) { attackPadded = true; await padAround({ x: attackCell.x, y: attackCell.y, z: attackCell.z }, 2, 'attack'); }
           if (outs <= 3 || /止まった|失敗/u.test(goOut.lines.join(' '))) note(`out#${outs} (box count ${count}, hp ${r1(hp())}): ${goOut.lines.join(' ').slice(0, 200)}`);
         }
