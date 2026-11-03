@@ -1247,6 +1247,7 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
   const start = Date.now(), endAt = start + 600_000, deathsBefore = deaths, pearlStart = packClient().ender_pearl ?? 0;
   let den: EndermanDenSpec | null = null, kills = 0, pearls = 0, setupMs = 0, noSiteMs = 0, decisionWaitMs = 0, pickupMs = 0, healthLost = 0, wallMs = 0;
   const seenIds = new Set<number>(), killedIds = new Set<number>(), visited = new Set<string>();
+  let hopCount = 0;
   const rows: Array<Record<string, unknown>> = [];
   const remaining = () => Math.max(0, endAt - Date.now());
   const pause = async (ms: number): Promise<number> => { const at = Date.now(); await sleep(Math.min(ms, remaining())); return Date.now() - at; };
@@ -1283,16 +1284,27 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
         if (best) { den = { entrance: best.entrance, direction: best.direction }; note(`横穴を選択 ${JSON.stringify(den)}・見通し ${best.sightDistance}m`); }
         else {
           row.result = 'no_candidate'; row.reason = '候補なし';
-          // The head substitute chooses a short, known, level step near warpedStand; no digging or placing to get there.
+          // The head substitute looks for a wall the way a person would: it walks a 14-block hop in the next of eight headings (45 degrees apart, the first not yet
+          // visited), within 90 blocks of warpedStand, and looks again from there (a survey of the stand's surroundings found walls only 30 to 80 blocks off it).
+          // No digging or placing to get there; the hop is a plain go on known level ground.
           const p = actor.entity.position as Vec3, base = { x: Math.floor(p.x), y: Math.floor(p.y + 0.001), z: Math.floor(p.z) };
-          const choices = [[1, 0], [0, 1], [-1, 0], [0, -1]].map(([dx, dz]) => ({ x: base.x + dx * 2, y: base.y, z: base.z + dz * 2, dx, dz }))
-            .filter(c => Math.hypot(c.x - stand[0], c.z - stand[2]) <= 24 && denStandable(actor, c)
-              && denStandable(actor, { x: base.x + c.dx, y: base.y, z: base.z + c.dz }))
-            .sort((a, b) => Number(visited.has(`${a.x},${a.z}`)) - Number(visited.has(`${b.x},${b.z}`)));
-          const move = choices[0];
-          if (move && remaining() >= 7_000) {
+          const ground = (gx: number, gz: number): number | null => {
+            for (let gy = base.y + 6; gy >= base.y - 10; gy--) if (denStandable(actor, { x: gx, y: gy, z: gz })) return gy;
+            return null;
+          };
+          const hops: Array<{ x: number; y: number; z: number }> = [];
+          for (let k = 0; k < 8; k++) {
+            const heading = ((hopCount + k) % 8) * 45 * Math.PI / 180;
+            const gx = base.x + Math.round(Math.cos(heading) * 14), gz = base.z + Math.round(Math.sin(heading) * 14);
+            if (Math.hypot(gx - stand[0], gz - stand[2]) > 90 || visited.has(`${gx},${gz}`)) continue;
+            const gy = ground(gx, gz);
+            if (gy !== null) hops.push({ x: gx, y: gy, z: gz });
+          }
+          hopCount++;
+          const move = hops[0];
+          if (move && remaining() >= 12_000) {
             const to = { x: move.x, y: move.y, z: move.z }; visited.add(`${move.x},${move.z}`);
-            const run = await act(`den-search#${row.i}`, [{ do: 'go', to, range: 0, maxDig: 0, maxPlace: 0, maxDrop: 0, waterOk: false, seconds: 5 }], Math.min(6, remaining() / 1000 - 0.5));
+            const run = await act(`den-search#${row.i}`, [{ do: 'go', to, range: 1, maxDig: 0, maxPlace: 0, maxDrop: 3, waterOk: false, seconds: 12 }], Math.min(14, remaining() / 1000 - 0.5));
             row.walk = { to, ok: run.ok, lines: run.lines };
           }
           row.waitSeconds = r1(await pause(1_000) / 1000); finishRow('no_site'); continue;
