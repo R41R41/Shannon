@@ -365,3 +365,45 @@ phase 5/6/7の着座中だけ、観測した `perch` の中心から水平2〜3.
 体の変更：観測 `dragon.approach.basin`（任意）、`go` が座っている竜の翼の押しを道の除外から外す、`dragonDanger.ts` が座っている竜の翼の押しを危険に数えない（頭・首・息・火の玉・着地・離陸の判定は変えない）、`floorReflexes.ts` の雲の中の縮退（通常の退避が尽きた時だけ、雲の外へ最短）、`go` の道探しが停止の合図で止まる。
 カボチャ（`dragon_kill_basin_walk_pumpkin`）：エンダーマンの怒りを避けるが鉄兜の防具 2 点を失い、最低体力が下がったので既定にしない。
 未測：結晶の区間（檻・柱）からの通し、頭（LLM）が手順を選べるか、エンダーマンの近接が重なった時（r109・r114・r117・r118 の死因）。
+
+## 入口からの通し台本 `end_full_chain`（2026-11-03、9つ目）
+
+`scripts/minecraft-end-fight-probe.ts` に独立場面を追加。選択は既存の `MINECRAFT_END_SCENES=enter,end_full_chain`。`killEntries` と同じ単独実行の扱いで、`enter` 以外との混在は準備前に拒否し、既定の全場面実行からは除く。比較場面の `prepareKillRun` は呼ばず、結晶・雲・玉のコマンド消去、竜の固定/体力変更/再生成、整地、途中の回復/補給をしない。終了後の `restoreDragon` も呼ばない。
+
+**tpの範囲**：依頼で再利用を指定された既存 `enter` は、ラボの到着再現にoperatorのtpと一時耐性を使う。その処理自体は変更していない。新場面は黒曜石足場への到着後の移動を全てhandで行い、`tp=false, tpScope='after enter arrival'` を記録する。`enter` も含めてtpコマンド0の試験を行ったとは扱わない。全体40分の時計・死亡数・最低体力は `enter` 開始から数える。新場面の準備で耐性を解除し、石の剣・盾（副手）・鉄の防具・鉄のつるはし・丸石64・弓・矢64・焼いた牛肉64を一度だけ用意する。バケツ無し、反射の実装と設定は不変。床反射/累積台帳が無い実行は拒否する。
+
+### 段階と既存部品
+
+1. `crossing` → `walkWest`：`cage_section_walk` の渡り/島歩きと同じ `go` の手順。元の固定座標は引き継がず、観測した目的と、読み取り専用の `islandFootings` が提示するロード済みの自然足場から台本が先頭を選ぶ。渡りは丸石の配置を許し、島内は配置/掘削を許さない。候補があることだけで道が通れるとは断定せず、経路の計算と実行は `go` に任せる。
+2. `crystals`：`crystals.list` を観測の距離の近い順（同距離はid順）で選ぶ。檻無しは該当する `shootSets` の先頭、無ければ `openings.positions` の先頭へ `go` → `shoot`。同じ位置で3回の試行、または `line_blocked` なら次の観測候補を選ぶ。矢は一度に1本、64本が尽きたら失敗。候補が無ければ観測した結晶へ自然足場上を近づいて再観測する。`list=[]` でも `remaining>0` / `unseen` が残る間は竜へ進まない。
+3. 檻つきは `cage_section` の `go_root` → `pillar_up` → `guard_ring` → `dig_bars` → `guard_close` → `shaft_down` を共用する。元の根元/格子/ガードの幾何を `utils/endFightGeometry.ts` へ抽出し、元場面も同じ関数を使う。観測 `blockedBy` の列が届けばそこを開ける。近い一本柱の上は結晶から13 m未満なので射撃せず、降りてから `afterCageRemoved` または更新された実在openingへ歩く。`afterCageRemoved` は檻全除去の仮定であり、一列の掘削で矢道が開いた証明にはしない。既存 `shoot` の13 m距離・実際の `arrowBlockedAt` による拒否を維持する。
+4. 100 msごとの観測でphase 6を見たら結晶handをAbortSignalで中断し、phase 5/7またはphase不明の間も休止する。柱上なら、元の柱と同じx/zにいることを確認して既存shaftで降り、`dragon.approach.wait[0]` があればそこへ退避する。任意のwait欄が一時欠落したら直近の観測で選んだwaitを保持して使い、まだ待ち場を観測していない遠い柱では直前に確認した地面（根元/島の歩行先）へ戻って待つ。押されて柱とずれた場合はshaftを仮定せず `displaced_from_shaft` で終了。飛行phaseの再観測で再開する。回避の反射を緩めない。
+5. `remaining=0`・`list=[]`・`unseen=[]` が揃ったら `dragon`。`basinAssist('walk')` と同じ待機 → phase 6の `dragon.approach.basin[0]` へ `go` → phase 5/6/7中の剣 `attack` → 座り終了時の待ち場への `go`。待ち場は **`dragon.approach.wait[0]` のみ**、場面内の `basinWaitingCell` を使わない。攻撃中/盆地への移動中も離陸を監視して中断し、退避が終わるまでは再攻撃しない。結晶が再出現したら攻撃せず失敗にする。食料が18以下なら地面/待機中に既存 `eat` を依頼する。
+6. `verify`：観測した今回の竜idに一致する `boss.verified` と `boss.witness.entityId` を確認する（最大15秒、全体期限内）。他の竜の過去の証明では合格にしない。死亡0・全結晶0・全体期限内の撃破と証明が揃った時だけ `ok=true`。
+
+目的の前文にある結晶25分は目安だが、段階bの明示条件を優先し、**結晶段の開始から15分で打ち切る**。15分で残った結晶をコマンドで消したり、回復中の竜を攻撃したりしない。竜15分は目標であり、強制終了は `enter` 開始から全体40分。実行中のhandと証明取得へも停止signal/残り時間を渡す。例外・死亡・時間切れでも途中の記録を返す。
+
+### `report.scenes.end_full_chain` の追加欄
+
+| 欄 | 内容 |
+| --- | --- |
+| `stages[]`, `seconds`, `crystalSeconds`, `dragonSeconds`, `dragonStartedSeconds`, `crystalsClearedSeconds`, `killSeconds` | 段階ごとの実秒と全体開始からの秒。`killSeconds` は全体開始から撃破を観測した秒 |
+| `crystals[]` | id・位置・元の檻の有無・初見秒・`destroyedSeconds`（破壊を観測した秒、確認できなければnull）・`destroyedEvidence`・消費矢・根元/掘った格子/ガード・`blockedBy`・仮定の射撃位置 |
+| `crystals[].shots[]`, `arrowsUsed` | 射撃秒・実際の発射位置・矢の減り・結果行・`destroyed` / `miss` / `line_blocked` / `refused_or_cut`。死亡時の持物消失等は矢の消費に数えず、その試行はnullと `arrowsUnknown` を残す。`arrowsUsed` は測定できた消費の合計 |
+| `hands[]`, `interruptions[]`, `waitingChosen[]`, `transitions[]` | 選んだhandと引数・結果/解析済みreceipt・所要ms・開始位置・phase 6中断/退避中断・観測から選んだ待ち場・phase変化 |
+| `reflexKinds`, `deaths`, `minHealth`, `healthTimeline[]` | 累積台帳の種類別差分（16件リングの切捨てに依存しない）・死亡数・最低体力・5秒ごとの竜/本人HPと残結晶数 |
+| `endReason`, `crystalsRemaining`, `dragonHealthEnd`, `boss`, `bossVerified`, `ok` | 終了理由・残存数/HP・今回の竜の証明・合否 |
+
+既存 `MINECRAFT_END_REPORT` が無ければ隔離worldの `report.json` に書き、失敗場面は終了コード1。ファイル書込み失敗も終了コード1と `report.errors` に残す。stdoutの `ENDFIGHT_RESULT` も従来どおり出す。
+
+### S1の回し方と残課題
+
+既存runnerなら `END_SCENES=enter,end_full_chain END_TIMEOUT=2700 END_FLOOR=default` を既存のlabel/code.tar引数に付ける。code.tarは未コミットの作業ツリーから作り、追加した2つのutilsも含める。外側の既定1500秒は通しの40分より短いので、そのまま使わない。新しい環境変数やスイッチは追加していない。自然の結晶が残る新しい隔離worldで実施し、終わったら既存runnerの停止/ログ保存を確認する。S1が実施する工程であり、この作業コピーからラボを起動していない。
+
+前提は自然島のロード済みの支持ある足場、観測候補が計算予算内に提示されること、弓と64本の矢、64個の丸石（渡り・柱・ガードで共用、降りる時の回収を含む）。不足時の補給や別のhandへの置換はしない。檻の一列だけでは射撃角度によって屋根/別の格子が残り得る。観測された別候補と実 `shoot` の結果で扱い、候補が尽きれば理由を残す。柱からの押出し、ガードの残存と資材不足、未ロード/計算予算による候補欠落、エンダーマンが重なる近接、通しの成功率/死亡0/実時間はS1の未測課題。反射の変更案が必要になる場合は新しい実測根拠と共に別途報告する。
+
+オフライン試験は `tests/unit/minecraftEndFullChain.test.ts`。場面本体のI/Oを置換して実行し、観測からの順/射撃/待ち場選択、檻往復、中断/再開、段階切替、時間切れ、死亡、別竜の証明拒否、累積反射、単独選択、report保存/書込み失敗を検証する。全probeの構文も検査し、`go`（5〜120秒）、`shoot`、`vertical`、`dig`、`place` の生成引数を実際の `ACT_HANDS` とhand固有の検証へ通す。型検査はbackendから `node tests/unit/checkEndFullChain.cjs`。`tsconfig.end-full-chain.json` の4 TSファイル（**probe本体を含む**）のsemantic診断と全構文診断を確認し、依存先自身のsemantic診断/全体ビルドの成功とは区別する。
+
+変更は指定コピーのprobe・小さなutils・関連単体試験/検査入口・本資料のみ。`floorReflexes.ts` / `dragonDanger.ts` / `fallClutch.ts` / `FALL_CLUTCH_ENABLED`、hand一覧、`integration/commonFca/`、環境変数は変更していない。`.codex-material/` は参照/変更せず、commit/push・VM・本体/外部サービス起動・Notion更新は行っていない。
+
+最終検証：新規 `minecraftEndFullChain` 24件、既存 `minecraftDragonKillCompare` 65件・`minecraftDragonSections` 17件・`minecraftDragonBasin` 22件、計 **128件成功**。入口の記録追加後も新規24件を再実行して成功。型検査入口 `node tests/unit/checkEndFullChain.cjs` はprobeを含む4 TSファイルの対象診断0件、`git diff --check` 成功。外部I/O無しのモック/架空地形で、既存の隔離設定とダミー値を子プロセス内だけに渡した。ラボの通し撃破/死亡0・全体ビルド・依存先全体の型検査は実施していない。
