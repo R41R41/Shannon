@@ -65,7 +65,7 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
     return !!below && (below.boundingBox === 'block' || !!below.shapes?.length) && !hazardous(String(below.name)) && open(feet) && open(head);
   };
   const hp = () => Number(bot.health ?? 0);
-  let hpMin = hp(), placed = 0, code: FillCode | null = null, cut = false, safe = false, preflight = true;
+  let debug = '', hpMin = hp(), placed = 0, code: FillCode | null = null, cut = false, safe = false, preflight = true;
   const sample = () => { hpMin = Math.min(hpMin, hp()); };
   const returnBudget = (from: Cell = bot.entity?.position ?? ctx.base) => Math.hypot(from.x - home.x, from.y - home.y, from.z - home.z) * 1800 + 2000;
   const stopped = (work: boolean): boolean => {
@@ -121,7 +121,12 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
   bot.on('health', sample);
   try {
     if (hp() <= 0 || reflexHeld(host) || ctx.stop.aborted || actionSignal(bot)?.aborted) { stopped(false); return finish(); }
-    if (!standsAt(middle(home))) { code = 'NO_STAND'; return finish(); }
+    if (!standsAt(middle(home))) {
+      code = 'NO_STAND';
+      const nm = (dy: number) => { const b = blockAt(bot, { x: home.x, y: home.y + dy, z: home.z }); return b ? `${b.name}/${b.boundingBox}` : 'unloaded'; };
+      debug = `（帰還先 ${home.x},${home.y},${home.z}: 足元の下 ${nm(-1)}・足 ${nm(0)}・頭 ${nm(1)}）`;
+      return finish();
+    }
     if (inventoryCount(bot, args.block) < cells.length || !bot.registry?.blocksByName?.[args.block]) { code = 'NO_BLOCKS'; return finish(); }
     if (hp() <= args.retreatHp) { code = 'HP_FLOOR'; return finish(); }
     preflight = false;
@@ -181,7 +186,7 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
     const result: FillResult = { status, code, placed, remaining: remaining.slice(0, 40), skippedBy, hpMin, hpEnd: hp(), elapsedMs: Date.now() - started, at: position, safe };
     const ok = status === 'done' && safe;
     return { ok, ...(code ? { code, reason: code === 'REFLEX' ? 'reflex' : code === 'DEAD' ? 'died' : code } : !ok ? { reason: 'partial' } : {}),
-      text: `まとめ置き ${code ?? status}: ${code ? WORDS[code] : status === 'done' ? '指定のマスを済ませ指定先へ戻った' : '未完のマスを残して指定先へ戻った'}。設置${placed}・未完${remaining.length}・最低体力${hpMin}・安全${safe ? '確認' : '未確認'}`,
+      text: `まとめ置き ${code ?? status}: ${code ? WORDS[code] : status === 'done' ? '指定のマスを済ませ指定先へ戻った' : '未完のマスを残して指定先へ戻った'}${debug}。設置${placed}・未完${remaining.length}・最低体力${hpMin}・安全${safe ? '確認' : '未確認'}`,
       at: position, progress: { unit: 'block', done: placed, left: remaining.length }, fill: result };
   }
 }
