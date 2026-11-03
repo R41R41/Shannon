@@ -332,7 +332,15 @@ export function laneReport(reader: CampReader, spawner: LaneCell, from: LaneCell
 }
 
 /** All planned cells and requested flags, with common facts once. Occupancy counts and reach flags keep four plans within the receipt. */
+/** The receipt keeps 16,000 characters of a result (nativeBody): a wire past this many characters drops the build rows of the plans after the first (the best). */
+export const LANE_WIRE_LIMIT = 15_800;
+
 export function laneProbeFields(report: LaneReport) {
+  const full = laneWire(report, report.candidates.length);
+  return JSON.stringify(full).length > LANE_WIRE_LIMIT ? laneWire(report, 1) : full;
+}
+
+function laneWire(report: LaneReport, withBuild: number) {
   const cells: Array<[number, number, number, string | null, LaneBlock['state']]> = [], ids = new Map<string, number>();
   const ref = (p: LaneBlock) => {
     const k = key(p);
@@ -353,9 +361,10 @@ export function laneProbeFields(report: LaneReport) {
     return standFactIds.get(k)!;
   };
   const parts: LanePart[] = ['enclosure', 'roof', 'plug', 'lid'];
-  const candidates = report.candidates.map(c => ({ ...c, plug: ref(c.plug), lane: c.lane.map(p => [ref(p.feet), ref(p.head)]),
+  const candidates = report.candidates.map((c, index) => ({ ...c, plug: ref(c.plug), lane: c.lane.map(p => [ref(p.feet), ref(p.head)]),
     waiting: [ref(c.waiting.feet), ref(c.waiting.head)], clear: c.clear.map(ref), hazards: c.hazards.map(p => [ref(p), p.inside]),
-    build: c.build.map(p => [fact(p), parts.indexOf(p.part), p.supportAfter ? ref({ ...p.supportAfter, name: 'air', state: 'air' }) : null,
+    ...(index >= withBuild ? { buildOmitted: c.build.length } : {}),
+    build: index >= withBuild ? [] : c.build.map(p => [fact(p), parts.indexOf(p.part), p.supportAfter ? ref({ ...p.supportAfter, name: 'air', state: 'air' }) : null,
       (p.inReach ? 1 : 0) | (p.visible ? 2 : 0) | (p.noSupport ? 4 : 0),
       p.standAt ? ref({ ...p.standAt, name: 'air', state: 'air' }) : null, p.group, p.walk]) }));
   return { ...report, candidates, cells, facts,
