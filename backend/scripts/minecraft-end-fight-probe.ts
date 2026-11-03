@@ -1776,7 +1776,7 @@ scenes.cage_guard_walk = async () => { cageGuard = true; try { return await scen
 type KillStyle = 'sword_stage' | 'bed' | 'bow';
 type KillNookBuilder = 'operator' | 'body';
 const KILL_LIMIT_MS = 25 * 60 * 1000;
-const killEntries = ['dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk'];
+const killEntries = ['dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin'];
 const killCell = (p: P3): P3 => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
 const packCount = (name: string): number => actor.inventory.items().filter((item: any) => item.name === name).reduce((n: number, item: any) => n + item.count, 0);
 let killArena: { ground: P3; perch: P3; yaw: number } | null = null;
@@ -2424,8 +2424,10 @@ function basinWaitingCell(view: ReturnType<typeof endObservation>): P3 | null {
 }
 // The tp baseline and the walking scene use the same first observed basin candidate. Floor reflexes stay ON;
 // after entry, keep swinging throughout phases 6/7/5, independently of the short head-strike windows.
-const basinAssist = async (mode: 'tp' | 'walk') => {
+const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false) => {
   const initial = await prepareKillRun(true);
+  // Endermen (the End island has them) take offence at eye contact; a carved pumpkin on the head ends that (it stands in for the iron helmet: two armour points less).
+  if (pumpkin) { await ask(`give ${ACTOR} minecraft:carved_pumpkin 1`); await sleep(500); await act([{ do: 'equip', item: 'carved_pumpkin', slot: 'head' }], 8); }
   const t0 = Date.now(), deadline = t0 + KILL_LIMIT_MS, deaths0 = actorDeaths, lowest = trackMinHealth(), counts0 = actor.reflexLedger.counts();
   const elapsed = () => (Date.now() - t0) / 1000;
   const sits: Array<Record<string, any>> = [], transitions: Array<[number, number | null]> = [];
@@ -2491,8 +2493,14 @@ const basinAssist = async (mode: 'tp' | 'walk') => {
       row.dragonAfter = endView()?.dragon?.health ?? null; row.hpAfter = Number(actor.health); row.minHp = minHp;
       row.ledger = (actor.reflexLedger.entriesSince(mark) ?? []).map((e: any) => `${e.kind}:${e.outcome}:${String(e.detail).slice(0, 80)}`).slice(0, 8);
       row.died = actorDeaths > deaths0;
-      // walking mode leaves the body where the sit ended (the next landing sends it to its next waiting cell by go); the tp baseline still goes back by tp
+      // The sit is over (take-off: phase 4 beats the wings hard within four blocks of the body; lab r115/r116/r119 threw the body 20 blocks up from the basin): the body leaves at once, to the cell sideways of
+      // this sit's facing, 10 to 14 m off (by go); the tp baseline goes back by tp.
       if (mode === 'tp' && actorDeaths === deaths0 && !dragonDead) await standAt(initial.ground.x, initial.ground.y, initial.ground.z);
+      else if (actorDeaths === deaths0 && !dragonDead) {
+        const away = basinWaitingCell(endView());
+        const left = away ? await act([{ do: 'go', to: killCell(away), range: 1, seconds: 12 }], 16) : null;
+        row.leave = { to: away, ok: left?.ok ?? null, ms: left?.ms ?? null, line: left ? left.lines.join(' | ').slice(0, 160) : null, hpAfter: Number(actor.health) };
+      }
       sits.push(row);
     }
   } finally { clearInterval(phaseTimer); actor.removeListener('entityDead', onDead); }
@@ -2504,6 +2512,7 @@ const basinAssist = async (mode: 'tp' | 'walk') => {
 };
 scenes.dragon_kill_basin_assist = () => basinAssist('tp');
 scenes.dragon_kill_basin_walk = () => basinAssist('walk');
+scenes.dragon_kill_basin_walk_pumpkin = () => basinAssist('walk', true);
 scenes.dragon_kill_sword_assist = () => swordAssist('strike');
 scenes.dragon_kill_sword_assist_walk = () => swordAssist('stage');
 scenes.dragon_kill_compare = async () => {
