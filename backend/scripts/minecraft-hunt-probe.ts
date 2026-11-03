@@ -1237,7 +1237,7 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
   const fixtureAt = Date.now();
   await ask('difficulty normal');
   // No enderman kill/summon or platform/roof construction. Only equipment and the initial site are fixture setup.
-  await equip({ stone_sword: 1, stone_pickaxe: 1, cooked_beef: 16 }, { armor: 'iron', shield: true });
+  await equip({ stone_sword: 1, stone_pickaxe: 1, cooked_beef: 16, cobblestone: 32 }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
   // 1.21.11 renamed doMobSpawning to spawn_mobs: read whichever answers (the old spelling is refused there), set both
   const spawnRule = /\b(true|false)\b/u.exec(await ask('gamerule spawn_mobs'))?.[1] ?? /\b(true|false)\b/u.exec(await ask('gamerule doMobSpawning'))?.[1] ?? 'true';
