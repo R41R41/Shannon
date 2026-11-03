@@ -5,6 +5,7 @@ import { nearestTable, tableInReach } from './craft.js';
 import { placeNearby } from './placeSpot.js';
 import { withProgress } from './progressUnits.js';
 import { craftEvents } from './craftEvents.js';
+import { withWoodForms } from './woodRecipes.js';
 
 /**
  * make: one item, and the parts it is made of, in a chain of crafts (hands-contract.md 4). The planner says what and how many; the body
@@ -33,32 +34,7 @@ const perCraft = (recipe: any): number => Math.max(1, Number(recipe.result?.coun
 function recipesFor(bot: any, name: string): any[] {
   const item = bot.registry?.itemsByName?.[name];
   if (!item) return [];
-  let recipes: any[] = [];
-  try { recipes = (bot.recipesAll?.(item.id, null, true) ?? []) as any[]; } catch { return []; }
-  return recipes.concat(woodFormRecipes(bot, name, recipes));
-}
-
-/**
- * S2 (2026-11-03, run59 leg 2: a shield "missing: oak_log×2" with four stripped_oak_log in the pack): the data lists planks only from the plain log, while the game takes any log of the
- * tree (the tag): the stripped log, the wood and the stripped wood too. The same recipe with those in the ingredient's place, so that they count and are laid in the grid.
- */
-function woodFormRecipes(bot: any, name: string, recipes: any[]): any[] {
-  const base = /^(.+)_planks$/u.exec(name)?.[1];
-  const byName = bot.registry?.itemsByName ?? {};
-  const log = base ? byName[`${base}_log`] : undefined;
-  if (!log) return [];
-  const swap = (value: any, from: number, to: number): any => Array.isArray(value) ? value.map(entry => swap(entry, from, to))
-    : value === from ? to : value && typeof value === 'object' && value.id === from ? { ...value, id: to } : value;
-  const out: any[] = [];
-  for (const recipe of recipes) {
-    if (!(recipe.delta ?? []).some((entry: any) => entry.count < 0 && entry.id === log.id)) continue;
-    for (const form of [`stripped_${base}_log`, `${base}_wood`, `stripped_${base}_wood`]) {
-      const other = byName[form];
-      if (!other) continue;
-      out.push({ ...recipe, delta: swap(recipe.delta, log.id, other.id), ingredients: swap(recipe.ingredients, log.id, other.id), inShape: swap(recipe.inShape, log.id, other.id) });
-    }
-  }
-  return out;
+  try { return withWoodForms(bot, name, (bot.recipesAll?.(item.id, null, true) ?? []) as any[]); } catch { return []; }
 }
 const clone = (state: State): State => ({ stock: new Map(state.stock), steps: [...state.steps], short: new Map(state.short), nodes: state.nodes });
 const shortTotal = (state: State) => [...state.short.values()].reduce((sum, n) => sum + n, 0);

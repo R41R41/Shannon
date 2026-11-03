@@ -101,6 +101,12 @@ describe('heavy or light', () => {
     expect(heavyReason(lines('無い: mine 止まった no_block: …', 'mine') as never, 3000, 18, false, seen, 't')).toBeNull();
     expect(heavyReason({ ok: true, lines: [] } as never, 125_000, 2, true, seen, 't')).toBeNull();
   });
+  it('run 59 leg 2: a search that ran out of time and says the waypoint to take goes back to the planner the first time at a place, and is held the second', () => {
+    const seen = new Set<string>();
+    const timeout = 'go 止まった search_timeout: 道探しが 5 秒で終わらない（道の有無は不明。2,719 マス調べた、(14,71,-14) まで・あと 86m） (14,71,-12) 道 15 歩・掘 0・置 6・引き直し 3 回。10m 以内の中継点へ go か、dig と walk の階段・縦穴で';
+    expect(heavyReason(lines(timeout) as never, 9000, 18, false, seen, 't')).toBeNull();
+    expect(heavyReason(lines(timeout) as never, 9000, 18, false, seen, 't')).toBe('explained:go/search_timeout');
+  });
   it('holds only for a go stuck, out of search time or at its time with few steps, a minute lost, near death and a death (not the first of a kind)', () => {
     for (const reason of ['go_stuck', 'go_search_timeout', 'go_limit_time_low:3', 'long:61s', 'near_death:3.5', 'death']) expect(holdsFor(reason), reason).toBe(true);
     for (const reason of ['first:mine/no_block', null]) expect(holdsFor(reason)).toBe(false);

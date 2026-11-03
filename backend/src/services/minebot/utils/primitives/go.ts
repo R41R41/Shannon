@@ -371,22 +371,58 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
   if (relax.upstream) (movements as { __upstream?: boolean }).__upstream = true;
   const getNeighbors = movements.getNeighbors.bind(movements);
   const inWater = isWaterName(nameAt(bot, Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z)));
-  movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => {
-    // A diagonal ascent sweeps both orthogonal corners before reaching its landing.
-    // Upstream clears the cheaper corner but does not check its footing: a failed
-    // jump can then walk into a shaft (run 54). Keep supported diagonal stairs,
-    // but make an exposed ascent approach cardinally or build its floor first.
-    const dx = move.x - node.x, dz = move.z - node.z;
-    if (move.y > node.y && Math.abs(dx) === 1 && Math.abs(dz) === 1) {
-      const supported = (x: number, z: number) => movements.getBlock(node, x, 0, z).physical || movements.getBlock(node, x, -1, z).physical;
-      if (!supported(dx, 0) || !supported(0, dz)) return false;
-    }
-    if (!relax.hazards && hazardAtFeetWith(read, move.x, move.y, move.z)) return false;
-    if (clouds.length && cloudZoneAtCell(clouds, move.x, move.y, move.z)) return false;
-    if (!args.waterOk && !inWater && (isWaterName(read(move.x, move.y, move.z)) || isWaterName(read(move.x, move.y + 1, move.z)))) return false;
-    return true;
-  });
+  movements.getNeighbors = (node: any) => {
+    const body = bodyCellKeys(bot);
+    return (getNeighbors(node) as any[]).filter(move => {
+      // A diagonal ascent sweeps both orthogonal corners before reaching its landing.
+      // Upstream clears the cheaper corner but does not check its footing: a failed
+      // jump can then walk into a shaft (run 54). Keep supported diagonal stairs,
+      // but make an exposed ascent approach cardinally or build its floor first.
+      const dx = move.x - node.x, dz = move.z - node.z;
+      if (move.y > node.y && Math.abs(dx) === 1 && Math.abs(dz) === 1) {
+        const supported = (x: number, z: number) => movements.getBlock(node, x, 0, z).physical || movements.getBlock(node, x, -1, z).physical;
+        if (!supported(dx, 0) || !supported(0, dz)) return false;
+      }
+      if (move.y <= node.y && Math.abs(dx) === 1 && Math.abs(dz) === 1 && !diagonalFooting(movements, node, dx, dz, move.toBreak)) return false;
+      if (body && laysIn(move, body)) return false;
+      if (!relax.hazards && hazardAtFeetWith(read, move.x, move.y, move.z)) return false;
+      if (clouds.length && cloudZoneAtCell(clouds, move.x, move.y, move.z)) return false;
+      if (!args.waterOk && !inWater && (isWaterName(read(move.x, move.y, move.z)) || isWaterName(read(move.x, move.y + 1, move.z)))) return false;
+      return true;
+    });
+  };
   return movements;
+}
+
+/**
+ * Run 59 (leg 2, task 4 holds 2 and 3, the Nether at (25,65,4)): whether a level or falling diagonal from `node` by (dx, dz) keeps the body over ground. A corner that is a wall
+ * (a block at the feet or the head that the move does not break) turns the body aside, and it goes through the other corner: that corner needs a floor. In the run the wall was
+ * basalt and the other corner the edge of the lava sea (33 down): the body slid to the edge and stopped there, the executor's 3.5 s ran out and the way was drawn again. With both
+ * corners open the body is over its own floor or its landing all the way, and the diagonal stays.
+ */
+export function diagonalFooting(movements: any, node: any, dx: number, dz: number, toBreak: readonly any[] = []): boolean {
+  const broken = (x: number, y: number, z: number) => toBreak.some((p: any) => p && p.x === node.x + x && p.y === node.y + y && p.z === node.z + z);
+  const wall = (x: number, z: number) => [0, 1].some(y => movements.getBlock(node, x, y, z).physical && !broken(x, y, z));
+  const wallX = wall(dx, 0), wallZ = wall(0, dz);
+  if (wallX === wallZ) return true;
+  return wallX ? movements.getBlock(node, 0, -1, dz).physical : movements.getBlock(node, dx, -1, 0).physical;
+}
+
+/** "x,y,z" of the cells the body is in now by its middle (its feet and its head), or null. */
+function bodyCellKeys(bot: any): string[] | null {
+  const p = bot.entity?.position;
+  if (!p) return null;
+  const x = Math.floor(p.x), y = Math.floor(p.y + 1e-3), z = Math.floor(p.z);
+  return [`${x},${y},${z}`, `${x},${y + 1},${z}`];
+}
+
+/**
+ * Run 59 (leg 2, the same holds): the way stepped back out of the body's cell, laid a block in it and climbed onto it ((25,65,3), a block in (25,65,4), up to (25,66,4)). The
+ * executor counts the step back as made when the body is nearer the cell after it (it trims the path from the player), so the block was sent with the body still in the cell: the
+ * place guard held it back (`mayLayAt`), the same way was drawn again, 12 times, and the go stopped. A move that lays a block in one of `cells` is not a move.
+ */
+export function laysIn(move: any, cells: readonly string[]): boolean {
+  return (move?.toPlace ?? []).some((p: any) => !p.useOne && cells.includes(`${p.x + p.dx},${p.y + p.dy},${p.z + p.dz}`));
 }
 
 // ---- the work ----------------------------------------------------------------------------------------------------------------------------
