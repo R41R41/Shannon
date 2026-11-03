@@ -288,7 +288,8 @@ describe('fight / act のden接続', () => {
     ]) {
       const f = field(), hands = ACT_HANDS.parse([{ ...hand, den: f.bot.field.den }]);
       const result = await settle(runAct(f.bot, hands));
-      expect(result).toContain('invalid_input'); expect(mocks.dig).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ success: false, failureType: 'invalid_input' });
+      expect(mocks.dig).not.toHaveBeenCalled();
     }
   });
 });
