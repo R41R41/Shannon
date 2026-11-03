@@ -72,3 +72,26 @@ scene('s4_den_survey', 'den survey: the enderman den candidates (radius 12) from
   note(`den survey rows ${JSON.stringify(rows.filter(r => (r.count as number) > 0))}`);
   return { points, withAny, total, rows };
 });
+
+// ---- walk speed: 100 blocks over a flat strip, walking (sprint:false) against the default (sprint on open ground) --------------------------------------
+scene('s4_walk100', 'walk speed: a 100-block flat strip in the overworld, the walk hand with sprint false and with the default; blocks per second (walking is about 4.3, sprinting about 5.6)', async note => {
+  await ask('difficulty peaceful'); await ask('gamemode survival ' + ACTOR);
+  const sp = sites.spawn as number[];
+  await placeActor('overworld', sp[0] + 60, sp[1] + 2, sp[2] + 60, 20);
+  await sleep(1500);
+  const y = Math.floor(actor.entity.position.y), x0 = Math.floor(actor.entity.position.x), z0 = Math.floor(actor.entity.position.z);
+  const results: Array<Record<string, unknown>> = [];
+  for (const mode of ['walk_sprint_false', 'default', 'walk_sprint_false', 'default']) {
+    await ask('difficulty peaceful');
+    for (const command of [`fill ${x0 - 2} ${y - 1} ${z0 - 3} ${x0 + 104} ${y - 1} ${z0 + 3} minecraft:stone`, `fill ${x0 - 2} ${y} ${z0 - 3} ${x0 + 104} ${y + 4} ${z0 + 3} minecraft:air`]) await ask(command);
+    await ask(`tp ${ACTOR} ${x0 + 0.5} ${y} ${z0 + 0.5}`); await sleep(1500);
+    const hand: Record<string, unknown> = { do: 'walk', to: { x: x0 + 100, y, z: z0 }, range: 1, seconds: 60 };
+    if (mode === 'walk_sprint_false') hand.sprint = false;
+    const startAt = Date.now(), startX = actor.entity.position.x;
+    const run = await act(`walk100-${mode}`, [hand], 70);
+    const seconds = (Date.now() - startAt) / 1000, moved = Math.abs(actor.entity.position.x - startX);
+    results.push({ mode, ok: run.ok, seconds: Number(seconds.toFixed(1)), blocks: Number(moved.toFixed(1)), blocksPerSecond: Number((moved / seconds).toFixed(2)), line: String(run.lines[0] ?? '').slice(0, 160) });
+    note(`walk100 ${mode}: ${moved.toFixed(1)} blocks in ${seconds.toFixed(1)} s = ${(moved / seconds).toFixed(2)} blocks/s, ok ${run.ok}`);
+  }
+  return { results };
+});
