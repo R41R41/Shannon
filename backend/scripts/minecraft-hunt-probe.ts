@@ -770,7 +770,7 @@ scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wid
 // The lane built BY THE BODY's hands (S2, 2026-11-03): the scripted head reads probe kind=lane (no spawner given: the near one), takes the first candidate (fewest cobblestones), and builds what the probe lists in the order
 // it lists it, with go and place hands (up to 4 cells per group, a go to a floor cell within reach first), the blazes alive and shooting. Then it re-reads the plan (what still stands to be built outside the lane), goes to the
 // waiting cell and holds for the rest of the time, fetching what falls. Measures the time to build, the lowest health while building, the cobblestones used and the kills after.
-async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean; torches?: boolean; settle?: boolean } = {}): Promise<Record<string, unknown>> {
+async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean; torches?: boolean; settle?: boolean; lidOnly?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const holdSeconds = options.holdSeconds ?? 300, groupSize = options.groupSize ?? 5, thinkMs = 5000;
@@ -864,6 +864,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   // the probe's own order and groups (each placement: the cell, its part, the cell to stand in and the number of its group)
   const placementsOf = (cand: any, table: any[], factTable: any[]) => (cand.build as Array<[number, number, number | null, number, number | null, number | null]>)
     .filter(([f]) => table[factTable[f][0]][4] === 'air')
+    .filter(([, part]) => !options.lidOnly || part === 3)
     .map(([f, part, , , stand, group]) => ({ at: { x: table[factTable[f][0]][0], y: table[factTable[f][0]][1], z: table[factTable[f][0]][2] }, part: ['enclosure', 'roof', 'plug', 'lid'][part] ?? String(part),
       stand: stand === null || stand === undefined ? null : { x: table[stand][0], y: table[stand][1], z: table[stand][2] }, group: group ?? -1 }));
   let placements = placementsOf(c, cells, facts);
@@ -938,7 +939,9 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const after = json?.candidates?.find((x: any) => x.direction === c.direction);
   note(`after the build: required ${JSON.stringify(after?.required)}, remainingOutsideLane ${after?.remainingOutsideLane}, unknown ${after?.unknownOutsideLane}, blazes in the count box ${json?.blaze?.count}`);
   // the hold
-  await act('to the waiting cell', [{ do: 'go', to: { x: wait[0], y: wait[1], z: wait[2] }, range: 0.5, seconds: 15, onFail: 'continue' }], 30, { accept: ['blaze'] });
+  // the cover to hold in: the waiting cell when it can be stood in, else the stand the body came to (a lid-only build has no waiting cell)
+  { const below = actor.blockAt(new Vec3(wait[0], wait[1] - 1, wait[2])); const here = below && below.boundingBox === 'block' ? { x: wait[0], y: wait[1], z: wait[2] } : { x: stand[0], y: stand[1], z: stand[2] };
+    mark('hold begins'); await act('to the hold cell', [{ do: 'go', to: here, range: 0.5, seconds: 15, onFail: 'continue' }], 30, { accept: ['blaze'] }); }
   const rods0 = packClient().blaze_rod ?? 0, holdStart = Date.now();
   let killed = 0;
   const onDead = (entity: any) => { if (String(entity?.name ?? '') === 'blaze') killed++; };
@@ -955,6 +958,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
     killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null };
 }
+scene('blaze_lid_fill', 'the lid only (the lane probe's lid cells) set with the fill hand right after clearing away, no torches, then attack hold from the cover for 300 s; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, holdSeconds: 300 }));
 scene('blaze_lane_fill_settle', 'the lane set with the fill hand after clearing away: fight from the cover what came back, torches first, fill, settle between steps; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, torches: true, settle: true }));
 scene('blaze_lane_fill_torch', 'the lane set with the fill hand after clearing away, torches first (a greedy cover of the box), timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, torches: true }));
 scene('blaze_lane_fill', 'the lane set with the fill hand after clearing away: the room fills 40 s, the body goes far off 150 s, comes back, probe lane, fill acts (12 groups each, health floor 10), then a 300 s hold', note => blazeLaneBuild(note, { away: true, fill: true }));
