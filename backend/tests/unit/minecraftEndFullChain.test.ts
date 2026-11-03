@@ -4,12 +4,15 @@ import ts from 'typescript';
 import { Vec3 } from 'vec3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as plan from '../../src/services/minebot/utils/endFullChainPlan.js';
-import { cageGuardCells, cageRoots, cageWall, islandFootings } from '../../src/services/minebot/utils/endFightGeometry.js';
+import { cageGuardCells, cageGuardWork, cageRecoveryFootings, cageRoots, cageWall, islandFootings } from '../../src/services/minebot/utils/endFightGeometry.js';
 import { ACT_HANDS } from '../../src/services/minebot/instantSkills/act.js';
 import { handProblem } from '../../src/services/minebot/utils/actHandRules.js';
 import { goProblem } from '../../src/services/minebot/utils/primitives/go.js';
 import { feetCentre } from '../../src/services/minebot/utils/dragonWalk.js';
+import { vertical } from '../../src/services/minebot/utils/primitives/vertical.js';
+import { place } from '../../src/services/minebot/utils/primitives/place.js';
 import { makeSim } from '../helpers/physicsBody.js';
+import { makeHandsSim } from '../helpers/handsSim.js';
 
 const source = fs.readFileSync(new URL('../../scripts/minecraft-end-fight-probe.ts', import.meta.url), 'utf8');
 const section = source.split('// ===== end_full_chain:')[1].split('// ===== end end_full_chain =====')[0];
@@ -19,7 +22,8 @@ const crystal = (id = 21, caged: boolean | null = false, distance = 30) => ({ id
 const opening = (id = 21) => ({ id, caged: false, positions: [p(10.5), p(12.5)], afterCageRemoved: [p(14.5)], blockedBy: { ...p(38, 90), name: 'iron_bars' } });
 function view(): any {
   return { position: p(5.5), health: 20, food: 20, inventory: [{ name: 'arrow', count: 64 }],
-    perch: p(2.5, 74), dragon: { id: 77, phase: 0, health: 200, approach: { wait: [p(14.5)], basin: [p(4.5)] } },
+    perch: p(2.5, 74), dragonBreath: [], dragonFireballs: 0,
+    dragon: { id: 77, phase: 0, health: 200, position: p(200, 100), yaw: Math.PI / 2, distance: 100, approach: { wait: [p(14.5)], basin: [p(4.5)] } },
     crystals: { remaining: 1, gone: 0, list: [crystal()], unseen: [], openings: [opening()], shootSets: [] } };
 }
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -70,6 +74,36 @@ describe('end_full_chain stand-in HEAD choices', () => {
     v.crystals.remaining = 0; v.crystals.unseen = [{ x: 13, z: 17 }]; expect(plan.chainClear(v)).toBe(false);
     v.crystals.unseen = []; expect(plan.chainClear(v)).toBe(true); expect(plan.chainClear(null)).toBe(false);
   });
+  it('moves only on distant holding-pattern flight facing away, with no flying ball or cloud corridor', () => {
+    const v = view(), from = p(5), to = p(40);
+    expect(plan.chainTravel(v, from, to)).toMatchObject({ ok: true, reason: 'flight_away' });
+    v.dragon.distance = 30; expect(plan.chainTravel(v, from, to).reason).toBe('dragon_near');
+    v.dragon.distance = 100; v.dragon.yaw = -Math.PI / 2;
+    expect(plan.chainTravel(v, from, to).reason).toBe('dragon_facing');
+    v.dragon.yaw = Math.PI / 2; v.dragonFireballs = 1;
+    expect(plan.chainTravel(v, from, to).reason).toBe('fireball');
+    v.dragonFireballs = 0; v.dragonBreath = [{ ...p(22), radius: 7, dangerRadius: 7 }];
+    expect(plan.chainTravel(v, from, to).reason).toBe('breath');
+    v.dragonBreath[0].y = 90; expect(plan.chainTravel(v, from, to).ok).toBe(true);
+    v.dragonBreath = []; v.dragon.phase = 1; expect(plan.chainTravel(v, from, to).ok).toBe(false);
+    v.dragon.phase = null; expect(plan.chainTravel(v, from, to).ok).toBe(false);
+    delete v.dragon; expect(plan.chainTravel(v, from, to).reason).toBe('dragon_unknown');
+  });
+  it('also checks facing and distance at the destination and rejects missing hazard data', () => {
+    const v = view();
+    expect(plan.chainTravel(v, p(5), p(230)).reason).toBe('dragon_near');
+    expect(plan.chainTravel(v, p(5), p(280)).reason).toBe('dragon_facing');
+    delete v.dragonBreath; expect(plan.chainTravel(v, p(5), p(40)).ok).toBe(false);
+  });
+  it('preselects previous safe ground or observed wait and rejects clouded/portal fallback ground', () => {
+    const v = view();
+    expect(plan.chainRetreat(v, [p(5), p(32), p(55)])).toEqual(p(32));
+    expect(plan.chainRetreat(v, [p(5), p(14.5)])).toEqual(p(14.5));
+    v.dragonBreath = [{ ...p(32), radius: 7, dangerRadius: 7 }];
+    expect(plan.chainRetreat(v, [p(32), p(55)])).toEqual(p(55));
+    expect(plan.chainOnShaft(p(36.9), p(36))).toBe(true);
+    expect(plan.chainOnShaft(p(35.9), p(36))).toBe(false);
+  });
   it('accepts every generated go/shoot/vertical/dig/place argument through the real act schema and range checks', () => {
     const h = plan.chainHands, guard = cageGuardCells(p(36.5, 90), [p(38, 90)]);
     for (const hand of [h.crossing(p(90)), h.go(p(10)), h.go(p(10), 12, 0), h.up(90), h.down(70), h.dig([p(38, 90)]),
@@ -115,16 +149,17 @@ describe('standalone scene dispatch and durable report', () => {
   });
 });
 
-function rig(options: { caged?: boolean; empty?: boolean; missingProof?: boolean; miss?: boolean } = {}) {
+function rig(options: { caged?: boolean; empty?: boolean; missingProof?: boolean; miss?: boolean; misses?: number; arrows?: number; blocks?: number } = {}) {
   vi.useFakeTimers(); vi.setSystemTime(1_000_000);
   const actor: any = new EventEmitter(); actor.health = 20; actor.game = { dimension: 'the_end' }; actor.floorReflexes = {};
-  actor.entity = { position: new Vec3(120.5, 70, 30.5) };
+  actor.entity = { position: new Vec3(120.5, 70, 30.5), onGround: true };
   const v = view(); if (options.caged) v.crystals.list[0].caged = true;
   if (options.empty) { v.crystals.list = []; v.crystals.remaining = 0; v.dragon.phase = 3; }
-  let arrows = 64, minHealth = 20, missed = false;
+  let arrows = options.arrows ?? 64, minHealth = 20, missed = 0;
   const calls: any[] = [], commands: string[] = [], totals: Record<string, number> = {};
   actor.reflexLedger = { counts: () => ({ ...totals }) };
-  const read = () => ({ ...v, position: { ...actor.entity.position }, health: actor.health, inventory: [{ name: 'arrow', count: arrows }] });
+  const read = () => ({ ...v, position: { ...actor.entity.position }, health: actor.health,
+    inventory: [{ name: 'arrow', count: arrows }, { name: 'cobblestone', count: options.blocks ?? 64 }] });
   let handler: ((h: any, signal?: AbortSignal) => Promise<any>) | undefined;
   const act = async (hands: any[], _seconds: number, _extra: any, signal?: AbortSignal) => {
     hands.forEach(accepted); calls.push({ hands, signal, at: Date.now() });
@@ -138,7 +173,7 @@ function rig(options: { caged?: boolean; empty?: boolean; missingProof?: boolean
       if (h.do === 'vertical') actor.entity.position.y = h.toY;
       if (h.do === 'shoot') {
         arrows--;
-        if (options.miss && !missed) { missed = true; line = '外れた（クリスタルは残っている）'; }
+        if (missed++ < (options.misses ?? (options.miss ? 1 : 0))) { line = '外れた（クリスタルは残っている）'; }
         else { v.crystals.list = v.crystals.list.filter((c: any) => c.id !== h.target); v.crystals.remaining = v.crystals.list.length;
           v.dragon.phase = 3; if (v.crystals.remaining === 0) setTimeout(() => { v.dragon.phase = 6; }, 600);
           line = 'クリスタルを壊した（爆発した）'; }
@@ -153,6 +188,9 @@ function rig(options: { caged?: boolean; empty?: boolean; missingProof?: boolean
     trackMinHealth: () => ({ stop: () => minHealth }), feetCentre, act,
     islandFootings: vi.fn((_bot, to) => [to.x === 120.5 ? p(91.5) : p(60.5)]),
     cageRoots: vi.fn(() => [p(36, 70, 30)]), cageWall: vi.fn(() => [p(38, 90, 30)]), cageGuardCells,
+    cageGuardWork: vi.fn((_bot, cells) => cells),
+    cageRecoveryFootings: vi.fn(() => actor.entity.onGround ? [{ at: { ...actor.entity.position },
+      ground: { ...actor.entity.position, y: 70 }, kind: actor.entity.position.y <= 70 ? 'ground' : 'shaft' }] : []),
     ask: async (s: string) => { commands.push(s); }, gear: vi.fn(), wearIron: vi.fn(), protect: vi.fn(), releaseReflex: vi.fn(), ACTOR: 'MinebotTrial',
     evidence: vi.fn(async () => ({ boss: { verified: true, witness: { entityId: options.missingProof ? 76 : 77 } } })),
     sleep: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)) };
@@ -186,11 +224,18 @@ describe('end_full_chain actual probe scene with mocked I/O', () => {
     expect(r.commands.some(s => /\btp\b|\bkill\b|\bfill\b|\bdata\b|\bsummon\b/u.test(s))).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
+  it('keeps the first successful open-crystal shot at one arrow and does no cage work', async () => {
+    const r = rig(), out = await settle(r.run());
+    expect(out).toMatchObject({ ok: true, arrowsUsed: 1 });
+    expect(out.crystals[0].shots).toHaveLength(1);
+    expect(r.calls.some(c => ['vertical', 'place', 'dig'].includes(c.hands[0].do))).toBe(false);
+  });
   it('reuses the cage root/up/ring/bars/close/shaft sequence and shoots only after descending to a distant opening', async () => {
     const r = rig({ caged: true }); const out: any = await settle(r.run());
     expect(out.ok).toBe(true);
-    expect(out.hands.filter((h: any) => ['go_root', 'pillar_up', 'guard_ring', 'dig_bars', 'guard_close', 'shaft_down', 'shoot_crystal'].includes(h.name)).map((h: any) => h.name))
-      .toEqual(['go_root', 'pillar_up', 'guard_ring', 'dig_bars', 'guard_close', 'shaft_down', 'shoot_crystal']);
+    expect(out.hands.filter((h: any) => ['go_root', 'climb_guard_ring', 'guard_ring', 'dig_bars', 'guard_close', 'shaft_down', 'shoot_crystal'].includes(h.name)).map((h: any) => h.name))
+      .toEqual(['go_root', 'climb_guard_ring', 'guard_ring', 'dig_bars', 'guard_close', 'shaft_down', 'shoot_crystal']);
+    expect(out.hands.filter((h: any) => h.name === 'pillar_up').map((h: any) => h.hand.toY)).toEqual([74, 78, 82, 86, 88, 90]);
     expect(out.crystals[0].shots[0].position.y).toBe(70); expect(out.crystals[0].caged).toBe(true);
   });
   it('records an actual blocked shot without inventing a destroyed crystal or spending an arrow, then tries the next observed opening', async () => {
@@ -202,6 +247,173 @@ describe('end_full_chain actual probe scene with mocked I/O', () => {
     expect(out.ok).toBe(true); expect(out.crystals[0].shots.map((s: any) => s.outcome)).toEqual(['line_blocked', 'destroyed']);
     expect(out.crystals[0].shots[0].arrows).toBe(0); expect(out.crystals[0].arrows).toBe(1);
     expect(out.crystals[0].shots[1].position.x).toBe(12.5);
+  });
+  it('finishes the same missed crystal before selecting a now-nearer crystal', async () => {
+    const r = rig({ miss: true }); r.v.crystals.list.push(crystal(22, false, 40)); r.v.crystals.remaining = 2;
+    r.v.crystals.openings.push(opening(22));
+    r.setHandler(async h => {
+      if (h.do === 'shoot') {
+        const first = r.v.crystals.list.find((c: any) => c.id === 21); if (first) first.distance = 50;
+        const next = r.v.crystals.list.find((c: any) => c.id === 22); if (next) next.distance = 1;
+        setTimeout(() => { r.v.dragon.phase = 0; }, 20);
+      }
+    });
+    const out = await settle(r.run());
+    expect(out.ok).toBe(true);
+    expect(out.hands.filter((h: any) => h.name === 'shoot_crystal').map((h: any) => h.hand.target)).toEqual([21, 21, 22]);
+    expect(out.crystals.find((c: any) => c.id === 21).shots.map((s: any) => s.position.x)).toEqual([10.5, 12.5]);
+  });
+  it('reuses the same valid opening if no alternative exists, with at most three attempts total', async () => {
+    const r = rig({ misses: 2 }); r.v.crystals.openings[0].positions = [p(10.5)];
+    const out = await settle(r.run());
+    expect(out.ok).toBe(true); expect(out.crystals[0].shots.map((s: any) => s.outcome)).toEqual(['miss', 'miss', 'destroyed']);
+    expect(out.crystals[0].arrows).toBe(3);
+    const limited = rig({ misses: 4 });
+    expect(await settle(limited.run())).toMatchObject({ ok: false, endReason: 'crystal_shot_limit:21', arrowsUsed: 3 });
+    expect(limited.calls.filter(c => c.hands[0].do === 'shoot')).toHaveLength(3);
+    const empty = rig({ misses: 4, arrows: 1 });
+    expect(await settle(empty.run())).toMatchObject({ ok: false, endReason: 'arrows_exhausted', arrowsUsed: 1 });
+  });
+  it.each(['near', 'facing', 'ball'] as const)('waits at preselected ground while %s prevents travel, then resumes on distant flight away', async reason => {
+    const r = rig();
+    if (reason === 'near') r.v.dragon.distance = 20;
+    if (reason === 'facing') r.v.dragon.yaw = -Math.PI / 2;
+    if (reason === 'ball') r.v.dragonFireballs = 1;
+    const run = r.run(); await vi.advanceTimersByTimeAsync(1500);
+    expect(r.calls.some(c => c.hands[0].do === 'shoot')).toBe(false);
+    expect(r.calls.some(c => c.hands[0].do === 'vertical')).toBe(false);
+    r.v.dragon.distance = 100; r.v.dragon.yaw = Math.PI / 2; r.v.dragonFireballs = 0;
+    const out = await settle(run); expect(out.ok).toBe(true);
+    expect(out.retreatPlans[0].seconds).toBeLessThanOrEqual(out.movementDecisions[0].seconds);
+    expect(out.waitingChosen[0].to).toEqual(p(60.5, 70, 30.5));
+    expect(out.movementDecisions.some((d: any) => d.ok)).toBe(true);
+  });
+  it('aborts travel when a fireball appears and returns to the reached footing before resuming', async () => {
+    const r = rig(); let cut = false, pending: AbortSignal | undefined;
+    r.setHandler(async (h, signal) => {
+      if (!cut && h.do === 'go' && h.to.x === 10) {
+        cut = true; pending = signal;
+        r.actor.entity.position = new Vec3(25.5, 70, 30.5);
+        setTimeout(() => { r.v.dragonFireballs = 1; }, 50);
+        return new Promise(resolve => signal!.addEventListener('abort', () => resolve({ ok: false, lines: ['cancelled'], ms: 100 }), { once: true }));
+      }
+    });
+    const run = r.run(); await vi.advanceTimersByTimeAsync(1000);
+    expect(pending?.aborted).toBe(true);
+    expect(r.calls.filter(c => c.hands[0].do === 'shoot')).toHaveLength(0);
+    expect(r.actor.entity.position.x).toBe(60.5);
+    r.v.dragonFireballs = 0;
+    const out = await settle(run); expect(out.ok).toBe(true);
+    expect(out.interruptions.some((i: any) => i.reason === 'fireball')).toBe(true);
+  });
+  it('lands after a displaced ascent before recalculating the crystal root and climbing again', async () => {
+    const r = rig({ caged: true }); let pushed = false;
+    r.deps.cageRoots.mockImplementation((_bot: any, observed: any) => {
+      expect(observed).toEqual(r.v.crystals.list[0].position);
+      return [p(pushed ? 35 : 36, 70, 30)];
+    });
+    r.setHandler(async h => {
+      if (h.do === 'vertical' && h.dir === 'up' && !pushed) {
+        pushed = true; r.actor.entity.position = new Vec3(33.5, 86, 30.5); r.actor.entity.onGround = false;
+        setTimeout(() => { r.actor.entity.position.y = 70; r.actor.entity.onGround = true; }, 1200);
+        return { ok: false, lines: ['被弾'], ms: 0 };
+      }
+    });
+    const out = await settle(r.run());
+    expect(out.ok).toBe(true); expect(out.crystals[0].cageRestarts).toBe(1);
+    expect(out.cageRecoveries[0]).toMatchObject({ ok: true, reason: 'cage_displaced', footing: { kind: 'ground' } });
+    const rootCalls = out.hands.filter((h: any) => h.name === 'go_root');
+    expect(rootCalls.map((h: any) => h.hand.to.x)).toEqual([36, 35]);
+    expect(out.hands.some((h: any) => h.hand.do === 'vertical' && h.position.y === 86 && h.position.x === 33.5)).toBe(false);
+    expect(rootCalls[1].seconds).toBeGreaterThanOrEqual(out.cageRecoveries[0].seconds + 1.2);
+  });
+  it('uses a verified reachable cobblestone shaft for descent and never reissues a displaced vertical', async () => {
+    const r = rig({ caged: true }); let pushed = false;
+    r.setHandler(async h => {
+      if (h.do === 'vertical' && h.dir === 'up' && !pushed) {
+        pushed = true; r.actor.entity.position = new Vec3(33.5, 78, 30.5);
+        return { ok: false, lines: ['被弾'], ms: 0 };
+      }
+    });
+    const out = await settle(r.run()); expect(out.ok).toBe(true);
+    const down = out.hands.find((h: any) => h.name === 'cage_recovery_down');
+    expect(down.position).toEqual(p(33.5, 78, 30.5)); expect(down.hand.toY).toBe(70);
+    expect(out.cageRecoveries[0].footing.kind).toBe('shaft');
+  });
+  it('does not trust an up hand reporting done when the body is above its goal in a different column (r137)', async () => {
+    const r = rig({ caged: true }); let pushed = false;
+    r.setHandler(async h => {
+      if (h.do === 'vertical' && h.dir === 'up' && !pushed) {
+        pushed = true; r.actor.entity.position = new Vec3(33.5, 86, 30.5);
+        return { ok: true, lines: ['vertical 済み は既に y=74 以上'], ms: 0 };
+      }
+    });
+    const out = await settle(r.run()); expect(out.ok).toBe(true);
+    expect(out.cageRecoveries[0].reason).toBe('cage_displaced');
+    expect(out.crystals[0].cageRestarts).toBe(1);
+    expect(out.hands.find((h: any) => h.position.x === 33.5)?.name).toBe('cage_recovery_footing');
+  });
+  it.each(['stock', 'geometry'] as const)('records why the optional ascent ring cannot be built: %s', async reason => {
+    const r = rig({ caged: true, blocks: reason === 'stock' ? 20 : 64 });
+    if (reason === 'geometry') r.deps.cageGuardWork.mockReturnValueOnce(null);
+    const out = await settle(r.run()); expect(out.ok).toBe(true);
+    expect(out.crystals[0].climbGuard).toMatchObject({ used: false, reason: reason === 'stock' ? 'reserve_top_guard_and_ascent' : 'unbuildable_ring' });
+    expect(out.hands.some((h: any) => h.name === 'climb_guard_ring')).toBe(false);
+    expect(out.hands.some((h: any) => h.name === 'guard_ring')).toBe(true);
+  });
+  it('reserves remaining cages before buying an optional ascent ring, reading their roots while still on ground', async () => {
+    const r = rig({ caged: true, blocks: 30 });
+    const other = { ...crystal(22, true, 40), position: p(40, 110) };
+    r.v.crystals.list.push(other); r.v.crystals.remaining = 2; r.v.crystals.openings.push(opening(22));
+    r.deps.cageRoots.mockImplementation(() => {
+      expect(r.actor.entity.position.y).toBe(70); return [p(36, 70, 30)];
+    });
+    r.setHandler(async h => { if (h.do === 'shoot') setTimeout(() => { r.v.dragon.phase = 0; }, 20); });
+    const out = await settle(r.run()); expect(out.ok).toBe(true);
+    expect(out.crystals[0].climbGuard).toMatchObject({ blocks: 30, future: 52, required: 56, used: false, reason: 'reserve_top_guard_and_ascent' });
+  });
+  it('preserves stock for unseen cages instead of assuming the loaded list is complete', async () => {
+    const r = rig({ caged: true }); r.v.crystals.unseen = [{ x: 100, z: 100 }];
+    r.setHandler(async h => { if (h.do === 'shoot') r.v.crystals.unseen = []; });
+    const out = await settle(r.run()); expect(out.ok).toBe(true);
+    expect(out.crystals[0].climbGuard).toMatchObject({ used: false, reason: 'future_cage_stock_unknown' });
+  });
+  it('limits cage restarts to two and safely reports a missing descent without a speculative shaft', async () => {
+    const r = rig({ caged: true });
+    r.setHandler(async h => {
+      if (h.do === 'vertical' && h.dir === 'up') {
+        r.actor.entity.position = new Vec3(33.5, 70, 30.5);
+        return { ok: false, lines: ['被弾'], ms: 0 };
+      }
+    });
+    const out = await settle(r.run()); expect(out).toMatchObject({ ok: false, endReason: 'cage_restart_limit' });
+    expect(out.crystals[0].cageRestarts).toBe(2);
+    expect(out.hands.filter((h: any) => h.name === 'go_root')).toHaveLength(3);
+    const blocked = rig({ caged: true }); let pushed = false;
+    blocked.setHandler(async h => {
+      if (h.do === 'vertical' && h.dir === 'up') {
+        pushed = true; blocked.actor.entity.position = new Vec3(33.5, 86, 30.5);
+        return { ok: false, lines: ['被弾'], ms: 0 };
+      }
+    });
+    const normal = blocked.deps.cageRecoveryFootings.getMockImplementation();
+    blocked.deps.cageRecoveryFootings.mockImplementation((...args: any[]) => pushed ? [] : normal(...args));
+    expect(await settle(blocked.run())).toMatchObject({ ok: false, endReason: 'no_safe_cage_descent' });
+    expect(blocked.calls.some(c => c.hands[0].do === 'vertical' && c.hands[0].dir === 'down')).toBe(false);
+  });
+  it('revalidates support after the recovery walk and refuses a shaft if another push changed the position', async () => {
+    const r = rig({ caged: true }); let pushed = false;
+    r.setHandler(async h => {
+      if (h.do === 'vertical' && h.dir === 'up' && !pushed) {
+        pushed = true; r.actor.entity.position = new Vec3(33.5, 78, 30.5);
+        return { ok: false, lines: ['被弾'], ms: 0 };
+      }
+      if (pushed && h.do === 'go' && h.to.x === 33) {
+        r.actor.entity.position.x = 32.5; return { ok: true, lines: ['go done then pushed'], ms: 0 };
+      }
+    });
+    expect(await settle(r.run())).toMatchObject({ ok: false, endReason: 'cage_recovery_support_changed' });
+    expect(r.calls.some(c => c.hands[0].do === 'vertical' && c.hands[0].dir === 'down')).toBe(false);
   });
   it('aborts an in-flight crystal go on phase 6, retreats, and does no crystal work until the sit ends', async () => {
     const r = rig(); let cut = false, pending: AbortSignal | undefined;
@@ -282,6 +494,61 @@ describe('end_full_chain actual probe scene with mocked I/O', () => {
 });
 
 describe('shared cage/arrival geometry', () => {
+  it('can build the upper-ascent ring, climb two more levels, guard the top and descend using real client physics and existing hands', async () => {
+    vi.useFakeTimers();
+    const s = makeHandsSim((x, y, z) => y === 69 ? 'end_stone' : x === 36 && z === 30 && y >= 70 && y < 88 ? 'cobblestone' : 'air',
+      { start: [36.5, 88, 30.5], items: [{ name: 'cobblestone', count: 64 }, { name: 'iron_pickaxe', count: 1 }] });
+    const context = () => ({ bot: s.bot, stop: new AbortController().signal, deadline: Date.now() + 60_000, facing: 'north' as const, base: plan.chainCell(s.bot.entity.position) });
+    const timer = setInterval(s.tick, 50);
+    try {
+      const guard = cageGuardCells(s.bot.entity.position, [p(38, 90, 30)]);
+      expect((await settle(place(context(), { at: guard.ring, block: 'cobblestone' }))).ok).toBe(true);
+      const up: any = plan.chainHands.up(90); expect((await settle(vertical(context(), up))).ok).toBe(true);
+      const top = cageGuardCells(s.bot.entity.position, [p(38, 90, 30)]), work = cageGuardWork(s.bot, top.ring)!;
+      expect(work).toHaveLength(7);
+      expect((await settle(place(context(), { at: work, block: 'cobblestone' }))).ok).toBe(true);
+      const down: any = plan.chainHands.down(70), descended = await settle(vertical(context(), down));
+      expect(descended, JSON.stringify(descended)).toMatchObject({ ok: true });
+      expect(s.bot.entity.position.y).toBeCloseTo(70, 1);
+    } finally { clearInterval(timer); }
+  });
+  it('offers reached natural ground after landing, and a continuous cobblestone shaft onto it', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const s = makeSim((_x, y, _z) => y === 69 ? 'end_stone' : 'air', { start: [36.5, 70, 30.5] });
+    s.bot.entity.onGround = false; expect(cageRecoveryFootings(s.bot)).toEqual([]);
+    s.bot.entity.onGround = true;
+    expect(cageRecoveryFootings(s.bot)[0]).toEqual({ at: p(36.5, 70, 30.5), ground: p(36.5, 70, 30.5), kind: 'ground' });
+    for (let y = 70; y < 78; y++) s.world.set(36, y, 30, 'cobblestone');
+    s.bot.entity.position.y = 78;
+    expect(cageRecoveryFootings(s.bot)[0]).toEqual({ at: p(36.5, 78, 30.5), ground: p(36.5, 70, 30.5), kind: 'shaft' });
+    s.world.set(36, 74, 30, 'air'); expect(cageRecoveryFootings(s.bot)).toEqual([]);
+    s.world.set(36, 74, 30, 'obsidian'); expect(cageRecoveryFootings(s.bot)).toEqual([]);
+  });
+  it('does not offer an obsidian pillar, liquid shaft, void floor or unsupported natural rim as a recovery descent', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const s = makeSim((_x, _y, _z) => 'air', { start: [36.5, 78, 30.5] });
+    s.bot.entity.onGround = true;
+    for (let y = 69; y < 78; y++) s.world.set(36, y, 30, 'obsidian');
+    expect(cageRecoveryFootings(s.bot)).toEqual([]);
+    for (let y = 70; y < 78; y++) s.world.set(36, y, 30, 'cobblestone');
+    s.world.set(36, 69, 30, 'end_stone'); expect(cageRecoveryFootings(s.bot)).toEqual([]);
+    s.world.set(36, 74, 30, 'lava'); expect(cageRecoveryFootings(s.bot)).toEqual([]);
+  });
+  it('keeps full existing support in an ascent ring and rejects an unbuildable or unloaded ring', () => {
+    const s = makeSim((_x, y, _z) => y < 87 ? 'obsidian' : 'air', { start: [36.5, 88, 30.5] });
+    const cells = cageGuardCells(s.bot.entity.position, [p(38, 90, 30)]).ring;
+    s.world.set(cells[0].x, cells[0].y, cells[0].z, 'obsidian');
+    expect(cageGuardWork(s.bot, cells)).toEqual(cells.slice(1));
+    s.world.set(cells[1].x, cells[1].y, cells[1].z, 'lava'); expect(cageGuardWork(s.bot, cells)).toBeNull();
+    s.world.set(cells[1].x, cells[1].y, cells[1].z, 'iron_bars'); expect(cageGuardWork(s.bot, cells)).toBeNull();
+    s.world.set(cells[1].x, cells[1].y, cells[1].z, null); expect(cageGuardWork(s.bot, cells)).toBeNull();
+  });
+  it('offers the visible front bar column instead of the preferred ballistic blocker behind it (r136)', () => {
+    const s = makeSim((_x, y, _z) => y === 89 ? 'end_stone' : 'air', { start: [36.5, 90, 30.5] });
+    for (const x of [38, 39]) for (const y of [90, 91]) s.world.set(x, y, 30, 'iron_bars');
+    const wall = cageWall(s.bot, p(40.5, 90, 30.5), p(39, 91, 30));
+    expect(wall.length).toBeGreaterThan(0); expect(wall.every(c => c.x === 38)).toBe(true);
+  });
   it('offers only loaded natural island footings with a support rim, without fixed arrival coordinates', () => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
     const s = makeSim((x, y, z) => x >= 209 && x <= 230 && z >= -20 && z <= 0 && y === 73 ? 'end_stone' : 'air', { start: [201.5, 65, -10.5] });

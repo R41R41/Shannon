@@ -2,6 +2,7 @@ import { Vec3 } from 'vec3';
 import { bodyReader, type Cell } from './localMap.js';
 import { feetCentre, inland, standing, walkGround } from './dragonWalk.js';
 import type { P3 } from './dragonParts.js';
+import { blockInSight, eyeOf } from './probeTools.js';
 
 /** Read-only geometry formerly inline in cage_section. No target choice or motor calls. */
 export function cageRoots(bot: any, crystal: P3, wall?: P3): Cell[] {
@@ -25,8 +26,23 @@ export function cageWall(bot: any, crystal: P3, preferred?: P3): P3[] {
     if (bot.blockAt(p)?.name === 'iron_bars' && eyes.distanceTo(p.offset(0.5, 0.5, 0.5)) <= 4.2) bars.push({ x, y, z });
   }
   bars.sort((a, b) => Math.hypot(a.x + 0.5 - eyes.x, a.y + 0.5 - eyes.y, a.z + 0.5 - eyes.z) - Math.hypot(b.x + 0.5 - eyes.x, b.y + 0.5 - eyes.y, b.z + 0.5 - eyes.z));
-  const first = (preferred && bars.find(p => p.x === preferred.x && p.z === preferred.z)) || bars[0];
+  // An observed ballistic blocker can be BEHIND another bar (r136). Offer an exposed column, as dig requires.
+  const visible = (p: P3) => blockInSight(bodyReader(bot), eyeOf(bot.entity.position), p).visible;
+  const first = (preferred && bars.find(p => p.x === preferred.x && p.z === preferred.z && visible(p))) || bars.find(visible);
   return bars.filter(p => p.x === first?.x && p.z === first?.z);
+}
+
+/** Existing full blocks already guard/support the ring. Unknown/liquid/thin occupied cells are not build offers. */
+export function cageGuardWork(bot: any, cells: readonly P3[]): P3[] | null {
+  const read = bodyReader(bot), work: P3[] = [];
+  for (const p of cells) {
+    const b = read(p.x, p.y, p.z);
+    if (!b) return null;
+    if (b.solid === true && /^(cobblestone|end_stone|obsidian|bedrock)$/u.test(b.name)) continue;
+    if (!/^(air|cave_air|void_air)$/u.test(b.name)) return null;
+    work.push(p);
+  }
+  return work;
 }
 export function cageGuardCells(position: P3, wall: readonly P3[]): { ring: P3[]; close: P3[]; feet: Cell; toward: number[] } {
   const f = { x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) };
@@ -35,6 +51,23 @@ export function cageGuardCells(position: P3, wall: readonly P3[]): { ring: P3[];
   const ring = sides.map(([a, b]) => ({ x: f.x + a, y: f.y - 1, z: f.z + b }));
   for (const dy of [0, 1]) for (const [a, b] of sides) if (!(a === toward[0] && b === toward[1])) ring.push({ x: f.x + a, y: f.y + dy, z: f.z + b });
   return { ring, close: [0, 1].map(dy => ({ x: f.x + toward[0], y: f.y + dy, z: f.z + toward[1] })), feet: f, toward };
+}
+
+/** Read-only recovery offers, after landing. Walks use full support and <=1 m steps; no invented drop or obsidian shaft.
+ * A shaft offer has a continuous cobblestone column onto natural island ground. go/vertical recheck it at execution. */
+export function cageRecoveryFootings(bot: any): Array<{ at: P3; ground: P3; kind: 'ground' | 'shaft' }> {
+  if (!bot.entity?.onGround) return [];
+  const walk = walkGround(bot, { deadline: performance.now() + 100, radius: 16, maxCells: 1200 });
+  const found: Array<{ at: P3; ground: P3; kind: 'ground' | 'shaft'; meters: number }> = [];
+  for (const n of walk.cells) {
+    const { x, y, z } = n.cell, at = feetCentre(n.cell);
+    let bottom = y;
+    while (bottom > Math.max(1, y - 64) && walk.read(x, bottom - 1, z)?.name === 'cobblestone') bottom--;
+    const ground = { x, y: bottom, z };
+    if (walk.read(x, bottom - 1, z)?.name !== 'end_stone' || !inland(walk.read, ground)) continue;
+    found.push({ at, ground: feetCentre(ground), kind: bottom === y ? 'ground' : 'shaft', meters: n.walkMeters });
+  }
+  return found.sort((a, b) => a.meters - b.meters).map(({ meters: _meters, ...p }) => p);
 }
 
 /** Loaded natural island footings, independent of the End seed and arrival coordinates. The planner selects a destination.
