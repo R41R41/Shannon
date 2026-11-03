@@ -1159,7 +1159,7 @@ async function endermanHunt(where: 'platform' | 'warped', note: (text: string) =
   await placeActor('the_nether', stand[0], y, stand[2], 24);
   const rows: Array<Record<string, unknown>> = [];
   const total = timedSeconds ? Math.max(1, Math.floor(timedSeconds / 60)) : 4;
-  let pearls = 0, kills = 0, laidTotal = 0;
+  let pearls = 0, kills = 0, laidTotal = 0, coneCentre: number | null = null;
   for (let i = 0; i < total && !disconnected; i++) {
     if (Number(actor.health) < 10) { note(`health ${actor.health}: stopped before enderman ${i + 1}`); break; }
     const angle = (i * 70 + 25) * Math.PI / 180, distance = 13 + (i % 3) * 3;
@@ -1181,9 +1181,10 @@ async function endermanHunt(where: 'platform' | 'warped', note: (text: string) =
     let spot: { x: number; z: number; y: number } | null = null;
     if (where === 'warped') {
       for (let attempt = 0; attempt < 36 && !spot; attempt++) {
-        const a = (i * 70 + 25 + attempt * 41) * Math.PI / 180, d = 13 + ((attempt * 5) % 8);
+        // The roof left standing opens toward the first spot: the later ones are searched inside that cone (±35°), not all round the stand (a wall of the roof would hide them from the body, which is the probe's own rule, not the body's)
+        const a = (coneCentre === null ? i * 70 + 25 + attempt * 41 : coneCentre + ((attempt * 37) % 71) - 35) * Math.PI / 180, d = 13 + ((attempt * 5) % 8);
         const gx = stand[0] + Math.round(Math.cos(a) * d), gz = stand[2] + Math.round(Math.sin(a) * d), gy = groundAt(gx, gz);
-        if (gy !== null && seenFromBody(gx, gy, gz)) spot = { x: gx, z: gz, y: gy };
+        if (gy !== null && seenFromBody(gx, gy, gz)) { spot = { x: gx, z: gz, y: gy }; if (coneCentre === null) coneCentre = Math.round(a * 180 / Math.PI); }
       }
       if (!spot) {
         const reason = `no open ground in the body's sight at 13 to 20 blocks round ${stand[0]},${stand[2]} (36 tries): enderman ${i + 1} is skipped`;
