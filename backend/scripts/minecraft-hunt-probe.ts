@@ -721,8 +721,9 @@ async function blazeLight(note: (text: string) => void, options: { lit: boolean;
     for (const dx of offsets) for (const dz of offsets) {
       const x = sx + dx, z = sz + dz;
       if (dx === 0 && dz === 0) continue;
-      const here = actor.blockAt(new Vec3(x, sy, z));
-      if (here && here.boundingBox !== 'block' && solidBelow(x, sy, z)) { await ask(`${nether} setblock ${x} ${sy} ${z} minecraft:torch`); torches++; }
+      // (the server decides: air at the feet cell and something that is not air under it)
+      const said = await ask(`${nether} execute if block ${x} ${sy} ${z} minecraft:air unless block ${x} ${sy - 1} ${z} minecraft:air unless block ${x} ${sy - 1} ${z} minecraft:lava run setblock ${x} ${sy} ${z} minecraft:torch`);
+      if (/Changed the block/u.test(said)) torches++;
     }
     note(`torches placed: ${torches} (spacing ${options.torchSpacing})`);
   }
