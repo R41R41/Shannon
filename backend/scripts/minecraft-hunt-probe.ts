@@ -840,8 +840,29 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     mark('back from away');
     note(`back at the stand after ${options.awaySeconds ?? 150} s away; blazes known now: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
   }
+  // a floor round a cell, ring by ring from what stands outwards, one ring to an act: a push (a fireball's) then lands on the floor, not in the pit
+  const padAround = async (cell: { x: number; y: number; z: number }, rings: number, label: string) => {
+    const cellAt = (x: number, y: number, z: number) => actor.blockAt(new Vec3(x, y, z));
+    let placed = 0, wanted = 0;
+    for (let r = 1; r <= rings && !disconnected && hp() > 0; r++) {
+      const ring: Array<{ x: number; y: number; z: number }> = [];
+      for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+        const at = cellAt(cell.x + dx, cell.y - 1, cell.z + dz), above = cellAt(cell.x + dx, cell.y, cell.z + dz);
+        if (!at || at.boundingBox === 'block' || /lava|water/u.test(at.name) || (above && above.boundingBox === 'block')) continue;
+        ring.push({ x: cell.x + dx, y: cell.y - 1, z: cell.z + dz });
+      }
+      if (!ring.length) continue;
+      wanted += ring.length;
+      const run = await act(`pad ${label} ring ${r}`, [{ do: 'place', at: ring.slice(0, 16), block: 'cobblestone', onFail: 'continue' }], 30, { accept: ['blaze'] });
+      placed += (run.lines.join(' ').match(/を置いた/gu) ?? []).length;
+    }
+    note(`pad ${label}: floor cells wanted ${wanted}, placed ${placed} (rings ${rings})`);
+    return { wanted, placed };
+  };
   let sealState: { walls: number; ok: boolean } | null = null;
-  if (options.checkOnly) sealState = await sealStand();
+  if (options.checkOnly) { await padAround({ x: stand[0], y: stand[1], z: stand[2] }, 2, 'cover'); sealState = await sealStand(); }
+  if (options.away && options.lidOnly) await padAround({ x: stand[0], y: stand[1], z: stand[2] }, 2, 'cover');
   if (options.settle) await settle('after the return');
   if (options.torches) {
     // torches first: a greedy cover of the spawner's box (the free cells of the three layers within two blocks of a torch on the floor of the spawner's layer), set with go and place in acts of six
@@ -1060,7 +1081,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     }
     return out;
   };
-  let n = 0, outs = 0, retreats = 0, climbs = 0;
+  let n = 0, outs = 0, retreats = 0, climbs = 0, attackPadded = false;
   // the attack cell for an ambush: a cell with a floor and open feet and head, 1.5 to 3 m from the spawner across, within a block of its height, the nearest of them to the cover cell
   const attackCell = (() => {
     if (!options.ambush) return null;
@@ -1099,8 +1120,9 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     const standCells = (c.build as any[]).filter(row => row[4] !== null && row[4] !== undefined).length;
     let out = 'no attack cell', back = 'not tried';
     if (attackCell) {
-      const goOut = await act('check: out to the attack cell', [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 12, canPlace: ['cobblestone'], maxPlace: 4, onFail: 'continue' }], 25, { accept: ['blaze'] });
+      const goOut = await act('check: out to the attack cell', [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 15, canPlace: ['cobblestone'], maxPlace: 10, onFail: 'continue' }], 30, { accept: ['blaze'] });
       out = /着いた/u.test(goOut.lines.join(' ')) ? 'reached' : `failed: ${goOut.lines.join(' ').slice(0, 140)}`;
+      if (out === 'reached') { const padded = await padAround({ x: attackCell.x, y: attackCell.y, z: attackCell.z }, 2, 'attack'); out += ` (pad ${padded.placed}/${padded.wanted})`; }
       for (let tryNo = 1; tryNo <= 3; tryNo++) {
         const goBack = await act('check: back to the cover', [{ do: 'go', to: holdCell, range: 0.5, seconds: 12, onFail: 'continue' }], 25, { accept: ['blaze'] });
         const at = actor.entity.position;
@@ -1151,7 +1173,8 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
             if (b && /fire/u.test(b.name)) fires.push({ x: attackCell.x + dx, y: attackCell.y + dy, z: attackCell.z + dz });
           }
           if (fires.length) { const put = await act('put the fire out at the attack cell', [{ do: 'dig', at: fires, collect: false, onFail: 'continue' }], 20, { accept: ['blaze'] }); note(`fire put out at the attack cell: ${put.lines.join(' | ').slice(0, 140)}`); }
-          const goOut = await act(`out#${++outs}`, [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 12, canPlace: ['cobblestone'], maxPlace: 4, onFail: 'continue' }], 25, { accept: ['blaze'] });
+          const goOut = await act(`out#${++outs}`, [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 15, canPlace: ['cobblestone'], maxPlace: 10, onFail: 'continue' }], 30, { accept: ['blaze'] });
+          if (!attackPadded && /着いた/u.test(goOut.lines.join(' '))) { attackPadded = true; await padAround({ x: attackCell.x, y: attackCell.y, z: attackCell.z }, 2, 'attack'); }
           if (outs <= 3 || /止まった|失敗/u.test(goOut.lines.join(' '))) note(`out#${outs} (box count ${count}, hp ${r1(hp())}): ${goOut.lines.join(' ').slice(0, 200)}`);
         }
       }
