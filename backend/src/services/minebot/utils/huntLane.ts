@@ -25,12 +25,14 @@ export interface LanePlacement {
   needsClearing: boolean;
   /** A currently standable feet cell; preceding unblocked placements must leave it and its sight line open. */
   standAt: LaneCell | null;
-  noStand: 'out_of_reach' | 'hazard' | 'unloaded' | null;
+  noStand: 'out_of_reach' | 'hazard' | 'unloaded' | 'unreachable' | null;
   /** One-based, consecutive groups of at most six, or null when there is no footing. */
   group: number | null;
   blockedByCreature: boolean;
   /** false at a safe footing, null when no footing is available. */
   fireNear: boolean | null;
+  /** Cardinal walking steps from the probe's origin, without digging, placing or a drop greater than one. */
+  walk: number | null;
 }
 export interface LaneCandidate {
   direction: 'east' | 'west' | 'south' | 'north';
@@ -55,6 +57,7 @@ const HAZARDS = new Set(['lava', 'water', 'fire', 'soul_fire']);
 const STAND_HAZARDS = new Set([...HAZARDS, 'magma_block', 'campfire', 'soul_campfire']);
 const HORIZONTAL = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 const STAND_REACH = 4.3;
+const WALK_LIMIT = 2000;
 const SIDES: ReadonlyArray<readonly [number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const DIRECTIONS = [{ direction: 'east', dx: 1, dz: 0 }, { direction: 'west', dx: -1, dz: 0 },
   { direction: 'south', dx: 0, dz: 1 }, { direction: 'north', dx: 0, dz: -1 }] as const;
@@ -91,6 +94,34 @@ function placementLine(read: CampReader, from: LaneCell, to: LaneCell): 'clear' 
     else if (solid(block) || PARTIAL.test(block.name)) return 'blocked';
   }
   return unknown ? 'unloaded' : 'clear';
+}
+
+/** One bounded BFS per plan. Future blocks cannot be a route or a new floor. */
+function walkingSteps(read: CampReader, from: LaneCell, planned: ReadonlySet<string>): Map<string, number> {
+  const steps = new Map<string, number>();
+  const empty = (p: LaneCell) => !planned.has(key(p)) && AIR.has(read(p.x, p.y, p.z)?.name ?? '');
+  const standable = (p: LaneCell) => {
+    const feet = read(p.x, p.y, p.z), head = read(p.x, p.y + 1, p.z), floor = read(p.x, p.y - 1, p.z);
+    return !!feet && !!head && !!floor && AIR.has(feet.name) && AIR.has(head.name)
+      && !STAND_HAZARDS.has(floor.name) && (solid(floor) || /(?:_stairs|_slab)$/u.test(floor.name));
+  };
+  // The body may start in a future block's cell, but cannot enter any such cell along the route.
+  if (!standable(from)) return steps;
+  const queue = [from];
+  steps.set(key(from), 0);
+  for (let i = 0; i < queue.length && steps.size < WALK_LIMIT; i++) {
+    const p = queue[i], nextStep = steps.get(key(p))! + 1;
+    for (const [dx, dz] of HORIZONTAL) for (const dy of [0, 1, -1]) {
+      const q = add(p, dx, dy, dz), k = key(q);
+      if (steps.has(k) || !empty(q) || !empty(add(q, 0, 1, 0)) || !standable(q)) continue;
+      // A step up needs clearance above the starting head; a step down needs it above the landing head.
+      if (dy === 1 && !empty(add(p, 0, 2, 0))) continue;
+      if (dy === -1 && !empty(add(q, 0, 2, 0))) continue;
+      steps.set(k, nextStep); queue.push(q);
+      if (steps.size === WALK_LIMIT) return steps;
+    }
+  }
+  return steps;
 }
 
 export function laneReport(reader: CampReader, spawner: LaneCell, from: LaneCell, options: LaneOptions = {}): LaneReport {
@@ -206,7 +237,7 @@ export function laneReport(reader: CampReader, spawner: LaneCell, from: LaneCell
       build.push({ at, part: t.part, supportNow, supportAfter, occupied,
         distance: Math.round(d * 100) / 100, inReach: d <= 4.5, visible: solidBetween(read, eye, [t.at.x + 0.5, t.at.y + 0.5, t.at.z + 0.5]).length === 0,
         noSupport: supportNow === false && !supportAfter, below: below(t.at), needsClearing: at.state === 'block',
-        standAt: null, noStand: null, group: null, blockedByCreature: occupied.length > 0, fireNear: null });
+        standAt: null, noStand: null, group: null, blockedByCreature: occupied.length > 0, fireNear: null, walk: null });
       // Only an air target with a known face can provide a later hypothetical face. Occupancy is a separate present-time fact.
       if (at.state === 'air' && (supportNow === true || supportAfter)) built.set(key(t.at), t.at);
     };
@@ -219,33 +250,36 @@ export function laneReport(reader: CampReader, spawner: LaneCell, from: LaneCell
     }
     // Footings use the actual floor, never a future floor or an excavation. Earlier feasible placements
     // are opaque and cannot be stood in. A blocked/unsupported placement supplies no hypothetical cover.
+    const walks = walkingSteps(read, from, targetKeys);
     const placed = new Set<string>();
     const plannedRead: CampReader = (x, y, z) => placed.has(`${x},${y},${z}`) ? { name: 'cobblestone', solid: true } : read(x, y, z);
     const chooseStand = (p: LanePlacement) => {
-      p.standAt = null; p.fireNear = null;
+      p.standAt = null; p.fireNear = null; p.walk = null; p.group = null;
       if (p.at.state === 'unloaded') { p.noStand = 'unloaded'; return; }
-      let hazard = false, unknown = false;
-      const choices: Array<{ at: LaneCell; distance: number; protected: boolean; covered?: boolean }> = [];
+      let hazard = false, unknown = false, unreachable = false;
+      const choices: Array<{ at: LaneCell; distance: number; walk: number | null; protected: boolean; covered?: boolean }> = [];
       for (let x = p.at.x - 4; x <= p.at.x + 4; x++) for (let z = p.at.z - 4; z <= p.at.z + 4; z++) for (let y = p.at.y - 5; y <= p.at.y + 3; y++) {
         const q = { x, y, z };
         if (Math.hypot(x - p.at.x, y + 1.62 - (p.at.y + 0.5), z - p.at.z) > STAND_REACH) continue;
         if (x === p.at.x && z === p.at.z && (y === p.at.y || y + 1 === p.at.y)) continue;
-        if (placed.has(key(q)) || placed.has(key(add(q, 0, 1, 0)))) continue;
+        if (targetKeys.has(key(q)) || targetKeys.has(key(add(q, 0, 1, 0)))) continue;
         const state = footing(q);
         if (state !== 'safe') { hazard ||= state === 'hazard'; unknown ||= state === 'unloaded'; continue; }
-        choices.push({ at: q, distance: distance(q), protected: Math.abs(x - spawner.x) > 4 || Math.abs(z - spawner.z) > 4
+        choices.push({ at: q, distance: distance(q), walk: walks.get(key(q)) ?? null, protected: Math.abs(x - spawner.x) > 4 || Math.abs(z - spawner.z) > 4
           || fullFloor(plannedRead(x, spawner.y + 1, z)) || fullFloor(plannedRead(x, spawner.y + 2, z)) });
       }
       const sheltered = (q: typeof choices[number]) => q.covered ??= placementLine(plannedRead,
         add(spawner, 0.5, 1.53, 0.5), add(q.at, 0.5, 1.62, 0.5)) === 'blocked';
-      choices.sort((a, b) => a.distance - b.distance || Number(b.protected) - Number(a.protected) || Number(sheltered(b)) - Number(sheltered(a)));
+      choices.sort((a, b) => (a.walk ?? Infinity) - (b.walk ?? Infinity)
+        || a.distance - b.distance || Number(b.protected) - Number(a.protected) || Number(sheltered(b)) - Number(sheltered(a)));
       for (const q of choices) {
         const line = placementLine(plannedRead, add(q.at, 0.5, 1.62, 0.5), add(p.at, 0.5, 0.5, 0.5));
         if (line === 'unloaded') unknown = true;
         if (line !== 'clear') continue;
-        p.standAt = q.at; p.noStand = null; p.fireNear = false; return;
+        if (q.walk === null) { unreachable = true; continue; }
+        p.standAt = q.at; p.noStand = null; p.fireNear = false; p.walk = q.walk; return;
       }
-      p.noStand = hazard ? 'hazard' : unknown ? 'unloaded' : 'out_of_reach';
+      p.noStand = unreachable ? 'unreachable' : hazard ? 'hazard' : unknown ? 'unloaded' : 'out_of_reach';
     };
     const project = (p: LanePlacement) => {
       if (p.standAt && !p.blockedByCreature && p.at.state === 'air'
@@ -302,7 +336,7 @@ export function laneReport(reader: CampReader, spawner: LaneCell, from: LaneCell
     + `見えている数え箱内のブレイズは${count}体（6体以上で湧き止めの条件${blaze.atLimit ? 'に達している' : 'には未到達'}）。`
     + `先頭の向きは、溶岩・水・火が中か隣に${best.hazards.length}マス、支えなし${best.build.filter(p => p.noSupport).length}マス、未ロードの建築マス${best.required.unknown}。`
     + `指定の形でもレーン外に湧ける空間${best.remainingOutsideLane}か所・不明${best.unknownOutsideLane}か所。建築順は囲み、屋根と栓、蓋が基本で支えを先にする。手の距離は目から4.5以内、視線は現在の地形。`
-    + `\n立ち位置つきの建築順（${new Set(best.build.filter(p => p.group !== null).map(p => p.group)).size}組）。立てる所が無いマス${best.build.filter(p => !p.standAt).length}個。`;
+    + `\n立ち位置は${new Set(best.build.filter(p => p.group !== null).map(p => p.group)).size}組、着けない${best.build.filter(p => p.noStand === 'unreachable').length}マス。`;
   return { text, spawner, from, spawn, blaze, candidates };
 }
 
@@ -332,10 +366,10 @@ export function laneProbeFields(report: LaneReport) {
     waiting: [ref(c.waiting.feet), ref(c.waiting.head)], clear: c.clear.map(ref), hazards: c.hazards.map(p => [ref(p), p.inside]),
     build: c.build.map(p => [fact(p), parts.indexOf(p.part), p.supportAfter ? ref({ ...p.supportAfter, name: 'air', state: 'air' }) : null,
       (p.inReach ? 1 : 0) | (p.visible ? 2 : 0) | (p.noSupport ? 4 : 0),
-      p.standAt ? ref({ ...p.standAt, name: 'air', state: 'air' }) : null, p.group]) }));
+      p.standAt ? ref({ ...p.standAt, name: 'air', state: 'air' }) : null, p.group, p.walk]) }));
   return { ...report, candidates, cells, facts,
     rows: { indexBase: 0, cells: ['x', 'y', 'z', 'name', 'state'], facts: ['cell', 'supportNow', 'occupiedCount', 'belowDepth', 'belowEnd', 'needsClearing', 'standFact'],
-      build: ['fact', 'partIndex', 'supportAfterCell', 'flags', 'standAtCell', 'group'], parts, flags: { inReach: 1, visibleNow: 2, noSupport: 4 },
+      build: ['fact', 'partIndex', 'supportAfterCell', 'flags', 'standAtCell', 'group', 'walk'], parts, flags: { inReach: 1, visibleNow: 2, noSupport: 4 },
       lane: ['feetCell', 'headCell'], waiting: ['feetCell', 'headCell'], hazards: ['cell', 'inside'],
       standFacts: ['noStand', 'blockedByCreature', 'fireNear'] }, standFacts };
 }

@@ -30,6 +30,7 @@ import { obsidian, obsidianProblem } from '../utils/primitives/obsidian.js';
 import { portal, portalProblem } from '../utils/primitives/portal.js';
 import { fight, HandCut } from '../utils/primitives/fight.js';
 import { shieldRush, shieldRushProblem, SHIELD_RUSH_DESCRIPTION, type ShieldRushResult, type ShieldRushOutcome } from '../utils/primitives/shieldRush.js';
+import { fill, fillProblem, FILL_DESCRIPTION, type FillResult, type FillOutcome } from '../utils/primitives/fill.js';
 import { LINE_MAX, LINE_MAX_WITH_CAUSE } from '../utils/actReport.js';
 import { waterDigWords } from '../utils/waterDigWords.js';
 import { mine } from '../utils/primitives/mine.js';
@@ -62,7 +63,7 @@ const Pos = z.object({ x: z.number().optional(), y: z.number().optional(), z: z.
   front: z.number().optional(), right: z.number().optional(), up: z.number().optional() }).strict();
 const ItemCount = z.object({ item: z.string(), count: z.number().optional() }).strict();
 export const HAND_KINDS = ['walk', 'go', 'dig', 'place', 'pillarUp', 'use', 'look', 'jump', 'sneak', 'equip', 'craft', 'furnace', 'chest',
-  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'obsidian', 'portal', 'fight', 'mine', 'make', 'smelt', 'vertical'] as const;
+  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'obsidian', 'portal', 'fight', 'mine', 'make', 'smelt', 'vertical', 'fill'] as const;
 const Face = z.enum(['up', 'down', 'north', 'south', 'east', 'west']);
 /** One hand: every field of the head's ActHand (the body takes whatever the head's schema takes), and a few more it can read. */
 const Hand = z.object({
@@ -72,6 +73,10 @@ const Hand = z.object({
   at: z.array(Pos).max(16).optional().describe('dig・place は順に全部、use・furnace・chest・shoot・drop は 1 つ、mine は鉱脈のマス（1〜4）、smelt は使うかまど（最大4）'),
   face: Face.optional().describe('place・use: 当てる面'),
   block: z.string().optional(),
+  groups: z.array(z.object({
+    stand: z.object({ x: z.number().finite(), y: z.number().finite(), z: z.number().finite() }).strict(),
+    at: z.array(z.object({ x: z.number().finite(), y: z.number().finite(), z: z.number().finite() }).strict()).min(1).max(8),
+  }).strict()).min(1).max(12).optional().describe('fill: 各組の立つ足のマス stand と、そこから順に置く at（絶対座標）'),
   item: z.string().optional(),
   count: z.number().optional(),
   items: z.array(ItemCount).max(16).optional(),
@@ -176,7 +181,8 @@ const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は
   + 'make(item, count) は途中の物（板・棒など）を持ち物から順に作る（足りなければ何も作らず足りない物の一覧を返す。3x3 は近くの作業台、無ければ持っている物を置く）。'
   + 'smelt(items: [{item,count}], fuel, fuelCount, furnaces: 何基に分けるか, at: かまど, seconds) はかまどに分けて入れて燃料を足すまで（焼き上がりは待たず、取り出しは furnace op=take）。'
   + '座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。'
-  + SHIELD_RUSH_DESCRIPTION;
+  + SHIELD_RUSH_DESCRIPTION
+  + FILL_DESCRIPTION;
 
 class Act extends InstantSkill {
   constructor(bot: CustomBot) {
@@ -255,6 +261,11 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
         maxPlace: hand.maxPlace, liquid: hand.liquid!, range: hand.range, seconds: hand.seconds });
     }
     case 'dig': return dig(ctx, { at: cells, tool: hand.tool, collect: hand.collect, take: hand.takeOk, exposeOk: hand.exposeOk });
+    case 'fill': {
+      const issue = fillProblem(hand);
+      if (issue) return bad(`fill: ${issue}`);
+      return fill(ctx, { block: hand.block!, groups: hand.groups!, retreatHp: hand.retreatHp!, retreatTo: hand.retreatTo!, seconds: hand.seconds! });
+    }
     case 'obsidian': {
       // The lava sources are the planner's, as cells; where to stand, where to pour, the wait, the dig and the water back are the body's (utils/primitives/obsidian).
       const problem = obsidianProblem(hand as Record<string, unknown>, spec => cellOf(ctx, hand, spec) !== null);
@@ -478,7 +489,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     && accepted.has(String(entity.name ?? '').toLowerCase()) && entity.position.distanceTo(bot.entity.position) <= 6);
   const hurtOrFall = () => {
     const health = Number(bot.health ?? 20);
-    highWater = acceptedNear() ? health : Math.max(highWater, health);
+    // fill owns its HP floor and return budget, including during its go; a damage notice must not cut that return short.
+    highWater = handNow?.do === 'fill' || acceptedNear() ? health : Math.max(highWater, health);
     if (highWater - health >= 4) {
       hurtAt ??= Date.now();
       if (Date.now() - hurtAt >= HURT_GRACE_MS && !reflexHeld(bot)) return stopWith(`被弾: 体力 ${Math.round(highWater)} → ${Math.round(health)}`, 'damage_taken');
@@ -499,7 +511,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       const entries = ledger?.entriesSince(mark).filter(entry => !LEDGER_QUIET.has(entry.kind)) ?? [];
       // r6 (run 29): a reflex's note does not stop a hand that is laying blocks (it may be what walls the threat off); the act stops when
       // that hand is over. A reflex that takes the body still cuts it at once (its lease aborts the action: onCut).
-      if (entries.length && !LAYING_HANDS.has(String(host.actHandNow ?? ''))) return stopWith(entries.map(entry => entry.detail).join('、'), 'reflex');
+      if (entries.length && handNow?.do !== 'fill' && !LAYING_HANDS.has(String(host.actHandNow ?? ''))) return stopWith(entries.map(entry => entry.detail).join('、'), 'reflex');
       // An accepted kind is not counted (the contract's 1.4): the act is there to fight it.
       const near = typeof stopIf?.hostileWithin === 'number' ? (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity?.position && entity !== bot.entity
         && !accepted.has(String(entity.name ?? '').toLowerCase()) && entity.position.distanceTo(bot.entity.position) <= stopIf.hostileWithin! && isThreat(bot, entity) && !sealed(entity)) : [];
@@ -553,7 +565,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const nextObsSeq = () => { try { return Number((host as { nextObsSeq?: () => number }).nextObsSeq?.() ?? 0); } catch { return 0; } };
   /** The cut reason of an act stopped from outside its hands. */
   const outsideCut = () => cutByOf(report.failureType, report.stoppedBy, signal?.reason);
-  const pushLine = (index: number, status: HandStatus, line: string, verdict: HandVerdict, motorOps: number, extra: Partial<HandLine> & { shieldRush?: ShieldRushResult } = {}, events: InventoryEvent[] = []) => {
+  const pushLine = (index: number, status: HandStatus, line: string, verdict: HandVerdict, motorOps: number, extra: Partial<HandLine> & { shieldRush?: ShieldRushResult; fill?: FillResult } = {}, events: InventoryEvent[] = []) => {
     handResults.set(index + 1, { goal: verdict.goal, end: verdict.end });
     handRuns.push({ goal: verdict.goal, motorOps, ran: status !== 'skipped' });
     report.lines.push({ i: index + 1, do: hands[index].do, status, line, ...extra, goal: verdict.goal, end: verdict.end, ...(status !== 'skipped' ? { motorOps } : {}),
@@ -685,7 +697,13 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (outcome.data?.container) report.container = outcome.data.container;
       if (typeof outcome.data?.arrowsLeft === 'number') report.arrowsLeft = outcome.data.arrowsLeft;
       const rush = (outcome as Partial<ShieldRushOutcome>).shieldRush;
-      const rushExtra = rush ? { shieldRush: rush } : {};
+      const filling = (outcome as Partial<FillOutcome>).fill;
+      const rushExtra = { ...(rush ? { shieldRush: rush } : {}), ...(filling ? { fill: filling } : {}) };
+      if (filling?.status === 'cut' || filling?.code === 'DEAD') {
+        if (!control.signal.aborted) stopWith(outcome.text, filling.code === 'DEAD' ? 'died' : filling.code === 'REFLEX' ? 'reflex' : 'timeout');
+        pushLine(index, 'stopped', clip(outcome.text), { goal: filling.placed ? 'partial' : 'failed', end: 'cut', cutBy: outsideCut(), code: filling.code ?? undefined, progress: outcome.progress }, handOps, rushExtra, delta);
+        remember(hand, 'stopped', outcome.text, outcome.at, base); skip(index + 1); return false;
+      }
       if (rush?.status === 'cut' || rush?.code === 'DEAD') {
         if (!control.signal.aborted) stopWith(outcome.text, rush.code === 'DEAD' ? 'died' : rush.code === 'REFLEX' ? 'reflex' : 'timeout');
         pushLine(index, 'stopped', clip(outcome.text), { goal: rush.targetDead ? 'partial' : 'unknown', end: 'cut', cutBy: outsideCut(), code: rush.code ?? undefined, progress: outcome.progress }, handOps, rushExtra, delta);
@@ -720,7 +738,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       try { if (outcome.at) around = aroundText(bodyReader(bot), outcome.at, feetCell(bot)); } catch { /* the line stands without it */ }
       // go's, obsidian's and portal's lines are the contract's own ("<手> 止まった <code>: ...", the counts in it): the code is the closed word.
       const own = hand.do === 'obsidian' || hand.do === 'portal' || hand.do === 'vertical';
-      const line = rush || hand.do === 'go' ? clip(outcome.text) : own ? clip(outcome.text.startsWith(`${hand.do} 止まった`) ? outcome.text : `${hand.do} 止まった ${outcome.reason ?? 'failed'}: ${outcome.text}`) : stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
+      const line = rush || filling || hand.do === 'go' ? clip(outcome.text) : own ? clip(outcome.text.startsWith(`${hand.do} 止まった`) ? outcome.text : `${hand.do} 止まった ${outcome.reason ?? 'failed'}: ${outcome.text}`) : stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
       // A hand that stops the act by itself ended (finished) on its own: a cut is only what comes from outside.
       pushLine(index, goesOn ? 'failed' : 'stopped', line, finishedVerdict(outcome, handOps), handOps,
         { ...rushExtra, ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) }, delta);

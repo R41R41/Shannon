@@ -770,7 +770,7 @@ scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wid
 // The lane built BY THE BODY's hands (S2, 2026-11-03): the scripted head reads probe kind=lane (no spawner given: the near one), takes the first candidate (fewest cobblestones), and builds what the probe lists in the order
 // it lists it, with go and place hands (up to 4 cells per group, a go to a floor cell within reach first), the blazes alive and shooting. Then it re-reads the plan (what still stands to be built outside the lane), goes to the
 // waiting cell and holds for the rest of the time, fetching what falls. Measures the time to build, the lowest health while building, the cobblestones used and the kills after.
-async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number } = {}): Promise<Record<string, unknown>> {
+async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const holdSeconds = options.holdSeconds ?? 300, groupSize = options.groupSize ?? 5, thinkMs = 5000;
@@ -792,6 +792,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     await placeActor('the_nether', arrival[0], arrival[1], arrival[2], 24);
     await sleep((options.awaySeconds ?? 150) * 1000);
     await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+    await sleep(5000);   // (the blocks under the body arrive after the move: a fill read at once said there was no floor)
     note(`back at the stand after ${options.awaySeconds ?? 150} s away; blazes known now: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
   }
   let json = await readLane();
@@ -799,6 +800,8 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const c = json.candidates[0], cells = json.cells as Array<[number, number, number, string | null, string]>, facts = json.facts as Array<[number, boolean | null, number, number, string, boolean]>;
   const spawnerCell = json.spawner as { x: number; y: number; z: number };
   const wait = cells[c.waiting[0]];
+  note(`probe text: ${String(json.text ?? '').slice(0, 700)}`);
+  note(`probe text tail: ${String(json.text ?? '').slice(700, 1500)}; stand cells in the plan: ${(c.build as any[]).filter(row => row[4] !== null && row[4] !== undefined).length} of ${c.build.length}; groups ${new Set((c.build as any[]).map(row => row[5])).size}`);
   note(`lane candidate ${c.direction}: required ${JSON.stringify(c.required)}; waiting cell ${wait.slice(0, 3)}; ${c.build.length} placements; spawn spaces ${json.spawn?.spaces}; blazes in the count box ${json.blaze?.count}`);
   // the probe's own order and groups (each placement: the cell, its part, the cell to stand in and the number of its group)
   const placementsOf = (cand: any, table: any[], factTable: any[]) => (cand.build as Array<[number, number, number | null, number, number | null, number | null]>)
@@ -816,7 +819,32 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     for (const p of placements) { const last = groups[groups.length - 1]; if (last && p.group !== -1 && last[0].group === p.group) last.push(p); else groups.push([p]); }
     // the cover first (the waiting cell's enclosure, the plug and the roof of the lane), then the lid; two groups to one act (12 hands: a go and up to five places each)
     const rank = (g: typeof placements) => ['enclosure', 'plug', 'roof', 'lid'].indexOf(g[0].part);
-    groups.sort((a, b) => rank(a) - rank(b));
+    // (in the fill run the probe's own order stands: it puts each cell after the one it is set against; the cover-first order broke that: "nothing_to_set_against" for the enclosure)
+    if (!options.fill) groups.sort((a, b) => rank(a) - rank(b));
+    if (options.fill) {
+      // the cover to go back to: the waiting cell once it can be stood in (its enclosure is a part of the plan), else the stand the body came to
+      const openCell = (x: number, y: number, z: number) => { const c = actor.blockAt(new Vec3(x, y, z)); return !!c && c.boundingBox !== 'block'; };
+      const retreatNow = () => { const below = actor.blockAt(new Vec3(wait[0], wait[1] - 1, wait[2])); return below && below.boundingBox === 'block' && openCell(wait[0], wait[1], wait[2]) && openCell(wait[0], wait[1] + 1, wait[2]) ? { x: wait[0], y: wait[1], z: wait[2] } : { x: stand[0], y: stand[1], z: stand[2] }; };
+      // the fill hand: the groups of this pass as they are (a stand cell and up to eight cells each), twelve groups to an act, health floor 10, back to the waiting cell
+      const withStand = groups.filter(g => g[0].stand);
+      const phases = [withStand];
+      let stopFill = false;
+      for (const phase of phases) {
+        const arg = phase.map(g => ({ stand: g[0].stand!, at: g.slice(0, 8).map(p => p.at) }));
+        for (let gi = 0; gi < arg.length && !stopFill && !disconnected && hp() > 0 && deaths === deaths0; gi += 12) {
+          if (hp() < 6) { aborted = `hp ${r1(hp())} at pass ${pass} group ${gi}/${arg.length}`; stopFill = true; break; }
+          await sleep(thinkMs);
+          const retreat = retreatNow();
+          const run = await act(`fill#${++acts}`, [{ do: 'fill', block: 'cobblestone', groups: arg.slice(gi, gi + 12), retreatHp: 10, retreatTo: retreat, seconds: 60 }], 90, { accept: ['blaze'] });
+          const f = ((run.json?.lines ?? []) as any[]).map(line => line.fill).find(Boolean);
+          built += Number(f?.placed ?? 0); failedCells += Array.isArray(f?.remaining) ? f.remaining.length : 0;
+          note(`fill#${acts} pass ${pass} (retreat ${retreat.x},${retreat.y},${retreat.z}) hp ${r1(hp())}: ${f ? `${f.status} ${f.code ?? ''} placed ${f.placed} remaining ${f.remaining?.length} skipped ${JSON.stringify(f.skippedBy)} reasons ${JSON.stringify(f.reasons)} hp ${r1(f.hpMin)}→${r1(f.hpEnd)} ${f.elapsedMs} ms safe ${f.safe}` : run.lines.join(' ').slice(0, 200)}`);
+          if (f && (f.status === 'cut' || f.code === 'HP_FLOOR' || f.code === 'NO_STAND')) { stopFill = true; break; }
+        }
+        if (stopFill) break;
+      }
+      groups.length = 0;
+    }
     for (let gi = 0; gi < groups.length && !disconnected && hp() > 0 && deaths === deaths0; gi += 2) {
       if (hp() < 6) { aborted = `hp ${r1(hp())} at pass ${pass} group ${gi}/${groups.length}`; break; }
       const pair = groups.slice(gi, gi + 2);
@@ -864,6 +892,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
     killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null };
 }
+scene('blaze_lane_fill', 'the lane set with the fill hand after clearing away: the room fills 40 s, the body goes far off 150 s, comes back, probe lane, fill acts (12 groups each, health floor 10), then a 300 s hold', note => blazeLaneBuild(note, { away: true, fill: true }));
 scene('blaze_lane_build_away', 'the lane built after clearing away: the room fills for 40 s, the body goes to the Nether arrival for 150 s, comes back and builds from the probe, then a 300 s hold', note => blazeLaneBuild(note, { away: true }));
 scene('blaze_lane_build', 'the lane built by the scripted head from probe kind=lane with go and place hands while the blazes are alive, then a 300 s hold', note => blazeLaneBuild(note));
 async function blazeSlit(note: (text: string) => void, options: { seconds?: number; fetch?: boolean; flush?: boolean } = {}): Promise<Record<string, unknown>> {
