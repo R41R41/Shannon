@@ -1047,7 +1047,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     }
     return out;
   };
-  let n = 0, outs = 0;
+  let n = 0, outs = 0, retreats = 0;
   // the attack cell for an ambush: a cell with a floor and open feet and head, 1.5 to 3 m from the spawner across, within a block of its height, the nearest of them to the cover cell
   const attackCell = (() => {
     if (!options.ambush) return null;
@@ -1064,17 +1064,29 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   })();
   if (attackCell) note(`ambush: attack cell ${attackCell.x},${attackCell.y},${attackCell.z}, cover cell ${holdCell.x},${holdCell.y},${holdCell.z}`);
   else if (options.ambush) note('ambush: no attack cell near the spawner');
+  // the counting box of the spawner (its block grown by four: x, y, z from -4 to +5), the burning flag of the body (the first bit of its flags), and the health lost: a drop of more than 1.25 at once is a fireball, a smaller one while burning is the fire
+  const boxCount = () => (Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze' && e.position
+    && e.position.x + 0.3 > spawnerCell.x - 4 && e.position.x - 0.3 < spawnerCell.x + 5 && e.position.y + 1.8 > spawnerCell.y - 4 && e.position.y < spawnerCell.y + 5
+    && e.position.z + 0.3 > spawnerCell.z - 4 && e.position.z - 0.3 < spawnerCell.z + 5).length;
+  const burning = () => { const flags = (actor.entity as any)?.metadata?.[0]; return typeof flags === 'number' && (flags & 1) !== 0; };
+  let burnLoss = 0, hitLoss = 0, smallLoss = 0, burnSeconds = 0, lastHp = hp();
+  const lossWatch = setInterval(() => {
+    const h = hp();
+    if (!Number.isFinite(h)) return;
+    if (burning()) burnSeconds += 0.25;
+    if (h < lastHp) { const drop = lastHp - h; if (drop > 1.25) hitLoss += drop; else if (burning()) burnLoss += drop; else smallLoss += drop; }
+    lastHp = h;
+  }, 250);
   try {
     while (Date.now() - holdStart < holdSeconds * 1000 && !disconnected && hp() > 0 && deaths === deaths0) {
       if (attackCell) {
-        // spawn-triggered: in the cover until a blaze stands near the spawner; then out to the attack cell and 5 s holds while some stand there and the health is 14 or more;
-        // back to the cover when none is left or the health is below 14, and rest to 18 there
+        // spawn-triggered: in the cover until a blaze is in the counting box (9x9x9 round the spawner) and there are four or fewer; then out to the attack cell and 3 s holds while that stays so,
+        // the health is 14 or more and the body is not on fire; back to the cover at once when not, and rest to 18 there
         const aPos = new Vec3(attackCell.x + 0.5, attackCell.y, attackCell.z + 0.5);
-        const nearSpawner = () => (Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze' && e.position
-          && Math.hypot(e.position.x - spawnerCell.x - 0.5, e.position.z - spawnerCell.z - 0.5) <= 9 && Math.abs(e.position.y - spawnerCell.y) <= 8).length;
         const atAttack = () => actor.entity.position.distanceTo(aPos) < 1.3;
-        if (nearSpawner() === 0 || hp() < 14) {
-          if (atAttack()) await act('back to the cover', [{ do: 'go', to: holdCell, range: 0.5, seconds: 12, onFail: 'continue' }], 25, { accept: ['blaze'] });
+        const count = boxCount(), afire = burning();
+        if (count === 0 || count > 4 || hp() < 14 || afire) {
+          if (atAttack()) { const back = await act('back to the cover', [{ do: 'go', to: holdCell, range: 0.5, seconds: 12, onFail: 'continue' }], 25, { accept: ['blaze'] }); retreats++; if (retreats <= 8) note(`back to the cover #${retreats} (box count ${count}, hp ${r1(hp())}, ${afire ? 'on fire' : 'not on fire'}): ${back.lines.join(' ').slice(0, 120)}`); }
           if (hp() < 18) {
             for (let w = 0; w < 6 && hp() < 18 && !disconnected && hp() > 0; w++) { if (Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15); await act('rest', [{ do: 'wait', seconds: 5 }], 15, { accept: ['blaze'] }); }
             note(`rested in the cover: hp ${r1(hp())}`);
@@ -1083,21 +1095,22 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
         }
         if (!atAttack()) {
           const goOut = await act(`out#${++outs}`, [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 12, canPlace: ['cobblestone'], maxPlace: 4, onFail: 'continue' }], 25, { accept: ['blaze'] });
-          if (outs <= 3 || /止まった|失敗/u.test(goOut.lines.join(' '))) note(`out#${outs} (blazes near the spawner ${nearSpawner()}, hp ${r1(hp())}): ${goOut.lines.join(' ').slice(0, 200)}`);
+          if (outs <= 3 || /止まった|失敗/u.test(goOut.lines.join(' '))) note(`out#${outs} (box count ${count}, hp ${r1(hp())}): ${goOut.lines.join(' ').slice(0, 200)}`);
         }
       }
-      const run = await act(`hold#${++n}`, [{ do: 'attack', target: 'blaze', hold: true, seconds: attackCell ? 5 : 20 }], 40, { accept: ['blaze'] });
+      const run = await act(`hold#${++n}`, [{ do: 'attack', target: 'blaze', hold: true, seconds: attackCell ? 3 : 20 }], 40, { accept: ['blaze'] });
       { const text = run.lines.join(' '); shieldHits += Number(/被弾 (\d+)回/u.exec(text)?.[1] ?? 0); woundsTaken += Number(/受けた傷 ([\d.]+)/u.exec(text)?.[1] ?? 0); if (/見えない/u.test(text)) unseenActs++; }
       if (hp() < 14 && Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15);
       if (/落とし物 blaze_rod/u.test(run.lines.join(' '))) await act('fetch', [{ do: 'pickup', range: 4, onFail: 'continue' }, { do: 'go', to: holdCell, range: 0.4, seconds: 8, onFail: 'continue' }], 30, { accept: ['blaze'] });
       if (n % 3 === 1) note(`hold#${n}: hp ${r1(hp())} kills ${killed} rods +${(packClient().blaze_rod ?? 0) - rods0}`);
     }
-  } finally { clearInterval(sampler); clearInterval(watch); actor.removeListener('entityDead', onDead); }
+  } finally { clearInterval(sampler); clearInterval(watch); clearInterval(lossWatch); actor.removeListener('entityDead', onDead); }
+  note(`health lost: ${r1(hitLoss)} in single drops over 1.25 (fireballs), ${r1(burnLoss)} while burning, ${r1(smallLoss)} other; burning ${r1(burnSeconds)} s; out ${outs} times, back ${retreats} times`);
   for (const line of watchReport()) note(`blaze watch ${line}`);
   return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
-    killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null, shieldHits, woundsTaken: r1(woundsTaken), actsWithBlazeUnseen: unseenActs, holdActs: n };
+    killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null, shieldHits, woundsTaken: r1(woundsTaken), actsWithBlazeUnseen: unseenActs, holdActs: n, hitLoss: r1(hitLoss), burnLoss: r1(burnLoss), burnSeconds: r1(burnSeconds), outs, retreats };
 }
-scene('blaze_ambush', 'the lid cover set with the fill hand after clearing away; in the cover until a blaze stands near the spawner, then out to a cell beside it and 5 s strikes while some stand there; back to the cover when none is left or below 14 hp (rest to 18); a blaze table at the end; 480 s', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, ambush: true, holdSeconds: 480 }));
+scene('blaze_ambush', 'the lid cover set with the fill hand after clearing away; in the cover until one to four blazes are in the counting box, then out to a cell beside the spawner and 3 s strikes; back at once when none, more than four, below 14 hp or on fire (rest to 18); health lost split into fireball drops and fire; a blaze table at the end; 480 s', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, ambush: true, holdSeconds: 480 }));
 scene('blaze_lid_window', 'the lid only with a window: two head-height cells next to the body towards the spawner stay open; fill, then attack hold 400 s; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, window: 2, holdSeconds: 400 }));
 scene('blaze_lid_fill', 'the lid only (the lid cells of the lane probe) set with the fill hand right after clearing away, no torches, then attack hold from the cover for 300 s; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, holdSeconds: 300 }));
 scene('blaze_lane_fill_settle', 'the lane set with the fill hand after clearing away: fight from the cover what came back, torches first, fill, settle between steps; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, torches: true, settle: true }));
