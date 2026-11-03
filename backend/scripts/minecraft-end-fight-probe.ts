@@ -2031,12 +2031,14 @@ scenes.end_full_chain = async () => {
 type KillStyle = 'sword_stage' | 'bed' | 'bow';
 type KillNookBuilder = 'operator' | 'body';
 const KILL_LIMIT_MS = 25 * 60 * 1000;
-const killEntries = ['dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'end_full_chain'];
+const killEntries = ['dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain'];
 const killCell = (p: P3): P3 => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
 const packCount = (name: string): number => actor.inventory.items().filter((item: any) => item.name === name).reduce((n: number, item: any) => n + item.count, 0);
 let killArena: { ground: P3; perch: P3; yaw: number } | null = null;
 const killPlaced = new Map<string, P3>();
 const killBlasts: P3[] = [];
+/** The crystals the End showed just before the comparison's set-up removed them (the crystal-count experiments put some back). */
+let killCrystalSnapshot: Array<{ id: number; x: number; y: number; z: number; caged: boolean | null }> = [];
 
 /** Bootstrap only: choose real island support from the loaded terrain, relative to the observed fountain/head. */
 async function prepareKillRun(waitingSide = false): Promise<{ dragonId: number; ground: P3 }> {
@@ -2076,6 +2078,7 @@ async function prepareKillRun(waitingSide = false): Promise<{ dragonId: number; 
   killBlasts.length = 0;
   await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`);
   await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+  killCrystalSnapshot = ((endView() as any)?.crystals?.list ?? []).map((c: any) => ({ id: c.id, x: c.position.x, y: c.position.y, z: c.position.z, caged: c.caged }));
   await ask(`${END} kill @e[type=minecraft:end_crystal]`);
   await ask(`${END} kill @e[type=minecraft:arrow]`);
   await ask(`${END} kill @e[type=minecraft:item]`);
@@ -2679,8 +2682,14 @@ function basinWaitingCell(view: ReturnType<typeof endObservation>): P3 | null {
 }
 // The tp baseline and the walking scene use the same first observed basin candidate. Floor reflexes stay ON;
 // after entry, keep swinging throughout phases 6/7/5, independently of the short head-strike windows.
-const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false) => {
+const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 'all' | 'caged' = 'none') => {
   const initial = await prepareKillRun(true);
+  // Crystal-count experiment: the crystals the experiment keeps are put back where they stood (the dragon heals while one lives); the dragon's health is sampled every 5 s.
+  const keptCrystals = killCrystalSnapshot.filter(c => keep === 'all' || (keep === 'caged' && c.caged === true));
+  for (const c of keptCrystals) await ask(`${END} summon minecraft:end_crystal ${c.x} ${c.y} ${c.z} {ShowBottom:0b}`);
+  const dragonSamples: Array<[number, number | null]> = [];
+  const sampleT0 = Date.now();
+  const sampleTimerCrystals = setInterval(() => { dragonSamples.push([Math.round((Date.now() - sampleT0) / 100) / 10, endView()?.dragon?.health ?? null]); }, 5000);
   // Endermen (the End island has them) take offence at eye contact; a carved pumpkin on the head ends that (it stands in for the iron helmet: two armour points less).
   if (pumpkin) { await ask(`give ${ACTOR} minecraft:carved_pumpkin 1`); await sleep(500); await act([{ do: 'equip', item: 'carved_pumpkin', slot: 'head' }], 8); }
   const t0 = Date.now(), deadline = t0 + KILL_LIMIT_MS, deaths0 = actorDeaths, lowest = trackMinHealth(), counts0 = actor.reflexLedger.counts();
@@ -2758,16 +2767,18 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false) => {
       }
       sits.push(row);
     }
-  } finally { clearInterval(phaseTimer); actor.removeListener('entityDead', onDead); }
+  } finally { clearInterval(phaseTimer); clearInterval(sampleTimerCrystals); actor.removeListener('entityDead', onDead); }
   const counts = actor.reflexLedger.counts(), reflexKinds: Record<string, number> = {};
   for (const [kind, n] of Object.entries(counts) as Array<[string, number]>) { const used = n - (counts0[kind] ?? 0); if (used > 0) reflexKinds[kind] = used; }
   const health = await dragonHealthServer().catch(() => null);
   return { scene: 'dragon_kill_compare', style: 'basin_assist', endReason, seconds: elapsed(), killSeconds: endReason === 'dragon_dead' ? elapsed() : null, deaths: actorDeaths - deaths0,
-    minHealth: lowest.stop(), dragonHealthEnd: health, waiting: initial.ground, waitingChosen, windows: sits, transitions: transitions.slice(0, 400), reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
+    minHealth: lowest.stop(), dragonHealthEnd: health, waiting: initial.ground, waitingChosen, keptCrystals: keptCrystals.length, dragonSamples, windows: sits, transitions: transitions.slice(0, 400), reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
 };
 scenes.dragon_kill_basin_assist = () => basinAssist('tp');
 scenes.dragon_kill_basin_walk = () => basinAssist('walk');
 scenes.dragon_kill_basin_walk_pumpkin = () => basinAssist('walk', true);
+scenes.dragon_kill_basin_crystals_all = () => basinAssist('walk', false, 'all');
+scenes.dragon_kill_basin_crystals_caged = () => basinAssist('walk', false, 'caged');
 scenes.dragon_kill_sword_assist = () => swordAssist('strike');
 scenes.dragon_kill_sword_assist_walk = () => swordAssist('stage');
 scenes.dragon_kill_compare = async () => {
