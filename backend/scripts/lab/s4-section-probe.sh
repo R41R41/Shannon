@@ -8,7 +8,7 @@
 set -eu
 PIN=${1:?pin dir}; LABEL=${2:?label}; KEY=${3:?world key}; SCENES=${4:?scenes}; shift 4
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-PARTS=${S4_SCENES_PART:-"$HERE/s4-section-scenes.part.ts $HERE/s4-leg2-scenes.part.ts $HERE/s4-nether-stronghold.part.ts $HERE/s4-t5-scenes.part.ts"}     # section / leg 2 / T5 scenes, concatenated in order
+PARTS=${S4_SCENES_PART:-"$HERE/s4-section-scenes.part.ts $HERE/s4-leg2-scenes.part.ts $HERE/s4-nether-stronghold.part.ts $HERE/s4-t5-scenes.part.ts $HERE/s4-seed-scenes.part.ts $HERE/s4-makeat-scenes.part.ts"}     # section / leg 2 / T5 scenes, concatenated in order
 SRC=$PIN/backend/scripts/minecraft-hunt-probe.ts
 RUN=$PIN/backend/scripts/lab/run-hunt-lab.sh
 [ -f "$SRC" ] && [ -f "$RUN" ] || { echo "missing $SRC or $RUN" >&2; exit 2; }
