@@ -1,26 +1,26 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "8b205a045d078bbdac08abd4ca6fec33465c29c9",
- "madeAt": "2026-11-02T19:47:49.754Z",
+ "bodyRevision": "a16e177d0d67120e3ea9202cc75fce2baa89cd43",
+ "madeAt": "2026-11-03T04:08:40.820Z",
  "answers": null,
  "fixtureSha256": null,
  "output": {
   "seen": {
    "capability": "floor-last-stand",
-   "target": 149
+   "target": 145
   },
   "handover": {
    "from": "floor-last-stand",
-   "target": 149,
-   "waitedMs": 2,
-   "reflexSettledAt": "2026-11-02T19:47:44.422Z",
+   "target": 145,
+   "waitedMs": 3,
+   "reflexSettledAt": "2026-11-03T04:08:35.475Z",
    "confirmed": true,
    "shield": "none"
   },
   "notes": [
    {
-    "command": "lab:q19",
+    "command": "lab:q18",
     "point": "reservation",
     "shield": false,
     "flagUp": false,
@@ -32,10 +32,10 @@
     "reserved": false,
     "reflex": "floor-last-stand",
     "kind": "motor_state",
-    "at": "2026-11-02T19:47:44.422Z"
+    "at": "2026-11-03T04:08:35.474Z"
    },
    {
-    "command": "lab:q19",
+    "command": "lab:q18",
     "point": "stop",
     "shield": false,
     "flagUp": false,
@@ -46,10 +46,10 @@
     "deactivatedSince": 0,
     "reflex": "floor-last-stand",
     "kind": "motor_state",
-    "at": "2026-11-02T19:47:44.422Z"
+    "at": "2026-11-03T04:08:35.475Z"
    },
    {
-    "command": "lab:q19",
+    "command": "lab:q18",
     "point": "acquire",
     "shield": false,
     "flagUp": false,
@@ -61,10 +61,10 @@
     "confirmed": true,
     "result": "none",
     "kind": "motor_state",
-    "at": "2026-11-02T19:47:44.424Z"
+    "at": "2026-11-03T04:08:35.477Z"
    },
    {
-    "command": "lab:q19",
+    "command": "lab:q18",
     "point": "first_op",
     "shield": false,
     "flagUp": false,
@@ -75,7 +75,7 @@
     "deactivatedSince": 0,
     "op": "setMovements",
     "kind": "motor_state",
-    "at": "2026-11-02T19:47:44.426Z"
+    "at": "2026-11-03T04:08:35.480Z"
    }
   ],
   "outcome": "failed",
@@ -84,8 +84,8 @@
    "end": "finished",
    "released": true,
    "code": "limit_time",
-   "startedAt": "2026-11-02T19:47:44.422Z"
+   "startedAt": "2026-11-03T04:08:35.474Z"
   },
-  "sentToLockMs": 7
+  "sentToLockMs": 9
  }
 }

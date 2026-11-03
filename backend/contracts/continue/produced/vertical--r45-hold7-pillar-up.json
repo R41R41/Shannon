@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "8b205a045d078bbdac08abd4ca6fec33465c29c9",
- "madeAt": "2026-11-02T19:51:40.003Z",
+ "bodyRevision": "a16e177d0d67120e3ea9202cc75fce2baa89cd43",
+ "madeAt": "2026-11-03T04:12:19.389Z",
  "answers": "vertical/r45-hold7-pillar-up",
  "fixtureSha256": "7e63b36cc22555fae0d6015b1576e3166a73bb6a85b8245da13b953af6bb8c7a",
  "substitute": "an arena of stone, not the real run's ground",
@@ -35,7 +35,7 @@
     "end": "finished",
     "life": 4
    },
-   "afterReflex": "反射 wall-escape（反射（wall-escape））の最中のため、放された後に始めた（待ち 9.3秒）",
+   "afterReflex": "反射 wall-escape（反射（wall-escape））の最中のため、放された後に始めた（待ち 7.2秒）",
    "lines": [
     {
      "i": 1,
@@ -54,7 +54,7 @@
        "y": 108,
        "z": 0
       },
-      "msPerUnit": 518,
+      "msPerUnit": 513,
       "work": {
        "dug": 0,
        "placeAttempts": 8,
@@ -67,8 +67,8 @@
        "item": "cobblestone",
        "count": -8,
        "reason": "placed",
-       "id": "lab:q40:1:1:0",
-       "obsSeq": 10839,
+       "id": "lab:q39:1:1:0",
+       "obsSeq": 10811,
        "deliverySeq": 0
       }
      ]
@@ -81,23 +81,23 @@
    },
    "hp": 20,
    "food": 20,
-   "ms": 4143,
+   "ms": 4105,
    "map": "地図 v1 足=(0,108,0) x=-10..10 z=-10..10 方式=surface 上=北\nz\\x 0  9  8  7  6  5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0\n-10 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -9 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -8 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -7 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -6 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -5 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -4 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -3 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -2 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -1 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  0 #h #h #h #h #h #h #h #h #h #h @0 #h #h #h #h #h #h #h #h #h #h\n  1 #h #h #h #h #h #h #h #h #h #h *h #h #h #h #h #h #h #h #h #h #h\n  2 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  3 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  4 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  5 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  6 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  7 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  8 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  9 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n 10 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\ny=109\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . . . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=108\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . @ . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=107\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . # . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\n縦 (0,0) 上: y=109〜124 .×16 …\n縦 (0,0) 下: y=107〜92 #×16 …"
   },
   "receiptUnit": {
    "goal": "done",
    "end": "finished",
    "released": true,
-   "startedAt": "2026-11-02T19:51:24.996Z"
+   "startedAt": "2026-11-03T04:12:06.593Z"
   },
   "bodyTimes": {
-   "acceptedAt": "2026-11-02T19:51:24.996Z",
-   "startedAt": "2026-11-02T19:51:34.341Z",
-   "reflexWaitMs": 9345,
-   "lockAt": "2026-11-02T19:51:34.341Z",
-   "firstMotorAt": "2026-11-02T19:51:34.343Z",
+   "acceptedAt": "2026-11-03T04:12:06.592Z",
+   "startedAt": "2026-11-03T04:12:13.768Z",
+   "reflexWaitMs": 7175,
+   "lockAt": "2026-11-03T04:12:13.768Z",
+   "firstMotorAt": "2026-11-03T04:12:13.770Z",
    "motorOps": 25,
-   "endedAt": "2026-11-02T19:51:38.485Z"
+   "endedAt": "2026-11-03T04:12:17.874Z"
   },
   "opCounts": {
    "dig": 0,
