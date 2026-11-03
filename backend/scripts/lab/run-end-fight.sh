@@ -10,7 +10,8 @@
 #   (d) stop the server, remove the world directory, the tmux session and the code directory.
 # Never touches the production services, their env files or their ports (25565-25569 are never used). The caller takes the lab's slot first:
 #   flock ~/.cache/minebot-lab/slot.lock bash run-end-fight.sh <label> <code.tar> ...
-# and this script takes /tmp/hands-live.lock too (the VM has 2 cores: one lab run at a time).
+# and this script takes a lock of its own: /tmp/hands-live-$LAB_SLOT.lock in a slot of vm-lab / lab-slot.sh (the slot is the lab's share of the machine, the runs of other slots go on),
+# the shared /tmp/hands-live.lock outside a slot (the VM with 2 cores: one lab run at a time).
 #
 # KEY=VALUE: END_SCENES=a,b (scene names or prefixes), END_TIMEOUT=<seconds, default 1500>, END_KEEP=1 (keep the code directory), END_PORT=<port>,
 #            END_FLOOR=default|floor|off (the probe bot's floor reflexes, default `default`), END_VIEW=<5..12> (the server's view distance, default 6).
@@ -29,8 +30,9 @@ NODEBIN=$HOME/.nvm/versions/node/v$(cat "$DEV/.nvmrc")/bin
 SOCKET=minebot-lab
 DIR=""; SESSION=""; PORT=""; STATUS=1
 
-exec 9>/tmp/hands-live.lock
-flock -n 9 || { echo "another lab run holds /tmp/hands-live.lock (the VM has 2 cores: one at a time)" >&2; exit 3; }
+HANDS_LOCK=/tmp/hands-live.lock; [ -n "${LAB_SLOT:-}" ] && HANDS_LOCK=/tmp/hands-live-$LAB_SLOT.lock
+exec 9>"$HANDS_LOCK"
+flock -n 9 || { echo "another lab run holds $HANDS_LOCK (one at a time in a slot)" >&2; exit 3; }
 
 log() { echo "[$(date +%H:%M:%S)] run-end-fight: $*"; }
 
