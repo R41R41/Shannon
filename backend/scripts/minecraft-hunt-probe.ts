@@ -1237,7 +1237,7 @@ scene('ender_warped', 'enderman: the warped forest itself, four endermen', note 
 
 // ===== natural roof hunt: ONLY this scene stands in for the head's choices; no site/target policy is installed in the body ===================
 scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×3屋根・中央固定。召喚なし、観測から場所と #id を選ぶ', async note => {
-  if (timedSeconds && timedSeconds !== 1500 && !(process.env.HUNT_ROOF_DIAG === '1' && timedSeconds >= 60)) throw new Error('ENDER_ROOF_NATURAL_REQUIRES_MINECRAFT_HUNT_SECONDS_1500');
+  if (timedSeconds && timedSeconds !== 1500 && timedSeconds < 60) throw new Error('ENDER_ROOF_NATURAL_REQUIRES_MINECRAFT_HUNT_SECONDS_1500_OR_A_DIAGNOSTIC_OF_60_OR_MORE');
   const stand = sites.warpedStand as number[] | undefined;
   if (!stand || stand.length !== 3 || !stand.every(Number.isFinite)) throw new Error('no warpedStand in the sites');
   const fixtureAt = Date.now();
