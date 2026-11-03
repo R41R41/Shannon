@@ -41,7 +41,7 @@ const receipt = (c: MinecraftControlCommand, fields: Partial<MinecraftControlRec
 };
 const tick = (ms = 0) => new Promise(resolve => setTimeout(resolve, ms));
 
-interface FixtureOptions { check?: CommonFcaActuator['check']; observer?: CommonFcaObserver; life?: number }
+interface FixtureOptions { check?: CommonFcaActuator['check']; observer?: CommonFcaObserver; life?: number; fightTargetNear?: CommonFcaActuator['fightTargetNear'] }
 function fixture(options: FixtureOptions = {}) {
   const requests: any[] = [], responses: any[] = [];
   const running = new Map<string, { command: MinecraftControlCommand; signal: AbortSignal; finish(fields?: Partial<MinecraftControlReceipt>): void }>();
@@ -72,6 +72,7 @@ function fixture(options: FixtureOptions = {}) {
     }),
     progress: () => ({ hand: 2, of: 3, iteration: 1, repeat: 1 }),
     ...(options.check ? { check: options.check } : {}),
+    ...(options.fightTargetNear ? { fightTargetNear: options.fightTargetNear } : {}),
   };
   const loop = new CommonFcaControlLoop({ baseUrl: 'http://127.0.0.1:3000', token: 'fake', serverId: 'home', connectionId: 'connection1', now: () => clock, actuator,
     ...(options.observer ? { observer: options.observer } : {}),
@@ -217,6 +218,37 @@ describe('the queue: what an end does', () => {
     expect(out.a!.unit).toMatchObject({ goal: 'failed', end: 'finished', released: true, startedAt: expect.any(String) });
     expect(f.started.map(entry => entry.id)).toEqual(['a']);
     await f.loop.stop();
+  });
+
+  it('R3-2: an item that ended by a reflex, a stopIf, a hit or a fall drops what waits behind it, the independent one (dependsOn []) too, with words that say it was a danger', async () => {
+    for (const code of ['interrupted_by_reflex', 'stop_if_hostile', 'damage_taken', 'fell']) {
+      const f = fixture();
+      await f.deliver(item('a', 'q1', null));
+      await f.deliver(item('b', 'q2', 'q1', { dependsOn: [] }));
+      f.running.get('a')!.finish({ outcome: 'failed', failureType: code, unit: { goal: 'partial', end: 'cut', released: true, code } }); await tick(2);
+      const out = await f.receipts();
+      expect(out.b).toMatchObject({ outcome: 'cancelled', inputsReleased: true, failureType: 'queue_dropped' });
+      expect(out.b!.result).toBe(`捨てた: 前の項目 q1 が危険で止まった（${code}）。安全のため始めていない（手は動いていない）`);
+      expect(out.b!.unit).toMatchObject({ goal: 'not_started', end: 'not_run', droppedBecause: { code: 'depends_failed', item: { queue: Q, item: 'q1' } } });
+      expect(f.started.map(entry => entry.id)).toEqual(['a']);
+      await f.loop.stop();
+    }
+  });
+
+  it('R3-2: an item that ended with the target of its fight alive within the range drops what waits (the independent one too); with the target gone or far the independent one still starts', async () => {
+    const near = fixture({ fightTargetNear: () => 'zombie' });
+    await near.deliver(item('a', 'q1', null, {}, { arguments: { hands: [{ do: 'fight', target: 'zombie' }] } }));
+    await near.deliver(item('b', 'q2', 'q1', { dependsOn: [] }));
+    near.running.get('a')!.finish({ outcome: 'failed', failureType: 'target_lost', unit: { goal: 'partial', end: 'finished', released: true, code: 'target_lost' } }); await tick(2);
+    expect((await near.receipts()).b!.result).toContain('戦いの相手（zombie）が 16m 内で生きている');
+    expect(near.started.map(entry => entry.id)).toEqual(['a']);
+    await near.loop.stop();
+    const far = fixture({ fightTargetNear: () => null });
+    await far.deliver(item('a', 'q1', null, {}, { arguments: { hands: [{ do: 'fight', target: 'zombie' }] } }));
+    await far.deliver(item('b', 'q2', 'q1', { dependsOn: [] }));
+    far.running.get('a')!.finish({ outcome: 'failed', failureType: 'target_lost', unit: { goal: 'partial', end: 'finished', released: true, code: 'target_lost' } }); await tick(2);
+    expect(far.started.map(entry => entry.id)).toEqual(['a', 'b']);
+    await far.loop.stop();
   });
 
   it('A-6 (4): an item dropped for a dependency at its start (the path now goes through afterEnd) leaves the independent one behind it running', async () => {

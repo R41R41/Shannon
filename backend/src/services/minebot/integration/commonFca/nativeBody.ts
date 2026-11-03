@@ -33,6 +33,8 @@ import { incidentsOf, withIncidentText, type HoldRelease } from '../../utils/inc
 import { createHash, randomUUID } from 'node:crypto';
 import { installLife, type LifeKeeper } from '../../utils/life.js';
 import { freeSlots } from '../../utils/primitives/common.js';
+import { findEntity, isDying } from '../../utils/primitives/use.js';
+import { FIGHT_THREAT_RANGE_M } from './bodyQueue.js';
 import { deathLedgerOf } from '../../utils/deathLedger.js';
 import { lapseOf, madenessOf, type BodyNow, type Lapse } from './lapse.js';
 import type { BodyTimes, BodyVersion, HandStart, ItemOutcome } from './continueContract.js';
@@ -237,6 +239,25 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   }
   private controlView() {
     return controlViewOf(this.bot, { commands: this.tags, cleanup: this.cleaning, waiting: this.waits }, this.now());
+  }
+  /**
+   * R3-2 (the safety cut): the target of a fight or attack hand of an act that is alive within FIGHT_THREAT_RANGE_M of the body now (its name), else null. A target named by its kind is the nearest of the kind;
+   * one named by its id is that creature; a creature that is dying does not count. The loop asks it when an item has ended without a done, before anything waiting behind it may start.
+   */
+  fightTargetNear(command: Command): string | null {
+    try {
+      if (command.kind !== 'skill' || command.skill !== 'act') return null;
+      const hands = (command.arguments as { hands?: unknown } | undefined)?.hands;
+      if (!Array.isArray(hands)) return null;
+      for (const hand of hands as Array<{ do?: unknown; target?: unknown }>) {
+        if ((hand?.do !== 'fight' && hand?.do !== 'attack') || (typeof hand.target !== 'string' && typeof hand.target !== 'number')) continue;
+        const spec = typeof hand.target === 'string' && /^#\d+$/u.test(hand.target.trim()) ? Number(hand.target.trim().slice(1)) : hand.target;
+        const entity = typeof spec === 'number' ? (this.bot as { entities?: Record<number, any> }).entities?.[spec] : findEntity(this.bot, spec, FIGHT_THREAT_RANGE_M);
+        const at = this.bot.entity?.position;
+        if (entity?.position && at && entity.position.distanceTo(at) <= FIGHT_THREAT_RANGE_M && !isDying(this.bot, entity)) return String(entity.name ?? hand.target);
+      }
+    } catch { /* a judgement that cannot be made is no danger: the item's own end decides */ }
+    return null;
   }
   /** Task queue: whether an item's condition holds now, and in words what is lacking when it does not. */
   check(condition: ActCondition): { ok: boolean; words: string; unknown?: boolean } {

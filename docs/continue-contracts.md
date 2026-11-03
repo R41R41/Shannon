@@ -317,6 +317,7 @@ export type DependState = 'succeeded' | 'failed' | 'pending' | 'unknown';
   - `w.dependsOn` が配列で、q も、q のせいで捨てられた項目も含まない → 残して、順番が来たら始める（`keptDespite`）。始める直前に `pre` を確かめる（真なら始める・偽なら `precondition` で始めない・判定できない（不明）なら始めない）。
   - それ以外（無い・q を含む・捨てた項目を含む） → 今どおり捨てる（`droppedBecause: depends_failed`）。
   - 依存先の状態が `unknown`（別の列の印・覚えていない印）→ 始めない（`depends_unknown`）。
+- **体の安全の切り（R3-2、見本 `continue/danger-cut.json` が正本。頭と体の両方が試験する）**：項目 q が**危険で終わった**時は、待っている項目を**全部**捨てる。`dependsOn: []` の項目も、q を含まない項目も捨てる（`depends_failed`、item は q。理由の言葉は「危険で止まった」）。危険で終わったとは、(1) q の止まりの code が `reflex`・`interrupted_by_reflex`（lava・息・壁・逃げの反射を含む）・`stop_if*`・`damage_taken`・`fell` のどれか、(2) q の fight・attack の手の相手が、体から 16 m 内で**まだ生きている**（done で終わった q は対象外）。止めるだけで、手は選ばない。体は項目ごとの終わりに `fightTargetNear` で相手を調べ、頭は落ちた receipt を今まで通り読む（言葉は `捨てた: 前の項目 q が危険で止まった（code）。安全のため始めていない（手は動いていない）`、または `…戦いの相手（zombie）が 16m 内で生きている…`）。
 - **`after` は順番だけ**です。`BodyQueue.admit()` は、`after` の項目が止まっていても、新しい項目の `dependsOn` が配列でそれを含まなければ受けます。ただし、今の列の最後（tail）を飛ばして後ろに付けることはしません。
 - **`replace`**：頭の `replace` は、書かれた項目を取り消し、その取り消しを後ろへ「失敗」と同じに伝えます。残るのは、`dependsOn` を配列で書き、取り消した項目を含まない項目（明示の独立）だけです。`dependsOn` を書いていない後ろの項目は取り消します（依存を書いていない事を独立の証拠にしない）。残した項目の順番（after）は付け替えます。体の `removeFrom()` も同じです（今は後ろを全部取る。確か：`bodyQueue.ts`、頭 `minecraftLlmcQueue.ts` の `replace()`）。
 - **段をまたぐ `dependsOn`**：列の名前は段ごとなので、前の段の項目には頼れません。頭は送る前に「送らなかった: dependsOn の q9 は前の段の列（今の列で頼れるのは q12・q13）」と明示のエラーを返します（実行の時の `depends_unknown` まで遅らせない）。

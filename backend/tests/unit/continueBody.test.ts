@@ -6,14 +6,14 @@ import { Vec3 } from 'vec3';
 import { describe, expect, it, vi } from 'vitest';
 import { LifeKeeper } from '../../src/services/minebot/utils/life.js';
 import { lapseOf, madenessOf, type BodyNow } from '../../src/services/minebot/integration/commonFca/lapse.js';
-import { BodyQueue, readEnvelope, type QueueEnvelope } from '../../src/services/minebot/integration/commonFca/bodyQueue.js';
+import { BodyQueue, dangerOfEnd, droppedByDanger, FIGHT_THREAT_RANGE_M, readEnvelope, type QueueEnvelope } from '../../src/services/minebot/integration/commonFca/bodyQueue.js';
 import { aggregateGoal, dependStateOf, isReliable, keepVerdict, startVerdict } from '../../src/services/minebot/integration/commonFca/continueContract.js';
 import { EventStore } from '../../src/services/minebot/integration/commonFca/eventStore.js';
 import { runAct, ACT_HANDS, dependsProblem } from '../../src/services/minebot/instantSkills/act.js';
 import { executeAction, holderSeqOf, motorOpsOf, createMotorPort, reserveHandover, reservationOf, dropReservation, physicalRoots } from '../../src/services/minebot/execution/ActionExecution.js';
 import { renderActReport, RECEIPT_MAX, type ActReport } from '../../src/services/minebot/utils/actReport.js';
 import { trackPack, installPackTap } from '../../src/services/minebot/utils/packEvents.js';
-import { parseDependencyTable } from './helpers/dependencyTable.js';
+import { fixture, parseDependencyTable } from './helpers/dependencyTable.js';
 
 const tempFile = (name: string) => path.join(mkdtempSync(path.join(tmpdir(), 'continue-')), name);
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -406,4 +406,37 @@ describe('the receipt\'s size (contract 8): the lines of the older passes become
     const carried = json.lines.flatMap((line: any) => line.delta ?? []).map((event: any) => event.deliverySeq);
     expect(Math.max(...carried, -1)).toBeLessThan(json.eventsMore.nextSeq);
   });
+});
+
+describe('the safety cut (R3-2): what waits behind an item that ended in a danger does not start, even an item that depends on nothing', () => {
+  const made = { life: 1, dim: 'overworld' as const, dimSince: 'd', bodyBoot: 'bb', connectionId: 'c', headBoot: 'h', obsSeq: 1 };
+  const Q = 't-run:hb-1:41';
+  const item = (id: string, dependsOn?: string[]) => ({ id: `skill:${id}`, kind: 'skill', skill: 'act', queue: { item: id, after: 'q12', node: null, maxMs: 10_000, startBy: new Date(Date.now() + 60_000).toISOString(), queue: Q, madeIn: made, ...(dependsOn ? { dependsOn } : {}) } }) as never;
+  const table = fixture('continue/danger-cut.json');
+  it('has the fixtures codes and range', () => {
+    expect(table.fightThreatRangeM).toBe(FIGHT_THREAT_RANGE_M);
+    for (const code of table.dangerStopCodes) expect(dangerOfEnd({ goal: 'partial', end: 'cut', code })).toBe(code);
+    expect(dangerOfEnd({ goal: 'partial', end: 'cut', code: `${table.dangerStopPrefix}_anything` })).toBe(`${table.dangerStopPrefix}_anything`);
+  });
+  for (const row of table.cases as Array<{ name: string; ended: { goal: any; end: any; released: boolean; code?: string }; fightTargetNear: string | null; waiting: Array<{ item: string; dependsOn?: string[] }>;
+    expect: { danger: string | null; dropped: string[]; kept: string[]; stays?: string[] } }>) {
+    it(row.name, () => {
+      const queue = new BodyQueue();
+      queue.begin(item('q12'));
+      for (const waiting of row.waiting) queue.waiting.push(item(waiting.item, waiting.dependsOn));
+      const danger = dangerOfEnd(row.ended, row.fightTargetNear);
+      expect(danger).toBe(row.expect.danger);
+      const judged = queue.judgeWaiting({ queue: Q, item: 'q12', unit: row.ended }, danger);
+      expect(judged.dropped.map(entry => entry.command.queue?.item)).toEqual(row.expect.dropped);
+      expect(judged.kept.map(entry => entry.command.queue?.item)).toEqual(row.expect.kept);
+      if (danger) {
+        for (const entry of judged.dropped) { expect(entry.danger).toBe(danger); expect(entry.code).toBe('depends_failed'); expect(entry.item?.item).toBe('q12'); }
+        const words = droppedByDanger('q12', danger);
+        expect(words).toContain('q12');
+        expect(words).toContain('手は動いていない');
+        if (danger.startsWith('fight_target:')) expect(words).toContain(`${FIGHT_THREAT_RANGE_M}m`);
+      }
+      expect(queue.waiting.map(command => command.queue?.item)).toEqual(row.expect.stays ?? row.expect.kept);
+    });
+  }
 });
