@@ -9,8 +9,9 @@ import { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.
 import { createMotorPort, executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 import { cooldownMs } from '../../src/services/minebot/utils/primitives/attack.js';
 import { installGazeGuard } from '../../src/services/minebot/utils/gazeGuard.js';
-import { ENDERMAN_EYE, looksAtEyes } from '../../src/services/minebot/utils/huntEnderman.js';
+import { ENDERMAN_EYE, endermanView, looksAtEyes, roofInteriorStep } from '../../src/services/minebot/utils/huntEnderman.js';
 import { endermanCampObservation } from '../../src/services/minebot/utils/huntEndermanCamp.js';
+import { bodyReader } from '../../src/services/minebot/utils/localMap.js';
 
 // The enderman hunt on a practice field (S2, 2026-11-02): the body lays a 3x3 roof over itself, stares the enderman in the eye from under it (the gaze guard is let go
 // for the stare and put back), and strikes it from the hole while it stands at the roof's edge and cannot reach. The body is moved by the client physics; the world
@@ -164,6 +165,10 @@ function makeField(options: Options) {
     if (bot.gazeGuard && !bot.gazeGuard.enabled && !mob.metadata[CREEPY]) stats.guardOffWhileStaring++;
     bot.emit('physicsTick');
   };
+  // Start as a player already standing on the field. With vy=0, the first physics step has no downward collision and clears onGround;
+  // the second applies gravity against the floor and restores it. Starting a recovery between those steps would fail its ground guard.
+  // Settle only player physics, with all controls released: no mob ticks, stare, attacks or elapsed recovery budget.
+  for (let i = 0; i < 2; i++) physics.simulatePlayer(new PlayerState(bot, control), world).apply(bot);
   const timer = setInterval(tick, 50);
   return { bot, control, mob, stats, placed, stop: () => clearInterval(timer) };
 }
@@ -298,9 +303,16 @@ describe('fight an enderman from a roofed hole', () => {
     const sample = () => { positions.push(field.bot.entity.position.clone()); };
     field.bot.on('physicsTick', sample);
     try {
+      const read = bodyReader(field.bot), from = { x: 0, y: FLOOR, z: 0 }, to = { x: 0, y: FLOOR, z: 1 };
+      expect(field.bot.entity.onGround).toBe(true);
+      expect(roofInteriorStep(read, from, from, to)).toBe(true);
+      const before = endermanView(read, field.bot.entity.position, field.mob.position);
+      expect(before.eyes.between[0]).toEqual({ at: { x: 1, y: FLOOR + 1, z: 0 }, name: 'cobblestone' });
+      const after = endermanView(read, { x: to.x + 0.5, y: to.y, z: to.z + 0.5 }, field.mob.position);
+      expect([after.eyes.clear, after.feet.clear, after.approach.clear]).toEqual([true, true, true]);
       const { json } = await act(field, [{ do: 'fight', target: '#200', seconds: 40 }]);
-      expect(json.ok).toBe(true);
       const camp = endermanCampObservation(field.bot)!;
+      expect(json.ok, JSON.stringify({ lines: json.lines, camp, stats: field.stats, body: field.bot.entity.position, target: field.mob.position })).toBe(true);
       expect(camp.afterBuild?.eyes.clear).toBe(false);
       expect(camp.recovery).toHaveLength(1);
       expect(camp.recovery[0]).toMatchObject({ to: { x: 0, y: FLOOR, z: 1 }, result: 'arrived' });
