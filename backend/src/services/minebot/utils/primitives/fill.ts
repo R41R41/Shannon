@@ -56,6 +56,14 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
   const home = cell(args.retreatTo), groups = args.groups.map(g => ({ stand: cell(g.stand), cells: g.at.map(at => ({ at: cell(at), done: false })) }));
   const cells = groups.flatMap(g => g.cells), skippedBy = { creature: 0, reach: 0, hazard: 0, other: 0 };
   const space = new RushSpace(bot, { center: home, radius: 1, maxDrop: 0 });
+  // The cover is where go can take the body and the body can stand: two open cells over a floor of any full-cube or partial shape (a stair or a slab is a floor to walk on); hazards refuse it. (RushSpace.footing refuses partial floors: that is its own motor model, not the fill's.)
+  const hazardous = (name: string) => /^(lava|water|fire|soul_fire|magma_block|cactus|powder_snow|campfire|soul_campfire|sweet_berry_bush|wither_rose)$/u.test(name);
+  const standsAt = (p: { x: number; y: number; z: number }) => {
+    const x = Math.floor(p.x), y = Math.floor(p.y + 0.01), z = Math.floor(p.z);
+    const below = blockAt(bot, { x, y: y - 1, z }), feet = blockAt(bot, { x, y, z }), head = blockAt(bot, { x, y: y + 1, z });
+    const open = (b: any) => !!b && b.boundingBox !== 'block' && !hazardous(String(b.name));
+    return !!below && (below.boundingBox === 'block' || !!below.shapes?.length) && !hazardous(String(below.name)) && open(feet) && open(head);
+  };
   const hp = () => Number(bot.health ?? 0);
   let hpMin = hp(), placed = 0, code: FillCode | null = null, cut = false, safe = false, preflight = true;
   const sample = () => { hpMin = Math.min(hpMin, hp()); };
@@ -103,7 +111,7 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
   };
   const safeAtHome = () => {
     const p = bot.entity?.position;
-    if (!p || !same(feetCell(bot), home) || !space.footing(p) || bot.entity.isInLava || (Number(bot.entity.metadata?.[0] ?? 0) & 1) !== 0) return false;
+    if (!p || !same(feetCell(bot), home) || !standsAt(p) || bot.entity.isInLava || (Number(bot.entity.metadata?.[0] ?? 0) & 1) !== 0) return false;
     // Use loaded blocks directly, including partial shapes, as the cover check (no map-memory fallback).
     return !shootersSeeing(bot, shootersInReach(bot, p), p, (x, y, z) => {
       const b = blockAt(bot, { x, y, z });
@@ -113,7 +121,7 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
   bot.on('health', sample);
   try {
     if (hp() <= 0 || reflexHeld(host) || ctx.stop.aborted || actionSignal(bot)?.aborted) { stopped(false); return finish(); }
-    if (!space.footing(middle(home))) { code = 'NO_STAND'; return finish(); }
+    if (!standsAt(middle(home))) { code = 'NO_STAND'; return finish(); }
     if (inventoryCount(bot, args.block) < cells.length || !bot.registry?.blocksByName?.[args.block]) { code = 'NO_BLOCKS'; return finish(); }
     if (hp() <= args.retreatHp) { code = 'HP_FLOOR'; return finish(); }
     preflight = false;
