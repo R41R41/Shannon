@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { Vec3 } from 'vec3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as geometry from '../../src/services/minebot/utils/dragonBedGeometry.js';
+import * as headModel from '../../src/services/minebot/utils/dragonHeadModel.js';
 import { partBox, isPerched, type P3 } from '../../src/services/minebot/utils/dragonParts.js';
 import { bedHalves } from '../../src/services/minebot/utils/bedRules.js';
 
@@ -83,7 +84,7 @@ describe('human operation and self-harm veto', () => {
     [{ phase: 4 }, 'not_descending'], [{ phase: 6 }, 'not_descending'], [{ observed: 17 }, 'observation_delay'],
     [{ placed: 17 }, 'placement_delay'], [{ placed: null }, 'placement_delay'], [{ lastBlast: 10 }, 'dragon_hurt_cooldown'],
     [{ reach: 4.5001 }, 'out_of_reach'], [{ damage: 6.01 }, 'self_damage'], [{ health: 10 }, 'self_damage'],
-    [{ damage: NaN }, 'estimate_unknown'], [{ used: 3 }, 'three_bed_limit'], [{ headDistance: 3 }, 'head_not_at_pillow'],
+    [{ damage: NaN }, 'estimate_unknown'], [{ used: 3 }, 'three_bed_limit'], [{ headDistance: 1.5001 }, 'head_not_at_pillow'],
     [{ headDamage: 49 }, 'head_not_at_pillow'],
     [{ placed: NaN }, 'estimate_unknown'], [{ damage: -1 }, 'estimate_unknown'],
   ])('refuses %j', (change, reason) => { expect(bedUseRefusal({ ...valid, ...change })).toBe(reason); });
@@ -94,14 +95,15 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
   const actor: any = new EventEmitter(); actor._client = new EventEmitter(); actor.health = 20; actor.food = 20;
   actor.entity = { position: new Vec3(115.5, 70, -39.5) };
   let beds = 4, obsidian = 4, uses = 0, disconnected: string | null = null;
-  const d: any = { id: 77, phase: 2, position: p(103.5, 77, -46), yaw: 0, health: 200,
+  const d: any = { id: 77, phase: 2, position: p(103.5, 74.5, -46), yaw: 0, health: 200,
     approach: { basin: [p(104.5, 70, -40.5)] } };
   const counts: Record<string, number> = {};
   actor.reflexLedger = { counts: () => ({ ...counts }) };
   actor.blockAt = (v: P3) => t.read(v);
   const calls: any[] = [], commands: string[] = [], scenes: Record<string, any> = {};
   let handler: ((hands: any[], signal: AbortSignal) => Promise<void>) | undefined;
-  const deps = { ...geometry, Vec3, partBox, isPerched, bedHalves, actor, actorDeaths: 0, disconnected, scenes, KILL_LIMIT_MS: options.limit ?? 10_000,
+  actor.entities = {};
+  const deps = { ...geometry, ...headModel, dragonEntity: () => d, Vec3, partBox, isPerched, bedHalves, actor, actorDeaths: 0, disconnected, scenes, KILL_LIMIT_MS: options.limit ?? 10_000,
     chainDistance: (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z),
     killCell: (v: P3) => p(Math.floor(v.x), Math.floor(v.y), Math.floor(v.z)), killPlaced: new Map(), killBlasts: [],
     prepareKillRun: vi.fn(async () => ({ dragonId: 77, ground: { ...actor.entity.position } })),
@@ -195,7 +197,8 @@ describe('end_bed_kill scene with mocked I/O', () => {
       expect(b.useTick - b.placedTick).toBeGreaterThanOrEqual(4);
       expect(b.prediction.tick - b.prediction.observedTick).toBeGreaterThanOrEqual(4);
       expect(b.dragonLoss).toBe(55); expect(b.selfDamage).toBe(2); expect(b.detonationTick).not.toBeNull();
-      expect(b.prediction.self.expected).toBeLessThanOrEqual(6); expect(b.prediction.source).toBe('position_yaw_estimate');
+      expect(b.prediction.self.expected).toBeLessThanOrEqual(6); expect(b.prediction.source).toBe('vanilla_history_model');
+      expect(b.prediction.aheadTicks).toBeGreaterThanOrEqual(4); expect(b.prediction.model.observedTick).toBe(b.prediction.observedTick);
     }
     for (let i = 1; i < out.bedTrials.length; i++) expect(out.bedTrials[i].useTick - out.bedTrials[i - 1].detonationTick).toBeGreaterThanOrEqual(11);
     for (const a of out.actions) {
@@ -206,6 +209,23 @@ describe('end_bed_kill scene with mocked I/O', () => {
     }
     expect(out.phaseTimeline.length).toBeGreaterThan(10);
     expect(r.commands).toEqual([]); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('prefers a real head part over the body model and excludes the synthetic observation headPosition', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 2400 });
+    r.d.position.x += 25; r.d.headPosition = p(-999, 999, -999);
+    r.actor.entities[78] = { id: 78, name: 'ender_dragon_part', position: p(103.5, 74.5, -39.5) };
+    const running = r.run(); await vi.advanceTimersByTimeAsync(2500); const out = await running;
+    const trial = out.bedTrials.find((b: any) => b.useRequested);
+    expect(trial.prediction.source).toBe('observed_part_entity');
+    expect(trial.prediction.predictedHead).toEqual(p(103.5, 75, -39.5));
+    for (const a of out.actions) expect(ACT_HANDS.safeParse(a.hands).success).toBe(true);
+  });
+  it('ignores the observation box estimate in flight and refuses a modelled head far from the pillow', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 2000 });
+    r.d.position.x += 25; r.d.headPosition = p(103.5, 75, -39.5);
+    const running = r.run(); await vi.advanceTimersByTimeAsync(2100); const out = await running;
+    expect(r.calls.some(c => c.hands[0]?.do === 'use')).toBe(false);
+    expect(out.refusals.some((f: any) => f.reason === 'head_not_at_pillow')).toBe(true);
   });
   it('vetoes a changed shield after placing a bed, records the reason, and never clicks it', async () => {
     vi.useFakeTimers(); const r = rig({ limit: 2200 });

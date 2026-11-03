@@ -724,3 +724,40 @@ backendから既存Vitestで上記4ファイルを列挙し `--maxWorkers=1 --mi
 変更は指定コピーのprobe・geometry・関係試験／型検査補助・本節のみ。ラボはS1担当で未実行。反射・gazeGuard・dragonStrike・actの一覧・環境変数・fallClutch・`.codex-material/` は変更しない。VM／本体／DB／外部資料更新／commit／pushは行わない。
 
 ?????Windows????Node v24.21.0???? `minecraftEndBedKill` **35?**??? `minecraftDragonKillCompare` 65??`minecraftDragonNook` 10??`minecraftEndFullChain` 125??**4????235???**?`node tests/unit/checkEndBedKill.cjs` ?probe???????3 TS???????0?`git diff --check` ?????????????????????????????????env???????env??????HEAD `ea4b374` ?????????6??????????????
+
+## dragon_head_model：履歴からの頭・首の再構成（2026-11-04、頼み17）
+
+指定リポジトリの [EnderDragon.java](https://github.com/youxuezhe7/minecraft-1.21.11-sources/blob/master/net/minecraft/world/entity/boss/enderdragon/EnderDragon.java) はWeb経由で取得できた。`aiStep` の履歴記録（179行）、旋回（206〜210行）、部位配置（238〜263行）、`tickPart`／`getHeadYOffset`（305〜316行）を根拠にする。1.21.11では旧 `getLatencyPos` 相当が `DragonFlightHistory` に分離されている。ただし同クラス自身と部位クラスの追加取得はネットワークエラーで失敗しており、履歴アクセサ内部の独立再確認とJava floatのbit一致は未検証。`lab-evidence/dragon-bed-mechanics.md` と現行 `dragonParts.ts`・`dragonState.ts` も確認した。このコピーには依頼にあるr187〜r190のreportはなく、その数値の再集計はしていない。
+
+### モデルと時刻
+
+新しい `utils/dragonHeadModel.ts` はI/Oを持たない。入力は毎physicsTickの**生のクライアントentity**の位置・yaw・phaseで、昇順・連続の最大20観測。観測JSONの位置・yawは小数1桁に丸められているため計算には使わない。欠測・不正値・tickの飛びで履歴を捨て、12観測が揃うまでモデルを返さない。竜IDの変更は台本が中断する。
+
+本体の移動前に履歴を記録するので、移動後の観測tickをTとすると、`get(k)` に相当する高さは `Y[T-1-k]`。使うのは0・5・10で、描画用partial tickの補間は使わない。`r=(Y[T-6]-Y[T-11])*10°`、頭の上下offsetは着座（5/6/7）だけ-1、それ以外は `Y[T-6]-Y[T-1]`。Notchian yawをa、旋回状態をAとすると、頭の足位置は本体＋`(sin(a-.01*A)*6.5*cos(r), offset+6.5*sin(r), -cos(a-.01*A)*6.5*cos(r))`。首は6.5を5.5にする。体・翼も同じaiStepの式で返す。頭のentity位置と箱中心はYが0.5違うため、測定は足位置、ベッドの箱と既存ログは中心を明示して使い分ける。
+
+Mineflayer yaw mはradで `a=180°-m*180/PI`。サーバー飛行時の `yRot += yRotA*.1` からAをwrapped yaw差の10倍として逆算する。クライアント側aiStepにはこの更新がないため、A=0の比較モデルも計測する。明示Aを与えられる純関数の入口もある。**packetのyaw量子化・重複受信、tick位相、着座中のphase固有旋回、目標の真上などで旋回更新を省く場合、過去から残るAまでは位置/yawだけでは確定しない。** この逆算をサーバー内部状態の実測とは呼ばない。
+
+n先（0〜8 tick）は直近4 tickの平均移動量・wrapped yaw変化を使って本体を1 tickずつ外挿し、履歴を進めてから毎回同じ部位式を適用する。直近にphase変更がある未来予測は拒否する。頭そのものの直線外挿や静的な箱の移動ではないが、**将来のAI目標・加速・phaseは不明なので本体運動は短期予測**。数値演算はJS doubleのsin/cosで、Java float／Mthの表とbit一致ではない。
+
+### ベッド場面への接続
+
+`end_bed_kill` は観測tick時点の履歴を固定し、実際の操作待ち時間（最低4 physicsTickかつ200ms、最大8 tick）をnとして使う。実在する頭部位entityをID offset・種類で確認できる場合は、その足位置を優先し、モデルの現在→未来の変位で運ぶ。`dragonState.headPosition` は現在、**着座時のpartBox推定**であり部位packetの実測ではないため、この優先経路へ入れない。反射や人物観測の既存形式は変更しない。
+
+依頼の枕から**1.5m以内**に合わせ、従来コードの距離上限2.2mを1.5mへ絞った。頭への予測50 HP以上、予測移動4m超の不安定拒否、自己被害、射程、phase、設置後4 tick、爆発間11 tick等の既存条件は保持。`prediction` に `aheadTicks`・モデルの状態と出所を残す。equip/look等のhand内部の追加遅延・ネットワーク遅延は実測調整が必要。
+
+### S1の計測場面
+
+既存の場面指定で `enter,dragon_head_model`。単独場面として他の戦闘場面との混在を拒否し、既定でラボworldの `report.json` に保存する。ベッド・剣を持たず、結晶だけを準備時にコマンド除去する。観測perchと自然の待機足場を使用し、計測中の竜phase／位置／Motion／HPは操作しない。記録用耐性を与えるが、反射はONのまま。自然着地2回の完了後の離陸、死亡・切断・ID変更、または10分で終了する。phaseを強制して観測件数を埋めない。
+
+- `samples[]`：毎physicsTickの生位置・yaw・phase、実部位head/neckの足位置、現在のサーバー型／クライアント型モデル、4 tick先の予測とtarget tick、水平／垂直／3D誤差（m）、予測後のphase変更を記録する。
+- `phaseStats`：0/1/2/3/6/7/5/4ごとの件数・実測欠落数・誤差mean/RMS/p95/max。現在、首、client型、4 tick先、予測中phase変更を分ける。未観測phaseは件数0、誤差統計null。
+- `landings[]`：各phase 3の最後の100 tick（5秒相当）の軌道、観測perch上の仮想枕、最初に頭の足位置が1.5m以内へ入ったtick、4〜8 tick前に出した到達予測とtick誤差を残す。後から出た予測を最初の到達の成績に使わない。欠測を「頭が来なかった」と決めない。柱の実測がない場合は枕の採点を行わない。
+
+**Mineflayerは通常、竜本体だけを保持する。独立した頭の実測が得られるとは仮定しない。** 部位がない場合は `data get entity <dragon> Parts`／`Head` と部位type selectorでPos取得を一度試し、コマンド・要求tick・返信tick・原文を `fallbackReads` に保存する。本体Posや既存箱推定を頭の正解として採用しない。取得不能なら誤差null、`validationStatus=unavailable_no_independent_head_position`、`ok=false`。通常vanillaの部位は独立した保存entityではなく、これらのNBT経路で校正できない可能性が高い。S1で取得不能が確認された場合、サーバー側の独立した部位位置計測が後続に必要である。今回そのためのModや新handは追加しない。独立測定がない状態を「バニラ完全再現を実証済み」「起爆成功」と扱わない。
+
+### 検証と残した課題
+
+`minecraftDragonHeadModel.test.ts` は既知の水平／降下／非線形履歴、移動前記録の1 tick差、着座offset、yawの単位・符号・周回・旋回状態、4 tick先での履歴更新、warmup／欠測／phase変更拒否、実部位の型とID、測定優先を検査する。計測場面をI/O置換で実行し、独立した模擬部位との現在／遅延誤差、phase集計、着地軌道／到達tick、部位取得不能時のnull、死亡／切断とlistener後始末を確認する。ベッド試験にも実部位優先と旧headPosition推定の除外を追加し、生成handをact.tsの実スキーマへ通す。
+
+型検査は `node tests/unit/checkEndBedKill.cjs`。probe本体・geometry・新モデル・関係試験2本の計5 TS rootのsemantic／構文／compiler option診断を確認する。依存先自身のsemantic診断と全backend型検査は対象外。実際の誤差・枕への到達予測精度・起爆回数／実被害はS1のラボで未計測。指定コピーだけを変更し、`.codex-material/`、反射、gazeGuard、dragonStrike、act一覧、FALL_CLUTCH_ENABLED、env設定は変更せず、commit／VM／ラボ実行も行っていない。
+最終検証：このWindowsコピーのNode v24.21.0で、新規モデル／計測22件＋ベッド37件＋既存比較65件＝**3ファイル124件成功**。`node tests/unit/checkEndBedKill.cjs` はprobe全体を含む5 rootの対象診断0件、`git diff --check` 成功。既存比較試験のimportに必要な既存オフライン用ダミー値だけを試験子プロセスに渡し、設定ファイルは変更していない。実クライアント／ゲーム／DB／LLMへの接続はしていない。HEADは `0e0a7ea` のまま、変更は未コミット。

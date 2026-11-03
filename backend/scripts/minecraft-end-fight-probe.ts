@@ -31,6 +31,7 @@ import { approachClear } from '../src/services/minebot/utils/dragonApproach.js';
 import { dragonNook, insideDragonNook, nookCellSupported, type DragonNook } from '../src/services/minebot/utils/dragonNook.js';
 import { BLOCK_REACH } from '../src/services/minebot/utils/blockReach.js';
 import { isPerched, type P3 } from '../src/services/minebot/utils/dragonParts.js';
+import { appendDragonBody, predictDragonHead, forecastDragonHead, dragonHeadCentre, observedDragonPart, type DragonBodySample } from '../src/services/minebot/utils/dragonHeadModel.js';
 import { cageRoots, cageWall, cageGuardCells, cageGuardWork, cageRecoveryFootings, cageWaterLandings, cageWaterSource, cageWaterExit, cageDryFooting, cagePoolExits, cageShadowFootings, crystalShelterState, crystalShelterExits, islandFootings } from '../src/services/minebot/utils/endFightGeometry.js';
 import { CHAIN_LIMIT_MS, CRYSTAL_LIMIT_MS, CRYSTAL_WAIT_MS, CAGE_TRAVEL_WAIT_MS, FAST_CAGE_POLICY, chainCell, chainWalkRetry, chainShootSet, chainDescent, chainDragonSample, chainDragonRush, chainBasin, chainClear, chainCloudClear, chainCompareTravel, chainCrystal, chainDistance, chainHands, chainOnShaft, chainPause, chainRetreat, chainShot, chainSitting, chainTravel, chainWait, type ChainCrystal, type CagePolicy, type DragonMotionSample } from '../src/services/minebot/utils/endFullChainPlan.js';
 
@@ -2650,7 +2651,7 @@ for (const [name, policy] of Object.entries(cageComparePolicies)) scenes[name] =
 type KillStyle = 'sword_stage' | 'bed' | 'bow';
 type KillNookBuilder = 'operator' | 'body';
 const KILL_LIMIT_MS = 25 * 60 * 1000;
-const killEntries = ['end_bed_kill', 'dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_far', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain', 'cage_descent_compare', 'cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'];
+const killEntries = ['end_bed_kill', 'dragon_head_model', 'dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_far', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain', 'cage_descent_compare', 'cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'];
 const killCell = (p: P3): P3 => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
 const packCount = (name: string): number => actor.inventory.items().filter((item: any) => item.name === name).reduce((n: number, item: any) => n + item.count, 0);
 let killArena: { ground: P3; perch: P3; yaw: number } | null = null;
@@ -3437,7 +3438,7 @@ function bedUseRefusal(input: { phase: number | null; now: number; observed: num
   if (input.lastBlast !== null && input.now - input.lastBlast < 11) return 'dragon_hurt_cooldown';
   if (input.reach > 4.5) return 'out_of_reach';
   if (input.damage > 6 || input.damage + 4 >= input.health) return 'self_damage';
-  if (input.headDistance > 2.2 || input.headDamage < 50) return 'head_not_at_pillow';
+  if (input.headDistance > 1.5 || input.headDamage < 50) return 'head_not_at_pillow';
   return null;
 }
 
@@ -3448,7 +3449,7 @@ async function endBedKill() {
   const out: Record<string, any> = { scene: 'dragon_kill_compare', style: 'end_bed_kill', limitSeconds: KILL_LIMIT_MS / 1000,
     initial: { ...initial, dragonHealth: 200, actorHealth: Number(actor.health), food: Number(actor.food), beds: 4, obsidian: 4, cobblestone: 64, arrows: 0, sword: 'iron_sword', floorReflexes: true },
     tickBasis: 'actor physicsTick since timed start; confirmations are client receipt ticks, not server gameTime',
-    headModel: 'headPosition when supplied, otherwise position/yaw part-box estimate; linear extrapolation over operation delay',
+    headModel: 'real head part entity first (dragonState.headPosition is a perched estimate); vanilla aiStep latency history, server yaw-delta rotation; short constant-motion forecast over >=4 operation ticks',
     bedTrials: [], refusals: [], actions: [], healthTimeline: [], transitions: [], phaseTimeline: [], phaseDurations: [],
     bedsUsed: 0, placementAttempts: 0, explosionsHit: 0, meleeHitWindows: 0, windows: [], reflexKinds: {}, boss: null, bossVerified: false, killSeconds: null, dragonHealthAt25Minutes: null };
   let tick = 0, terminal: string | null = null, active: { controller: AbortController; allowed: () => boolean } | null = null;
@@ -3457,8 +3458,9 @@ async function endBedKill() {
   let view = endView(), sampleBusy = false, samplePending: Promise<void> = Promise.resolve(), nextSample = 0;
   let bedReadPending: Promise<void> = Promise.resolve(), afterReadBusy = false;
   let leaveNeeded = false, enteredSit = false;
-  type HeadSample = { tick: number; head: P3; source: string };
+  type HeadSample = { tick: number; head: P3; source: string; history: DragonBodySample[]; measuredFeet: P3 | null };
   const heads: HeadSample[] = [];
+  let bodyHistory: DragonBodySample[] = [];
   // ask() uses chat markers. Serialise these reads so overlapping marker windows cannot mix replies.
   let serverQueue: Promise<unknown> = Promise.resolve();
   const serverHealth = () => {
@@ -3483,10 +3485,7 @@ async function endBedKill() {
     out.refusals.push({ tick, seconds: seconds(), phase, reason, count: 1, ...detail });
   };
   const headOf = (d: any): P3 | null => {
-    if (!d?.position || !Number.isFinite(d.yaw)) return null;
-    const box = partBox(d, 'head');
-    const p = d.headPosition ?? { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2, z: (box.minZ + box.maxZ) / 2 };
-    return Object.values(p).every(Number.isFinite) ? { ...p } as P3 : null;
+    return d?.id === initial.dragonId && heads.at(-1)?.tick === tick ? heads.at(-1)!.head : null;
   };
   const onHealth = () => {
     const hp = Number(actor.health);
@@ -3525,13 +3524,21 @@ async function endBedKill() {
       if (p === 4) { leaveNeeded = true; enteredSit = false; }
       if (!isPerched(p)) enteredSit = false;
     }
-    const head = headOf(d);
+    // Raw client precision, not endObservation's one-decimal position/yaw. No history across absence.
+    const raw = dragonEntity();
+    bodyHistory = raw?.id === initial.dragonId && d ? appendDragonBody(bodyHistory,
+      { tick, position: raw.position, yaw: raw.yaw, phase: d.phase }) : [];
+    const measuredFeet = d ? observedDragonPart(actor.entities, d.id, 'head') : null;
+    const model = predictDragonHead(bodyHistory);
+    const head = measuredFeet ? dragonHeadCentre(measuredFeet) : model ? dragonHeadCentre(model.parts.head) : null;
     if (head) {
-      heads.push({ tick, head, source: d.headPosition ? 'observed_headPosition' : 'position_yaw_estimate' });
+      heads.push({ tick, head, history: bodyHistory, measuredFeet, source: measuredFeet ? 'observed_part_entity' : 'vanilla_history_model' });
       if (heads.length > 32) heads.shift();
     }
     out.phaseTimeline.push({ tick, seconds: seconds(), phase, position: d?.position ?? null, yaw: d?.yaw ?? null, headPosition: head,
-      headSource: heads.at(-1)?.source ?? null, dragonHealth: d?.health ?? null, actorHealth: Number(actor.health) });
+      headSource: head ? heads.at(-1)?.source : null, rawPosition: raw?.position ? { ...raw.position } : null, rawYaw: raw?.yaw ?? null,
+      model: model ? { pitch: model.pitch, headYOffset: model.headYOffset, yRotA: model.yRotA, rotationSource: model.rotationSource } : null,
+      dragonHealth: d?.health ?? null, actorHealth: Number(actor.health) });
     if (active && !active.allowed()) active.controller.abort(phase === 4 ? 'takeoff_leave_now' : 'observation_changed');
     const beds = packCount('white_bed');
     out.bedsUsed += Math.max(0, lastBeds - beds); lastBeds = beds;
@@ -3587,11 +3594,13 @@ async function endBedKill() {
     if (!halves || !other || JSON.stringify(halves.head) !== JSON.stringify(layout.head) || JSON.stringify(other.foot) !== JSON.stringify(layout.foot)) {
       refuse('bed_halves_missing_or_wrong_facing'); return false;
     }
-    const previous = [...heads].reverse().find(h => intent.tick - h.tick >= 4 && intent.tick - h.tick <= 8);
-    if (!previous || tick - intent.tick > 8) { refuse('head_motion_unknown'); return false; }
-    const dt = intent.tick - previous.tick, ahead = tick - intent.tick;
-    const predicted = { x: intent.head.x + (intent.head.x - previous.head.x) * ahead / dt,
-      y: intent.head.y + (intent.head.y - previous.head.y) * ahead / dt, z: intent.head.z + (intent.head.z - previous.head.z) * ahead / dt };
+    const ahead = tick - intent.tick;
+    if (ahead < 4 || ahead > 8) { refuse('head_motion_unknown'); return false; }
+    // Freeze the targeting history at the observation, then advance it by the ACTUAL human delay.
+    // Newer observations may veto a changed phase; they never bypass that delay.
+    const forecast = forecastDragonHead(intent.history, ahead, intent.measuredFeet);
+    if (!forecast) { refuse('head_motion_unknown'); return false; }
+    const predicted = forecast.centre;
     if (chainDistance(predicted, intent.head) > 4) { refuse('head_prediction_unstable'); return false; }
     const centre = bedCentre(halves.head), headBox = { minX: predicted.x - 0.5, minY: predicted.y - 0.5, minZ: predicted.z - 0.5,
       maxX: predicted.x + 0.5, maxY: predicted.y + 0.5, maxZ: predicted.z + 0.5 };
@@ -3604,8 +3613,8 @@ async function endBedKill() {
       used: out.bedTrials.filter((b: any) => b.useRequested).length, reach: Math.max(bedEyeReach(actor.entity.position, halves.foot), bedEyeReach(actor.entity.position, halves.head)),
       damage: self.expected, health: Number(actor.health), headDamage, headDistance };
     const reason = bedUseRefusal(input);
-    pending.latestEstimate = { tick, observedTick: intent.tick, source: intent.source, observedHead: intent.head, previousHead: previous,
-      predictedHead: predicted, headDistance, exposure, headDamage, self };
+    pending.latestEstimate = { tick, observedTick: intent.tick, aheadTicks: ahead, source: forecast.source, observedHead: intent.head,
+      model: forecast.model, predictedHead: predicted, headDistance, exposure, headDamage, self };
     if (reason) { refuse(reason, { estimate: pending.latestEstimate }); return false; }
     if (!atStand()) { refuse('operating_position_changed'); return false; }
     pending.useRequested = true; pending.useTick = tick; pending.phaseAtUse = view?.dragon?.phase;
@@ -3750,6 +3759,151 @@ async function endBedKill() {
 scenes.end_bed_kill = endBedKill;
 // ===== end end_bed_kill =====
 
+// ===== dragon_head_model: independent measurements, no combat hands =====
+function dragonHeadError(predicted: P3 | null, actual: P3 | null) {
+  if (!predicted || !actual) return null;
+  return { horizontal: Math.hypot(predicted.x - actual.x, predicted.z - actual.z), vertical: Math.abs(predicted.y - actual.y),
+    signedVertical: predicted.y - actual.y, metres: chainDistance(predicted, actual) };
+}
+function dragonHeadErrorStats(errors: Array<ReturnType<typeof dragonHeadError>>) {
+  const valid = errors.filter((e): e is NonNullable<typeof e> => e !== null);
+  const stats = (axis: 'horizontal' | 'vertical' | 'metres') => {
+    const values = valid.map(e => e[axis]).sort((a, b) => a - b);
+    return values.length ? { count: values.length, mean: values.reduce((a, b) => a + b, 0) / values.length,
+      rms: Math.sqrt(values.reduce((a, b) => a + b * b, 0) / values.length), p95: values[Math.ceil(values.length * 0.95) - 1], max: values.at(-1) } : null;
+  };
+  return { count: valid.length, horizontal: stats('horizontal'), vertical: stats('vertical'), metres: stats('metres') };
+}
+
+async function dragonHeadModelScene() {
+  if (!actor.floorReflexes) throw new Error('head measurement requires floor reflexes ON');
+  await park(false); releaseReflex();
+  const waiting = basinWaitingCell(endView());
+  if (!waiting || !endView()?.perch) throw new Error('head measurement needs an observed perch and loaded natural waiting ground');
+  await protect(true); await gear([]); // no sword/bed; resistance is for recording, never evidence of safety
+  await standAt(waiting.x, waiting.y, waiting.z);
+  await ask(`${END} kill @e[type=minecraft:end_crystal]`);
+  // No dragon phase/pose/health/motion reset: continue its natural cycle from enter.
+  const initialDragon = dragonEntity();
+  if (!initialDragon) throw new Error('head measurement needs the loaded dragon');
+  const dragonId = initialDragon.id, deaths0 = actorDeaths, t0 = Date.now();
+  const out: Record<string, any> = { scene: 'dragon_head_model', dragonId, limitSeconds: Math.min(KILL_LIMIT_MS, 600_000) / 1000,
+    tickBasis: 'client physicsTick; raw Mineflayer entity precision; no server gameTime alignment assumed',
+    source: 'EnderDragon.aiStep 1.21.11 / 6c4ae19; history recorded before movement; get(5),get(10); head/neck feet',
+    assumptions: ['future body velocity/yaw averaged over four ticks; phase held for forecast only',
+      'server yRotA inferred from wrapped yaw delta; client variant uses zero', 'packet/interpolation delay is not corrected',
+      'dragonState.headPosition is a perched box estimate, excluded from ground truth', 'resistance for measurement; floor reflexes remain on'],
+    samples: [], fallbackReads: [], landings: [], phaseStats: {}, validationStatus: 'unavailable', ok: false };
+  let tick = 0, history: DragonBodySample[] = [], terminal: string | null = null, phase: number | null = null;
+  let landing: Record<string, any> | null = null, completedLandings = 0, sawTakeoff = false;
+  const pending = new Map<number, any>();
+  const onTick = () => {
+    tick++;
+    const raw = dragonEntity(), view = endView();
+    if (disconnected) { terminal = 'disconnected'; return; }
+    if (actorDeaths > deaths0) { terminal = 'actor_dead'; return; }
+    if (raw && raw.id !== dragonId) { terminal = 'dragon_identity_changed'; return; }
+    const nextPhase = raw ? dragonPhaseOf(actor, raw) : null;
+    if (nextPhase !== phase) {
+      if (landing) { landing.toTick = tick - 1; landing.complete = nextPhase !== null; if (landing.complete) completedLandings++; landing = null; }
+      if (nextPhase === 3) {
+        landing = { n: out.landings.length + 1, fromTick: tick, toTick: null, complete: false, pillow: view?.perch ? bedCentre(killCell(view.perch)) : null };
+        out.landings.push(landing);
+      }
+      phase = nextPhase;
+    }
+    if (phase === 4) sawTakeoff = true;
+    if (sawTakeoff && completedLandings >= 2 && phase === 4) terminal = 'two_natural_landings_and_takeoff';
+    history = raw ? appendDragonBody(history, { tick, position: raw.position, yaw: raw.yaw, phase }) : [];
+    const model = predictDragonHead(history), client = predictDragonHead(history, 0, { rotation: 'client_zero' });
+    const future = predictDragonHead(history, 4);
+    const actual = raw ? observedDragonPart(actor.entities, dragonId, 'head') : null;
+    const neck = raw ? observedDragonPart(actor.entities, dragonId, 'neck') : null;
+    const earlier = pending.get(tick);
+    pending.delete(tick);
+    const row: Record<string, any> = { tick, seconds: (Date.now() - t0) / 1000, phase,
+      position: raw ? { x: raw.position.x, y: raw.position.y, z: raw.position.z } : null, yaw: raw?.yaw ?? null,
+      observedHead: actual, observedNeck: neck, measurementSource: actual ? 'part_entity' : null,
+      observedPartId: actual ? dragonId + 1 : null, observationHeadPositionEstimate: view?.dragon?.headPosition ?? null,
+      modelHead: model?.parts.head ?? null, modelNeck: model?.parts.neck ?? null, clientModelHead: client?.parts.head ?? null,
+      modelState: model ? { pitch: model.pitch, headYOffset: model.headYOffset, yRotA: model.yRotA } : null,
+      predictedAt4: future?.parts.head ?? null, forecastTargetTick: future?.tick ?? null,
+      errorNow: dragonHeadError(model?.parts.head ?? null, actual), errorNeck: dragonHeadError(model?.parts.neck ?? null, neck),
+      errorClient: dragonHeadError(client?.parts.head ?? null, actual),
+      errorAhead4: earlier && raw ? dragonHeadError(earlier.head, actual) : null,
+      forecastPhase: earlier?.phase ?? null, phaseChangedDuringForecast: earlier ? earlier.phase !== phase : null,
+      pillow: landing?.pillow ?? null, landing: landing?.n ?? null,
+      actualPillowDistance: actual && landing?.pillow ? chainDistance(actual, landing.pillow) : null, pillowForecasts: [] };
+    if (future) pending.set(tick + 4, { phase, head: future.parts.head });
+    if (landing?.pillow) for (let n = 4; n <= 8; n++) {
+      const forecast = predictDragonHead(history, n);
+      if (forecast) row.pillowForecasts.push({ ahead: n, tick: tick + n, head: forecast.parts.head, distance: chainDistance(forecast.parts.head, landing.pillow) });
+    }
+    out.samples.push(row);
+  };
+  actor.on('physicsTick', onTick);
+  try {
+    // Vanilla normally sends no multipart spawn packets. Try the command paths, preserve replies
+    // and request/receipt ticks, and NEVER turn the parent's Pos or a box estimate into head truth.
+    if (!observedDragonPart(actor.entities, dragonId, 'head')) {
+      for (const command of [`${END} data get entity ${DRAGON} Parts`, `${END} data get entity ${DRAGON} Head`,
+        `${END} data get entity @e[type=minecraft:ender_dragon_part,limit=1] Pos`]) {
+        const requestTick = tick;
+        try { out.fallbackReads.push({ command, requestTick, reply: await ask(command), receiptTick: tick, acceptedAsMeasurement: false }); }
+        catch (error) { out.fallbackReads.push({ command, requestTick, receiptTick: tick, error: String(error), acceptedAsMeasurement: false }); }
+      }
+    }
+    while (!terminal && Date.now() - t0 < out.limitSeconds * 1000) await sleep(50);
+    terminal ??= 'time_limit';
+  } finally {
+    actor.removeListener('physicsTick', onTick);
+    pending.clear();
+    const unfinished = out.landings.at(-1);
+    if (unfinished?.toTick === null) { unfinished.toTick = tick; unfinished.partial = true; }
+  }
+  out.endReason = terminal; out.seconds = (Date.now() - t0) / 1000;
+  for (const p of [0, 1, 2, 3, 6, 7, 5, 4]) {
+    const rows = out.samples.filter((r: any) => r.phase === p);
+    out.phaseStats[p] = { ticks: rows.length, measuredTicks: rows.filter((r: any) => r.observedHead).length,
+      missingMeasurementTicks: rows.filter((r: any) => !r.observedHead).length,
+      reconstruction: dragonHeadErrorStats(rows.map((r: any) => r.errorNow)), neck: dragonHeadErrorStats(rows.map((r: any) => r.errorNeck)),
+      clientReconstruction: dragonHeadErrorStats(rows.map((r: any) => r.errorClient)),
+      ahead4: dragonHeadErrorStats(rows.filter((r: any) => r.phaseChangedDuringForecast === false).map((r: any) => r.errorAhead4)),
+      ahead4AcrossPhaseChange: dragonHeadErrorStats(rows.filter((r: any) => r.phaseChangedDuringForecast === true).map((r: any) => r.errorAhead4)) };
+  }
+  for (const l of out.landings) {
+    const rows = out.samples.filter((r: any) => r.landing === l.n);
+    l.lastFiveSeconds = rows.filter((r: any) => r.tick > l.toTick - 100);
+    const measured = rows.filter((r: any) => r.observedHead);
+    const pillowMeasurements = measured.filter((r: any) => Number.isFinite(r.actualPillowDistance));
+    const actualPass = pillowMeasurements.find((r: any) => r.actualPillowDistance <= 1.5);
+    l.firstActualPillowTick = actualPass?.tick ?? null;
+    l.measurementComplete = measured.length === rows.length && rows.length > 0;
+    l.closestMeasuredPillow = pillowMeasurements.length ? pillowMeasurements.reduce((a: any, b: any) => a.actualPillowDistance < b.actualPillowDistance ? a : b) : null;
+    // Score only forecasts issued >=4 ticks BEFORE the observed FIRST entry. Later forecasts
+    // cannot improve that entry's score retrospectively. Missing coverage is never 'no pass'.
+    l.pillowPredictions = rows.flatMap((r: any) => {
+      const f = r.pillowForecasts.find((f: any) => f.distance <= 1.5);
+      if (!f) return [];
+      const eligible = l.measurementComplete && (actualPass ? r.tick <= actualPass.tick - 4 : true);
+      return [{ issuedTick: r.tick, predictedTick: f.tick, ahead: f.ahead, predictedDistance: f.distance,
+        actualFirstTick: actualPass?.tick ?? null, tickError: eligible && actualPass ? f.tick - actualPass.tick : null,
+        status: !eligible ? 'unscored_missing_coverage_or_late_issue' : actualPass ? 'matched' : 'false_positive_no_observed_pass' }];
+    });
+    l.pillowStatus = !l.pillow ? 'pillow_unavailable' : !l.measurementComplete ? 'measurement_incomplete' : !actualPass ? 'no_observed_pass' : l.pillowPredictions.some((f: any) => f.status === 'matched') ? 'predicted' : 'missed_pass';
+  }
+  const measured = out.samples.filter((r: any) => r.errorNow).length;
+  out.validationStatus = measured ? 'measured' : 'unavailable_no_independent_head_position';
+  out.measurementNote = measured ? 'Errors include client packet/physicsTick alignment; no server truth claimed'
+    : 'No head part entity was received. Standard vanilla Parts/Head NBT and part selector do not expose multipart positions. Error metrics stay null; a server-side instrumentation source is needed for calibration.';
+  out.ok = measured > 0 && out.phaseStats[3].reconstruction.count > 0 && out.phaseStats[3].ahead4.count > 0
+    && out.landings.some((l: any) => l.complete && l.measurementComplete && l.pillow)
+    && !['actor_dead', 'disconnected', 'dragon_identity_changed'].includes(terminal!);
+  return out;
+}
+scenes.dragon_head_model = dragonHeadModelScene;
+// ===== end dragon_head_model =====
+
 scenes.death = async () => {
   await protect(true);
   await flatten(); await gear(['diamond_sword']); await wear(); await hold('diamond_sword');
@@ -3785,7 +3939,7 @@ scenes.death = async () => {
 // ===== run =====
 let exitCode = 0;
 try {
-  const invalidKillSelection = wanted.some(name => name.startsWith('dragon_kill') || name.startsWith('cage_descent_compare') || name === 'end_full_chain' || name === 'end_bed_kill') && (wanted.filter(name => name !== 'enter').length !== 1 || !killEntries.includes(wanted.find(name => name !== 'enter')!));
+  const invalidKillSelection = wanted.some(name => name.startsWith('dragon_kill') || name.startsWith('cage_descent_compare') || name === 'end_full_chain' || name === 'end_bed_kill' || name === 'dragon_head_model') && (wanted.filter(name => name !== 'enter').length !== 1 || !killEntries.includes(wanted.find(name => name !== 'enter')!));
   if (invalidKillSelection) { report.errors.push('choose exactly one standalone entry (dragon_kill_compare or end_full_chain, optionally after enter), without other scenes'); exitCode = 1; }
   for (const name of invalidKillSelection ? [] : Object.keys(scenes)) {
     if (killEntries.includes(name) && wanted.filter(n => n !== 'enter').join() !== name) continue;
