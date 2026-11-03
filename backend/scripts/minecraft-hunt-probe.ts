@@ -1047,7 +1047,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     }
     return out;
   };
-  let n = 0, outs = 0, retreats = 0;
+  let n = 0, outs = 0, retreats = 0, climbs = 0;
   // the attack cell for an ambush: a cell with a floor and open feet and head, 1.5 to 3 m from the spawner across, within a block of its height, the nearest of them to the cover cell
   const attackCell = (() => {
     if (!options.ambush) return null;
@@ -1084,6 +1084,12 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
         // the health is 14 or more and the body is not on fire; back to the cover at once when not, and rest to 18 there
         const aPos = new Vec3(attackCell.x + 0.5, attackCell.y, attackCell.z + 0.5);
         const atAttack = () => actor.entity.position.distanceTo(aPos) < 1.3;
+        // (a push may have dropped the body into the pit below the cover: back up by the way, placing and digging cobblestone, before anything else)
+        if (actor.entity.position.y < holdCell.y - 1.5) {
+          const up = await act('climb back to the cover', [{ do: 'go', to: holdCell, range: 0.6, seconds: 20, canPlace: ['cobblestone'], maxPlace: 8, canDig: ['cobblestone', 'netherrack', 'nether_bricks'], maxDig: 8, onFail: 'continue' }], 40, { accept: ['blaze'] });
+          if (++climbs <= 5) note(`the body is at y ${r1(actor.entity.position.y)}, below the cover (y ${holdCell.y}): ${up.lines.join(' ').slice(0, 200)}`);
+          continue;
+        }
         const count = boxCount(), afire = burning();
         if (count === 0 || count > 4 || hp() < 14 || afire) {
           if (atAttack()) { const back = await act('back to the cover', [{ do: 'go', to: holdCell, range: 0.5, seconds: 12, onFail: 'continue' }], 25, { accept: ['blaze'] }); retreats++; if (retreats <= 8) note(`back to the cover #${retreats} (box count ${count}, hp ${r1(hp())}, ${afire ? 'on fire' : 'not on fire'}): ${back.lines.join(' ').slice(0, 120)}`); }
@@ -1094,6 +1100,13 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
           continue;
         }
         if (!atAttack()) {
+          // (a fireball leaves fire on the cells: fire in or beside the attack cell is dug out first, the way the fill puts it out)
+          const fires: Array<{ x: number; y: number; z: number }> = [];
+          for (const [dx, dy, dz] of [[0, 0, 0], [0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]] as const) {
+            const b = actor.blockAt(new Vec3(attackCell.x + dx, attackCell.y + dy, attackCell.z + dz));
+            if (b && /fire/u.test(b.name)) fires.push({ x: attackCell.x + dx, y: attackCell.y + dy, z: attackCell.z + dz });
+          }
+          if (fires.length) { const put = await act('put the fire out at the attack cell', [{ do: 'dig', at: fires, collect: false, onFail: 'continue' }], 20, { accept: ['blaze'] }); note(`fire put out at the attack cell: ${put.lines.join(' | ').slice(0, 140)}`); }
           const goOut = await act(`out#${++outs}`, [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 12, canPlace: ['cobblestone'], maxPlace: 4, onFail: 'continue' }], 25, { accept: ['blaze'] });
           if (outs <= 3 || /止まった|失敗/u.test(goOut.lines.join(' '))) note(`out#${outs} (box count ${count}, hp ${r1(hp())}): ${goOut.lines.join(' ').slice(0, 200)}`);
         }
