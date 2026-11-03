@@ -29,6 +29,7 @@ import { serverRefusalPlugin } from '../utils/serverRefusals.js';
 import { lavaDigGuardPlugin, lavaReflexPlugin } from '../utils/lavaSafety.js';
 import { wallReflexPlugin } from '../utils/wallReflex.js';
 import { gazeGuardPlugin } from '../utils/gazeGuard.js';
+import { entityResetPlugin } from '../utils/entityReset.js';
 import { exposureDigGuardPlugin } from '../utils/exposureGuard.js';
 import { promptPlacePlugin } from '../utils/promptPlace.js';
 import { installCollisionTolerance } from '../utils/collisionTolerance.js';
@@ -92,6 +93,7 @@ export async function createProbeBot(port: number, username = 'ShannonProbe', ac
   bot.loadPlugin(lavaReflexPlugin);
   bot.loadPlugin(wallReflexPlugin);
   bot.loadPlugin(gazeGuardPlugin);
+  bot.loadPlugin(entityResetPlugin);
   bot.loadPlugin(fireballDeflectPlugin);
   bot.loadPlugin(shieldBlockPlugin);
   bot.loadPlugin(knockBracePlugin);
