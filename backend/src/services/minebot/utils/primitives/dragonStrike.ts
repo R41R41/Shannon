@@ -6,6 +6,7 @@ import { letGo, StepStopped, stopped, wait, type StepContext, type StepOutcome }
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { boxCentre, boxDistance, isDying, isPerched, partBox, partTarget, phaseName, STRIKE_ORDER, type DragonPart } from '../dragonParts.js';
 import { dragonPhaseOf, STRIKE_REACH } from '../dragonState.js';
+import { avertedPitchInRange, gazeEyes, gazeGuardTick, gazeTargets, recordGazeAttack, type GazeLook } from '../gazeGuard.js';
 
 /**
  * attack at the ender dragon: blows at its parts while it is on the perch (phases 5, 6, 7), and only then.
@@ -47,6 +48,29 @@ export function partToStrike(dragon: { position: Vec3; yaw?: number }, eye: Vec3
   return null;
 }
 
+/** Keep the head-first strike order, trying a safe elevation through each part before changing parts.
+ * These points come from the live part boxes, never from a standing place chosen by the body. */
+export function dragonStrikeAim(bot: any, dragon: { position: Vec3; yaw?: number }, eye = gazeEyes(bot), reach = STRIKE_REACH):
+  { part: DragonPart; point: Vec3; look: GazeLook; requested: GazeLook } | null {
+  const creatures = bot.gazeGuard?.enabled ? gazeTargets(bot) : [];
+  let requested: GazeLook | undefined;
+  for (const part of STRIKE_ORDER) {
+    const box = partBox(dragon, part);
+    if (boxDistance(eye, box) > reach) continue;
+    const centre = boxCentre(box);
+    const dx = centre.x - eye.x, dz = centre.z - eye.z, horizontal = Math.hypot(dx, dz);
+    const yaw = Math.atan2(-dx, -dz), pitch = Math.atan2(centre.y - eye.y, horizontal);
+    requested ??= { yaw, pitch };
+    const held = avertedPitchInRange(eye, yaw, pitch, creatures,
+      Math.atan2(box.minY + 0.02 - eye.y, horizontal), Math.atan2(box.maxY - 0.02 - eye.y, horizontal));
+    if (held === null) continue;
+    // Straight up/down is already the centre ray; avoid tan(pi/2) * 0.
+    const point = new Vec3(centre.x, held === pitch ? centre.y : eye.y + Math.tan(held) * horizontal, centre.z);
+    return { part, point, look: { yaw, pitch: held }, requested };
+  }
+  return null;
+}
+
 export async function strikeDragon(ctx: StepContext, dragon: any, limitMs: number): Promise<StepOutcome> {
   const bot = ctx.bot;
   const id: number = dragon.id;
@@ -54,7 +78,7 @@ export async function strikeDragon(ctx: StepContext, dragon: any, limitMs: numbe
   const healthBefore = entityHealth(bot, dragon);
   const parts: Record<string, number> = {};
   const swungAt: number[] = [];
-  let blows = 0, landed = 0, lastSwing = 0, dead = false, sawPerch = false, perchedNow = false, lastReach: number | null = null, lastPhase: number | null = null;
+  let blows = 0, landed = 0, lastSwing = 0, gazeBlocked = 0, dead = false, sawPerch = false, perchedNow = false, lastReach: number | null = null, lastPhase: number | null = null;
   let dyingSince: number | null = null, lastInReach = started;
   const struck = (): Progress => ({ unit: 'blow', done: landed, left: null });
   const onDead = (entity: any) => { if (entity?.id === id) dead = true; };
@@ -85,17 +109,30 @@ export async function strikeDragon(ctx: StepContext, dragon: any, limitMs: numbe
         // The wait for a perch is not the wait for a reach: the clock for "nothing in reach" starts when the dragon sits.
         if (!sawPerch) lastInReach = now;
         sawPerch = true;
-        const eye = new Vec3(bot.entity.position.x, bot.entity.position.y + 1.62, bot.entity.position.z);
+        const eye = gazeEyes(bot);
         const pick = partToStrike(live, eye);
         lastReach = pick ? pick.distance : boxDistance(eye, partBox(live, 'head'));
         if (pick) {
           lastInReach = now;
           if (now - lastSwing >= swingWaitMs(bot.heldItem?.name)) {
-            const target = partTarget(live, pick.part);
-            try { await bot.lookAt(new Vec3(target.position.x, target.position.y, target.position.z), true); } catch { /* looked */ }
+            const aim = dragonStrikeAim(bot, live, eye);
+            lastSwing = now;
+            if (!aim) {
+              const centre = boxCentre(partBox(live, pick.part));
+              recordGazeAttack(bot, { yaw: Math.atan2(eye.x - centre.x, eye.z - centre.z),
+                pitch: Math.atan2(centre.y - eye.y, Math.hypot(centre.x - eye.x, centre.z - eye.z)) }, null, { id, part: pick.part });
+              gazeBlocked++;
+              if (bot.gazeGuard) gazeGuardTick(bot, bot.gazeGuard);
+              await wait(ctx, 50);
+              continue;
+            }
+            recordGazeAttack(bot, aim.requested, aim.look, { id, part: aim.part });
+            const target = partTarget(live, aim.part);
+            try { await bot.lookAt(aim.point, true); } catch { /* looked */ }
+            if (bot.gazeGuard) gazeGuardTick(bot, bot.gazeGuard);
             // Marked before the swing: the hurt that answers it may come at once.
             swungAt.push(Date.now()); lastSwing = Date.now(); blows++;
-            parts[pick.part] = (parts[pick.part] ?? 0) + 1;
+            parts[aim.part] = (parts[aim.part] ?? 0) + 1;
             bot.attack(target);
           }
         } else if (now - lastInReach >= UNREACHED_MS) break;
@@ -123,9 +160,10 @@ export async function strikeDragon(ctx: StepContext, dragon: any, limitMs: numbe
   }
   const phaseText = lastPhase === null ? 'phase 不明' : `phase ${lastPhase} ${phaseName(lastPhase) ?? ''}`.trim();
   if (isDying(lastPhase)) return { ...stopped(bot, 'time_up', `${label} は死にかけているが死は見ていない（${phaseText}。${counts}）。次: 竜が消えるのを待ち、goal-evidence で死を確かめる`), progress: struck() };
-  if (sawPerch && !perchedNow) return { ...stopped(bot, 'perch_over', `止まり木が終わった（${phaseText}）。${blows ? counts : '一度も打てる所に頭・首・胴・翼が無かった'}。次: 次の着地（phase 3）と見回し（phase 6）を息の雲と頭の箱の外で待つ`), progress: struck(), data: { dragon: { blows, landed, parts } } };
+  if (sawPerch && !perchedNow) return { ...stopped(bot, 'perch_over', `止まり木が終わった（${phaseText}）。${blows ? counts : gazeBlocked ? `目を避ける照準が作れず${gazeBlocked}回見送った` : '一度も打てる所に頭・首・胴・翼が無かった'}。次: 次の着地（phase 3）と見回し（phase 6）を息の雲と頭の箱の外で待つ`), progress: struck(), data: { dragon: { blows, landed, parts } } };
   if (blows > 0) return { ...stopped(bot, 'time_up', `${label} は倒れなかった（${phaseText}。${counts}）。次: 止まり木が続くなら同じ手をもう一度`), progress: struck(), data: { dragon: { blows, landed, parts } } };
   if (!sawPerch) return { ...stopped(bot, 'not_perched', `${label} は止まり木に居なかった（${phaseText}、止まっているのは phase 5・6・7 だけ。${seconds}秒待った）。次: 息の雲と頭の箱の外で phase 6 か 7 を待つ。クリスタルが残るなら先に弓で壊す`), progress: struck() };
+  if (gazeBlocked) return { ...stopped(bot, 'gaze_blocked', `${label} に届く部位はあるが、エンダーマンの目を避けて狙える向きが無かった（${gazeBlocked}回）。次: 観測して打つ位置を選び直す`), progress: struck() };
   const head = lastReach === null ? '' : `。頭の箱まで目から ${lastReach.toFixed(1)}m（${STRIKE_REACH}m まで届く）`;
   const centre = boxCentre(partBox(live, 'head'));
   return { ...stopped(bot, 'out_of_reach', `止まり木に居るが打てる所に頭・首・胴・翼が無い（${phaseText}${head}。頭は (${centre.x.toFixed(1)},${centre.y.toFixed(1)},${centre.z.toFixed(1)}) 付近）。次: 頭の下 3〜4m へ go してから attack`), progress: struck() };
