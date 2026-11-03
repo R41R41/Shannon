@@ -46,3 +46,29 @@ scene('s4_seed_rooms', 'seed survey: every blaze spawner room of the staged worl
   const arrival = sites.netherArrival as number[] | undefined, stand = sites.blazeStand as number[] | undefined;
   return { rooms, arrival, blazeStand: stand, spawners: spawners.length, fromArrival: arrival && spawners[0] ? Math.round(Math.hypot(spawners[0][0] - arrival[0], spawners[0][2] - arrival[2])) : null };
 });
+
+// ---- den survey: where the warped forest has a wall a 2-high, 2-deep side tunnel can be dug into (needs a pin that has huntEndermanDen: claude/dragon-pearl) ----
+scene('s4_den_survey', 'den survey: the enderman den candidates (radius 12) from a grid of points round the warped forest\'s stand: how many, where, and what the best one looks like', async note => {
+  const stand = sites.warpedStand as number[];
+  await ask('difficulty peaceful'); await ask('gamemode spectator ' + ACTOR);
+  const rows: Array<Record<string, unknown>> = [];
+  let total = 0, points = 0, withAny = 0;
+  for (let dx = -64; dx <= 64; dx += 16) for (let dz = -64; dz <= 64; dz += 16) {
+    const x = stand[0] + dx, z = stand[2] + dz;
+    await ask(`execute in minecraft:the_nether run forceload add ${x - 14} ${z - 14} ${x + 14} ${z + 14}`);
+    await sleep(900);
+    points++;
+    const found: Array<any> = [];
+    for (const dy of [-16, -8, 0, 8, 16]) {      // the nether floor's height varies: five heights per point, a radius-12 read at each (vertical range 2)
+      await ask(`execute in minecraft:the_nether run tp ${ACTOR} ${x + 0.5} ${stand[1] + dy} ${z + 0.5}`);
+      await sleep(dy === -16 ? 1400 : 450);
+      for (const item of (endermanDenCandidates as any)(actor, { radius: 12, verticalRange: 2, limit: 64 }) as Array<any>) found.push(item);
+    }
+    found.sort((a, b) => a.score - b.score);
+    total += found.length; if (found.length) withAny++;
+    rows.push({ at: [x, z], count: found.length, best: found[0] ? { entrance: found[0].entrance, direction: found[0].direction, sight: found[0].sightDistance, penalties: found[0].penalties } : null });
+  }
+  note(`den survey: ${points} points, ${withAny} with at least one candidate, ${total} candidates in all`);
+  note(`den survey rows ${JSON.stringify(rows.filter(r => (r.count as number) > 0))}`);
+  return { points, withAny, total, rows };
+});
