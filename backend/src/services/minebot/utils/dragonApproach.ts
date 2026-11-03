@@ -1,10 +1,10 @@
 import { Vec3 } from 'vec3';
 import { boxDistance, boxesOverlap, bodyBoxAt, flameCloudCentre, inflate, isPerched, partBox, shift, BREATH_RADIUS_MIN, type P3 } from './dragonParts.js';
 import { cloudReaches, lyingCloudZones } from './dragonDanger.js';
-import { STRIKE_REACH } from './dragonState.js';
+import { fountainOf, STRIKE_REACH } from './dragonState.js';
 import { feetCentre, inland, walkGround, walkRoute, type WalkSearch, type WalkCell } from './dragonWalk.js';
 import { cellKey, type Cell } from './localMap.js';
-import { goWalkRouteChecker } from './primitives/go.js';
+import { goWalkRouteChecker, worldWatchOf } from './primitives/go.js';
 
 /** Measured in the Shannon lab, 2026-11-02: docs/minecraft-end-fight.md, 止まり木の周期.
  * Samples, not an execution timer. Damage of about 50 can end a perch early. */
@@ -30,6 +30,10 @@ export function dragonWindows(phase: number | null, elapsed: number): DragonWind
 }
 
 export interface DragonApproach {
+  /** Connected basin footing; wing push is reported, never exempted from the floor reflex. Absent without a proven walk. */
+  basin?: Array<P3 & { walkMeters: number; /** Estimate at walking speed, without sprint or execution delays. */ walkSeconds: number;
+    /** Eye to the nearest head/neck/body/wing box. */ headReach: number; inWingPush: boolean; inBreathNow: boolean;
+    /** Facing projection: side 0, front 1, behind -1. */ side: number }>;
   strike: Array<P3 & { headReach: number; walkMeters: number }>;
   /** Wait clear of the whole perch, then use strike[strikeIndex] when the window opens. */
   stage?: Array<P3 & { toStrikeMeters: number; walkMeters: number; strikeIndex: number }>;
@@ -37,10 +41,10 @@ export interface DragonApproach {
   retreat: Array<P3 & { walkMeters: number }>;
 }
 
-/** Same grown contact boxes as the reflex. Also exclude the future flame, even in the early safe window. */
-export function perchClearance(bot: any, dragon: { position: P3; yaw?: number }, clearance = 0): (feet: P3) => boolean {
+/** Same grown contact boxes as the reflex by default; walking can report wing push separately. Always exclude the future flame, even in the early safe window. */
+export function perchClearance(bot: any, dragon: { position: P3; yaw?: number }, clearance = 0, avoidWings = true): (feet: P3) => boolean {
   const boxes = [inflate(partBox(dragon, 'head'), 1.1 + clearance), inflate(partBox(dragon, 'neck'), 1.1 + clearance),
-    ...(['wing1', 'wing2'] as const).map(part => inflate(shift(inflate(partBox(dragon, part), 4, 2, 4), 0, -2, 0), 0.1 + clearance))];
+    ...(avoidWings ? wingPushBoxes(dragon, clearance) : [])];
   const clouds = lyingCloudZones(bot);
   const flame = flameCloudCentre(dragon);
   let ground: number | null = null;
@@ -55,27 +59,35 @@ export function perchClearance(bot: any, dragon: { position: P3; yaw?: number },
     !cloudReaches(centre, BREATH_RADIUS_MIN, feet, Math.max(0.5, clearance));
 }
 export const approachClear = (bot: any, dragon: { position: P3; yaw?: number }, feet: P3): boolean => perchClearance(bot, dragon)(feet);
+const wingPushBoxes = (dragon: { position: P3; yaw?: number }, clearance = 0) =>
+  (['wing1', 'wing2'] as const).map(part => inflate(shift(inflate(partBox(dragon, part), 4, 2, 4), 0, -2, 0), 0.1 + clearance));
 
 /** Geometry only. Ideas learned from mine-ai-mcp (MIT, aibengineering, https://github.com/aibengineering/mine-ai-mcp):
  * separate perch geometry, preparation and observed timing. Written for Shannon, no copied code or automatic combat sequence. */
 const approachCache = new WeakMap<object, { key: string; at: number; value: DragonApproach }>();
 /** How long a computed approach stands (the perch lasts about 27 s and the head does not move on it) and the time one computation may take (lab r30-r32: 12 ms for the scan found no cell on a loaded machine). */
 const APPROACH_CACHE_MS = 900, APPROACH_SCAN_MS = 60, APPROACH_TOTAL_MS = 120;
-export function dragonApproach(bot: any, dragon: any, phase: number | null): DragonApproach | undefined {
-  if (!isPerched(phase)) return undefined;
-  const me = bot.entity?.position, headNow = partBox(dragon, 'head');
-  const key = [me ? Math.floor(me.x / 2) : '-', me ? Math.floor(me.z / 2) : '-', Math.round(headNow.minX), Math.round(headNow.minY), Math.round(headNow.minZ), lyingCloudZones(bot).length].join(',');
+export function dragonApproach(bot: any, dragon: any, phase: number | null, perch = fountainOf(bot)): DragonApproach | undefined {
+  if (!isPerched(phase)) { approachCache.delete(bot); return undefined; }
+  const me = bot.entity?.position, watch = worldWatchOf(bot);
+  // A moved/growing cloud, vertical move or edited floor must invalidate basin routes even inside the 900 ms cache.
+  const key = JSON.stringify([me && [Math.floor(me.x), Math.floor(me.y), Math.floor(me.z)], dragon.id, dragon.position, dragon.yaw,
+    perch, lyingCloudZones(bot), watch.epoch, watch.tick]);
   const held = approachCache.get(bot), clock = Date.now();
   if (held && held.key === key && clock - held.at < APPROACH_CACHE_MS) return held.value;
-  const value = computeApproach(bot, dragon);
+  const value = computeApproach(bot, dragon, perch);
   if (value) approachCache.set(bot, { key, at: clock, value });
   return value;
 }
-function computeApproach(bot: any, dragon: any): DragonApproach {
-  const deadline = performance.now() + APPROACH_TOTAL_MS, head = partBox(dragon, 'head');
+function computeApproach(bot: any, dragon: any, perch: P3 | null): DragonApproach {
+  const start = performance.now(), deadline = start + APPROACH_TOTAL_MS, scanDeadline = start + APPROACH_SCAN_MS, head = partBox(dragon, 'head');
+  // Two scans share 60 ms, all verification shares 120 ms. Basin work cannot add another unbounded observation pass.
+  let basin: DragonApproach['basin'];
+  try { if (perch) basin = basinPositions(bot, dragon, perch, start + APPROACH_SCAN_MS / 2, scanDeadline); } catch { /* optional field */ }
+  const extra = basin?.length ? { basin } : {};
   const safe = perchClearance(bot, dragon);
-  if (!bot.entity?.position || !safe(bot.entity.position)) return { strike: [], stage: [], retreat: [] };
-  const ground = walkGround(bot, { deadline: performance.now() + APPROACH_SCAN_MS, radius: 32, maxCells: 2500, safe });
+  if (!bot.entity?.position || !safe(bot.entity.position)) return { strike: [], stage: [], retreat: [], ...extra };
+  const ground = walkGround(bot, { deadline: scanDeadline, radius: 32, maxCells: 2500, safe });
   const verify = goWalkRouteChecker(bot, deadline), strike: DragonApproach['strike'] = [], retreat: DragonApproach['retreat'] = [];
   for (const node of ground.cells) {
     if (performance.now() >= deadline) break;
@@ -97,7 +109,36 @@ function computeApproach(bot: any, dragon: any): DragonApproach {
     if (retreat.length === 2) break;
   }
   const stage = stagePositions(bot, dragon, ground, strike, verify, deadline);
-  return { strike, stage, retreat };
+  return { strike, stage, retreat, ...extra };
+}
+
+/** The body's own walk into the 2–3.2 m ring, with no digging/placing. A one-level rise is offered only if go can really step up it. */
+function basinPositions(bot: any, dragon: any, perch: P3, scanDeadline: number, deadline: number): DragonApproach['basin'] {
+  const safe = perchClearance(bot, dragon, 0, false), me = bot.entity?.position;
+  if (!me || !safe(me) || performance.now() >= scanDeadline) return undefined;
+  const ground = walkGround(bot, { deadline: scanDeadline, radius: 32, maxCells: 2500, safe });
+  if (performance.now() >= deadline) return undefined;
+  const facing = { x: Math.sin(dragon.yaw ?? 0), z: Math.cos(dragon.yaw ?? 0) }, wings = wingPushBoxes(dragon);
+  const parts = (['head', 'neck', 'body', 'wing1', 'wing2'] as const).map(part => partBox(dragon, part));
+  const candidates: Array<{ node: WalkCell; p: P3; side: number }> = [];
+  for (const node of ground.cells) {
+    if (performance.now() >= deadline) return undefined;
+    const p = feetCentre(node.cell), dx = p.x - perch.x, dz = p.z - perch.z, r = Math.hypot(dx, dz);
+    if (r < 2 || r > 3.2 || !safe(p)) continue;
+    candidates.push({ node, p, side: (dx * facing.x + dz * facing.z) / r });
+  }
+  candidates.sort((a, b) => Math.abs(a.side) - Math.abs(b.side) || a.node.walkMeters - b.node.walkMeters);
+  const verify = goWalkRouteChecker(bot, deadline), result: NonNullable<DragonApproach['basin']> = [];
+  for (const { node, p, side } of candidates) {
+    if (performance.now() >= deadline) break;
+    if (!verify(walkRoute(node))) continue;
+    const eye = { ...p, y: p.y + 1.62 };
+    result.push({ ...p, walkMeters: node.walkMeters, walkSeconds: node.walkMeters / 4.317,
+      headReach: Math.min(...parts.map(box => boxDistance(eye, box))),
+      inWingPush: wings.some(box => boxesOverlap(bodyBoxAt(p), box)), inBreathNow: false, side });
+    if (result.length === 3) break;
+  }
+  return result.length ? result : undefined;
 }
 
 /** Reverse Dijkstra on the already scanned ground: distance is along go-checked steps, never a straight line or a detour via the body.

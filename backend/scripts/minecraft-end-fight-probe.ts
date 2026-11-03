@@ -1784,7 +1784,7 @@ const killPlaced = new Map<string, P3>();
 const killBlasts: P3[] = [];
 
 /** Bootstrap only: choose real island support from the loaded terrain, relative to the observed fountain/head. */
-async function prepareKillRun(): Promise<{ dragonId: number; ground: P3 }> {
+async function prepareKillRun(waitingSide = false): Promise<{ dragonId: number; ground: P3 }> {
   const chosen = wanted.filter(name => name !== 'enter');
   if (chosen.length !== 1 || !killEntries.includes(chosen[0])) throw new Error('dragon_kill_compare entries must run alone');
   if (!actor.floorReflexes || !actor.reflexLedger?.counts) throw new Error('dragon_kill_compare requires floor reflexes ON and the full ledger counter');
@@ -1809,6 +1809,8 @@ async function prepareKillRun(): Promise<{ dragonId: number; ground: P3 }> {
     killArena = { ground: cells[0], perch: { ...p }, yaw: 180 - d.yaw * 180 / Math.PI };
   }
   const arena = killArena;
+  const ground = waitingSide ? basinWaitingCell(endView()) : arena.ground;
+  if (!ground) throw new Error('no loaded lateral waiting footing 10 to 14 m from the observed perch');
   // Only blocks this comparison attempted to place; never flatten the island or the podium.
   for (const cell of killPlaced.values()) {
     const name = actor.blockAt(new Vec3(cell.x, cell.y, cell.z))?.name;
@@ -1832,7 +1834,7 @@ async function prepareKillRun(): Promise<{ dragonId: number; ground: P3 }> {
   await gear(['stone_sword', 'shield', 'cobblestone 64', 'bow', 'arrow 64', ...Array(12).fill('white_bed'), 'obsidian 12', 'cooked_beef 64']);
   await wearIron();
   await act([{ do: 'equip', item: 'shield', slot: 'offhand' }, { do: 'equip', item: 'stone_sword' }], 10);
-  await standAt(arena.ground.x, arena.ground.y, arena.ground.z);
+  await standAt(ground.x, ground.y, ground.z);
   await ask(`${END} tp ${DRAGON} ${arena.perch.x} ${arena.perch.y} ${arena.perch.z} ${arena.yaw} 0`);
   await still();
   await ask(`${END} data modify entity ${DRAGON} Health set value 200.0f`);
@@ -1858,7 +1860,7 @@ async function prepareKillRun(): Promise<{ dragonId: number; ground: P3 }> {
     throw new Error('comparison initial health/ground/gear was not confirmed');
   }
   context.taskId = `dragon-kill-${++context.taskRevision}`;
-  return { dragonId: d!.id, ground: arena.ground };
+  return { dragonId: d!.id, ground };
 }
 
 /** Read-only geometry chosen by the script from one observed stage/strike pair and the observed head box. */
@@ -2398,11 +2400,32 @@ const swordAssist = async (mode: 'strike' | 'stage') => {
   return { scene: 'dragon_kill_compare', style: 'sword_assist', endReason, seconds: elapsed(), killSeconds: endReason === 'dragon_dead' ? elapsed() : null, deaths: actorDeaths - deaths0,
     minHealth: lowest.stop(), dragonHealthEnd: health, windows, reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
 };
-// Feasibility baseline for the basin melee (no walking, so what the position itself costs is seen): at the start of a sit the body is put (tp) on a standable cell of the island ground 2 to 3.2 m
-// from the perch centre, beside the dragon's facing, and swings at the dragon for as long as it sits (the hand is asked again after a cut); then it is put back on the waiting cell.
-// Floor reflexes stay ON. Per sit: how long the dragon sat, what it lost, what the body lost, the reflex kinds and the cuts.
+/** Lab HEAD's waiting choice, relative to the first observed perch/facing; basin destinations belong entirely to the observation. */
+function basinWaitingCell(view: ReturnType<typeof endObservation>): P3 | null {
+  const centre = view?.perch, d = view?.dragon;
+  if (!centre || !d) return null;
+  const read = bodyReader(actor), facing = { x: Math.sin(d.yaw), z: Math.cos(d.yaw) };
+  const cells: Array<{ p: P3; score: number }> = [];
+  for (let dx = -14; dx <= 14; dx++) for (let dz = -14; dz <= 14; dz++) {
+    const x = Math.floor(centre.x) + dx, z = Math.floor(centre.z) + dz;
+    const rx = x + 0.5 - centre.x, rz = z + 0.5 - centre.z, r = Math.hypot(rx, rz);
+    if (r < 10 || r > 14) continue;
+    const side = Math.abs((rx * facing.x + rz * facing.z) / r);
+    if (side > 0.25) continue;
+    for (let y = Math.floor(centre.y) + 1; y >= centre.y - 32; y--) {
+      if (!standing(read, { x, y, z })) continue;
+      const p = feetCentre({ x, y, z });
+      cells.push({ p, score: side * 100 + Math.abs(r - 12) + Math.hypot(p.x - actor.entity.position.x, p.z - actor.entity.position.z) * 0.01 });
+      break;
+    }
+  }
+  cells.sort((a, b) => a.score - b.score);
+  return cells[0]?.p ?? null;
+}
+// The tp baseline and the walking scene use the same first observed basin candidate. Floor reflexes stay ON;
+// after entry, keep swinging throughout phases 6/7/5, independently of the short head-strike windows.
 const basinAssist = async (mode: 'tp' | 'walk') => {
-  const initial = await prepareKillRun();
+  const initial = await prepareKillRun(true);
   const t0 = Date.now(), deadline = t0 + KILL_LIMIT_MS, deaths0 = actorDeaths, lowest = trackMinHealth(), counts0 = actor.reflexLedger.counts();
   const elapsed = () => (Date.now() - t0) / 1000;
   const sits: Array<Record<string, any>> = [], transitions: Array<[number, number | null]> = [];
@@ -2411,24 +2434,6 @@ const basinAssist = async (mode: 'tp' | 'walk') => {
   actor.on('entityDead', onDead);
   // the phase is watched on its own timer (the swinging loop below does not return for seconds): its changes, to 0.1 s
   const phaseTimer = setInterval(() => { const p = endView()?.dragon?.phase ?? null; if (p !== lastPhase) { lastPhase = p; transitions.push([Math.round(elapsed() * 10) / 10, p]); } }, 100);
-  const basinCell = (centre: P3, yaw: number): P3 | null => {
-    const read = bodyReader(actor), cells: Array<{ p: P3; score: number }> = [];
-    const facing = { x: -Math.sin(yaw), z: Math.cos(yaw) };
-    for (let dx = -4; dx <= 4; dx++) for (let dz = -4; dz <= 4; dz++) {
-      const x = Math.floor(centre.x) + dx, z = Math.floor(centre.z) + dz, r = Math.hypot(x + 0.5 - centre.x, z + 0.5 - centre.z);
-      if (r < 2 || r > 3.2) continue;
-      for (let y = Math.floor(centre.y) + 1; y >= Math.floor(centre.y) - 12; y--) {
-        const cell = { x, y, z };
-        if (read(x, y - 1, z)?.name && read(x, y - 1, z)?.name !== 'air' && standing(read, cell)) {
-          const side = Math.abs(((x + 0.5 - centre.x) * facing.x + (z + 0.5 - centre.z) * facing.z) / r);
-          cells.push({ p: feetCentre(cell), score: side * 10 + Math.abs(y - (centre.y - 4)) * 0.1 });
-          break;
-        }
-      }
-    }
-    cells.sort((a, b) => a.score - b.score);
-    return cells[0]?.p ?? null;
-  };
   try {
     while (Date.now() < deadline) {
       if (actorDeaths > deaths0) { endReason = 'actor_dead'; break; }
@@ -2439,8 +2444,8 @@ const basinAssist = async (mode: 'tp' | 'walk') => {
       wasSitting = sitting;
       // enter at the scan (phase 6) of a sit, once
       if (!d || !view?.perch || d.phase !== 6 || enteredSit === sitId) { await sleep(100); continue; }
-      const cell = basinCell(view.perch, d.yaw);
-      if (!cell) { enteredSit = sitId; sits.push({ n: sitId, seconds: elapsed(), skipped: 'no basin cell' }); continue; }
+      const cell = d.approach?.basin?.[0];
+      if (!cell) { enteredSit = sitId; sits.push({ n: sitId, seconds: elapsed(), skipped: 'no proven basin walk', entryFailure: { noCandidate: true } }); continue; }
       enteredSit = sitId;
       const row: Record<string, any> = { n: sitId, seconds: elapsed(), cell, dragonBefore: d.health, hpBefore: Number(actor.health), phaseAtEntry: d.phase, hands: [] };
       const mark = actor.reflexLedger.mark(), seatStart = Date.now();
@@ -2448,8 +2453,12 @@ const basinAssist = async (mode: 'tp' | 'walk') => {
       if (mode === 'tp') await standAt(cell.x, cell.y, cell.z);
       else {
         // the walk from the waiting cell into the basin is the body's own
-        const walk = await act([{ do: 'go', to: killCell(cell), range: 0.8, seconds: 8 }], 12);
-        row.walk = { ok: walk.ok, ms: walk.ms, line: walk.lines.join(' | ').slice(0, 200), phaseAfter: endView()?.dragon?.phase ?? null };
+        const walk = await act([{ do: 'go', to: killCell(cell), range: 0.5, maxDrop: 1, seconds: 12 }], 16);
+        const line = walk.lines.join(' | '), ledger = actor.reflexLedger.entriesSince(mark) ?? [];
+        row.walk = { ok: walk.ok, ms: walk.ms, line, phaseAfter: endView()?.dragon?.phase ?? null,
+          reflexes: ledger.map((e: any) => ({ kind: e.kind, outcome: e.outcome, detail: String(e.detail) })) };
+        row.entryFailure = { reflex: /反射/u.test(line), reflexKinds: [...new Set(ledger.map((e: any) => e.kind))],
+          deadEnd: /\bdead_end\b/u.test(line), limitTime: /\blimit_time\b/u.test(line) };
       }
       row.at = { ...actor.entity.position };
       let hp = Number(actor.health), minHp = hp;
@@ -2477,7 +2486,7 @@ const basinAssist = async (mode: 'tp' | 'walk') => {
   for (const [kind, n] of Object.entries(counts) as Array<[string, number]>) { const used = n - (counts0[kind] ?? 0); if (used > 0) reflexKinds[kind] = used; }
   const health = await dragonHealthServer().catch(() => null);
   return { scene: 'dragon_kill_compare', style: 'basin_assist', endReason, seconds: elapsed(), killSeconds: endReason === 'dragon_dead' ? elapsed() : null, deaths: actorDeaths - deaths0,
-    minHealth: lowest.stop(), dragonHealthEnd: health, windows: sits, transitions: transitions.slice(0, 400), reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
+    minHealth: lowest.stop(), dragonHealthEnd: health, waiting: initial.ground, windows: sits, transitions: transitions.slice(0, 400), reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
 };
 scenes.dragon_kill_basin_assist = () => basinAssist('tp');
 scenes.dragon_kill_basin_walk = () => basinAssist('walk');

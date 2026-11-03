@@ -8,7 +8,7 @@ import { isPerched, partBox } from '../../src/services/minebot/utils/dragonParts
 import { bedHalves } from '../../src/services/minebot/utils/bedRules.js';
 import { ReflexLedger } from '../../src/services/minebot/utils/reflexLedger.js';
 import { BLOCK_REACH } from '../../src/services/minebot/utils/blockReach.js';
-import { feetCentre } from '../../src/services/minebot/utils/dragonWalk.js';
+import { feetCentre, standing as terrainStanding } from '../../src/services/minebot/utils/dragonWalk.js';
 import { makeSim } from '../helpers/physicsBody.js';
 import { go as bodyGo } from '../../src/services/minebot/utils/primitives/go.js';
 import { StepStopped } from '../../src/services/minebot/utils/primitives/common.js';
@@ -82,7 +82,7 @@ function rig(options: { estimate?: number; proofId?: number; missingPlan?: boole
     }), protect: vi.fn(async () => {}), releaseReflex: vi.fn(), park: vi.fn(async () => {}),
     gear: vi.fn(async () => {}), wearIron: vi.fn(async () => {}), standAt: vi.fn(async () => {}), still: vi.fn(async () => {}),
   };
-  const factory = new Function(...Object.keys(deps), `${compiled}\nconst actualPrepare = prepareKillRun; prepareKillRun = prepareMock; return { run: dragonKillRun, choose: chooseKillPlan, route: killRetreatRoute, layout: killBedLayout, useBed: usePerchBed, actualPrepare, setArena(a) { killArena = a; }, die() { actorDeaths++; actor.health = 0; actor.emit('death'); } };`);
+  const factory = new Function(...Object.keys(deps), `${compiled}\nconst actualPrepare = prepareKillRun; prepareKillRun = prepareMock; return { run: dragonKillRun, basin: basinAssist, waiting: basinWaitingCell, choose: chooseKillPlan, route: killRetreatRoute, layout: killBedLayout, useBed: usePerchBed, actualPrepare, setArena(a) { killArena = a; }, die() { actorDeaths++; actor.health = 0; actor.emit('death'); } };`);
   const api = factory(...Object.values(deps));
   return { ...api, actor, d, calls, deps, blocks, setGround: (y: number) => { groundY = y; }, setHandler: (fn: typeof handler) => { handler = fn; },
     reflect: () => { reflected = true; }, noExplosion: () => { explosion = false; },
@@ -92,6 +92,88 @@ function rig(options: { estimate?: number; proofId?: number; missingPlan?: boole
 }
 
 afterEach(() => { vi.useRealTimers(); });
+
+describe('basin lab HEAD uses observed walking candidates', () => {
+  it.each(['tp', 'walk'])('uses only the first basin observation for %s, enters at phase 6 and swings through closed short windows', async mode => {
+    vi.useFakeTimers(); const r = rig();
+    const p = { x: 102.5, y: 70, z: -30.5, walkMeters: 10, walkSeconds: 2.3, headReach: 2, inWingPush: true, inBreathNow: false, side: 0 };
+    r.d.approach.basin = [p, { ...p, x: 98.5 }];
+    r.d.windows.open = false; r.d.phase = 7;
+    const promise = r.basin(mode);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(r.calls).toHaveLength(0); expect(r.deps.standAt).not.toHaveBeenCalled();
+    r.d.phase = 6;
+    r.setHandler(async (hands: any[]) => { if (hands.some(h => h.do === 'attack')) r.d.phase = r.d.phase === 5 ? 7 : 5; });
+    await vi.advanceTimersByTimeAsync(600);
+    expect(r.deps.prepareMock).toHaveBeenCalledWith(true);
+    if (mode === 'walk') {
+      expect(r.calls[0].hands).toEqual([{ do: 'go', to: { x: 102, y: 70, z: -31 }, range: 0.5, maxDrop: 1, seconds: 12 }]);
+      expect(r.calls.filter((c: any) => c.hands[0]?.do === 'go')).toHaveLength(1);
+    } else expect(r.deps.standAt).toHaveBeenCalledWith(p.x, p.y, p.z);
+    expect(r.calls.filter((c: any) => c.hands.some((h: any) => h.do === 'attack')).length).toBeGreaterThan(1);
+    await r.kill(); const result = await promise;
+    expect(result.windows[0]).toMatchObject({ cell: p, phaseAtEntry: 6 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('records a missing optional basin without guessing coordinates or issuing a go/attack', async () => {
+    vi.useFakeTimers(); const r = rig(), promise = r.basin('walk');
+    await vi.advanceTimersByTimeAsync(400);
+    expect(r.calls).toHaveLength(0); expect(r.deps.standAt).not.toHaveBeenCalled();
+    await r.kill(); const result = await promise;
+    expect(result.windows).toHaveLength(1);
+    expect(result.windows[0]).toMatchObject({ skipped: 'no proven basin walk', entryFailure: { noCandidate: true } });
+  });
+
+  it.each([
+    { line: '1.go stopped: 反射: 竜の危険', kind: 'retreat', detail: '竜の息の雲・竜の翼の4マス内', reflex: true, deadEnd: false, limitTime: false },
+    { line: '1.go stopped: 反射: 押された先で踏ん張った', kind: 'knock', detail: '押された先で踏ん張った', reflex: true, deadEnd: false, limitTime: false },
+    { line: '1.go stopped: 反射: 低体力の逃走', kind: 'flee', detail: '低体力のため敵から離れた', reflex: true, deadEnd: false, limitTime: false },
+    { line: '1.go stopped: dead_end: canPlace が要る', kind: null, detail: '', reflex: false, deadEnd: true, limitTime: false },
+    { line: '1.go stopped: limit_time: 12 秒の上限', kind: null, detail: '', reflex: false, deadEnd: false, limitTime: true },
+  ])('preserves entry failure and walking-only reflex detail: $line', async failure => {
+    vi.useFakeTimers(); const r = rig();
+    r.d.approach.basin = [{ x: 102.5, y: 70, z: -30.5 }];
+    r.setHandler(async (hands: any[]) => {
+      if (hands[0]?.do !== 'go') return;
+      if (failure.kind) r.actor.reflexLedger.note(failure.kind, failure.detail);
+      return { ok: false, lines: [failure.line], ms: 12000 };
+    });
+    const promise = r.basin('walk'); await vi.advanceTimersByTimeAsync(400); await r.kill();
+    const row = (await promise).windows[0];
+    expect(row.entryFailure).toEqual({ reflex: failure.reflex, deadEnd: failure.deadEnd, limitTime: failure.limitTime, reflexKinds: failure.kind ? [failure.kind] : [] });
+    expect(row.walk.line).toBe(failure.line);
+    expect(row.walk.reflexes.map((e: any) => e.detail)).toEqual(failure.kind ? [failure.detail] : []);
+    expect(r.calls.filter((c: any) => c.hands[0]?.do === 'go')).toHaveLength(1);
+  });
+
+  it.each([0, Math.PI / 2, Math.PI, -Math.PI / 2])('selects real lateral waiting support 10–14 m from a translated observed perch (yaw %s)', yaw => {
+    const r = rig();
+    r.deps.bodyReader.mockImplementation((bot: any) => (x: number, y: number, z: number) => {
+      const b = bot.blockAt(new Vec3(x, y, z)); return { name: b.name, solid: b.boundingBox === 'block' };
+    });
+    r.deps.standing.mockImplementation(terrainStanding);
+    const view = { perch: { x: 123.5, y: 74, z: -47.5 }, dragon: { ...r.d, yaw } };
+    const p = r.waiting(view), dx = p.x - view.perch.x, dz = p.z - view.perch.z, distance = Math.hypot(dx, dz);
+    expect(distance).toBeGreaterThanOrEqual(10); expect(distance).toBeLessThanOrEqual(14);
+    expect(Math.abs((dx * Math.sin(yaw) + dz * Math.cos(yaw)) / distance)).toBeLessThanOrEqual(0.25);
+    expect(p.y).toBe(70);
+    r.deps.bodyReader.mockReturnValue(() => null);
+    expect(r.waiting(view)).toBeNull();
+  });
+
+  it('prepares the basin on its lateral waiting support instead of arena.ground and refuses an unloaded side', async () => {
+    vi.useFakeTimers(); const r = rig();
+    r.setArena({ ground: { x: 110.5, y: 70, z: -30.5 }, perch: r.d.position, yaw: 90 });
+    const preparing = r.actualPrepare(true); await vi.advanceTimersByTimeAsync(20); const prepared = await preparing;
+    const distance = Math.hypot(prepared.ground.x - r.d.position.x, prepared.ground.z - r.d.position.z);
+    expect(prepared.ground.x).toBeCloseTo(r.d.position.x);
+    expect(distance).toBeGreaterThanOrEqual(10); expect(distance).toBeLessThanOrEqual(14);
+    expect(r.deps.standAt).toHaveBeenCalledWith(prepared.ground.x, prepared.ground.y, prepared.ground.z);
+    r.deps.standing.mockReturnValue(false);
+    await expect(r.actualPrepare(true)).rejects.toThrow('no loaded lateral waiting footing');
+  });
+});
 
 describe('observed bed support geometry', () => {
   it.each([{ x: 4, y: 66, z: -15 }, { x: 8, y: 65, z: 4 }])('anchors the r73 floating wall at $x,$y,$z to uneven ground, bottom first', target => {

@@ -270,3 +270,46 @@ Windows worktreeの関連4ファイルは104件成功・既存2件skip（比較�
 検証はこの作業コピー内の外部I/Oなしの関連単体試験と、`tests/unit/tsconfig.dragon-nook.json` を入口にしたemitなしの型検査だけ。スクリプト本体も型検査のfilesへ明記し、抜き出した台本の変換だけで括弧/構文の確認を済ませない。変更対象自身と依存先の診断を分けて記録する。ラボ・VM・Bot・DB・実ソース/外部サービス・Notion更新・commit/pushは行わない。`.codex-material/` は参照・変更しない。S1に残す測定は、建築時間と拒否、窓前からの滞在、内側の被害/退避、横からの玉と他生物への雲の移動、窓内の剣/ベッドの実命中、自然な頭の向きの変化、撃破と `boss.verified`。
 
 最終ローカル検証：`minecraftDragonKillCompare` 52件、`minecraftDragonSections` 17件、`goStopsSearch` 1件、`minecraftDragonNook` 10件、計80件成功。既存の隔離用設定 `SHANNON_ISOLATED_MINEBOT_PROBE=true` とダミー値をコマンドのプロセス内だけに渡し、共有.envを読まず、DB/API/ラボには接続していない。最終の型検査は上記tsconfigの4ファイル（スクリプト本体を含む）自身の診断0、プログラムの構文診断0、emitなし。依存先の既存10診断は残るため全体型検査の合格とは扱わない。同じ条件で既存2ファイルをHEADの内容へメモリ上で読み替えた照合も依存先10件、追加0件。`git diff --check` 成功。実際の無被害・退避不要・体による建築成功・討伐の成立は未検証のまま。
+
+## 盆地への歩行候補と横の待ち場（2026-11-03、7つ目）
+
+根拠は作業コピー内の `lab-evidence/r103-*` / `r105-*` / `r106-*` と `lab-evidence/dragon-kill-methods-wf.md`。特に `r106-report.json` の `scenes.dragon_kill_basin_walk.windows` の11回中、`n=1` だけが `walk.ok=true`（3.448秒）。残る10回を**歩行の終了行**で重複なく分類すると以下になる。
+
+| 終了理由 | 回数 | n | 記録と原因の範囲 |
+| --- | ---: | --- | --- |
+| 竜の危険による反射中断、雲を記録 | 1 | 2 | `retreat` に息の雲 `(-5,65,7)` 半径7。歩行6.679秒で中断 |
+| 竜の危険による反射中断、翼を記録 | 3 | 4, 5, 7 | 翼の4マス内。4/5の同じ窓の台帳には頭の2.5先の息の予告もある（重複して数えない） |
+| 押された先で踏ん張る反射中断 | 1 | 6 | `knock`。歩行終了時phase 0、押されている |
+| 低体力逃走の反射中断 | 1 | 11 | `flee`、開始HP約6.67。遠い待ち場と被害の蓄積後 |
+| `dead_end` | 2 | 3, 9 | 「1段上、道は途中まで、canPlaceが要る」。この行だけでは実際の段差と翼の経路除外のどちらが閉塞の原因かを断定できない。3の台帳には息の予告による退避もある |
+| `limit_time` | 2 | 8, 10 | 8秒上限、残り14 / 19 m。従来の待ち場が竜の正面側約16 mで、迂回や押し戻しを含む道が長い |
+
+台帳は窓全体の記録であり、すべての項目をその `go` の中断原因と断定しない。反射中断は計6回（竜4、knock1、flee1）。着座の53〜56秒と頭の短い `dragon.windows` 約2.5秒は別の概念で、盆地への移動や滞在を短い窓に制限しない。
+
+### 観測 `dragon.approach.basin`
+
+phase 5/6/7の着座中だけ、観測した `perch` の中心から水平2〜3.2 mにある、現在地から歩ける足場を最大3件追加する。既存の `strike` / `stage` / `retreat` と `windows` の意味・安全条件は維持する。`basin` は証明できる候補がなければ省略し、空欄を架空の座標で埋めない。
+
+各候補は `{x,y,z,walkMeters,walkSeconds,headReach,inWingPush,inBreathNow,side}`。`walkMeters` は地形上の連結した経路長、`walkSeconds` はそれを通常歩速4.317 m/sで割った参考値（装備・受付・探索・反射の時間は含まない）。この欄の `headReach` は目から頭/首/胴/両翼の箱までの**最小**距離で、既存の竜直下の `headReach`（頭だけ）とは定義が違う。`side` は中心から足場への向きと、部位計算と同じ竜の向き `(sin(yaw),cos(yaw))` の内積を正規化する。横0、正面1、背面−1で、絶対値の小さい候補、次に歩行距離を優先する。
+
+頭・首には反射と同じ1.1 mの拡張箱を保ち、現在の息の雲と頭の2.5 m先の予告雲（安全判定は最小半径7 m＋0.5 m余白）を避けた `walkGround` の経路を、`goWalkRouteChecker` の実際の全辺判定で確認する。液体・未知・掘削・設置の道は出さない。単純な1段上りでも `go` が本当に跳び上がれる場合だけ採り、天井などで上れなければ候補から外す。暗黙の `canPlace` や新しいhandは追加しない。`inWingPush` は反射と同じ翼の押し箱への重なり、`inBreathNow` は現在の雲と予告のいずれも除いたため採用候補ではfalse。
+
+2つの地形走査は開始後60 msの枠を共有し（盆地の走査は最初の30 msまで）、盆地の経路確認は60 msまで、既存候補を含む全処理は従来の120 ms枠内で打ち切る。各走査は最大2500セル、半径32 m。900 msキャッシュを共用し、足元セルの高さ、竜の位置/向き/ID、perch、雲の位置/半径、`go` の地形更新epoch/tickで失効させる。同じ個数の雲の移動も再計算する。期限・ロード不足・検証例外では盆地欄を付けず、既存観測を返す。
+
+### `go` の変更の限定と測定根拠
+
+着座中の既存End専用経路除外だけで、`perchClearance(...,0,false)` を使い、翼の押し箱を道の閉塞条件から外す。頭・首、実在雲、予告雲、危険の中から出る既存経路の扱いは維持する。phase 3/4には新しい免除を広げず、従来の `isPerched` ゲートを保つ。`approachClear` / 既存待機候補は既定どおり翼も避ける。
+
+根拠は `r105-report.json` の `scenes.dragon_kill_basin_assist`：`killSeconds=452.059`、`deaths=0`、`minHealth=20`。特に `windows[n=4].ledger` に「翼の4マス内」「首の1マス内」「息の雲」を含む退避失敗/cover_noneが記録されながら、同窓の `hpBefore/hpAfter/minHp` は全て20。`n=5` には翼を理由に7.7 m離れた退避成功があり、HP20を維持して撃破している。これは測定された低い盆地足場での経路除外見直しの根拠で、他の高さや飛行中も翼が無害という証明ではない。反射は元のままなので、翼でも依然 `go` や攻撃を中断できる。`floorReflexes.ts` / `dragonDanger.ts` / `fallClutch.ts`、`FALL_CLUTCH_ENABLED` は変更しない。
+
+### 台本と記録
+
+両入口 `dragon_kill_basin_assist`（tp）/ `dragon_kill_basin_walk`（歩き）は、phase 6で初めて読めた `dragon.approach.basin[0]` を使い、台本内の盆地座標計算を削除する。未取得ならその着座は `no proven basin walk` と記録する。比較の準備には `prepareKillRun(true)` を用い、通常の `arena.ground` の代わりに、その開始時の観測perch/竜の向きから横10〜14 m（正面方向への射影の絶対値0.25以下、12 mに近い実在足場）を台本が選ぶ。読み取れる足場がなければ場面を拒否し、正面の待ち場へ代替しない。待ち場への初期配置と着座後の戻しは既存のoperator tpで、盆地への入りだけをtp/歩きで比較する。
+
+歩きは既存 `go` に `seconds:12,range:0.5,maxDrop:1` を渡す（候補検証もmaxDrop1）。着座中の剣を繰り返すループは従来どおりで、`windows.open` を条件にしない。窓ごとに候補の全欄、歩行の終了行全文、所要時間、終了phase、歩行終了までの反射の種類/結果/詳細、`entryFailure.reflex/reflexKinds/deadEnd/limitTime` を追加して残す。全場面の `waiting` に選んだ足場を残す。既存の攻撃・HP・着座時間・台帳は保持する。
+
+反射は今後も入りを中断できる。これで実際に歩き通せること、無被害で滞在できること、自然な首振り後も最初の横の待ち場が有効なこと、討伐成功はS1の測定対象。反射が主な失敗として残る場合も、先に新しい `walk.reflexes` で翼/頭/首/実在雲/予告を区別する。この変更で反射条件や優先度を緩めることはしない。変更を検討するには別の測定と依頼が必要。
+
+ローカル最終検証は `minecraftDragonBasin` 17件、`minecraftDragonKillCompare` 65件、`minecraftDragonSections` 17件、`minecraftDragonNook` 10件、`goDragonCloud` 4件、`goStopsSearch` 1件、計114件成功（新規30件）。4方向の横足場、正面/背面、実在雲の中/雲で遮られた道、上れる1段と天井で上れない1段、キャッシュ失効/予算、翼だけの歩行許可と同位置での既存反射検出、頭/首/雲/予告の拒否、両場面の観測候補利用・phase 6入口・短い窓に依存しない攻撃・待ち場・失敗の記録を検証した。外部I/Oなし、既存の隔離設定とダミー値は子プロセス内だけで、共有.env・ラボ・VM・DB・外部サービスは使っていない。
+
+型検査の入口は `tests/unit/tsconfig.dragon-basin.json`、変更した実装4ファイル（**`scripts/minecraft-end-fight-probe.ts` 本体を含む**）と試験2ファイルを明記、emitなし。TypeScript compiler APIで同じ設定を解決し、その6ファイルのsemantic診断とプログラムの構文診断を確認した。構文診断0、probe / dragonApproach / dragonState / 試験2ファイルの診断0。`go.ts` は既存の5件（exclusion配列のtuple型4件、Vec3/Move型1件）が残る。4実装ファイルをHEAD `b13598d` の内容にメモリ上だけで差し替え、旧4ファイル自身を同条件で確認しても同じ5件で、追加診断0。通常の `tsc -p` が併せて報告する依存先5件も未修正で、全体型検査の合格とは扱わない。`git diff --check` 成功。変更は指定の作業コピー・指定の実装/試験/資料のみ、commit/pushなし。`.codex-material/` は参照・変更していない。

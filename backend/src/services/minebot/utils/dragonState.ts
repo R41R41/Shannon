@@ -263,7 +263,7 @@ export function endObservation(bot: Bot, now = Date.now()): EndObservation | nul
   // Optional calculations never take the existing End observation down.
   let shooting: Partial<CrystalShooting> = {}, approach: DragonApproach | undefined;
   try { shooting = crystalOpenings(bot, loaded, now); } catch { /* unavailable terrain/shot adapter */ }
-  try { if (dragon && view) approach = dragonApproach(bot, dragon, view.phase); } catch { /* no proven route */ }
+  try { if (dragon && view) approach = dragonApproach(bot, dragon, view.phase, perch); } catch { /* no proven route */ }
   return {
     ...(dragon && view ? { dragon: { id: view.id, health: view.health, phase: view.phase, phaseName: view.phaseName, phaseFor: view.phaseFor, perched: view.perched, position: view.at, yaw: view.yaw,
       ...(view.head ? { headPosition: view.head } : {}), distance: at ? round1(dragon.position.distanceTo(at)) : 0, headReach: view.headReach, strike: view.strike,
