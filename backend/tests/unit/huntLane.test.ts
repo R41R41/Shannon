@@ -308,6 +308,21 @@ describe('laneReport: read-only lane geometry and counts', () => {
     for (const p of target) expect(p.standAt === null ? p.noStand === 'hazard' || p.noStand === 'out_of_reach' : p.standAt.x <= 0).toBe(true);
   });
 
+  it('does not let stone two cells down cancel lava one cell down beside the footing', () => {
+    // the bridge of the previous test, with lava at y 19 and stone at y 18 on both sides of it
+    const bridge: CampReader = (x, y, z) => {
+      let name = 'air';
+      if (x === 0 && y === 21 && z === 0) name = 'spawner';
+      else if (y < 19 && x <= 0) name = 'stone';
+      else if (y === 19) name = x <= 0 ? 'stone' : z === 2 && x >= 1 && x <= 6 ? 'stone' : 'lava';
+      else if (y === 18) name = 'stone';
+      else if (y < 18) name = 'stone';
+      return { name, solid: !['air', 'water', 'lava', 'fire', 'soul_fire'].includes(name) };
+    };
+    const report = laneReport(bridge, { x: 0, y: 21, z: 0 }, { x: -2, y: 20, z: 2 });
+    for (const p of report.candidates.flatMap(c => c.build)) if (p.standAt) expect(p.standAt.x <= 0 || p.standAt.z !== 2).toBe(true);
+  });
+
   it('keeps one-based groups consecutive, with a common footing and at most six placements', () => {
     const c = east(flat()), seen = new Set<number>();
     let previous: number | null = null;

@@ -149,6 +149,8 @@ export function laneReport(reader: CampReader, spawner: LaneCell, from: LaneCell
       for (const [dx, dz] of HORIZONTAL) {
         if (fullFloor(read(p.x + dx, p.y, p.z + dz)) || fullFloor(read(p.x + dx, p.y + 1, p.z + dz))) continue;
         const a = read(p.x + dx, p.y - 1, p.z + dz), b = read(p.x + dx, p.y - 2, p.z + dz);
+        // (a hazard directly below the neighbour is a hazard whatever lies under it: a floor two cells down does not cancel lava one cell down)
+        if (a && PUSH_HAZARDS.has(a.name)) return 'hazard';
         if (!(fullFloor(a) && !PUSH_HAZARDS.has(a!.name)) && !(fullFloor(b) && !PUSH_HAZARDS.has(b!.name))) {
           if (!a || !b) unknown = true;
           else return 'hazard';
