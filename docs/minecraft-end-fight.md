@@ -682,3 +682,45 @@ backendから既存Vitestで上記4ファイルを列挙し `--maxWorkers=1 --mi
 変更先はこのコピーのprobe・plan・geometry・単体試験・本書だけ。VM・ラボ・本体・DBは起動せず、`.codex-material/`・禁止された反射等・actのhand一覧・envファイルを変更しない。外部更新・commit/pushも行わない。
 
 最終検証：Windowsコピー（Node v24.21.0）で `minecraftEndFullChain` **125件**＋既存 `minecraftDragonKillCompare` 65件・`minecraftDragonSections` 17件・`minecraftDragonBasin` 22件＝**4ファイル229件成功**（`--maxWorkers=1 --minWorkers=1 --silent`）。`node tests/unit/checkEndFullChain.cjs` は **probeを含む変更4 TSファイルの対象診断0件**。対象のsemantic／構文／compiler option診断を検査し、依存先自身のsemantic診断と全backend型検査は対象外。`git diff --check` 成功。既存の隔離指定とダミー値だけを試験子プロセスへ渡し、共有envは変更していない。HEADは `0985736` のまま、5ファイル未コミット。
+
+## end_bed_kill：結晶0・降下中の最大3床＋鉄剣（2026-11-04、作業コピーのみ）
+
+既存のbedが頭の下へ着けなかった記録は、読める範囲では **r84とr97**。r84は51.253秒のstageを298msで `script_observation_changed` により取消し、その止まりの接近を捨てた。r97も153.419秒・242.470秒のstageを観測変化で取消し、着けたstageからもベッドを設置する位置／窓へ進めず、8回の止まりで `bedTrials=[]`・使用0・竜HP200。どちらも最後は `retreat_failed`。r97の反射には翼・予測した息・火球からの退避が残る。**ベッドの爆発威力や自己被害を実測した失敗ではない**。r85/r96は剣側の対照記録で、r85は打ち上げ・落下後の死亡、r96はstage到達後もHP200で退避失敗。このコピーにないr86〜r95の内容は補っていない。
+
+新場面は、着座後の短いstrike窓と、頭の外側へ進む従来のstageを入口にしない。観測 `perch` の岩盤柱上へ枕を合わせ、yawから並べた四方の候補について、低い床の操作位置・設置／使用射程・支持・自己遮蔽を先に計算する。**phase 2〜3で接近し、その間だけ壁・ベッドを置いて使う**。頭の移動だけではgoを取り消さず、降下終了・離陸・反射・死亡・切断・全体期限は中断理由とする。この変更が実際に接近失敗を解消するかはS1の実ラボで測る。
+
+### 入口・準備・操作
+
+- 既存の場面選択で `enter,end_bed_kill`（または単独 `end_bed_kill`）。他の場面との混在を拒否し、`dragon_kill_*` と同じ25分上限、既定の `report.json` 保存、失敗時の終了コード、`scene:dragon_kill_compare` の記録を使う。新しい環境変数・handは追加しない。
+- `prepareKillRun(true,true)` だけで結晶をコマンド除去し、竜HP200・鉄剣・盾・鉄防具・ベッド4・黒曜石4・食料64・丸石64を確認する。弓／矢／水バケツなし。既存準備内の配置だけtpを使い、最初にphase 0へ一度戻した後は自然周期。計測中のphase固定、tp、回復、コマンド建築は行わない。反射ONを必須とし、変更しない。
+- `descentBedLayouts` は実測perchの直下が岩盤であることを確認し、枕の隣の足側支持と小さな横壁を最大4黒曜石で設計する。空気・接地・頭上空間・目から両半分／建築セルまで4.5m以内・予測被害を満たす候補だけを使う。各黒曜石を既存 `place` で1個ずつ置き、更新を確認して続ける。岩盤柱自体の遮蔽も利用する。世界座標やシードは指定しない。
+- 設置後は実際の両半分・枕方向を読み直す。誤った向きなら既存 `dig` で回収して再計画する。危険な自己被害ならベッドを保持して別の操作位置を探し、候補が無ければ退く。不明な使用結果を自動再起爆しない。設置試行は最大3、在庫1個を予備として残すため、破壊／中断した設置も試行枠を使う。
+- 全handは観測後に **4 physicsTickかつ200ms以上** 待つ。起爆にはさらに設置確認から4 tick以上、前の爆発確認から11 tick以上を要求する。遅延後の頭位置を履歴から予測し、毎回照合する。固定秒数の連打にはしない。
+- 着座中は、残りベッド数にかかわらず観測 `dragon.approach.basin[0]` へ既存goで入り、鉄剣をequipして既存attackを使う。頭を優先する既存attackの実行規則を共用し、台本が部位packetを直接送らない。盆地候補が無ければ見送る。phase 4をtick監視で検出すると実行中handを取り消し、観測perch／yawと自然足場から求めた横の待機地へgoする。HP計測の返信待ち中でも退避へ進む。待機用の穴や屋根は作らない。
+
+### 起爆の式
+
+`dragonBedGeometry.ts` の `bedExposure` は対象AABBのvanillaサンプル格子を作り、各サンプルと枕中心を結ぶ線を、ロード済みブロックの **collision shapes** と交差判定する。両ベッド半分は除外する。未ロード／形状不明は遮蔽物と数えず、薄い板・空の形状を完全な立方体とみなさない。通る割合が `E=exposure`、遮られる割合が `1-E=shielded`。自分にはその時点の足位置とentityのwidth／height（無い場合は立位0.6×1.8）を使う。
+
+威力5の距離 `d<=10` に対し `q=(1-d/10)*E`、`D=35*(q*q+q)+1`。整数丸めをせず、完全遮蔽 `E=0` でも1 HPを残す。自分の `expected` はNormal・防具軽減前の値であり、鉄防具・盾・耐性を安全余裕に数えない。**`expected<=6` かつ `expected+4<現在HP`** のときだけ起爆候補とする。使用直前に現在の箱・地形で再計算し、hand中も位置／射程／被害悪化を監視して取り消す。既存use hand自身の安全判定も通す。
+
+頭の予測箱にも別のEを計算する。距離は枕中心から頭部の足位置（頭中心から高さ0.5を引いた位置）まで。予測距離2.2m以内かつ予測ダメージ50以上を要求する（中心的な狙いは約1.5m・56 HP）。自己遮蔽と頭への遮蔽を混同しない。着座中の累積50 HP超で離陸するため、ベッドは着座後に持ち越して起爆しない。3床約165＋鉄剣6発は目標の見込みで、実測値ではない。
+
+### reportと時刻の意味
+
+- `bedTrials[]`：足／枕／壁／操作位置、`placeRequestTick`・`placedTick`・`useTick`・`detonationTick`、設置／使用／爆発時の頭・phase、使用時の実位置と支持／壁の残存、`prediction` の観測tick・前の頭観測・予測頭・頭への距離／E／被害と `self` のAABB／E／遮蔽割合／予測被害。設置はblockUpdate、爆発は枕中心に対応するexplosion packetで確認し、単なるベッド消失を爆発扱いしない。
+- 同じ行に `dragonBefore/After`（観測）、`dragonHealthServerBefore/After`・読取りtick・`dragonLoss`（コマンド読取り差）、`healthBeforePlace/healthBefore/healthAfter/minHealth/selfDamage/selfDamageAtWorst` を分けて残す。取得不能はnull／error、未起爆は `notDetonatedReason`。自己被害と竜HP差は区間内の全原因を含み、爆発だけの因果証明ではない。サーバーHP読取りは同時にaskを走らせず直列化する。
+- `phaseTimeline[]` は各physicsTickのphase・位置・yaw・頭とその出所・両HP。`transitions`・`phaseDurations` と `phase1Seconds` で、特に火球phaseの継続時間を残す。`healthTimeline` に約5秒ごとの `dragonHealthServer` と被ダメpacketを残す。tickは計測開始からのクライアントphysicsTickで、サーバーgameTimeではない。設置／爆発tickも受信確認tick。request／確認の違いを実サーバーの完全なtick計測と扱わない。
+- `actions` と `refusals` に遅延・中断・未起爆理由、`windows` に剣hand前後、終了時に `deaths/minHealth/reflexKinds/endReason/killSeconds/deathTick/dragonDeadAt/boss/bossVerified` を残す。反射回数は累積counterの開始差分。別竜の証拠や単なる消失を討伐にせず、**この竜IDの `boss.verified`** と無死亡・25分以内をok条件とする。
+
+### 試験・仮定・残した課題
+
+新規試験は `tests/unit/minecraftEndBedKill.test.ts`。移動したperch／四方のyawからの設置候補・支持と4個予算、形状ごとの遮蔽割合、遮蔽物消失、浮動小数の威力5、自己被害／射程／頭位置／phase拒否、4 tickと11 tick境界、3床＋鉄剣6回の模擬実行、予備温存、途中離陸、遅いサーバーHP返信中の退避、未確認爆発、死亡／切断／期限、phase 1滞在、竜IDの異なる証明、反射累積差分と単独選択を検査する。準備の持ち物・結晶除去・HP200・一度だけのphase 0設定もI/O置換で確認する。生成handを**実act.tsから読んだACT_HANDSスキーマ**、goを実goProblemへ通す。実Bot接続は行わない。
+
+型検査はbackendから `node tests/unit/checkEndBedKill.cjs`。`tsconfig.end-bed-kill.json` に **probe本体・dragonBedGeometry・新規試験の3 TSファイル** を明記し、emitなしで対象semantic・構文・compiler option診断を確認する。依存先自身のsemantic診断と全backend型検査は対象外。
+
+現観測は降下中に `headPosition` を供給しないため、`position/yaw` の既存partBoxから頭を再構成し、4〜8 tick離れた履歴で線形外挿する。この方法はソースが使う飛行履歴由来の上下変位を完全には復元しない。headPositionが供給された場合と推定を必ず分け、外挿が4mを超える場合や観測が古い場合は見送る。packet遅延、equip／look後の実クリック遅延、ノックバック・無敵時間、観測候補から操作位置までの実歩行、接触／息／Endermanに対する既存反射との両立は仮定と測定課題である。配置・遮蔽の局所計算は経路全体の安全保証ではない。S1には設置まで進める割合、3床の実ダメージ／自己被害、頭推定誤差、phase 1長期化、盆地への切替、撃破／死亡／反射と各所要時間を残す。
+
+変更は指定コピーのprobe・geometry・関係試験／型検査補助・本節のみ。ラボはS1担当で未実行。反射・gazeGuard・dragonStrike・actの一覧・環境変数・fallClutch・`.codex-material/` は変更しない。VM／本体／DB／外部資料更新／commit／pushは行わない。
+
+?????Windows????Node v24.21.0???? `minecraftEndBedKill` **35?**??? `minecraftDragonKillCompare` 65??`minecraftDragonNook` 10??`minecraftEndFullChain` 125??**4????235???**?`node tests/unit/checkEndBedKill.cjs` ?probe???????3 TS???????0?`git diff --check` ?????????????????????????????????env???????env??????HEAD `ea4b374` ?????????6??????????????
