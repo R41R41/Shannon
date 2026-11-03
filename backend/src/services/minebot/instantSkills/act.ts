@@ -42,6 +42,7 @@ import { itemFoodPoints } from '../utils/foodPoints.js';
 import { stepLabel } from '../utils/actLabel.js';
 import { ACT_CONDITION, conditionHolds, conditionMetText, type ActCondition } from '../utils/actConditions.js';
 import { noteHand } from '../utils/handHistory.js';
+import { DEN_DIRECTIONS, endermanDenProblem } from '../utils/huntEndermanDen.js';
 
 export { stepLabel };
 
@@ -85,6 +86,8 @@ const Hand = z.object({
   furnaces: z.number().int().min(1).max(4).optional().describe('smelt: 何基に分けるか（1〜4）'),
   op: z.enum(['put', 'take', 'look', 'takeAll']).optional(),
   target: z.union([z.string(), z.number()]).optional().describe('#id か名前'),
+  den: z.object({ entrance: z.object({ x: z.number().int(), y: z.number().int(), z: z.number().int() }).strict(),
+    direction: z.enum(DEN_DIRECTIONS) }).strict().optional().describe('fight enderman 専用: 観測から選んだ横穴の入口（絶対整数マス）と壁の奥への東西南北。指定4マスだけ掘る・設置0。完成してから指定 #id を誘い、奥で脚を打つ。rel は適用しない'),
   untilDead: z.boolean().optional(),
   hold: z.boolean().optional().describe('attack: その場で待ち、手の届く所に来たら打つ（追わない）'),
   style: z.enum(['shield_rush']).optional().describe('attack: 指定した blaze 1体へ盾を構えて詰め、拾って指定先へ戻る'),
@@ -177,6 +180,7 @@ const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は
   + 'obsidian: 挙げた溶岩の源（at、8 まで）に水を注いで黒曜石にして掘り、水を汲み戻す（立ち位置・注ぐ所・待ちは体。count・seconds・canPlace・maxPlace）。'
   + 'portal: at（枠の内側の左下）と axis（x か z）の枠 10 個を組み、火打ち金で点け、enter なら入る（足場は canPlace の物）。止まる時は「<手> 止まった <code>」の行で理由を返す。'
   + 'fight: 挙げた相手 target を戦い（stance=flee なら range m 離れるまで逃げ）、狙い・間合い・盾・クリティカル・低体力で食べる/退くは体がこなす。反射が優先。'
+  + 'enderman は den:{entrance:{x,y,z},direction:north|east|south|west}（入口の絶対整数マス・壁の奥へ進む向き）と target:#id を渡すと、2高×1幅×2奥の横穴を4マスだけ掘り、天井・床・液体・空洞を確認してから入口外で目を合わせ、奥の2マス目へ戻り脚を打つ。待ちは20秒まで、被弾・hp<8で中止。倒せば入口外3mの落とし物だけ短く拾う（他の個体が近ければ拾わない）。denなしは従来の屋根方式。'
   + 'mine(block: 掘る種類 id, at: その鉱脈のマス1〜4, count, tool, collect, seconds, canDig・maxDig: 鉱脈へ行く道を掘ってよい物) は at のマスにつながった同じ種類だけを近い順に掘って拾う（ほかの鉱石は探さない）。'
   + 'make(item, count) は途中の物（板・棒など）を持ち物から順に作る（足りなければ何も作らず足りない物の一覧を返す。3x3 は近くの作業台、無ければ持っている物を置く）。'
   + 'smelt(items: [{item,count}], fuel, fuelCount, furnaces: 何基に分けるか, at: かまど, seconds) はかまどに分けて入れて燃料を足すまで（焼き上がりは待たず、取り出しは furnace op=take）。'
@@ -227,12 +231,13 @@ const bad = (text: string): StepOutcome => ({ ok: false, reason: 'invalid_input'
 const targetOf = (value: string | number | undefined) => value === undefined ? undefined : typeof value === 'number' ? value
   : /^#\d+$/u.test(value.trim()) ? Number(value.trim().slice(1)) : value;
 const PILLAR_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'end_stone', 'obsidian'];
-/** The fields a fight hand takes (with `do`): the head's rules, minecraftActHandRules.ts. */
-const FIGHT_FIELDS = new Set(['do', 'target', 'stance', 'item', 'retreatHp', 'range', 'seconds', 'rel', 'note', 'onFail', 'dependsOn']);
+/** Body fight fields. `den` is the body extension; the head's separate contract is updated by S3. */
+const FIGHT_FIELDS = new Set(['do', 'target', 'den', 'stance', 'item', 'retreatHp', 'range', 'seconds', 'rel', 'note', 'onFail', 'dependsOn']);
 const SLOTS: Record<string, string> = { hand: 'hand', offhand: 'off-hand', 'off-hand': 'off-hand', head: 'head', chest: 'torso', torso: 'torso', legs: 'legs', feet: 'feet' };
 
 async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
   const bot = ctx.bot;
+  if (hand.den !== undefined && hand.do !== 'fight') return { ok: false, reason: 'invalid_input', text: 'den は fight enderman だけで使う' };
   const cells = cellsOf(ctx, hand, hand.at);
   if (cells === null) return bad('at のマスが読めない（{x,y,z} か {front,right,up}）');
   const one = cells[0];
@@ -323,11 +328,18 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       // The hand's own fields and ranges (the head's minecraftActHandRules.ts HAND_FIELDS / KIND_CHECKS for fight).
       if (target === undefined) return bad('fight には target（#id か名前）が要る');
       const extra = Object.keys(hand).filter(key => !FIGHT_FIELDS.has(key));
-      if (extra.length) return bad(`${extra.join('・')} は fight では使えない（fight の欄: target・stance・item・retreatHp・range・seconds・rel・note・onFail・dependsOn）`);
+      if (extra.length) return bad(`${extra.join('・')} は fight では使えない（fight の欄: target・den・stance・item・retreatHp・range・seconds・rel・note・onFail・dependsOn）`);
       if (hand.seconds !== undefined && (hand.seconds < 5 || hand.seconds > 60)) return bad('fight の seconds は 5〜60');
       if (hand.range !== undefined && (hand.range < 0 || hand.range > 16)) return bad('fight の range は 0〜16');
       if (hand.retreatHp !== undefined && (!Number.isInteger(hand.retreatHp) || hand.retreatHp < 1 || hand.retreatHp > 19)) return bad('fight の retreatHp は 1〜19 の整数');
-      return fight(ctx, { target, stance: hand.stance, item: hand.item, retreatHp: hand.retreatHp, range: hand.range, seconds: hand.seconds });
+      if (hand.den !== undefined) {
+        const problem = endermanDenProblem(hand.den);
+        if (problem) return bad(problem);
+        if (typeof target !== 'number' || !Number.isSafeInteger(target) || target < 0) return bad('den の fight には観測した target:#id が要る（種類名では選ばない）');
+        if (hand.stance === 'flee') return bad('den は stance=fight だけ');
+        if (hand.rel === true) return bad('den.entrance は絶対整数マス（rel:true は使えない）');
+      }
+      return fight(ctx, { target, den: hand.den, stance: hand.stance, item: hand.item, retreatHp: hand.retreatHp, range: hand.range, seconds: hand.seconds });
     }
     case 'shoot': return shoot(ctx, { target, at: one, charge: hand.charge, weapon: hand.item === 'crossbow' ? 'crossbow' : hand.item === 'bow' ? 'bow' : undefined, shots: hand.n });
     case 'eat': {

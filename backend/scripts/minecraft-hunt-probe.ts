@@ -20,6 +20,10 @@ import { madeStamp } from './lab/madeStamp.js';
 import { blackBoxOf } from '../src/services/minebot/utils/blackbox.js';
 import { exposureFromSpawner, hideoutsFrom, campSite } from '../src/services/minebot/utils/huntCamp.js';
 import { bodyReader } from '../src/services/minebot/utils/localMap.js';
+import { clearEndermanCampObservation, endermanCampObservation } from '../src/services/minebot/utils/huntEndermanCamp.js';
+import { ENDERMAN_EYE, endermanLine } from '../src/services/minebot/utils/huntEnderman.js';
+import { denCenter, denClearRay, denOffset, denStandable, endermanDenCandidates, inspectEndermanDen, type EndermanDenSpec } from '../src/services/minebot/utils/huntEndermanDen.js';
+import { clearEndermanDenObservation, endermanDenObservation, type DenEntity } from '../src/services/minebot/utils/huntEndermanDenFight.js';
 
 const port = Number(process.env.MINECRAFT_HUNT_PORT);
 const worldDirectory = process.env.MINECRAFT_HUNT_WORLD_DIRECTORY ?? '';
@@ -113,7 +117,7 @@ async function runSkill(skill: string, args: Record<string, unknown>, seconds: n
 async function act(label: string, hands: unknown[], seconds: number, extra: Record<string, unknown> = {}): Promise<ActRun> {
   const before = packClient();
   const { receipt, parsed, wallMs, error } = await runSkill('act', { hands, ...extra }, seconds);
-  const lines: string[] = Array.isArray(parsed?.lines) ? parsed.lines.map((line: any) => `${line.i}.${line.do} ${line.status}: ${String(line.line).slice(0, 400)}`) : [];
+  const lines: string[] = Array.isArray(parsed?.lines) ? parsed.lines.map((line: any) => `${line.i}.${line.do} ${line.status}: ${String(line.line)}`) : [];
   const run: ActRun = { label, ok: parsed ? parsed.ok === true : receipt?.outcome === 'completed', wallMs, actMs: typeof parsed?.ms === 'number' ? parsed.ms : null, lines, json: parsed,
     stoppedBy: parsed?.stoppedBy, stoppedWhy: parsed?.stoppedWhy, hp: Number.isFinite(Number(actor.health)) ? r1(Number(actor.health)) : null, pack: delta(before, packClient()), ...(error ? { error } : {}) };
   log(`ACT ${label} ${run.ok ? 'ok' : 'NO'} ${(wallMs / 1000).toFixed(1)}s hp ${run.hp} ${run.stoppedBy ? `stoppedBy ${run.stoppedBy} ${String(run.stoppedWhy ?? '').slice(0, 80)} ` : ''}${lines.map(line => line.slice(0, 200)).join(' | ')}${error ? ` ERROR ${error}` : ''}`);
@@ -1283,6 +1287,8 @@ async function endermanHunt(where: 'platform' | 'warped', note: (text: string) =
   let pearls = 0, kills = 0, laidTotal = 0;
   for (let i = 0; i < total && !disconnected; i++) {
     if (Number(actor.health) < 10) { note(`health ${actor.health}: stopped before enderman ${i + 1}`); break; }
+    // the search below is round the stand: when the last fight or pickup moved the body away from it, it goes back first (the roof stays where it is)
+    if (where === 'warped' && i > 0 && Math.hypot(actor.entity.position.x - (stand[0] + 0.5), actor.entity.position.z - (stand[2] + 0.5)) > 3) { await placeActor('the_nether', stand[0], y, stand[2], 24); await sleep(800); }
     const angle = (i * 70 + 25) * Math.PI / 180, distance = 13 + (i % 3) * 3;
     const ex = stand[0] + Math.round(Math.cos(angle) * distance), ez = stand[2] + Math.round(Math.sin(angle) * distance);
     // On the ground there (the warped forest is not flat): the first solid cell with two open cells over it, within a few blocks of the body's own height.
@@ -1295,15 +1301,9 @@ async function endermanHunt(where: 'platform' | 'warped', note: (text: string) =
       }
       return best;
     };
-    // The planner hunts the ones it can see: the eye's line from the body to the enderman's eyes (2.55 over its feet) is clear of solid blocks (the first two metres, where the roof will be, are not counted).
+    // Use the body's entire eye ray, including the nearby trees and the roof left by the previous attempt.
     const seenFromBody = (gx: number, gy: number, gz: number): boolean => {
-      const from = actor.entity.position.offset(0, 1.62, 0), to = new Vec3(gx + 0.5, gy + 2.55, gz + 0.5), length = from.distanceTo(to), steps = Math.ceil(length / 0.4);
-      for (let k = 1; k < steps; k++) {
-        if (k * 0.4 < 2) continue;
-        const point = from.plus(to.minus(from).scaled(k / steps)), block = actor.blockAt(point);
-        if (!block || block.boundingBox === 'block') return false;
-      }
-      return true;
+      return endermanLine(bodyReader(actor), actor.entity.position, { x: gx + 0.5, y: gy, z: gz + 0.5 }, ENDERMAN_EYE).clear;
     };
     let spot: { x: number; z: number; y: number } | null = null;
     if (where === 'warped') {
@@ -1312,32 +1312,184 @@ async function endermanHunt(where: 'platform' | 'warped', note: (text: string) =
         const gx = stand[0] + Math.round(Math.cos(a) * d), gz = stand[2] + Math.round(Math.sin(a) * d), gy = groundAt(gx, gz);
         if (gy !== null && seenFromBody(gx, gy, gz)) spot = { x: gx, z: gz, y: gy };
       }
-      if (!spot) { note(`no open ground in the body's sight at 13 to 20 blocks round ${stand[0]},${stand[2]} (36 tries): enderman ${i + 1} is skipped`); continue; }
+      if (!spot) {
+        const reason = `no open ground in the body's sight at 13 to 20 blocks round ${stand[0]},${stand[2]} (36 tries): enderman ${i + 1} is skipped`;
+        note(reason);
+        rows.push({ i: i + 1, skipped: true, spot: null, enderman: null, targetId: null, roofPosition: null, eyeLine: null, feetLine: null,
+          line: reason, stoppedWhy: reason, stoppedBy: 'skipped', ok: false, killed: false });
+        continue;
+      }
     } else {
       for (const [jx, jz] of [[0, 0], [2, 0], [0, 2], [-2, 0], [0, -2]] as Array<[number, number]>) {
         const found = groundAt(ex + jx, ez + jz);
         if (found !== null) { spot = { x: ex + jx, z: ez + jz, y: found }; break; }
       }
     }
-    await ask(`execute in minecraft:the_nether run summon minecraft:enderman ${(spot?.x ?? ex) + 0.5} ${spot?.y ?? y + 1} ${(spot?.z ?? ez) + 0.5}`);
+    const spawn = { x: (spot?.x ?? ex) + 0.5, y: spot?.y ?? y + 1, z: (spot?.z ?? ez) + 0.5 };
+    await ask(`execute in minecraft:the_nether run summon minecraft:enderman ${spawn.x} ${spawn.y} ${spawn.z}`);
     await sleep(1500);
     const pearlsBefore = await countServer('ender_pearl'), blocksBefore = await countServer('cobblestone');
     const hpBefore = Number(actor.health);
+    clearEndermanCampObservation(actor);
     const run = await act(`enderman#${i + 1}`, [{ do: 'fight', target: 'enderman', seconds: 50, retreatHp: 8 }, { do: 'pickup', range: 6 }], 90);
+    const camp = endermanCampObservation(actor);
     const pearlsAfter = await countServer('ender_pearl'), blocksAfter = await countServer('cobblestone');
     const line = run.lines[0] ?? '';
     const killed = /死んだ/u.test(line);
     if (killed) kills++;
     pearls += pearlsAfter - pearlsBefore; laidTotal += Math.max(0, blocksBefore - blocksAfter);
-    rows.push({ i: i + 1, enderman: [ex, ez], ok: run.ok, killed, seconds: r1(run.wallMs / 1000), hpLost: r1(Math.max(0, hpBefore - Number(actor.health))), cobblestoneUsed: blocksBefore - blocksAfter, pearlDelta: pearlsAfter - pearlsBefore,
-      line: line.slice(0, 260), stoppedBy: run.stoppedBy });
+    rows.push({ i: i + 1, skipped: false, spot: spawn, enderman: [spawn.x, spawn.z], targetId: camp?.targetId ?? null,
+      roofPosition: camp?.afterBuild?.position ?? null, eyeLine: camp?.afterBuild?.eyes ?? null, feetLine: camp?.afterBuild?.feet ?? null,
+      approach: camp?.afterBuild?.approach ?? null, camp,
+      ok: run.ok, killed, seconds: r1(run.wallMs / 1000), hpLost: r1(Math.max(0, hpBefore - Number(actor.health))), cobblestoneUsed: blocksBefore - blocksAfter, pearlDelta: pearlsAfter - pearlsBefore,
+      line, lines: run.lines, stoppedBy: run.stoppedBy, stoppedWhy: run.stoppedWhy ?? run.error ?? null });
     await ask('execute in minecraft:the_nether run kill @e[type=minecraft:enderman]');
     // the roof is left standing; the next enderman is fought from the same hole when the body is still in it
   }
-  return { where, endermen: rows.length, kills, pearls, blocksLaid: laidTotal, rows, finalHp: actor.health };
+  const skipped = rows.filter(row => row.skipped === true).length;
+  return { where, attempts: rows.length, skipped, endermen: rows.length - skipped, kills, pearls, blocksLaid: laidTotal, rows, finalHp: actor.health };
 }
 scene('ender_platform', 'enderman: a flat plate in the Nether, four endermen 13 to 19 blocks off', note => endermanHunt('platform', note));
 scene('ender_warped', 'enderman: the warped forest itself, four endermen', note => endermanHunt('warped', note));
+
+// ===== natural endermen, one explicitly selected wall den (the scripted head chooses, the body executes) ======================================
+scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見える最寄りの #id だけを誘う。召喚・補充・整地なし', async note => {
+  if (timedSeconds && timedSeconds !== 600) throw new Error('ENDER_DEN_REQUIRES_MINECRAFT_HUNT_SECONDS_600');
+  const stand = sites.warpedStand as number[] | undefined;
+  if (!stand || stand.length !== 3 || !stand.every(Number.isFinite)) throw new Error('no warpedStand in the sites');
+  const fixtureAt = Date.now();
+  await ask('difficulty normal');
+  // No enderman kill/summon or platform/roof construction. Only equipment and the initial site are fixture setup.
+  await equip({ stone_sword: 1, stone_pickaxe: 1, cooked_beef: 16 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  // 1.21.11 renamed doMobSpawning to spawn_mobs: read whichever answers (the old spelling is refused there), set both
+  const spawnRule = /\b(true|false)\b/u.exec(await ask('gamerule spawn_mobs'))?.[1] ?? /\b(true|false)\b/u.exec(await ask('gamerule doMobSpawning'))?.[1] ?? 'true';
+  const spawnWasEnabled = spawnRule === 'true';
+  await ask('gamerule spawn_mobs true'); await ask('gamerule doMobSpawning true');
+  const fixtureSetupMs = Date.now() - fixtureAt;
+  const start = Date.now(), endAt = start + 600_000, deathsBefore = deaths, pearlStart = packClient().ender_pearl ?? 0;
+  let den: EndermanDenSpec | null = null, kills = 0, pearls = 0, setupMs = 0, noSiteMs = 0, decisionWaitMs = 0, pickupMs = 0, healthLost = 0, wallMs = 0;
+  const seenIds = new Set<number>(), killedIds = new Set<number>(), visited = new Set<string>();
+  let hopCount = 0;
+  const rows: Array<Record<string, unknown>> = [];
+  const remaining = () => Math.max(0, endAt - Date.now());
+  const pause = async (ms: number): Promise<number> => { const at = Date.now(); await sleep(Math.min(ms, remaining())); return Date.now() - at; };
+  let previousHp = Number(actor.health);
+  const hurt = () => { const hp = Number(actor.health); if (Number.isFinite(hp)) { healthLost += Math.max(0, previousHp - hp); previousHp = hp; } };
+  actor.on('health', hurt);
+  try {
+    while (remaining() > 0 && !disconnected) {
+      hurt();
+      const at = Date.now(), hpBefore = Number(actor.health), pearlsBefore = packClient().ender_pearl ?? 0, lostAtStart = healthLost;
+      const row: Record<string, unknown> = { i: rows.length + 1, startedSeconds: r1((at - start) / 1000), targetId: null, skipped: true,
+        killed: false, setupSeconds: 0, pickupSeconds: 0, waitSeconds: 0, pearlDelta: 0, healthLost: 0 };
+      const finishRow = (category: 'fight' | 'no_site' | 'decision'): void => {
+        hurt();
+        const ms = Date.now() - at;
+        row.seconds = r1(ms / 1000); row.hpBefore = hpBefore; row.hpAfter = Number(actor.health);
+        row.healthLost = r1(healthLost - lostAtStart);
+        row.pearlDelta = (packClient().ender_pearl ?? 0) - pearlsBefore;
+        if (category === 'no_site') noSiteMs += ms;
+        if (category === 'decision') decisionWaitMs += ms;
+        rows.push(row);
+      };
+      if (deaths > deathsBefore || hpBefore < 8 || remaining() < 6_000) {
+        row.result = deaths > deathsBefore ? 'dead_wait' : hpBefore < 8 ? 'low_hp_wait' : 'deadline_wait';
+        row.reason = '反射・体力・時計に従って新しい敵対を始めない';
+        row.waitSeconds = r1(await pause(2_000) / 1000); finishRow('decision'); continue;
+      }
+      // Reuse the exact den until its shell is no longer safe. Site choice belongs here, never to fight.
+      if (den && !inspectEndermanDen(actor, den).ok) { note('選択した横穴が不成立。観測から選び直す'); den = null; }
+      if (!den) {
+        const candidates = endermanDenCandidates(actor, { radius: 7, limit: 8 });
+        row.candidates = candidates;
+        const best = candidates[0];
+        if (best) { den = { entrance: best.entrance, direction: best.direction }; note(`横穴を選択 ${JSON.stringify(den)}・見通し ${best.sightDistance}m`); }
+        else {
+          row.result = 'no_candidate'; row.reason = '候補なし';
+          // The head substitute looks for a wall the way a person would: it walks a 14-block hop in the next of eight headings (45 degrees apart, the first not yet
+          // visited), within 90 blocks of warpedStand, and looks again from there (a survey of the stand's surroundings found walls only 30 to 80 blocks off it).
+          // No digging or placing to get there; the hop is a plain go on known level ground.
+          const p = actor.entity.position as Vec3, base = { x: Math.floor(p.x), y: Math.floor(p.y + 0.001), z: Math.floor(p.z) };
+          const ground = (gx: number, gz: number): number | null => {
+            for (let gy = base.y + 6; gy >= base.y - 10; gy--) if (denStandable(actor, { x: gx, y: gy, z: gz })) return gy;
+            return null;
+          };
+          const hops: Array<{ x: number; y: number; z: number }> = [];
+          for (let ring = 1; ring <= 6 && !hops.length; ring++) for (let k = 0; k < 8 && !hops.length; k++) {
+            const heading = ((hopCount + k) % 8) * 45 * Math.PI / 180, radius = ring * 14;
+            const gx = stand[0] + Math.round(Math.cos(heading) * radius), gz = stand[2] + Math.round(Math.sin(heading) * radius);
+            if (visited.has(`${gx},${gz}`)) continue;
+            const gy = ground(gx, gz);
+            if (gy !== null) hops.push({ x: gx, y: gy, z: gz }); else visited.add(`${gx},${gz}`);
+          }
+          hopCount++;
+          const move = hops[0];
+          if (move && remaining() >= 20_000) {
+            const to = { x: move.x, y: move.y, z: move.z }; visited.add(`${move.x},${move.z}`);
+            const run = await act(`den-search#${row.i}`, [{ do: 'go', to, range: 2, maxDig: 0, maxPlace: 8, canPlace: ['cobblestone'], maxDrop: 5, waterOk: false, seconds: 20 }], Math.min(22, remaining() / 1000 - 0.5));
+            row.walk = { to, ok: run.ok, lines: run.lines };
+          }
+          row.waitSeconds = r1(await pause(1_000) / 1000); finishRow('no_site'); continue;
+        }
+      }
+      row.den = den;
+      // After a kill the body is at the rear. The scripted head steps outside to observe actual eyes again; this is counted decision time.
+      const rear = denCenter(denOffset(den, 1)), outside = denOffset(den, -1);
+      const nearby = (Object.values(actor.entities ?? {}) as DenEntity[]).some(e => e.name === 'enderman' && e.isValid !== false && !killedIds.has(e.id)
+        && e.position.distanceTo(actor.entity.position) < 6);
+      if ((actor.entity.position as Vec3).distanceTo(rear) < 0.6 && !nearby && remaining() >= 7_000) {
+        const run = await act(`den-observe#${row.i}`, [{ do: 'go', to: outside, range: 0, maxDig: 0, maxPlace: 0, maxDrop: 0, waterOk: false, seconds: 5 }], Math.min(6, remaining() / 1000 - 0.5));
+        row.observationWalk = { ok: run.ok, lines: run.lines };
+        row.result = 'observe_outside'; row.reason = '頭の代役が入口外へ出て次の目線を観測'; finishRow('decision'); continue;
+      }
+      const eye = (actor.entity.position as Vec3).offset(0, 1.62, 0);
+      const visible = (Object.values(actor.entities ?? {}) as DenEntity[]).filter(e => e.name === 'enderman' && e.isValid !== false && !killedIds.has(e.id)
+        && e.position.distanceTo(actor.entity.position) <= 32 && denClearRay(actor, eye, e.position.offset(0, ENDERMAN_EYE, 0)))
+        .sort((a, b) => a.position.distanceTo(actor.entity.position) - b.position.distanceTo(actor.entity.position));
+      for (const e of visible) seenIds.add(e.id);
+      row.visibleIds = visible.map(e => e.id);
+      const target = visible[0];
+      if (!target || remaining() < 6_000) {
+        row.result = 'no_visible_target'; row.reason = '見えているエンダーマンなし';
+        row.waitSeconds = r1(await pause(2_000) / 1000); finishRow('decision'); continue;
+      }
+      row.targetId = target.id; row.skipped = false;
+      const seconds = Math.min(50, Math.floor(remaining() / 1000) - 1);
+      clearEndermanDenObservation(actor);
+      const lostBefore = healthLost;
+      const run = await act(`ender-den#${row.i}`, [{ do: 'fight', target: `#${target.id}`, den, seconds, retreatHp: 8 }], seconds + 0.25);
+      hurt();
+      const observation = endermanDenObservation(actor);
+      const code = String(run.json?.lines?.[0]?.code ?? observation?.stopReason ?? run.stoppedBy ?? run.error ?? 'unknown');
+      const killed = code === 'target_killed' || observation?.killed === true;
+      if (killed && !killedIds.has(target.id)) { kills++; killedIds.add(target.id); }
+      setupMs += observation?.setupMs ?? 0; pickupMs += observation?.pickupMs ?? 0;
+      row.killed = killed; row.result = killed ? 'killed' : code === 'enderman_did_not_arrive' ? 'did_not_arrive' : code === 'enderman_not_visible' ? 'not_visible' : 'stopped';
+      row.reason = code; row.lines = run.lines; row.observation = observation; row.healthLost = r1(healthLost - lostBefore);
+      row.setupSeconds = r1((observation?.setupMs ?? 0) / 1000); row.digSeconds = r1((observation?.digMs ?? 0) / 1000);
+      row.verifySeconds = r1((observation?.verifyMs ?? 0) / 1000); row.pickupSeconds = r1((observation?.pickupMs ?? 0) / 1000);
+      row.waitSeconds = r1((observation?.waitMs ?? 0) / 1000);
+      finishRow('fight');
+      pearls = Math.max(0, (packClient().ender_pearl ?? 0) - pearlStart);
+      note(`試み ${row.i}: #${target.id} ${row.result}/${code} ${row.seconds}秒・${kills}撃破・${pearls}パール`);
+    }
+  } finally {
+    wallMs = Date.now() - start;
+    actor.removeListener('health', hurt);
+    // Restore the scene's global spawning switch even if an action fails. Never kill surviving natural endermen.
+    await ask(`gamerule spawn_mobs ${spawnWasEnabled ? 'true' : 'false'}`); await ask(`gamerule doMobSpawning ${spawnWasEnabled ? 'true' : 'false'}`);
+  }
+  const fightAttempts = rows.filter(row => row.skipped === false).length;
+  pearls = Math.max(0, (packClient().ender_pearl ?? 0) - pearlStart);
+  return { natural: true, seconds: 600, equipment: { weapon: 'stone_sword', tool: 'stone_pickaxe', armor: 'iron', shield: true },
+    fixtureSetupMs, wallMs, attempts: rows.length, fightAttempts, skipped: rows.length - fightAttempts,
+    denominator: '全判断の試み（候補なし・見えない・観測歩行・体力待ちを含む）。fightAttempts と固有IDも併記',
+    kills, killRate: rows.length ? kills / rows.length : 0, fightKillRate: fightAttempts ? kills / fightAttempts : 0,
+    pearls, killsPerMinute: kills / Math.max(wallMs / 60_000, 0.001), deaths: deaths - deathsBefore,
+    uniqueSeen: seenIds.size, killedIds: [...killedIds], healthLost: r1(healthLost),
+    clock: { setupMs, noSiteMs, decisionWaitMs, pickupMs, fightAndOtherMs: Math.max(0, wallMs - setupMs - noSiteMs - decisionWaitMs - pickupMs) }, rows };
+});
 
 // ===== the thrown eye against /locate =========================================================================================================
 function bearingBetween(from: { x: number; z: number }, to: { x: number; z: number }): number { return (Math.atan2(to.x - from.x, -(to.z - from.z)) * 180 / Math.PI + 360) % 360; }

@@ -26,6 +26,8 @@ import { endermanAngry } from '../huntEnderman.js';
 import { hideoutsFrom } from '../huntCamp.js';
 import { scanLoadedBlocks } from '../loadedBlockScan.js';
 import { go } from './go.js';
+import { EndermanDenFight } from '../huntEndermanDenFight.js';
+import { endermanDenProblem, type EndermanDenSpec } from '../huntEndermanDen.js';
 
 const { goals } = pathfinder;
 
@@ -44,13 +46,15 @@ const { goals } = pathfinder;
  * reach above the eye is waited for under the shield (its height is drawn again every five seconds). A blow is held back while a shot is about to land or a
  * blaze that sees the body has been charged long enough to shoot (utils/huntBlaze StrikeGate: 1.5 s in all within each 8 s). Its drop is told in the line it dies in.
  *
- * An enderman is fought from a hole it cannot enter (utils/huntEnderman, huntEndermanCamp): the body lays a 3x3 roof over itself at feet+2 from what building
+ * An enderman with `den` uses the planner's two-high, two-deep wall den (huntEndermanDenFight): only its four cells may be excavated, BEFORE angering the specified
+ * #id. The body provokes outside, returns to the rear cell, strikes only visible legs within 3m, and briefly collects drops when no other creature is near.
+ * Without `den`, the legacy roof remains (utils/huntEnderman, huntEndermanCamp): the body lays a 3x3 roof over itself at feet+2 from what building
  * blocks it carries, stares the enderman in the eye from under it (the gaze guard is let go for the stare), and from then on stands in the hole under the shield
  * and strikes what comes within reach: it is not followed, and it is not looked in the eye once it is angry (it would teleport away). The roof is the hand's own
  * work and needs no canPlace: the blocks are named in the line when they are short. A bow is no tool for it (it dodges arrows).
  *
  * It never looks for a target of its own: another creature that comes is not turned to (the floor's reflexes answer it, and their word is above this
- * hand's). It never digs and never lays a block. Whatever it does is told in the line: the blows swung and landed, the health lost, the meals, and who
+ * hand's). Other targets grant no excavation or placement. Whatever it does is told in the line: the blows swung and landed, the health lost, the meals, and who
  * held the body.
  *
  * Who holds the body (the owner's rule, run 39): the floor's reflexes (lava, air, a fall, the low-health flight at 8, a lit creeper, a shot) are above
@@ -63,7 +67,7 @@ const { goals } = pathfinder;
  *    keys and its look (it takes both for the turn to the shot) and only waits;
  *  - leaves the creature's kind to the act's `accept` rules: the act counts the target's kind as accepted for the length of this hand (hurt, stopIf).
  */
-export interface FightArgs { target: string | number; stance?: 'fight' | 'flee'; item?: string; retreatHp?: number; range?: number; seconds?: number }
+export interface FightArgs { target: string | number; den?: EndermanDenSpec; stance?: 'fight' | 'flee'; item?: string; retreatHp?: number; range?: number; seconds?: number }
 
 /** A blow reaches 3 blocks from the eye to the creature's box; the body works to keep it there. */
 const REACH = 3.0;
@@ -153,6 +157,10 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   const none = (code: string, text: string) => stopped(bot, code, `fight 止まった ${code}: ${text}`);
 
   const wanted = typeof args.target === 'number' ? args.target : /^#\d+$/u.test(String(args.target).trim()) ? Number(String(args.target).trim().slice(1)) : args.target;
+  if (args.den !== undefined) {
+    const problem = endermanDenProblem(args.den);
+    if (problem || typeof wanted !== 'number' || !Number.isSafeInteger(wanted) || wanted < 0 || stance !== 'fight') return none('invalid_input', problem ?? 'den は指定した enderman #id の stance=fight だけ');
+  }
   deathLedgerOf(bot);
   /**
    * A kind named by its name: the nearest one, but for a blaze or an enderman (hunts from one spot) the nearest one the eye sees: a blaze that hovers behind the spawner room's wall,
@@ -192,6 +200,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   const retreatHp = askedRetreatHp ?? (stance === 'fight' && hovering ? CAMP_RETREAT_HP : null);
   const camp = bot.entity.position.clone();
   const ender = stance === 'fight' && String(target.name ?? '').toLowerCase() === 'enderman';
+  if (args.den !== undefined && !ender) return none('invalid_input', 'den はエンダーマン専用。他の対象には掘らない');
   /** A camp holds no key and follows nothing: the body stands where the planner put it. */
   const stand = hovering || ender;
   const watch = hovering ? new ShooterWatch(bot) : null;
@@ -199,6 +208,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   let shield0 = shieldState(bot);
   const gate = new StrikeGate();
   let endermanCamp: EndermanCamp | null = null;
+  let endermanDen: EndermanDenFight | null = null;
   const held0 = reflexHeld(bot);
   if (held0) return none('reflex', `${label} へ向かう前に、反射 ${held0} が体を握っている。終わるまで始めない`);
   const footingRisk = (enemy = target) => stance === 'fight' && isThreat(bot as never, enemy) ? combatFootingRisk(bot, enemy) : null;
@@ -226,7 +236,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     const index = swings.findIndex(at => Date.now() - at <= LANDED_WITHIN_MS);
     if (index >= 0) { swings.splice(index, 1); landed++; }
   };
-  const onDead = (entity: any) => { if (entity?.id === target.id) dead = true; };
+  const onDead = (entity: any) => { if (entity?.id === target.id) { dead = true; endermanDen?.markKilled(); } };
   const sample = () => { const now = Number(bot.health ?? lastHealth); if (now < lastHealth) lost += lastHealth - now; lastHealth = now; };
   bot.on?.('entityHurt', onHurt); bot.on?.('entityDead', onDead); bot.on?.('health', sample);
   /** The shield's wear since the fight began (a blocked fireball costs it 6 of its 336), or that it broke; across swaps for a spare, what each broken one had left counts as worn. */
@@ -255,7 +265,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   let ending = '', siteNote = '';
   /** How long the hand stood and waited for the shield reflex that was meeting a shot (no blow goes out meanwhile): told when it is a second or more. */
   let shotWaitMs = 0;
-  const counts = () => `与えた打撃 ${landed}（振り ${blows}）・受けた体力 ${r1(lost)}・食べた ${meals}${wear()}${gate.count ? `・見送り ${gate.count}` : ''}${shotWaitMs >= 1000 ? `・盾の間 ${r1(shotWaitMs / 1000)}秒` : ''}${endermanCamp ? `・${endermanCamp.describe(endermanAngry(bot.registry, bot.entities?.[target.id]))}` : ''}${siteNote ? `・${siteNote}` : ''}${ending}`;
+  const counts = () => `与えた打撃 ${landed}（振り ${blows}）・受けた体力 ${r1(lost)}・食べた ${meals}${wear()}${gate.count ? `・見送り ${gate.count}` : ''}${shotWaitMs >= 1000 ? `・盾の間 ${r1(shotWaitMs / 1000)}秒` : ''}${endermanCamp ? `・${endermanCamp.describe(endermanAngry(bot.registry, bot.entities?.[target.id]))}` : ''}${endermanDen ? `・${endermanDen.describe()}` : ''}${siteNote ? `・${siteNote}` : ''}${ending}`;
   /** Continue contracts (1): the blows that landed (the target was hurt within the swing's time), of the blows swung. */
   const struck = (): Progress => ({ unit: 'blow', done: landed, left: null });
   const holder = (reflex?: string | null) => reflex ? `体: 反射 ${reflex}` : '体: fight（反射なし）';
@@ -348,7 +358,11 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
    * the death, so they are here when the loop sees the death (waiting a tenth of a second for them was tried, and the floor's melee reflex took the body from the act in that tenth: the
    * corpse, which the game keeps for a second, stood within reach after the fight's mark had ended).
    */
-  const killed = async (): Promise<StepOutcome> => finish('死んだ', '', dropsLine(bot, itemsBefore, lastAt));
+  const killed = async (): Promise<StepOutcome> => {
+    const drops = dropsLine(bot, itemsBefore, lastAt);
+    if (endermanDen) { await endermanDen.collect(); sample(); }
+    return finish('死んだ', '', drops);
+  };
   /** `at`: the creature's cell, only where the place is what the line is about (it cannot be reached). */
   const fail = (code: string, text: string, at?: Cell): StepOutcome => {
     const out = { ...stopped(bot, code, `fight 止まった ${code}: ${label} ${text}。${counts()}・${holder(code === 'reflex' ? reflexHeld(bot) : null)}`, at), progress: struck() };
@@ -466,7 +480,9 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       catch (error) { if (error instanceof StepStopped || CUT.test(String((error as Error)?.message))) throw error; }
     }
     shield0 = shieldState(bot);
-    if (ender) {
+    if (ender && args.den) {
+      endermanDen = new EndermanDenFight(ctx, args.den, target.id, endAt, askedRetreatHp ?? 8);
+    } else if (ender) {
       // The hole it is fought from: the site and the blocks are looked at before anything is done.
       endermanCamp = new EndermanCamp(ctx, target);
       let refusal = endermanCamp.check();
@@ -509,6 +525,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       // Low health: out of reach, a meal that can help, and back in; else leave.
       if (retreatHp !== null && Number(bot.health ?? 20) < retreatHp) {
         unfollow(); releaseKeys();
+        if (endermanDen) return fail('retreat', '指定した体力の下限に達した。横穴の手を中止する');
         const verdict = await retreat();
         if (verdict) return verdict;
         continue;
@@ -526,7 +543,35 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
         if (await runAway(8, 2500) === 'reflex') return fail('reflex', '点火したクリーパーから離れる途中で反射が体を握った');
         continue;
       }
-      if (meetingShot()) { releaseKeys(); shotWaitMs += TICK_MS; await wait(ctx, TICK_MS); continue; }
+      const denSafety = endermanDen?.checkSafety();
+      if (denSafety?.kind === 'stop') return { ...fail(denSafety.outcome.reason ?? 'failed', denSafety.outcome.text), code: denSafety.outcome.code ?? denSafety.outcome.reason };
+      if (meetingShot()) {
+        releaseKeys(); shotWaitMs += TICK_MS;
+        const pauseAt = Date.now(); await wait(ctx, TICK_MS);
+        endermanDen?.noteWait(Date.now() - pauseAt);
+        continue;
+      }
+      if (endermanDen) {
+        const step = await endermanDen.advance(live);
+        if (step.kind === 'stop') return { ...fail(step.outcome.reason ?? 'failed', step.outcome.text, step.outcome.at), code: step.outcome.code ?? step.outcome.reason };
+        let waiting = step.kind !== 'fight' && endermanDen.phase === 'provoke';
+        if (step.kind === 'fight') {
+          // Legs, never the generic entity centre/eye ray: the completed den deliberately hides the head.
+          await equipWeapon();
+          const point = endermanDen.strikePoint(live);
+          if (point) {
+            const turn = await guard(ctx, Promise.resolve(bot.lookAt(point, true)), 300);
+            if (turn && !reflexHeld(bot) && Number(bot.health ?? 20) >= Math.max(8, askedRetreatHp ?? 8) && Date.now() - lastSwing >= cooldownMs(bot.heldItem?.name)) {
+              // Recheck after the turn (it may teleport), and only from the rear cell.
+              if (endermanDen.strikePoint(live)) { lastSwing = Date.now(); blows++; swings.push(lastSwing); bot.attack(live); }
+            }
+          } else waiting = true;
+        }
+        const pauseAt = Date.now();
+        await wait(ctx, TICK_MS);
+        if (waiting) endermanDen.noteWait(Date.now() - pauseAt);
+        continue;
+      }
       if (endermanCamp) {
         const step = await endermanCamp.advance(live, now, box, endermanAngry(bot.registry, live));
         if (step.kind === 'stop') { unfollow(); releaseKeys(); return { ...fail(step.outcome.reason ?? 'failed', step.outcome.text, step.outcome.at), ...(step.outcome.code ? { code: step.outcome.code } : {}) }; }
@@ -621,6 +666,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   } finally {
     bot.removeListener?.('entityHurt', onHurt); bot.removeListener?.('entityDead', onDead); bot.removeListener?.('health', sample);
     endermanCamp?.release();
+    endermanDen?.release();
     endEngagement();
     endOwner();
     unfollow();

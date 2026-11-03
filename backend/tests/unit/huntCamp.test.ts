@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Vec3 } from 'vec3';
+import { EndermanCamp, endermanCampObservation } from '../../src/services/minebot/utils/huntEndermanCamp.js';
+import { ENDERMAN_EYE, roofInteriorStep } from '../../src/services/minebot/utils/huntEnderman.js';
+import { bodyReader } from '../../src/services/minebot/utils/localMap.js';
+import type { StepContext } from '../../src/services/minebot/utils/primitives/common.js';
 import { CAMP_RANGE, SPAWNER_RANGE, campSite, campWords, exposureFromSpawner, hideoutWords, hideoutsFrom, seenFromSpawner, type CampReader } from '../../src/services/minebot/utils/huntCamp.js';
 import { LAYERS, SPAWNER, ground } from './fixtures/blazeSpawnerRoom.js';
 
@@ -211,5 +216,219 @@ describe('hideoutsFrom: a fire beside the way does not shut it', () => {
       expect(hideout.x).toBeGreaterThanOrEqual(7);
       for (const [fx, fz] of [[3, -7], [4, -7]]) expect(Math.abs(hideout.x - fx) + Math.abs(hideout.z - fz) <= 1 && hideout.y === 56).toBe(false);
     }
+  });
+});
+
+describe('EndermanCamp: bounded recovery inside the existing roof, for the same target only', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  function campField(options: { maxX?: number; blocks?: Record<string, string> } = {}) {
+    vi.useFakeTimers(); vi.setSystemTime(100_000);
+    const blocks = { ...options.blocks }, controls: Record<string, boolean> = {};
+    const maxX = options.maxX ?? 2;
+    const bot = {
+      entity: { id: 1, position: new Vec3(0.5, 0, 0.5), yaw: 0, onGround: true },
+      entities: {} as Record<number, { id: number; name: string; position: Vec3; height?: number; width?: number }>,
+      inventory: { slots: [] as unknown[], items: () => [{ name: 'cobblestone', count: 64 }] },
+      gazeGuard: { enabled: true },
+      blockAt: (p: Vec3): { name: string; position: Vec3; boundingBox: string } | null => {
+        const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z), k = `${x},${y},${z}`;
+        const name = blocks[k] ?? (y < 0 || (Math.abs(x) >= 6 && y === 0) ? 'stone'
+          : y === 2 && x >= -1 && x <= maxX && Math.abs(z) <= 1 ? 'cobblestone' : 'air');
+        return { name, position: new Vec3(x, y, z), boundingBox: ['air', 'lava', 'fire'].includes(name) ? 'empty' : 'block' };
+      },
+      setControlState: vi.fn((name: string, on: boolean) => { controls[name] = on; }),
+      lookAt: vi.fn((p: Vec3): Promise<void> => { bot.entity.yaw = Math.atan2(-(p.x - bot.entity.position.x), -(p.z - bot.entity.position.z)); return Promise.resolve(); }),
+      placeBlock: vi.fn(), dig: vi.fn(), attack: vi.fn(),
+    };
+    const target = { id: 200, name: 'enderman', position: new Vec3(10.5, 1, 0.5), height: 2.9, width: 0.6 };
+    bot.entities[target.id] = target;
+    const stop = new AbortController();
+    const ctx: StepContext = { bot, stop: stop.signal, deadline: 130_000, facing: 'north', base: { x: 0, y: 0, z: 0 } };
+    const camp = new EndermanCamp(ctx, target);
+    return { bot, target, controls, stop, camp, blocks };
+  }
+
+  it('recovers one cell inside an extended roof, retains #200, and fights with hidden eyes once angry', async () => {
+    const f = campField();
+    expect(f.camp.check()).toBeNull();
+    expect((await f.camp.advance(f.target, 100_000, 9, false)).kind).toBe('wait');
+    const record = endermanCampObservation(f.bot)!;
+    expect(record.afterBuild?.position).toEqual({ x: 0.5, y: 0, z: 0.5 });
+    expect(record.afterBuild?.eyes.clear).toBe(false);
+    expect(record.recovery).toHaveLength(1);
+    expect(record.recovery[0].to).toEqual({ x: 1, y: 0, z: 0 });
+    expect(f.controls.forward).toBe(true);
+    f.bot.entity.position = new Vec3(1.5, 0, 0.5);
+    await f.camp.advance(f.target, 100_500, 9, false);
+    expect(record.recovery[0].result).toBe('arrived');
+    expect(record.latest?.eyes.clear).toBe(true);
+    expect(f.controls.forward).toBe(false);
+    f.target.position = new Vec3(3.5, 0, 0.5);
+    expect((await f.camp.advance(f.target, 100_550, 2, true)).kind).toBe('fight');
+    expect(record.latest?.eyes.clear).toBe(false);
+    expect(record.latest?.feet.clear).toBe(true);
+    expect(record.targetId).toBe(200);
+    expect(f.bot.gazeGuard.enabled).toBe(true);
+    expect(f.bot.placeBlock).not.toHaveBeenCalled();
+    expect(f.bot.dig).not.toHaveBeenCalled();
+    f.camp.release();
+  });
+
+  it.each(['feet', 'approach'] as const)('records a blocked %s but provokes #200 when its eyes are clear', async part => {
+    const f = campField({ blocks: part === 'feet' ? { '6,1,0': 'stone' } : {} });
+    f.target.position = new Vec3(14.5, 1, 0.5);
+    if (part === 'approach') {
+      const read = f.bot.blockAt;
+      // No known floor crosses this strip, while both sight lines remain loaded and open.
+      f.bot.blockAt = (p: Vec3) => p.x === 8 && p.y <= 0 ? null : read(p);
+    }
+    expect((await f.camp.advance(f.target, 100_000, 14, false)).kind).toBe('wait');
+    const record = endermanCampObservation(f.bot)!;
+    expect(record.afterBuild?.eyes.clear).toBe(true);
+    expect(record.afterBuild?.[part].clear).toBe(false);
+    expect(record.recovery).toHaveLength(0);
+    expect(f.bot.lookAt).toHaveBeenCalledWith(f.target.position.offset(0, ENDERMAN_EYE, 0), true);
+    expect(f.bot.gazeGuard.enabled).toBe(false);
+    expect((await f.camp.advance(f.target, 100_300, 14, true)).kind).toBe('fight');
+    expect(record.latest?.[part].clear).toBe(false);
+    expect(record.targetId).toBe(200);
+    f.camp.release();
+    expect(f.bot.gazeGuard.enabled).toBe(true);
+  });
+
+  it('recovers to a clear eye ray even when the feet and walking route remain blocked', async () => {
+    const f = campField({ blocks: { '6,1,0': 'stone' } });
+    const read = f.bot.blockAt;
+    f.bot.blockAt = (p: Vec3) => p.x === 8 && p.y <= 0 ? null : read(p);
+    await f.camp.advance(f.target, 100_000, 9, false);
+    const record = endermanCampObservation(f.bot)!;
+    expect(record.recovery).toHaveLength(1);
+    f.bot.entity.position = new Vec3(1.5, 0, 0.5);
+    expect((await f.camp.advance(f.target, 100_500, 9, false)).kind).toBe('wait');
+    expect(record.recovery[0].result).toBe('arrived');
+    expect(record.latest?.eyes.clear).toBe(true);
+    expect(record.latest?.feet.clear).toBe(false);
+    expect(record.latest?.approach.clear).toBe(false);
+    expect(f.bot.gazeGuard.enabled).toBe(false);
+    f.camp.release();
+  });
+
+  it('leaves prolonged lower-body obstruction after anger to the existing fight loop', async () => {
+    const f = campField({ blocks: { '1,1,0': 'stone' } });
+    f.target.position = new Vec3(2.5, 0, 0.5);
+    expect((await f.camp.advance(f.target, 100_000, 2, true)).kind).toBe('fight');
+    expect((await f.camp.advance(f.target, 108_001, 2, true)).kind).toBe('fight');
+    expect(endermanCampObservation(f.bot)?.latest?.feet.clear).toBe(false);
+    expect(endermanCampObservation(f.bot)?.recovery).toHaveLength(0);
+    f.camp.release();
+  });
+
+  it('does not step onto the edge of a bare 3x3 roof, and returns not_visible with the cobblestone blocker', async () => {
+    const f = campField({ maxX: 1, blocks: { '1,1,0': 'cobblestone' } });
+    const read = bodyReader(f.bot), anchor = { x: 0, y: 0, z: 0 };
+    for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) expect(roofInteriorStep(read, anchor, anchor, { x, y: 0, z })).toBe(false);
+    await f.camp.advance(f.target, 100_000, 9, false);
+    const step = await f.camp.advance(f.target, 108_001, 9, false);
+    expect(step.kind).toBe('stop');
+    if (step.kind === 'stop') { expect(step.outcome.code).toBe('enderman_not_visible'); expect(step.outcome.text).toContain('(1,1,0) cobblestone'); }
+    expect(endermanCampObservation(f.bot)?.recovery).toEqual([]);
+    expect(f.bot.entity.position).toEqual(new Vec3(0.5, 0, 0.5));
+    expect(f.controls.forward).not.toBe(true);
+  });
+
+  it('a stem occluding the eye ray cannot authorize movement around it', async () => {
+    const f = campField({ blocks: { '1,1,0': 'warped_stem' } });
+    await f.camp.advance(f.target, 100_000, 9, false);
+    const step = await f.camp.advance(f.target, 108_001, 9, false);
+    expect(step.kind).toBe('stop');
+    if (step.kind === 'stop') expect(step.outcome.text).toContain('warped_stem');
+    expect(endermanCampObservation(f.bot)?.recovery).toHaveLength(0);
+  });
+
+  it.each(['lava', 'fire', 'unloaded', 'pit', 'occupied'])('refuses an adjacent cell with %s', async hazard => {
+    const f = campField();
+    if (hazard === 'occupied') f.bot.entities[201] = { id: 201, name: 'enderman', position: new Vec3(1.5, 0, 0.5) };
+    else if (hazard === 'pit') f.blocks['2,-1,0'] = 'air';
+    else if (hazard === 'unloaded') {
+      const read = f.bot.blockAt;
+      // The native block reader may return null for an unloaded cell.
+      f.bot.blockAt = (p: Vec3) => p.x === 2 && p.y === -1 && p.z === 0 ? null : read(p);
+    } else f.blocks['2,0,0'] = hazard;
+    await f.camp.advance(f.target, 100_000, 9, false);
+    expect(endermanCampObservation(f.bot)?.recovery).toHaveLength(0);
+    expect(f.controls.forward).not.toBe(true);
+  });
+
+  it('stops a stalled step at 1.8 seconds, releases movement and keeps the original blocker', async () => {
+    const f = campField();
+    await f.camp.advance(f.target, 100_000, 9, false);
+    const step = await f.camp.advance(f.target, 101_800, 9, false);
+    expect(step.kind).toBe('stop');
+    if (step.kind === 'stop') { expect(step.outcome.reason).toBe('not_visible'); expect(step.outcome.text).toContain('cobblestone'); }
+    expect(f.controls.forward).toBe(false); expect(f.controls.sneak).toBe(false);
+    expect(endermanCampObservation(f.bot)?.recovery[0].result).toBe('stopped');
+  });
+
+  it('rechecks the standing roof during movement and stops if the destination loses its cover', async () => {
+    const f = campField();
+    await f.camp.advance(f.target, 100_000, 9, false);
+    f.blocks['2,2,0'] = 'air';
+    expect((await f.camp.advance(f.target, 100_050, 9, false)).kind).toBe('stop');
+    expect(f.controls.forward).toBe(false);
+    expect(f.controls.sneak).toBe(false);
+    expect(f.bot.entity.position).toEqual(new Vec3(0.5, 0, 0.5));
+    expect(f.bot.placeBlock).not.toHaveBeenCalled();
+  });
+
+  it('permits at most two steps for #200 even when it alternates sides, and never restarts the blind budget', async () => {
+    const f = campField();
+    await f.camp.advance(f.target, 100_000, 9, false);
+    f.bot.entity.position = new Vec3(1.5, 0, 0.5);
+    await f.camp.advance(f.target, 100_400, 9, false);
+    f.target.position = new Vec3(-9.5, 1, 0.5);
+    await f.camp.advance(f.target, 100_500, 9, false);
+    f.bot.entity.position = new Vec3(0.5, 0, 0.5);
+    await f.camp.advance(f.target, 100_900, 9, false);
+    f.target.position = new Vec3(10.5, 1, 0.5);
+    await f.camp.advance(f.target, 101_000, 9, false);
+    expect(endermanCampObservation(f.bot)?.recovery).toHaveLength(2);
+    const step = await f.camp.advance(f.target, 109_001, 9, false);
+    expect(step.kind).toBe('stop');
+    expect(endermanCampObservation(f.bot)?.recovery).toHaveLength(2);
+    expect(f.controls.forward).toBe(false);
+  });
+
+  it('bounds both recovery steps together to three seconds', async () => {
+    const f = campField();
+    await f.camp.advance(f.target, 100_000, 9, false);
+    f.bot.entity.position = new Vec3(1.5, 0, 0.5);
+    await f.camp.advance(f.target, 101_700, 9, false);
+    f.target.position = new Vec3(-9.5, 1, 0.5);
+    await f.camp.advance(f.target, 101_750, 9, false);
+    expect(endermanCampObservation(f.bot)?.recovery).toHaveLength(2);
+    expect((await f.camp.advance(f.target, 103_000, 9, false)).kind).toBe('stop');
+    expect(f.controls.forward).toBe(false);
+  });
+
+  it('does not replace a lost target with a different live ID during recovery', async () => {
+    const f = campField();
+    await f.camp.advance(f.target, 100_000, 9, false);
+    const step = await f.camp.advance({ ...f.target, id: 201 }, 100_050, 9, false);
+    expect(step.kind).toBe('stop');
+    if (step.kind === 'stop') expect(step.outcome.code).toBe('target_lost');
+    expect(endermanCampObservation(f.bot)?.targetId).toBe(200);
+    expect(f.controls.forward).toBe(false);
+    expect(f.bot.attack).not.toHaveBeenCalled();
+  });
+
+  it('cancellation and release stop a pending step and restore the gaze guard', async () => {
+    const f = campField();
+    await f.camp.advance(f.target, 100_000, 9, false);
+    f.stop.abort('test');
+    expect((await f.camp.advance(f.target, 100_050, 9, false)).kind).toBe('stop');
+    f.camp.release();
+    expect(f.controls.forward).toBe(false); expect(f.controls.sneak).toBe(false);
+    expect(f.bot.gazeGuard.enabled).toBe(true);
   });
 });
