@@ -2430,6 +2430,8 @@ const basinAssist = async (mode: 'tp' | 'walk') => {
   const elapsed = () => (Date.now() - t0) / 1000;
   const sits: Array<Record<string, any>> = [], transitions: Array<[number, number | null]> = [];
   let endReason = 'time_limit', dragonDead = false, lastPhase: number | null = null, sitId = 0, wasSitting = false, enteredSit = -1;
+  let landingId = 0, lastLandingPhase: number | null = null, waitedLanding = -1;
+  const waitingChosen: Array<Record<string, any>> = [];
   const onDead = (e: any) => { if (e?.id === initial.dragonId) dragonDead = true; };
   actor.on('entityDead', onDead);
   // the phase is watched on its own timer (the swinging loop below does not return for seconds): its changes, to 0.1 s
@@ -2442,6 +2444,16 @@ const basinAssist = async (mode: 'tp' | 'walk') => {
       const sitting = !!d && isPerched(d.phase);
       if (sitting && !wasSitting) sitId++;
       wasSitting = sitting;
+      // walking mode: the waiting cell is chosen sideways of the facing of THIS landing (the facing changes from landing to landing), taken once while it is still landing (phase 3, a few seconds in)
+      if (mode === 'walk' && d && view?.perch && d.phase === 3 && d.phaseFor >= 3 && waitedLanding !== landingId) {
+        waitedLanding = landingId;
+        const waiting = basinWaitingCell(view);
+        if (waiting) await standAt(waiting.x, waiting.y, waiting.z);
+        waitingChosen.push({ landing: landingId, seconds: elapsed(), waiting, yaw: d.yaw });
+        continue;
+      }
+      if (d && d.phase === 3 && lastLandingPhase !== 3) landingId++;
+      lastLandingPhase = d?.phase ?? null;
       // enter at the scan (phase 6) of a sit, once
       if (!d || !view?.perch || d.phase !== 6 || enteredSit === sitId) { await sleep(100); continue; }
       const cell = d.approach?.basin?.[0];
@@ -2486,7 +2498,7 @@ const basinAssist = async (mode: 'tp' | 'walk') => {
   for (const [kind, n] of Object.entries(counts) as Array<[string, number]>) { const used = n - (counts0[kind] ?? 0); if (used > 0) reflexKinds[kind] = used; }
   const health = await dragonHealthServer().catch(() => null);
   return { scene: 'dragon_kill_compare', style: 'basin_assist', endReason, seconds: elapsed(), killSeconds: endReason === 'dragon_dead' ? elapsed() : null, deaths: actorDeaths - deaths0,
-    minHealth: lowest.stop(), dragonHealthEnd: health, waiting: initial.ground, windows: sits, transitions: transitions.slice(0, 400), reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
+    minHealth: lowest.stop(), dragonHealthEnd: health, waiting: initial.ground, waitingChosen, windows: sits, transitions: transitions.slice(0, 400), reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
 };
 scenes.dragon_kill_basin_assist = () => basinAssist('tp');
 scenes.dragon_kill_basin_walk = () => basinAssist('walk');
