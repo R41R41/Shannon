@@ -12,6 +12,8 @@ export type FillCode = 'HP_FLOOR' | 'TIME_LIMIT' | 'NO_STAND' | 'NO_BLOCKS' | 'R
 export interface FillResult {
   status: 'done' | 'partial' | 'retreated' | 'failed' | 'cut'; code: FillCode | null; placed: number; remaining: Cell[];
   skippedBy: { creature: number; reach: number; hazard: number; other: number };
+  /** The place hand's own reasons for the cells it skipped, counted (what `other` was). */
+  reasons?: Record<string, number>;
   hpMin: number; hpEnd: number; elapsedMs: number; at: Cell; safe: boolean;
 }
 export interface FillOutcome extends StepOutcome { fill: FillResult }
@@ -103,7 +105,9 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
     return perform(work, deadline, part => go(part, { goals: [to], range: 0.8, seconds: Math.max(0, (deadline - Date.now()) / 1000),
       maxDig: 0, maxPlace: 0, maxDrop: 0, waterOk: false }));
   };
+  const reasons: Record<string, number> = {};
   const skip = (reason?: string) => {
+    const key = String(reason ?? 'none').slice(0, 40); reasons[key] = (reasons[key] ?? 0) + 1;
     if (reason === 'creature_in_cell') skippedBy.creature++;
     else if (/reach|path|body_in_cell|stuck|dead_end/u.test(reason ?? '')) skippedBy.reach++;
     else if (/hazard|fire|lava|magma|cactus/u.test(reason ?? '')) skippedBy.hazard++;
@@ -183,7 +187,7 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
     if (!preflight && !safe && !cut && code !== 'DEAD') code = 'RETREAT_BLOCKED';
     const status: FillResult['status'] = code === 'DEAD' ? 'failed' : cut ? 'cut' : preflight || !safe || code === 'RETREAT_BLOCKED' ? 'failed'
       : code === 'HP_FLOOR' || code === 'TIME_LIMIT' ? 'retreated' : remaining.length ? 'partial' : 'done';
-    const result: FillResult = { status, code, placed, remaining: remaining.slice(0, 40), skippedBy, hpMin, hpEnd: hp(), elapsedMs: Date.now() - started, at: position, safe };
+    const result: FillResult = { status, code, placed, remaining: remaining.slice(0, 40), skippedBy, reasons, hpMin, hpEnd: hp(), elapsedMs: Date.now() - started, at: position, safe };
     const ok = status === 'done' && safe;
     return { ok, ...(code ? { code, reason: code === 'REFLEX' ? 'reflex' : code === 'DEAD' ? 'died' : code } : !ok ? { reason: 'partial' } : {}),
       text: `まとめ置き ${code ?? status}: ${code ? WORDS[code] : status === 'done' ? '指定のマスを済ませ指定先へ戻った' : '未完のマスを残して指定先へ戻った'}${debug}。設置${placed}・未完${remaining.length}・最低体力${hpMin}・安全${safe ? '確認' : '未確認'}`,
