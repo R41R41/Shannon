@@ -3318,7 +3318,8 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 
   const elapsed = () => (Date.now() - t0) / 1000;
   const sits: Array<Record<string, any>> = [], transitions: Array<[number, number | null]> = [];
   let endReason = 'time_limit', dragonDead = false, lastPhase: number | null = null, sitId = 0, wasSitting = false, enteredSit = -1;
-  let landingId = 0, lastLandingPhase: number | null = null, waitedLanding = -1;
+  let landingId = 0, lastLandingPhase: number | null = null, waitedLanding = -1, lastEatAt = 0;
+  const eats: Array<Record<string, any>> = [];
   const waitingChosen: Array<Record<string, any>> = [];
   const onDead = (e: any) => { if (e?.id === initial.dragonId) dragonDead = true; };
   actor.on('entityDead', onDead);
@@ -3343,6 +3344,13 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 
       }
       if (d && d.phase === 3 && lastLandingPhase !== 3) landingId++;
       lastLandingPhase = d?.phase ?? null;
+      // Healing while the dragon is away (phases 0, 1, 4): a steak refills the hunger bar and its saturation, and with the bar full and saturation left the body mends 1 HP every half second (at 18 or 19 with no saturation, one every four seconds; the floor reflex eats only below 18 with health at 12 or less). So when hurt and not full, one steak, at most once in ten seconds.
+      if (mode === 'walk' && d && [0, 1, 4].includes(d.phase as number) && Number(actor.health) < 15 && Number(actor.food) < 20 && Date.now() - lastEatAt > 10_000) {
+        lastEatAt = Date.now();
+        const meal = await act([{ do: 'eat', item: 'cooked_beef' }], 10);
+        eats.push({ seconds: elapsed(), hp: Number(actor.health), food: Number(actor.food), ok: meal.ok, line: meal.lines.join(' | ').slice(0, 120) });
+        continue;
+      }
       // enter at the scan (phase 6) of a sit, once
       if (!d || !view?.perch || d.phase !== 6 || enteredSit === sitId) { await sleep(100); continue; }
       const cell = d.approach?.basin?.[0];
@@ -3394,7 +3402,7 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 
   for (const [kind, n] of Object.entries(counts) as Array<[string, number]>) { const used = n - (counts0[kind] ?? 0); if (used > 0) reflexKinds[kind] = used; }
   const health = await dragonHealthServer().catch(() => null);
   return { scene: 'dragon_kill_compare', style: 'basin_assist', endReason, seconds: elapsed(), killSeconds: endReason === 'dragon_dead' ? elapsed() : null, deaths: actorDeaths - deaths0,
-    minHealth: lowest.stop(), dragonHealthEnd: health, waiting: initial.ground, waitingChosen, keptCrystals: keptCrystals.length, dragonSamples, windows: sits, transitions: transitions.slice(0, 400), reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
+    minHealth: lowest.stop(), dragonHealthEnd: health, waiting: initial.ground, waitingChosen, keptCrystals: keptCrystals.length, eats, dragonSamples, windows: sits, transitions: transitions.slice(0, 400), reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
 };
 scenes.dragon_kill_basin_assist = () => basinAssist('tp');
 scenes.dragon_kill_basin_walk = () => basinAssist('walk');
