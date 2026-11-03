@@ -783,6 +783,10 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const sampler = setInterval(() => { const value = hp(); if (Number.isFinite(value)) track.push(r1(value)); }, 1000);
   const cobble0 = packClient().cobblestone ?? 0;
   const t0 = Date.now(), deaths0 = deaths;
+  // timeline (the coordinator's order d49: the seconds the body is exposed, by stretch)
+  const blazesKnown = () => (Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length;
+  const mark = (label: string) => note(`T+${r1((Date.now() - t0) / 1000)} s [${label}] hp ${r1(hp())} blazes known ${blazesKnown()} cobble ${packClient().cobblestone ?? 0} torch ${packClient().torch ?? 0}`);
+  mark('start');
   if (options.away) {
     // the clearing-away: the room fills for a minute (the spawner runs with the body near), the body goes far off (the spawner stops, what it made fades), waits, and comes back to build
     const arrival = sites.netherArrival as number[] | undefined;
@@ -796,10 +800,6 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     mark('back from away');
     note(`back at the stand after ${options.awaySeconds ?? 150} s away; blazes known now: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
   }
-  // timeline (the coordinator's order d49: the seconds the body is exposed, by stretch)
-  const blazesKnown = () => (Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length;
-  const mark = (label: string) => note(`T+${r1((Date.now() - t0) / 1000)} s [${label}] hp ${r1(hp())} blazes known ${blazesKnown()} cobble ${packClient().cobblestone ?? 0} torch ${packClient().torch ?? 0}`);
-  mark('start');
   if (options.torches) {
     // torches first: a greedy cover of the spawner's box (the free cells of the three layers within two blocks of a torch on the floor of the spawner's layer), set with go and place in acts of six
     const sp = sites.blazeSpawner as number[], [tx, ty, tz] = sp;
