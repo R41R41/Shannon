@@ -3311,7 +3311,7 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 
   for (const c of keptCrystals) await ask(`${END} summon minecraft:end_crystal ${c.x} ${c.y} ${c.z} {ShowBottom:0b}`);
   const dragonSamples: Array<[number, number | null]> = [];
   const sampleT0 = Date.now();
-  const sampleTimerCrystals = setInterval(() => { dragonSamples.push([Math.round((Date.now() - sampleT0) / 100) / 10, endView()?.dragon?.health ?? null]); }, 5000);
+  const sampleTimerCrystals = setInterval(() => { dragonSamples.push([Math.round((Date.now() - sampleT0) / 100) / 10, endView()?.dragon?.health ?? null, Number(actor.health), Number(actor.food), Number((actor as any).foodSaturation)] as any); }, 5000);
   // Endermen (the End island has them) take offence at eye contact; a carved pumpkin on the head ends that (it stands in for the iron helmet: two armour points less).
   if (pumpkin) { await ask(`give ${ACTOR} minecraft:carved_pumpkin 1`); await sleep(500); await act([{ do: 'equip', item: 'carved_pumpkin', slot: 'head' }], 8); }
   const t0 = Date.now(), deadline = t0 + KILL_LIMIT_MS, deaths0 = actorDeaths, lowest = trackMinHealth(), counts0 = actor.reflexLedger.counts();
@@ -3348,7 +3348,7 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 
       if (mode === 'walk' && d && [0, 1, 4].includes(d.phase as number) && Number(actor.health) < 15 && Number(actor.food) < 20 && Date.now() - lastEatAt > 10_000) {
         lastEatAt = Date.now();
         const meal = await act([{ do: 'eat', item: 'cooked_beef' }], 10);
-        eats.push({ seconds: elapsed(), hp: Number(actor.health), food: Number(actor.food), ok: meal.ok, line: meal.lines.join(' | ').slice(0, 120) });
+        eats.push({ seconds: elapsed(), hp: Number(actor.health), food: Number(actor.food), saturationBefore: Number((actor as any).foodSaturation), ok: meal.ok, line: meal.lines.join(' | ').slice(0, 120) });
         continue;
       }
       // enter at the scan (phase 6) of a sit, once

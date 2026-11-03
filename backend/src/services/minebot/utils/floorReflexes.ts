@@ -403,6 +403,25 @@ const SELF_EAT_HEALTH = 6;
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple']);
 // (Whether a meal is critical, `eatIsCritical`, is floorBudget.ts's one definition: this choice, the tick's cut rule and the budget's exemption share it.)
 /**
+ * The mending meal: hurt and not full, nothing about to strike. A meal at food 18 or 19 gains almost no food, but it refills the saturation (cooked beef: +12.8, kept to the
+ * food level): with the bar full and saturation left the body mends one health point every half second, at 18 or 19 without saturation one every four seconds (lab: the dragon stage
+ * waited at food 17 to 19 for minutes, hurt; the body ate 0.5 times a run). The 1.6 s of the meal must not be struck: no hostile within MEND_HOSTILE_NEAR, no dragon danger, no
+ * dragon fireball flying within MEND_FIREBALL_NEAR, no meal in lava. Cooked food only (raw meat and rotten flesh keep their own rules).
+ */
+const MEND_HOSTILE_NEAR = 8;
+const MEND_FIREBALL_NEAR = 40;
+function mendingMeal(bot: FloorBody, health: number, food: number): boolean {
+  if (!(health < 20 && food < 20)) return false;
+  try {
+    if (dragonHazards(bot).length) return false;
+    const at = bot.entity?.position;
+    for (const entity of Object.values((bot as unknown as { entities?: Record<string, any> }).entities ?? {})) {
+      if (entity?.name === 'dragon_fireball' && at && entity.position?.distanceTo?.(at) <= MEND_FIREBALL_NEAR) return false;
+    }
+  } catch { return false; }
+  return true;
+}
+/**
  * Food to eat now, or null; never with an enemy at arm's length (standing to eat there killed the body, L18).
  *
  * The body eats by itself only starving (food 3 or less) or nearly dead (health 6 or less, with hunger to fill: `eatIsCritical`); every
@@ -412,14 +431,15 @@ const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spi
  */
 export function floorEatChoice(bot: FloorBody, wide = true): Item | null {
   const health = bot.health ?? 20, food = bot.food ?? 20;
-  if (!(food <= SELF_EAT_FOOD || health <= SELF_EAT_HEALTH)) return null;
-  if (wide) {
+  const mend = wide && mendingMeal(bot, health, food);
+  if (!(food <= SELF_EAT_FOOD || health <= SELF_EAT_HEALTH || mend)) return null;
+  if (wide && !mend) {
     // Nearly dead with food 18 or more: a meal gains next to nothing.
     if (!eatIsCritical(health, food)) return null;
-  } else if (!(food <= 6 || (health <= 12 && food < 18))) return null;
-  if (bot.entity?.isInLava || hostileWithin(bot, HOSTILE_NEAR, wide, wide)) return null;
+  } else if (!wide && !(food <= 6 || (health <= 12 && food < 18))) return null;
+  if (bot.entity?.isInLava || hostileWithin(bot, mend ? MEND_HOSTILE_NEAR : HOSTILE_NEAR, wide, wide)) return null;
   let items = (bot.inventory?.items() ?? []).filter(item => (FALLBACK_FOOD_POINTS[item.name] ?? 0) > 0 && !NEVER_EAT.has(item.name)
-    && (item.name !== 'rotten_flesh' || food <= 6));
+    && (item.name !== 'rotten_flesh' || food <= 6) && !(mend && (RAW_FOOD.has(item.name) || item.name === 'rotten_flesh')));
   if (wide) {
     // Cooked (or anything not raw) first; raw meat only when that is all there is.
     // Rotten flesh (hunger) comes after raw meat, though it fills more: it is the last resort, not something ready to eat.
