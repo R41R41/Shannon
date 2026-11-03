@@ -3342,8 +3342,6 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 
       lastLandingPhase = d?.phase ?? null;
       // enter at the scan (phase 6) of a sit, once
       if (!d || !view?.perch || d.phase !== 6 || enteredSit === sitId) { await sleep(100); continue; }
-      // The planner does not go into a sit hurt (lab r150: in at 5 hearts of health, killed by the breath cloud): below 14 it stays at the waiting cell, eating (the reflex) and mending, and takes the next sit.
-      if (mode === 'walk' && Number(actor.health) < 14) { enteredSit = sitId; sits.push({ n: sitId, seconds: elapsed(), skipped: 'low_health', hp: Number(actor.health) }); continue; }
       const cell = d.approach?.basin?.[0];
       if (!cell) { enteredSit = sitId; sits.push({ n: sitId, seconds: elapsed(), skipped: 'no proven basin walk', entryFailure: { noCandidate: true } }); continue; }
       enteredSit = sitId;
