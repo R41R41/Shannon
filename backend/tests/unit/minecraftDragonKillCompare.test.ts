@@ -12,6 +12,8 @@ import { feetCentre } from '../../src/services/minebot/utils/dragonWalk.js';
 import { makeSim } from '../helpers/physicsBody.js';
 import { go as bodyGo } from '../../src/services/minebot/utils/primitives/go.js';
 import { StepStopped } from '../../src/services/minebot/utils/primitives/common.js';
+import { dragonNook, insideDragonNook, nookCellSupported } from '../../src/services/minebot/utils/dragonNook.js';
+import { walkGround } from '../../src/services/minebot/utils/dragonWalk.js';
 
 // Load only the marked lab HEAD, with its I/O replaced. Importing the probe itself would open two live connections.
 const source = fs.readFileSync(new URL('../../scripts/minecraft-end-fight-probe.ts', import.meta.url), 'utf8');
@@ -20,7 +22,7 @@ const bedUse = source.slice(source.indexOf('function perchBedEstimate('), source
 const compiled = ts.transpileModule(`${source.match(/^const round =.*$/m)![0]}\n// ${section}\n${bedUse}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
 
 function rig(options: { estimate?: number; proofId?: number; missingPlan?: boolean } = {}) {
-  let health = 200, arrows = 64, beds = 12, obsidian = 12, reflected = false, explosion = true;
+  let health = 200, arrows = 64, beds = 12, obsidian = 12, cobblestone = 64, reflected = false, explosion = true;
   const actor: any = new EventEmitter();
   actor._client = new EventEmitter(); actor.health = 20; actor.food = 20; actor.floorReflexes = {};
   actor.entity = { position: new Vec3(110.5, 70, -30.5), onGround: true };
@@ -28,7 +30,7 @@ function rig(options: { estimate?: number; proofId?: number; missingPlan?: boole
   let groundY = 70;
   actor.blockAt = (p: any) => blocks.get(`${p.x},${p.y},${p.z}`) ?? (p.y < groundY ? { name: 'end_stone', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' });
   actor.inventory = { slots: [], items: () => [{ name: 'arrow', count: arrows }, { name: 'white_bed', count: beds }, { name: 'obsidian', count: obsidian },
-    { name: 'cobblestone', count: 64 }, { name: 'cooked_beef', count: 64 }, { name: 'bow', count: 1 }] };
+    { name: 'cobblestone', count: cobblestone }, { name: 'cooked_beef', count: 64 }, { name: 'bow', count: 1 }] };
   ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'].forEach((name, i) => { actor.inventory.slots[5 + i] = { name }; });
   actor.inventory.slots[45] = { name: 'shield' }; actor.heldItem = { name: 'stone_sword' };
   actor.reflexLedger = new ReflexLedger(actor);
@@ -48,8 +50,9 @@ function rig(options: { estimate?: number; proofId?: number; missingPlan?: boole
       if (h.do === 'place') {
         for (const p of h.at) blocks.set(`${p.x},${p.y},${p.z}`, h.block === 'white_bed'
           ? { name: 'white_bed', getProperties: () => ({ part: 'foot', facing: 'west' }) } : { name: h.block, boundingBox: 'block' });
-        if (h.block === 'white_bed') beds--; else obsidian -= h.at.length;
+        if (h.block === 'white_bed') beds--; else if (h.block === 'obsidian') obsidian -= h.at.length; else cobblestone -= h.at.length;
       }
+      if (h.do === 'dig') for (const p of h.at) blocks.set(`${p.x},${p.y},${p.z}`, { name: 'air', boundingBox: 'empty' });
       if (h.do === 'attack') { d.health -= 6; }
       if (h.do === 'use' && explosion) {
         const halves = bedHalves(actor.blockAt(h.at[0]), h.at[0])!;
@@ -64,13 +67,19 @@ function rig(options: { estimate?: number; proofId?: number; missingPlan?: boole
   const deps: Record<string, any> = { actor, actorDeaths: 0, disconnected: null, wanted: ['dragon_kill_sword'], scenes: {}, g: 70,
     context: { taskId: 'test', taskRevision: 1 }, Vec3, isPerched, partBox, perchBedFoot, bedWallCells, bedCellSupported, supportedBedCells, bedHalves, BLOCK_REACH, feetCentre,
     approachClear: vi.fn(() => true), dragonHazards: vi.fn(() => []), standing: vi.fn(() => true), bodyReader: vi.fn(() => ({})),
+    dragonNook: vi.fn(dragonNook), insideDragonNook, nookCellSupported, walkGround,
+    activeActionCapabilities: vi.fn(() => []),
     blastAt: vi.fn(() => ({ safe: true, expected: options.estimate ?? 4 })), act,
     sleep: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
-    endView: () => ({ dragon: { ...d, phaseFor: d.phaseFor ?? Date.now() / 1000 } }), trackMinHealth: () => ({ stop: () => actor.health }),
+    endView: () => ({ perch: { ...d.position }, dragonBreath: [], dragon: { ...d, phaseFor: d.phaseFor ?? Date.now() / 1000 } }), trackMinHealth: () => ({ stop: () => actor.health }),
     dragonHealthServer: vi.fn(async () => d.health), evidence: vi.fn(async () => ({ boss: { verified: true, witness: { entityId: options.proofId ?? 77 } } })),
     prepareMock: vi.fn(async () => ({ dragonId: 77, ground: { x: 110.5, y: 70, z: -30.5 } })),
     END: 'execute in minecraft:the_end run', DRAGON: '@e[type=minecraft:ender_dragon,limit=1]', ACTOR: 'MinebotTrial',
-    ask: vi.fn(async () => ''), protect: vi.fn(async () => {}), releaseReflex: vi.fn(), park: vi.fn(async () => {}),
+    ask: vi.fn(async (command: string) => {
+      const match = /setblock (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (\w+)/u.exec(command);
+      if (match) blocks.set(`${match[1]},${match[2]},${match[3]}`, { name: match[4], boundingBox: match[4] === 'air' ? 'empty' : 'block' });
+      return '';
+    }), protect: vi.fn(async () => {}), releaseReflex: vi.fn(), park: vi.fn(async () => {}),
     gear: vi.fn(async () => {}), wearIron: vi.fn(async () => {}), standAt: vi.fn(async () => {}), still: vi.fn(async () => {}),
   };
   const factory = new Function(...Object.keys(deps), `${compiled}\nconst actualPrepare = prepareKillRun; prepareKillRun = prepareMock; return { run: dragonKillRun, choose: chooseKillPlan, route: killRetreatRoute, layout: killBedLayout, useBed: usePerchBed, actualPrepare, setArena(a) { killArena = a; }, die() { actorDeaths++; actor.health = 0; actor.emit('death'); } };`);
@@ -110,6 +119,82 @@ describe('observed bed support geometry', () => {
 });
 
 describe('dragon kill comparison lab HEAD (mock motors, no server)', () => {
+  it.each(['operator', 'body'] as const)('uses the shared fight loop for a %s-built nook, records residence/damage/window hits and stops with proof', async builder => {
+    vi.useFakeTimers(); const r = rig();
+    const promise = r.run('sword_stage', builder); await vi.advanceTimersByTimeAsync(2500);
+    expect(r.deps.dragonNook).toHaveBeenCalled();
+    expect(r.calls.some((c: any) => c.hands.some((h: any) => h.do === 'attack'))).toBe(true);
+    r.actor.health = 18; r.actor.emit('health'); await vi.advanceTimersByTimeAsync(300);
+    r.actor.reflexLedger.note('retreat', '竜の危険から離れた');
+    r.actor.reflexLedger.preempted('floor-dragon', ['go']);
+    r.actor.entity.position.x += 8;
+    await vi.advanceTimersByTimeAsync(100);
+    await r.kill(); const out = await promise;
+    expect(out).toMatchObject({ limitSeconds: 1500, bossVerified: true, nook: { builder, kind: 'raised_canopy', ready: true, damageInside: 2, safetyVerified: false } });
+    expect(out.nook.insideSeconds).toBeGreaterThan(0);
+    expect(out.nook.retreatPreemptsInside).toBe(1);
+    expect(out.reflexKinds.retreat).toBe(1);
+    expect(out.windows[0]).toMatchObject({ swordAttempts: 1, meleeHit: true });
+    expect(out.nook.exits.length).toBeGreaterThan(0);
+    expect(r.actor.listenerCount('health')).toBe(0); expect(vi.getTimerCount()).toBe(0);
+    if (builder === 'body') {
+      expect(r.calls.some((c: any) => c.hands[0]?.do === 'place')).toBe(true);
+      expect(r.calls.some((c: any) => c.hands[0]?.do === 'dig')).toBe(true);
+      expect(r.deps.ask.mock.calls.some(([s]: any[]) => /setblock/u.test(s))).toBe(false);
+    } else expect(r.deps.ask.mock.calls.some(([s]: any[]) => /setblock/u.test(s))).toBe(true);
+  });
+
+  it('does not attack or resend a nook cell after a reflex cuts construction in that perch', async () => {
+    vi.useFakeTimers(); const r = rig();
+    r.setHandler(async (hands: any[]) => hands[0]?.do === 'place' ? { ok: false, lines: ['反射: retreat'], ms: 10 } : undefined);
+    const promise = r.run('sword_stage', 'body'); await vi.advanceTimersByTimeAsync(2000);
+    expect(r.calls.filter((c: any) => c.hands[0]?.do === 'place')).toHaveLength(1);
+    expect(r.calls.some((c: any) => c.hands.some((h: any) => h.do === 'attack'))).toBe(false);
+    await r.kill(); const out = await promise;
+    expect(out.nook).toMatchObject({ ready: false, insideSeconds: 0 });
+    expect(out.nook.buildRefusals[0].reason).toBe('place_interrupted_or_unconfirmed');
+  });
+
+  it.each(['operator', 'body'] as const)('prepares the %s nook bed before a window and checks the actual blast estimate again on use', async builder => {
+    vi.useFakeTimers(); const r = rig(); r.d.windows.open = false;
+    const promise = r.run('bed', builder); await vi.advanceTimersByTimeAsync(2500);
+    expect(r.calls.some((c: any) => c.hands.some((h: any) => h.do === 'place' && h.block === 'white_bed'))).toBe(true);
+    expect(r.calls.some((c: any) => c.hands.some((h: any) => h.do === 'use'))).toBe(false);
+    r.d.windows.open = true; await vi.advanceTimersByTimeAsync(500);
+    expect(r.calls.some((c: any) => c.hands.some((h: any) => h.do === 'use'))).toBe(true);
+    await r.kill(); const out = await promise;
+    expect(out.windows[0]).toMatchObject({ bedExplosions: 1, explosionHit: true });
+    expect(out.bedTrials[0]).toMatchObject({ expectedDamage: 4, exploded: true });
+  });
+
+  it('keeps the live bed damage gate even for a designed and completed nook', async () => {
+    vi.useFakeTimers(); const r = rig({ estimate: 4.1 });
+    const promise = r.run('bed', 'operator'); await vi.advanceTimersByTimeAsync(1000);
+    expect(r.calls.some((c: any) => c.hands.some((h: any) => h.do === 'use'))).toBe(false);
+    await r.kill(); const out = await promise;
+    expect(out.bedTrials[0].expectedDamage).toBe(4.1); expect(out.explosionsHit).toBe(0);
+  });
+
+  it('detects a destroyed roof and records an exit from confirmed residence, without another attack', async () => {
+    vi.useFakeTimers(); const r = rig(); const promise = r.run('sword_stage', 'operator');
+    await vi.advanceTimersByTimeAsync(700);
+    const design = r.deps.dragonNook.mock.results[0].value.plan;
+    const roof = design.cells.find((p: any) => p.role === 'roof');
+    r.blocks.delete(`${roof.x},${roof.y},${roof.z}`);
+    r.d.windows.open = false; await vi.advanceTimersByTimeAsync(300); r.d.windows.open = true;
+    await vi.advanceTimersByTimeAsync(500); await r.kill(); const out = await promise;
+    expect(out.nook.ready).toBe(false); expect(out.nook.exits.length).toBeGreaterThan(0);
+    expect(out.windows[1].swordAttempts).toBe(0);
+  });
+
+  it('records refusal and waits without inventing an attack site when nook geometry is missing', async () => {
+    vi.useFakeTimers(); const r = rig(); r.deps.dragonNook.mockReturnValue({ plan: null, reason: 'fixture_unloaded' });
+    const promise = r.run('bed', 'operator'); await vi.advanceTimersByTimeAsync(1000);
+    expect(r.calls).toHaveLength(0);
+    await r.kill(); const out = await promise;
+    expect(out.nook.designs[0].reason).toBe('fixture_unloaded'); expect(out.nook.insideSeconds).toBe(0);
+  });
+
   it('waits for scan and three fresh stable approach observations, rather than a fixed landing delay', async () => {
     vi.useFakeTimers(); const r = rig(); r.d.phase = 3; r.d.windows.open = false;
     const promise = r.run('sword_stage'); await vi.advanceTimersByTimeAsync(1000);
