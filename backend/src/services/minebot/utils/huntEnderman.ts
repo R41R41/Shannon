@@ -155,6 +155,7 @@ export interface EndermanLine {
 }
 export interface EndermanView {
   eyes: EndermanLine;
+  /** Diagnostics only: neither the current lower-body ray nor a walking route is required to provoke. */
   feet: EndermanLine;
   approach: { clear: boolean; contact: Cell3 | null; reason: string };
 }
@@ -200,6 +201,7 @@ export function roofInteriorStep(read: BlockReader, anchor: Cell3, from: Cell3, 
 /**
  * Can this same enderman walk through known, dry three-high columns to a visible lower-body contact point?
  * A bounded local search observes the route only: the body never walks it. One-block steps need headroom over both columns.
+ * These readings are kept for the probe, not as permission to provoke or hold: an angry enderman can teleport past a blocked route.
  */
 export function endermanView(reader: BlockReader, from: Cell3, target: Cell3): EndermanView {
   const cache = new Map<string, MapBlock | null>();

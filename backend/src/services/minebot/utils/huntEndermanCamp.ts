@@ -14,8 +14,8 @@ const { goals } = pathfinder;
  * The live part of the enderman hunt (S2, 2026-11-02; the plan and the reasons are in huntEnderman.ts): build the roof over the body, stare the enderman in the
  * eye from under it, and hold the hole. The fight hand (primitives/fight) asks this for one step at a time and does the blows, the shield and the counts itself.
  *
- * Built before it is angered: a blow costs 7 points and a push. Placement completion alone is not a usable camp: after building, read the eye ray,
- * the approach and the lower-body ray again. The same target is retained through every phase and any small recovery inside the standing roof.
+ * Built before it is angered: a blow costs 7 points and a push. After building, the eye ray gates provoking; the approach and lower-body ray are recorded
+ * for diagnostics only, since an angry enderman can teleport here. The same target is retained through every phase and any small recovery inside the standing roof.
  */
 
 /** The longest the roof is worked on (a body that cannot lay it in this is not going to). */
@@ -203,7 +203,7 @@ export class EndermanCamp {
       && e.position.y < to.y + 1.8 && e.position.y + (e.height ?? 1.8) > to.y);
   }
 
-  /** Starts only for a roof block on this target's eye ray and an already protected adjacent cell with all three working paths. */
+  /** Starts only for a roof block on this target's eye ray and an already protected adjacent cell with a clear eye ray. */
   private recover(live: any, view: CampObservation, now: number): boolean {
     if (this.recoveryEnded || this.observation.recovery.length >= RECOVERY_LIMIT
       || (this.recoveryBegan && now - this.recoveryBegan >= RECOVERY_MS)) return false;
@@ -218,7 +218,7 @@ export class EndermanCamp {
       const to = { x: from.x + dx, y: from.y, z: from.z + dz };
       if (!roofInteriorStep(read, this.cell, from, to) || this.shiftOccupied(to)) continue;
       const next = endermanView(read, { x: to.x + 0.5, y: to.y, z: to.z + 0.5 }, live.position);
-      if (!next.eyes.clear || !next.feet.clear || !next.approach.clear) continue;
+      if (!next.eyes.clear) continue;
       this.recoveryBegan ||= now;
       this.recoveryBlocker = view.eyes;
       this.shift = { from: { ...from }, to, at: now };
@@ -253,11 +253,11 @@ export class EndermanCamp {
     bot.setControlState('sneak', true); bot.setControlState('forward', dot > 0.98);
   }
 
-  private notVisible(view: CampObservation, now: number, box: number, part: 'eyes' | 'feet'): CampStep {
+  private notVisible(view: CampObservation, now: number, box: number): CampStep {
     this.guard(true); this.staredSince = 0; this.blindSince ||= now;
-    const line = this.recoveryEnded && view[part].clear ? this.recoveryBlocker ?? view[part] : view[part], first = line.between[0];
+    const line = this.recoveryEnded && view.eyes.clear ? this.recoveryBlocker ?? view.eyes : view.eyes, first = line.between[0];
     if (now - this.blindSince > SIGHT_MS || this.recoveryEnded) {
-      return this.failure('enderman_not_visible', 'not_visible', `エンダーマンの${part === 'eyes' ? '目' : '足元'}が見えない（${now - this.blindSince}ms/${SIGHT_MS}ms。間に ${first ? `${cellText(first.at)} ${first.name} ほか ${line.between.length - 1}` : 'なし'}。${box.toFixed(1)}m。対象 #${this.targetId}、微動 ${this.observation.recovery.length}/${RECOVERY_LIMIT}）。屋根内で線を戻せない`, feetCell(this.ctx.bot) ?? this.cell);
+      return this.failure('enderman_not_visible', 'not_visible', `エンダーマンの目が見えない（${now - this.blindSince}ms/${SIGHT_MS}ms。間に ${first ? `${cellText(first.at)} ${first.name} ほか ${line.between.length - 1}` : 'なし'}。${box.toFixed(1)}m。対象 #${this.targetId}、微動 ${this.observation.recovery.length}/${RECOVERY_LIMIT}）。屋根内で線を戻せない`, feetCell(this.ctx.bot) ?? this.cell);
     }
     return { kind: 'wait' };
   }
@@ -307,7 +307,7 @@ export class EndermanCamp {
     if (this.phase === 'provoke' && angry) { this.phase = 'hold'; this.guard(true); this.blindSince = 0; }
     if (this.phase === 'hold' && !angry) { this.phase = 'provoke'; this.staredSince = 0; this.blindSince = 0; }
     let view = this.observe(live, now);
-    // Once angered, stop the recovery turn immediately. Hold the verified swept space and use the lower-body ray.
+    // Once angered, stop the recovery turn immediately and hold the verified swept space.
     if (this.shift && angry) {
       const feet = feetCell(bot), { from, to } = this.shift;
       if (!feet || ![from, to].some(c => c.x === feet.x && c.y === feet.y && c.z === feet.z)
@@ -320,8 +320,8 @@ export class EndermanCamp {
       this.guard(true);
       this.moveShift(now);
       view = this.observe(live, now);
-      if (this.shift) return this.notVisible(view, now, box, 'eyes');
-      if (this.recoveryEnded) return this.notVisible(view, now, box, 'eyes');
+      if (this.shift) return this.notVisible(view, now, box);
+      if (this.recoveryEnded) return this.notVisible(view, now, box);
     }
     const feet = feetCell(bot);
     if (!feet || feet.x !== this.standing.x || feet.y !== this.standing.y || feet.z !== this.standing.z) return this.failure('roof_failed', 'moved', '屋根内の確認した立ち位置から動かされた', feet ?? this.cell);
@@ -330,9 +330,8 @@ export class EndermanCamp {
       if (!view.eyes.clear) {
         this.blindSince ||= now;
         if (now - this.blindSince <= SIGHT_MS && this.recover(live, view, now)) this.moveShift(now);
-        return this.notVisible(view, now, box, 'eyes');
+        return this.notVisible(view, now, box);
       }
-      if (!view.feet.clear || !view.approach.clear) return this.failure('enderman_unreachable', 'unreachable', `目は見えるが呼べて打てる道が無い（足元の線 ${view.feet.clear ? '通る' : '遮蔽'}。${view.approach.reason}）`, this.standing);
       this.blindSince = 0;
       this.staredSince ||= now;
       if (now - this.staredSince > STARE_MS) {
@@ -344,10 +343,7 @@ export class EndermanCamp {
       return { kind: 'wait' };
     }
 
-    // hold uses the lower-body ray only. A roof hiding the angry enderman's eyes must not stop a blow.
-    if (!view.feet.clear) return this.notVisible(view, now, box, 'feet');
-    this.blindSince = 0;
-    if (!view.approach.clear) return this.failure('enderman_unreachable', 'unreachable', view.approach.reason, this.standing);
+    // hold delegates range, sight and prolonged obstruction to the existing fight loop. The observed route is not a prerequisite for teleporting here.
     return { kind: 'fight' };
   }
 }

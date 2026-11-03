@@ -178,6 +178,18 @@ wsl -d Ubuntu-24.04 -u ghrunner -- env HOME=/home/azureuser LAB_SLOT_COUNT=3 LAB
 場面：`barter`・`eye_locate`・`eye_near`・`locate_start`（起点→ポータルの間の距離）・`frame_search`・`ender_platform`・`ender_warped`・`blaze_hold`・`blaze_hold_fireres`・`blaze_fight`・`blaze_hold_near`・`blaze_fight_near`・`map_blaze`（湧き場の周りの 17×17 の層の地図）・`map_portal`（ポータルの間の層の地図）・`probe_kinds`・`craft_eyes`・`craft_diag`・`stronghold_descent`（地表から掘って降りる）・`end_portal`（枠にはめてエンドへ入る）・`fire_dig`・`tool_broke`・`nether_walk`（到着点→要塞→歪んだ森）・`nether_warped`・`nether_leg2`（要塞→歪んだ森）。ネザー歩きの場面は止まった所の周りの地図（`MAP`）と、置きを断られたマスの周り（`REFUSED`）、読み込みの端（`LOADED`）を probe.log に出す。
 スロットは他のセッションと共有（`lab-slot.sh`）。他の人の hands-live の run が走っている間は始められない（`/tmp/hands-live.lock`）ので、数秒おきに入り直す。メモリが 8 GB を切る時は 1 本ずつ。
 
+### 2026-11-03：ce055c7 の屋根内微動試験の追補（未実行）
+
+PC の WSL で 58/59 件合格、`huntEndermanFight.test.ts` の「walks one protected cell…」だけ `json.ok=false` との報告を受けた。提示された `[ender 3]`・`(6,66,0) stone`・微動 0/2 の出力は、別の「stone 壁で見えず停止する」試験のログ。当該失敗試験の停止理由は未取得なので、このログから候補ゼロとは断定しない。
+
+盤面は体 `(0.5,64,0.5)`、支え `(1,65,0)`、屋根 `x=-1..1 / y=66 / z=-1..2`、対象 #200 `(12.5,64,0.5)`。`+X` は支えで塞がり、`-X` と `-Z` は保護の外になるが、`+Z` の `(0,64,1)` は移動元・先の 3×3 の床と屋根が揃い、移動先の目線・足元の線・3マス高の接近経路も通る。高さや保護条件を緩める必要はない。試験にこれらの前提の直接確認を追加した。
+
+静的に見つかった別の停止要因は fixture の初期接地状態。`onGround=true / velocity.y=0` から始めると、[prismarine-physics 1.10.0](https://github.com/PrismarineJS/prismarine-physics/blob/1.10.0/index.js) は最初の移動で下向き衝突が無いため `onGround=false` にし、その後で重力を適用する。次の物理刻みで床に当たるまでの間に微動の `moveShift` が動くと、接地の安全条件で停止する。既存の偽物理の微動試験は常に接地、屋根を建てる実物理試験は建築中に接地が安定するため、この差を検出しなかった。これは候補選択後（微動 1/2）の停止要因であり、引用ログの微動 0/2 とは区別する。
+
+fixture は操作開始前にプレイヤーの物理だけをキー無しで 2 刻み進め、床に接地済みの状態に揃える。生き物・凝視・攻撃・回復の時計は進めない。盤面、実装の接地ガード、同じ #id、屋根内のみ・掘削/設置無し、2 回・合計 3 秒・1 歩 1.8 秒・視認 8 秒の上限は変更していない。当該試験の成功判定の失敗メッセージには、その試験自身の行・観測・キーと打撃の記録・両者の位置を含め、他試験の console 出力と混同しないようにした。
+
+今回はテスト・ビルド・実機・commit を実施していない。接地初期化の不整合を取り除く根拠は上記の物理実装と呼出し順序の静的確認であり、59/59 合格や報告された失敗の原因確定とは扱わない。残る確認は WSL での同じ 59 件の再実行と、まだ失敗する場合の当該試験自身の停止理由・回復記録。Notion は接続ツールが `Unknown tool` を返し、同期・再取得できていない。
+
 ## 7. 頭の契約に要る変更（S3・S0 へ）
 - act の手の種類・欄は増やしていない。行の言葉が増えた（上の表）。`ActResult.eye` に任意の欄が増え、`broke` の意味が変わった（上）。
 - `find-structure` の description と args（radius・x・z、`blaze_spawner`）が変わった → **catalog.json の description とハッシュは S0 が録り直す**。
