@@ -1428,7 +1428,7 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
       if (candidates.length || hostile.length) noCandidateSince = null; else noCandidateSince ??= Date.now();
       const relocation = !hostile.length && noCandidateSince !== null && Date.now() - noCandidateSince >= 17_500;
       if ((!roof || relocation) && !hostile.length) {
-        const choice: { cell: Cell; visible: number; horizons: number; distance: number } | null = chooseClearing(!!roof) ?? (roof ? null : chooseClearing(false, true));
+        const choice: { cell: Cell; visible: number; horizons: number; distance: number } | null = chooseClearing(!!roof) ?? chooseClearing(false, true);
         row.kind = 'site'; row.choice = choice; row.relocation = relocation;
         if (choice && remaining() >= 13_000) {
           const before = actor.entity.position.clone(); visited.add(keyOf(choice.cell));
@@ -1437,7 +1437,8 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
           if (run.ok && Math.floor(actor.entity.position.x) === choice.cell.x && Math.floor(actor.entity.position.z) === choice.cell.z
             && Math.abs(actor.entity.position.y - choice.cell.y) < 0.1) { roof = choice.cell; noCandidateSince = null; }
           else row.reason = 'walk_not_arrived';
-        } else if (!roof && remaining() >= 13_000) {
+        } else if ((!roof || relocation) && remaining() >= 13_000) {
+          if (relocation) { roof = null; noCandidateSince = null; }      // the old roof is given up: no pull back to its centre while looking for another place
           // The stand-in explores: no level 5x5 clearing within 16 m of here, so it walks about 10 m along the next compass direction (a standable cell on observed ground) and looks again.
           row.reason = 'no_loaded_clearing_explore'; exploreStep++; row.rejects = { ...rejects }; for (const k of Object.keys(rejects)) delete rejects[k];
           const p0 = actor.entity.position as Vec3, angle = (exploreStep % 8) * Math.PI / 4, rd = bodyReader(actor);
