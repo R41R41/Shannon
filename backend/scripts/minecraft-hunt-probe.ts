@@ -770,12 +770,12 @@ scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wid
 // The lane built BY THE BODY's hands (S2, 2026-11-03): the scripted head reads probe kind=lane (no spawner given: the near one), takes the first candidate (fewest cobblestones), and builds what the probe lists in the order
 // it lists it, with go and place hands (up to 4 cells per group, a go to a floor cell within reach first), the blazes alive and shooting. Then it re-reads the plan (what still stands to be built outside the lane), goes to the
 // waiting cell and holds for the rest of the time, fetching what falls. Measures the time to build, the lowest health while building, the cobblestones used and the kills after.
-async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean } = {}): Promise<Record<string, unknown>> {
+async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean; torches?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const holdSeconds = options.holdSeconds ?? 300, groupSize = options.groupSize ?? 5, thinkMs = 5000;
   await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
-  await equip({ stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 }, { armor: 'iron', shield: true });
+  await equip({ stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173, ...(options.torches ? { torch: 24 } : {}) }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
   const readLane = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'lane' }, 25); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
   const hp = () => Number(actor.health);
@@ -793,9 +793,46 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     await sleep((options.awaySeconds ?? 150) * 1000);
     await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
     await sleep(5000);   // (the blocks under the body arrive after the move: a fill read at once said there was no floor)
+    mark('back from away');
     note(`back at the stand after ${options.awaySeconds ?? 150} s away; blazes known now: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
   }
+  // timeline (the coordinator's order d49: the seconds the body is exposed, by stretch)
+  const blazesKnown = () => (Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length;
+  const mark = (label: string) => note(`T+${r1((Date.now() - t0) / 1000)} s [${label}] hp ${r1(hp())} blazes known ${blazesKnown()} cobble ${packClient().cobblestone ?? 0} torch ${packClient().torch ?? 0}`);
+  mark('start');
+  if (options.torches) {
+    // torches first: a greedy cover of the spawner's box (the free cells of the three layers within two blocks of a torch on the floor of the spawner's layer), set with go and place in acts of six
+    const sp = sites.blazeSpawner as number[], [tx, ty, tz] = sp;
+    const free = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y, z)); return !!b && b.boundingBox !== 'block' && !['lava', 'fire', 'water'].includes(b.name); };
+    const targets: Array<[number, number, number]> = [], candidates: Array<[number, number]> = [];
+    for (let dx = -4; dx <= 4; dx++) for (let dz = -4; dz <= 4; dz++) {
+      const x = tx + dx, z = tz + dz, below = actor.blockAt(new Vec3(x, ty - 1, z));
+      if (!(dx === 0 && dz === 0) && free(x, ty, z) && below && below.boundingBox === 'block') candidates.push([x, z]);
+      for (const y of [ty - 1, ty, ty + 1]) if (!(dx === 0 && dz === 0 && y === ty) && free(x, y, z) && free(x, y + 1, z)) targets.push([x, y, z]);
+    }
+    const dist = (a: [number, number, number], t: [number, number]) => Math.abs(a[0] - t[0]) + Math.abs(a[2] - t[1]) + Math.abs(a[1] - ty);
+    const open = new Set(targets.map(c0 => c0.join(',')));
+    const chosen: Array<[number, number]> = [];
+    while (open.size) {
+      let best: [number, number] | null = null, bestN = 0;
+      for (const t of candidates) { let n = 0; for (const key of open) { if (dist(key.split(',').map(Number) as [number, number, number], t) <= 2) n++; } if (n > bestN) { bestN = n; best = t; } }
+      if (!best) break;
+      chosen.push(best);
+      for (const key of [...open]) if (dist(key.split(',').map(Number) as [number, number, number], best) <= 2) open.delete(key);
+    }
+    note(`torch cover: ${chosen.length} torches for ${targets.length} cells, ${open.size} left uncovered`);
+    for (let i = 0; i < chosen.length && hp() > 6 && !disconnected; i += 6) {
+      const batch = chosen.slice(i, i + 6);
+      await sleep(thinkMs);
+      const hands: unknown[] = [];
+      for (const [x, z] of batch) { hands.push({ do: 'go', to: { x, y: ty, z }, range: 2.2, seconds: 8, onFail: 'continue' }); hands.push({ do: 'place', at: [{ x, y: ty, z }], block: 'torch', onFail: 'continue' }); }
+      const run = await act(`torches#${i / 6 + 1}`, hands.slice(0, 12), 60, { accept: ['blaze'] });
+      note(`torches#${i / 6 + 1} hp ${r1(hp())}: ${run.lines.join(' ').slice(0, 220)}`);
+    }
+    mark('torches done');
+  }
   let json = await readLane();
+  mark('probe read');
   if (!json?.found) { clearInterval(sampler); throw new Error(`no lane report: ${String(json?.text ?? '').slice(0, 200)}`); }
   const c = json.candidates[0], cells = json.cells as Array<[number, number, number, string | null, string]>, facts = json.facts as Array<[number, boolean | null, number, number, string, boolean]>;
   const spawnerCell = json.spawner as { x: number; y: number; z: number };
@@ -896,6 +933,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
     killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null };
 }
+scene('blaze_lane_fill_torch', 'the lane set with the fill hand after clearing away, torches first (a greedy cover of the box), timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, torches: true }));
 scene('blaze_lane_fill', 'the lane set with the fill hand after clearing away: the room fills 40 s, the body goes far off 150 s, comes back, probe lane, fill acts (12 groups each, health floor 10), then a 300 s hold', note => blazeLaneBuild(note, { away: true, fill: true }));
 scene('blaze_lane_build_away', 'the lane built after clearing away: the room fills for 40 s, the body goes to the Nether arrival for 150 s, comes back and builds from the probe, then a 300 s hold', note => blazeLaneBuild(note, { away: true }));
 scene('blaze_lane_build', 'the lane built by the scripted head from probe kind=lane with go and place hands while the blazes are alive, then a 300 s hold', note => blazeLaneBuild(note));
