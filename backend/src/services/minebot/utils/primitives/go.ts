@@ -316,7 +316,8 @@ export interface GoState {
 export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk' | 'maxDig' | 'maxPlace'>> & { sprint: boolean }, rule: DigRule, placeHeld: string[], state: GoState, relax: Relax = {}): any {
   const mayDigAny = rule.names.size > 0 || !!relax.permissions;
   const mayPlaceAny = placeHeld.length > 0 || !!relax.blocks || !!relax.permissions;
-  const movements = buildMovements(bot, false, args.sprint, true, true, mayDigAny, true, 1, false, args.waterOk, args.maxDrop, args.waterOk ? 4 : 10, mayPlaceAny, 2);
+  // (the library's exclusion lists are typed as one-element tuples; the rules below append to them)
+  const movements: any = buildMovements(bot, false, args.sprint, true, true, mayDigAny, true, 1, false, args.waterOk, args.maxDrop, args.waterOk ? 4 : 10, mayPlaceAny, 2);
   movements.maxDropDown = args.maxDrop + 1;
   movements.infiniteLiquidDropdownDistance = args.waterOk;
   installDoorRules(movements);
@@ -594,7 +595,7 @@ export function sealedGoalWords(bot: any, cell: Cell, range: number, rule: Pick<
   let count = 0;
   for (let dx = -radius; dx <= radius; dx++) for (let dy = -radius; dy <= radius; dy++) for (let dz = -radius; dz <= radius; dz++) {
     const candidate = { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz };
-    if (!goal.isEnd(new Vec3(candidate.x, candidate.y, candidate.z))) continue;
+    if (!goal.isEnd(new Vec3(candidate.x, candidate.y, candidate.z) as any)) continue;
     if (!sealedAtWords(bot, candidate, rule, false, allowWater)) return null;
     count++;
   }
