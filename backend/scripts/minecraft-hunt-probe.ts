@@ -705,7 +705,7 @@ async function blazeLane(note: (text: string) => void, options: { seconds?: numb
 async function blazeLight(note: (text: string) => void, options: { lit: boolean; seconds?: number; torchSpacing?: number }): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
   if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
-  const seconds = options.seconds ?? 180;
+  const seconds = options.seconds ?? (options.torchSpacing ? 60 : 180);
   await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
   await equip({ stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
