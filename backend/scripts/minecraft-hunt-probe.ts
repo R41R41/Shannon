@@ -826,6 +826,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
       for (let gi = 0; gi < arg.length && !disconnected && hp() > 0 && deaths === deaths0; gi += 12) {
         if (hp() < 6) { aborted = `hp ${r1(hp())} at pass ${pass} group ${gi}/${arg.length}`; break; }
         await sleep(thinkMs);
+        { const r = retreatNow(); const nm = (dy: number) => actor.blockAt(new Vec3(r.x, r.y + dy, r.z))?.name; note(`fill retreat cell ${r.x},${r.y},${r.z}: under ${nm(-1)} / feet ${nm(0)} / head ${nm(1)}; first stand ${JSON.stringify(arg[gi]?.stand)}`); }
         const run = await act(`fill#${++acts}`, [{ do: 'fill', block: 'cobblestone', groups: arg.slice(gi, gi + 12), retreatHp: 10, retreatTo: retreatNow(), seconds: 60 }], 90, { accept: ['blaze'] });
         const f = ((run.json?.lines ?? []) as any[]).map(line => line.fill).find(Boolean);
         built += Number(f?.placed ?? 0); failedCells += Array.isArray(f?.remaining) ? f.remaining.length : 0;
