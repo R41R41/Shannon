@@ -1069,12 +1069,16 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     && e.position.x + 0.3 > spawnerCell.x - 4 && e.position.x - 0.3 < spawnerCell.x + 5 && e.position.y + 1.8 > spawnerCell.y - 4 && e.position.y < spawnerCell.y + 5
     && e.position.z + 0.3 > spawnerCell.z - 4 && e.position.z - 0.3 < spawnerCell.z + 5).length;
   const burning = () => { const flags = (actor.entity as any)?.metadata?.[0]; return typeof flags === 'number' && (flags & 1) !== 0; };
-  let burnLoss = 0, hitLoss = 0, smallLoss = 0, burnSeconds = 0, lastHp = hp();
+  let burnLoss = 0, hitLoss = 0, smallLoss = 0, burnSeconds = 0, lastHp = hp(), hitCount = 0;
+  const shield0 = Number((actor.inventory?.slots?.[45] as any)?.durabilityUsed ?? 0), fireballIds = new Set<number>();
+  // (the blazes that see the body: the line from the blaze to the eye is clear)
+  const sightCount = () => { const eye = actor.entity.position.offset(0, 1.62, 0); let n = 0; for (const e of Object.values(actor.entities ?? {}) as any[]) { if (String(e?.name) !== 'blaze' || !e.position) continue; const v = e.position.offset(0, 0.9, 0).minus(eye), len = v.norm(); if (len > 48 || len < 0.1) continue; try { if (!(actor.world as any).raycast(eye, v.normalize(), len, (b: any) => b.boundingBox === 'block')) n++; } catch { /* unloaded */ } } return n; };
+  const fireballWatch = setInterval(() => { for (const e of Object.values(actor.entities ?? {}) as any[]) if (String(e?.name) === 'small_fireball' && e.position && e.position.distanceTo(actor.entity.position) < 24) fireballIds.add(e.id); }, 100);
   const lossWatch = setInterval(() => {
     const h = hp();
     if (!Number.isFinite(h)) return;
     if (burning()) burnSeconds += 0.25;
-    if (h < lastHp) { const drop = lastHp - h; if (drop > 1.25) hitLoss += drop; else if (burning()) burnLoss += drop; else smallLoss += drop; }
+    if (h < lastHp) { const drop = lastHp - h; if (drop > 1.25) { hitLoss += drop; hitCount++; } else if (burning()) burnLoss += drop; else smallLoss += drop; }
     lastHp = h;
   }, 250);
   try {
@@ -1090,8 +1094,8 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
           if (++climbs <= 5) note(`the body is at y ${r1(actor.entity.position.y)}, below the cover (y ${holdCell.y}): ${up.lines.join(' ').slice(0, 200)}`);
           continue;
         }
-        const count = boxCount(), afire = burning();
-        if (count === 0 || count > 4 || hp() < 14 || afire) {
+        const count = boxCount(), afire = burning(), sees = sightCount();
+        if (count === 0 || count > 4 || sees > 2 || hp() < 14 || afire) {
           // (the path search may run out of its 1.5 s slice on the way back: the same go is said again, up to four times, and the body rests only once it is in the cover)
           const atCover = () => actor.entity.position.distanceTo(new Vec3(holdCell.x + 0.5, holdCell.y, holdCell.z + 0.5)) < 1.5;
           if (!atCover()) {
@@ -1126,8 +1130,8 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
       if (/落とし物 blaze_rod/u.test(run.lines.join(' '))) await act('fetch', [{ do: 'pickup', range: 4, onFail: 'continue' }, { do: 'go', to: holdCell, range: 0.4, seconds: 8, onFail: 'continue' }], 30, { accept: ['blaze'] });
       if (n % 3 === 1) note(`hold#${n}: hp ${r1(hp())} kills ${killed} rods +${(packClient().blaze_rod ?? 0) - rods0}`);
     }
-  } finally { clearInterval(sampler); clearInterval(watch); clearInterval(lossWatch); actor.removeListener('entityDead', onDead); }
-  note(`health lost: ${r1(hitLoss)} in single drops over 1.25 (fireballs), ${r1(burnLoss)} while burning, ${r1(smallLoss)} other; burning ${r1(burnSeconds)} s; out ${outs} times, back ${retreats} times`);
+  } finally { clearInterval(sampler); clearInterval(watch); clearInterval(lossWatch); clearInterval(fireballWatch); actor.removeListener('entityDead', onDead); }
+  note(`health lost: ${r1(hitLoss)} in single drops over 1.25 (fireballs), ${r1(burnLoss)} while burning, ${r1(smallLoss)} other; burning ${r1(burnSeconds)} s; out ${outs} times, back ${retreats} times; fireballs seen ${fireballIds.size}, direct hits ${hitCount}, shield wear ${Number((actor.inventory?.slots?.[45] as any)?.durabilityUsed ?? 0) - shield0} (${r1((Number((actor.inventory?.slots?.[45] as any)?.durabilityUsed ?? 0) - shield0) / 6)} blocked)`);
   for (const line of watchReport()) note(`blaze watch ${line}`);
   return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
     killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null, shieldHits, woundsTaken: r1(woundsTaken), actsWithBlazeUnseen: unseenActs, holdActs: n, hitLoss: r1(hitLoss), burnLoss: r1(burnLoss), burnSeconds: r1(burnSeconds), outs, retreats };

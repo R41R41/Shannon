@@ -15,7 +15,7 @@ import { markHeadCombat } from '../combatOwner.js';
 import { bestMeleeWeapon } from '../floorReflexes.js';
 import { equipToHandVerified } from '../equipVerified.js';
 import { scanLoadedBlocks } from '../loadedBlockScan.js';
-import { HOVERING_SHOOTERS, ShooterWatch, StrikeGate, strikeHold } from '../huntBlaze.js';
+import { HOVERING_SHOOTERS, ShooterWatch, StrikeGate, chargeHold, strikeHold } from '../huntBlaze.js';
 import { isDragonTarget, strikeDragon } from './dragonStrike.js';
 import { endDragonOf } from '../dragonState.js';
 import { isCrystalTarget, strikeCrystal } from './crystalStrike.js';
@@ -301,7 +301,9 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
       const why = !!near && HOVERING_SHOOTERS.has(String(near.entity.name)) ? strikeHold(bot, watch, Date.now()) : null;
       const shotComing = why !== null && why.startsWith('火の玉');
       // (the gate's patience still bounds it: 1.5 s in all within each 8 s, so a stream of fireballs does not stop every blow)
-      const held = !!near && HOVERING_SHOOTERS.has(String(near.entity.name)) && !gate.may(Date.now(), shotComing || !raised ? why : null);
+      // (a blaze that sees the body has its flame on: no blow while it charges, only the shield; the gate's patience still bounds the wait)
+      const charging = !!near && HOVERING_SHOOTERS.has(String(near.entity.name)) ? chargeHold(watch, Date.now()) : null;
+      const held = !!near && HOVERING_SHOOTERS.has(String(near.entity.name)) && !gate.may(Date.now(), shotComing || !raised || charging ? (why ?? charging) : null);
       if (near && !held && Date.now() - lastSwing >= cooldownMs(bot.heldItem?.name)) {
         raise();
         try { await bot.lookAt(near.entity.position.offset(0, (near.entity.height ?? 1.8) * 0.6, 0), true); } catch { /* looked */ }
