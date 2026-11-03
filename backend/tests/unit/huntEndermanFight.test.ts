@@ -10,6 +10,7 @@ import { createMotorPort, executeAction } from '../../src/services/minebot/execu
 import { cooldownMs } from '../../src/services/minebot/utils/primitives/attack.js';
 import { installGazeGuard } from '../../src/services/minebot/utils/gazeGuard.js';
 import { ENDERMAN_EYE, looksAtEyes } from '../../src/services/minebot/utils/huntEnderman.js';
+import { endermanCampObservation } from '../../src/services/minebot/utils/huntEndermanCamp.js';
 
 // The enderman hunt on a practice field (S2, 2026-11-02): the body lays a 3x3 roof over itself, stares the enderman in the eye from under it (the gaze guard is let go
 // for the stare and put back), and strikes it from the hole while it stands at the roof's edge and cannot reach. The body is moved by the client physics; the world
@@ -25,12 +26,12 @@ const CREEPY = KEYS.indexOf('creepy'), STARED = KEYS.indexOf('stared_at');
 const itemOf = (name: string, count = 1, slot = 36) => ({ name, count, type: (mcData.itemsByName as any)[name]?.id ?? 9000, slot });
 const FLOOR = 64;
 
-interface Options { at: Vec3; angry?: boolean; walls?: Array<[number, number, number]>; blocks?: number; guard?: boolean; shield?: boolean; health?: number; pumpkin?: boolean }
+interface Options { at: Vec3; angry?: boolean; walls?: Array<[number, number, number]>; wallName?: string; blocks?: number; guard?: boolean; shield?: boolean; health?: number; pumpkin?: boolean }
 function makeField(options: Options) {
   const placed = new Map<string, string>();
   const fixed = new Set((options.walls ?? []).map(([x, y, z]) => `${x},${y},${z}`));
   const cache = new Map<string, any>();
-  const nameAt = (x: number, y: number, z: number) => y < FLOOR ? 'stone' : fixed.has(`${x},${y},${z}`) ? 'stone' : placed.get(`${x},${y},${z}`) ?? 'air';
+  const nameAt = (x: number, y: number, z: number) => y < FLOOR ? 'stone' : fixed.has(`${x},${y},${z}`) ? options.wallName ?? 'stone' : placed.get(`${x},${y},${z}`) ?? 'air';
   const getBlock = (position: Vec3) => {
     const x = Math.floor(position.x), y = Math.floor(position.y), z = Math.floor(position.z);
     const name = nameAt(x, y, z);
@@ -260,5 +261,81 @@ describe('fight an enderman from a roofed hole', () => {
     expect(field.stats.laid).toHaveLength(0);
     expect(lineOf(json)).toContain('屋根は既にある');
     expect(field.stats.hitsOnBot).toBe(0);
+    const camp = endermanCampObservation(field.bot)!;
+    expect(camp.afterBuild?.eyes.clear).toBe(true);
+    expect(camp.afterBuild?.feet.clear).toBe(true);
+    expect(camp.afterBuild?.approach.clear).toBe(true);
+    // The approaching enderman's head disappears above the roof edge; the lower-body gate keeps allowing blows.
+    expect(camp.latest?.eyes.clear).toBe(false);
+    expect(camp.latest?.feet.clear).toBe(true);
+    expect(field.stats.hits).toBeGreaterThan(0);
   }, 90_000);
+
+  it('a clear stare through a two-high passage is refused before provoking: the enderman has no approach', async () => {
+    const walls: Array<[number, number, number]> = [];
+    for (let x = -3; x <= 16; x++) for (const z of [-1, 1]) for (let y = FLOOR; y <= FLOOR + 4; y++) walls.push([x, y, z]);
+    walls.push([4, FLOOR + 2, 0]);
+    const field = makeField({ at: new Vec3(12.5, FLOOR, 0.5), walls });
+    try {
+      const { json } = await act(field, [{ do: 'fight', target: '#200', seconds: 30 }]);
+      expect(json.ok).toBe(false);
+      expect(lineOf(json)).toContain('呼べて打てる道が無い');
+      const camp = endermanCampObservation(field.bot)!;
+      expect(camp.afterBuild?.eyes.clear).toBe(true);
+      expect(camp.afterBuild?.feet.clear).toBe(true);
+      expect(camp.afterBuild?.approach.clear).toBe(false);
+      expect(field.stats.stareTicks).toBe(0);
+      expect(field.stats.swings).toBe(0);
+      expect(field.bot.gazeGuard.enabled).toBe(true);
+    } finally { field.stop(); }
+  }, 60_000);
+
+  it('walks one protected cell around its own support with real player physics, then provokes and kills the same #200', async () => {
+    const walls: Array<[number, number, number]> = [[1, FLOOR + 1, 0]];
+    for (let x = -1; x <= 1; x++) for (let z = -1; z <= 2; z++) walls.push([x, FLOOR + 2, z]);
+    const field = makeField({ at: new Vec3(12.5, FLOOR, 0.5), walls, wallName: 'cobblestone' });
+    const positions: Vec3[] = [];
+    const sample = () => { positions.push(field.bot.entity.position.clone()); };
+    field.bot.on('physicsTick', sample);
+    try {
+      const { json } = await act(field, [{ do: 'fight', target: '#200', seconds: 40 }]);
+      expect(json.ok).toBe(true);
+      const camp = endermanCampObservation(field.bot)!;
+      expect(camp.afterBuild?.eyes.clear).toBe(false);
+      expect(camp.recovery).toHaveLength(1);
+      expect(camp.recovery[0]).toMatchObject({ to: { x: 0, y: FLOOR, z: 1 }, result: 'arrived' });
+      expect(camp.targetId).toBe(200);
+      expect(field.stats.laid).toHaveLength(0);
+      expect(field.stats.hits).toBeGreaterThan(0);
+      expect(field.stats.hitsOnBot).toBe(0);
+      expect(field.stats.teleports).toBe(0);
+      expect(positions.length).toBeGreaterThan(0);
+      for (const p of positions) {
+        expect(Math.abs(p.x - 0.5)).toBeLessThan(0.2);
+        expect(p.z).toBeGreaterThanOrEqual(0.3);
+        expect(p.z).toBeLessThanOrEqual(1.7);
+        expect(Math.abs(p.y - FLOOR)).toBeLessThan(0.1);
+      }
+      expect(field.control.forward).toBe(false);
+      expect(field.control.sneak).toBe(false);
+    } finally { field.bot.removeListener('physicsTick', sample); field.stop(); }
+  }, 90_000);
+
+  it('a blocked lower-body ray prevents blows after anger, without switching from #200 to another enderman', async () => {
+    const walls: Array<[number, number, number]> = [[1, FLOOR + 1, 0]];
+    for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) walls.push([x, FLOOR + 2, z]);
+    const field = makeField({ at: new Vec3(2.5, FLOOR, 0.5), angry: true, walls });
+    field.bot.entities[201] = { ...field.mob, id: 201, position: new Vec3(-2.5, FLOOR, 0.5) };
+    try {
+      const { json } = await act(field, [{ do: 'fight', target: '#200', seconds: 20 }]);
+      expect(json.ok).toBe(false);
+      expect(lineOf(json)).toContain('足元');
+      expect(lineOf(json)).toContain('not_visible');
+      expect(lineOf(json)).toContain('#200');
+      expect(field.stats.swings).toBe(0);
+      expect(endermanCampObservation(field.bot)?.targetId).toBe(200);
+      expect(endermanCampObservation(field.bot)?.recovery).toHaveLength(0);
+      expect(field.stats.hitsOnBot).toBe(0);
+    } finally { field.stop(); }
+  }, 60_000);
 });

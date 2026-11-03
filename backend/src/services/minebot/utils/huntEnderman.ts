@@ -1,6 +1,8 @@
 import { Vec3 } from 'vec3';
 import { isAngry } from './hostileMobHints.js';
 import { BUILDING_BLOCKS } from '../instantSkills/buildAroundSelf.js';
+import { isOpenBlock, type BlockReader, type MapBlock } from './localMap.js';
+import { solidBetween } from './probeTools.js';
 
 /**
  * Fighting an enderman from a hole it cannot enter (S2, 2026-11-02).
@@ -22,6 +24,8 @@ import { BUILDING_BLOCKS } from '../instantSkills/buildAroundSelf.js';
 export const ENDERMAN_EYE = 2.55;
 /** The enderman's body is this tall: where fewer than three cells are free over a floor it cannot stand. */
 export const ENDERMAN_HEIGHT = 2.9;
+/** Aim below the roof after provoking; the eyes are deliberately not required for a blow. */
+export const ENDERMAN_FEET = 1.0;
 const HAND_REACH = 4.4;
 
 export type Cell3 = { x: number; y: number; z: number };
@@ -49,12 +53,20 @@ const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
  * the support column the first cap is set against. `toward` (the enderman's side) only decides which side the support column goes on (the far one: it blocks
  * the look). Every placement must be within the hand's reach of the eyes and have a standing block to be set against when its turn comes.
  */
-export function planRoof(world: RoofWorld, cell: Cell3, toward?: { x: number; z: number }): RoofPlan {
+export function planRoof(world: RoofWorld, cell: Cell3, toward?: { x: number; z: number }, target?: Cell3): RoofPlan {
   const problems: string[] = [];
   const plan = (placements: Cell3[], caps: number): RoofPlan => ({ cell, placements, caps, problems });
   const { x: cx, y: cy, z: cz } = cell;
   const eye = new Vec3(cx + 0.5, cy + 1.62, cz + 0.5);
   const body = new Set([key(cx, cy, cz), key(cx, cy + 1, cz)]);
+  // Supports must not fill either working ray. This is only a constraint on this roof, never a new target or site.
+  const workingLines = new Set<string>();
+  if (target) for (const up of [ENDERMAN_EYE, ENDERMAN_FEET]) {
+    const distance = Math.hypot(target.x - eye.x, target.y + up - eye.y, target.z - eye.z);
+    const steps = Math.ceil(distance / 0.05);
+    for (let i = 1; i < steps; i++) workingLines.add(key(Math.floor(eye.x + (target.x - eye.x) * i / steps),
+      Math.floor(eye.y + (target.y + up - eye.y) * i / steps), Math.floor(eye.z + (target.z - eye.z) * i / steps)));
+  }
   const solid = (x: number, y: number, z: number) => world.solid(x, y, z);
   for (const check of [[cx, cy - 1, cz, 'floor'], [cx, cy, cz, 'feet'], [cx, cy + 1, cz, 'head']] as const) {
     if (solid(check[0], check[1], check[2]) === null) { problems.push('周りが未ロード'); return plan([], 0); }
@@ -108,7 +120,7 @@ export function planRoof(world: RoofWorld, cell: Cell3, toward?: { x: number; z:
     const ready = [...targets.values()].filter(c => near(c.x, c.y, c.z) && hasSupport(c.x, c.y, c.z)).sort((a, b) => priority(a) - priority(b));
     if (ready.length) { lay(ready[0]); continue; }
     // A column of supports: breadth first over free cells (not the body's), from cells that have a standing block beside them to cells beside a target.
-    const free = (x: number, y: number, z: number) => !body.has(key(x, y, z)) && !standing(x, y, z) && solid(x, y, z) === false && world.replaceable(x, y, z)
+    const free = (x: number, y: number, z: number) => !body.has(key(x, y, z)) && !workingLines.has(key(x, y, z)) && !standing(x, y, z) && solid(x, y, z) === false && world.replaceable(x, y, z)
       && !targets.has(key(x, y, z)) && Math.abs(x - cx) <= 2 && Math.abs(z - cz) <= 2 && y >= cy - 1 && y <= cy + 3 && near(x, y, z);
     const beside = (x: number, y: number, z: number) => FACES.some(([a, b, c]) => targets.has(key(x + a, y + b, z + c)));
     const queue: Array<{ c: Cell3; path: Cell3[] }> = [];
@@ -135,6 +147,91 @@ export function planRoof(world: RoofWorld, cell: Cell3, toward?: { x: number; z:
   }
   if (targets.size) problems.push(`置けない屋根のマスが ${targets.size} ある（手が届かないか、当てる面が無い）`);
   return plan(order, caps.length);
+}
+
+export interface EndermanLine {
+  clear: boolean;
+  between: Array<{ at: Cell3; name: string }>;
+}
+export interface EndermanView {
+  eyes: EndermanLine;
+  feet: EndermanLine;
+  approach: { clear: boolean; contact: Cell3 | null; reason: string };
+}
+
+/** The same actual block observation used by the camp and the lab; unknown cells block both rays. */
+export function endermanLine(read: BlockReader, from: Cell3, target: Cell3, up: number): EndermanLine {
+  const between = solidBetween(read, [from.x, from.y + 1.62, from.z], [target.x, target.y + up, target.z]);
+  // solidBetween skips endpoint cells for block probes. Here both endpoints are in bodies, so unknown/solid endpoints cannot certify sight.
+  for (const p of [{ x: from.x, y: from.y + 1.62, z: from.z }, { x: target.x, y: target.y + up, z: target.z }]) {
+    const at = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }, b = read(at.x, at.y, at.z);
+    if ((!b || b.solid === true) && !between.some(c => c.x === at.x && c.y === at.y && c.z === at.z)) between.push(at);
+  }
+  return { clear: !between.length, between: between.map(at => ({ at, name: read(at.x, at.y, at.z)?.name ?? '未ロード' })) };
+}
+
+const CAMP_HAZARD = /^(lava|water|bubble_column|fire|soul_fire|magma_block|campfire|soul_campfire|cactus|sweet_berry_bush|wither_rose|powder_snow|cobweb|.*_portal|end_gateway)$/u;
+const fullFloor = (b: MapBlock | null) => !!b && b.solid === true && (b.top ?? 1) === 1 && !CAMP_HAZARD.test(b.name)
+  && !/slab|stairs|fence|wall|leaves/u.test(b.name);
+const freeCell = (b: MapBlock | null) => !!b && isOpenBlock(b) && !CAMP_HAZARD.test(b.name);
+
+/** A neighbouring cell is inside only if it has the same protection as the original centre. A bare 3x3 edge is NOT safe. */
+export function roofInterior(read: BlockReader, anchor: Cell3, at: Cell3): boolean {
+  if (at.y !== anchor.y || Math.abs(at.x - anchor.x) > 1 || Math.abs(at.z - anchor.z) > 1) return false;
+  if (!freeCell(read(at.x, at.y, at.z)) || !freeCell(read(at.x, at.y + 1, at.z))) return false;
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    const x = at.x + dx, z = at.z + dz;
+    if (!fullFloor(read(x, at.y - 1, z))) return false;
+    for (let dy = 0; dy <= 2; dy++) {
+      const b = read(x, at.y + dy, z);
+      if (!b || CAMP_HAZARD.test(b.name)) return false;
+    }
+    if (!fullFloor(read(x, at.y + 2, z)) && !(fullFloor(read(x, at.y, z)) && fullFloor(read(x, at.y + 1, z)))) return false;
+  }
+  return true;
+}
+
+/** Only a cardinal, level step within the already standing roof. No excavation, placement, jump or pathfinder detour. */
+export function roofInteriorStep(read: BlockReader, anchor: Cell3, from: Cell3, to: Cell3): boolean {
+  return from.y === to.y && Math.abs(from.x - to.x) + Math.abs(from.z - to.z) === 1
+    && roofInterior(read, anchor, from) && roofInterior(read, anchor, to);
+}
+
+/**
+ * Can this same enderman walk through known, dry three-high columns to a visible lower-body contact point?
+ * A bounded local search observes the route only: the body never walks it. One-block steps need headroom over both columns.
+ */
+export function endermanView(reader: BlockReader, from: Cell3, target: Cell3): EndermanView {
+  const cache = new Map<string, MapBlock | null>();
+  const read: BlockReader = (x, y, z) => {
+    const k = key(x, y, z);
+    if (!cache.has(k)) cache.set(k, reader(x, y, z));
+    return cache.get(k)!;
+  };
+  const eyes = endermanLine(read, from, target, ENDERMAN_EYE), feet = endermanLine(read, from, target, ENDERMAN_FEET);
+  const centre = (c: Cell3) => ({ x: c.x + 0.5, y: c.y, z: c.z + 0.5 });
+  const contact = (p: Cell3) => Math.hypot(Math.max(0, Math.abs(p.x - from.x) - 0.3),
+    p.y + ENDERMAN_FEET - (from.y + 1.62), Math.max(0, Math.abs(p.z - from.z) - 0.3)) <= 3
+    && endermanLine(read, from, p, ENDERMAN_FEET).clear;
+  if (contact(target)) return { eyes, feet, approach: { clear: true, contact: { ...target }, reason: '' } };
+  const start = { x: Math.floor(target.x), y: Math.floor(target.y), z: Math.floor(target.z) };
+  const fits = (c: Cell3) => fullFloor(read(c.x, c.y - 1, c.z)) && [0, 1, 2].every(dy => freeCell(read(c.x, c.y + dy, c.z)));
+  const queue: Cell3[] = fits(start) ? [start] : [], seen = new Set(queue.map(c => key(c.x, c.y, c.z)));
+  const minX = Math.min(start.x, Math.floor(from.x)) - 3, maxX = Math.max(start.x, Math.floor(from.x)) + 3;
+  const minZ = Math.min(start.z, Math.floor(from.z)) - 3, maxZ = Math.max(start.z, Math.floor(from.z)) + 3;
+  const minY = Math.min(start.y, Math.floor(from.y)) - 2, maxY = Math.max(start.y, Math.floor(from.y)) + 2;
+  for (let head = 0; head < queue.length && head < 1024; head++) {
+    const c = queue[head];
+    if (contact(centre(c))) return { eyes, feet, approach: { clear: true, contact: centre(c), reason: '' } };
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1, -1]) {
+      const p = { x: c.x + dx, y: c.y + dy, z: c.z + dz }, k = key(p.x, p.y, p.z);
+      if (seen.has(k) || p.x < minX || p.x > maxX || p.z < minZ || p.z > maxZ || p.y < minY || p.y > maxY) continue;
+      if (!fits(p)) continue;
+      if (dy && ![c, p].every(q => freeCell(read(q.x, Math.max(c.y, p.y) + 2, q.z)))) continue;
+      if (queue.length < 1024) { seen.add(k); queue.push(p); }
+    }
+  }
+  return { eyes, feet, approach: { clear: false, contact: null, reason: '既知の床と3マスの高さで打撃位置まで通る道を確認できない（局所1024マスまで）' } };
 }
 
 export interface RoofSite { cell: Cell3; /** Blocks the plan lays. */ blocks: number; /** Horizontal distance from where the body stands. */ distance: number }

@@ -1,6 +1,7 @@
 import { Vec3 } from 'vec3';
 import { describe, expect, it } from 'vitest';
-import { ENDERMAN_EYE, looksAtEyes, planRoof, roofBlockFor, roofSites, type Cell3, type RoofPlan, type RoofWorld } from '../../src/services/minebot/utils/huntEnderman.js';
+import { ENDERMAN_EYE, ENDERMAN_FEET, endermanLine, endermanView, looksAtEyes, planRoof, roofBlockFor, roofSites, type Cell3, type RoofPlan, type RoofWorld } from '../../src/services/minebot/utils/huntEnderman.js';
+import type { BlockReader } from '../../src/services/minebot/utils/localMap.js';
 
 // The roof over an enderman hunt (S2, 2026-11-02): a plan that leaves no cell round the body where an enderman (2.9 tall, 0.6 wide) can stand lower than the roof
 // and reach the body, with every block laid against one already standing.
@@ -184,5 +185,58 @@ describe('roofSites: a cell where the roof can be made, on ground where the body
     expect(roofSites(nothing, { x: 0, y: 0, z: 0 }, 5)).toEqual([]);
     const w = world();
     expect(roofSites(w, { x: 0, y: 0, z: 0 }, 3, undefined, 400).every(site => site.distance <= 3)).toBe(true);
+  });
+});
+
+describe('the working lines after the roof is placed', () => {
+  const from = { x: 0.5, y: 0, z: 0.5 };
+  const roofRead = (blocks: Record<string, string> = {}): BlockReader => (x, y, z) => {
+    const name = blocks[key(x, y, z)] ?? (y < 0 ? 'stone' : y === 2 && Math.abs(x) <= 1 && Math.abs(z) <= 1 ? 'cobblestone' : 'air');
+    return { name, solid: !['air', 'fire', 'lava'].includes(name) };
+  };
+
+  it('a close enderman has its eyes hidden by the roof but its lower body is clear and within striking distance', () => {
+    const target = { x: 2.5, y: 0, z: 0.5 }, view = endermanView(roofRead(), from, target);
+    expect(view.eyes.clear).toBe(false);
+    expect(view.eyes.between[0].name).toBe('cobblestone');
+    expect(view.feet.clear).toBe(true);
+    expect(view.approach.clear).toBe(true);
+  });
+
+  it('a clear eye ray does not prove an approach: a two-high passage has no route for a three-high enderman', () => {
+    const read: BlockReader = (x, y, z) => {
+      // A narrow corridor, two high across x=3: both rays fit, the enderman does not.
+      const solid = y < 0 || Math.abs(z) >= 1 || (x === 3 && y >= 2);
+      return { name: solid ? 'stone' : 'air', solid };
+    };
+    const view = endermanView(read, from, { x: 10.5, y: 0, z: 0.5 });
+    expect(view.eyes.clear).toBe(true);
+    expect(view.feet.clear).toBe(true);
+    expect(view.approach.clear).toBe(false);
+  });
+
+  it('a nearby warped stem and an unloaded cell block the whole ray, including the first two metres', () => {
+    for (const name of ['warped_stem', 'unloaded']) {
+      const base = roofRead();
+      const read: BlockReader = (x, y, z) => x === 1 && y === 1 && z === 0 ? name === 'unloaded' ? null : { name, solid: true } : base(x, y, z);
+      const view = endermanView(read, from, { x: 12.5, y: 0, z: 0.5 });
+      expect(view.eyes.clear).toBe(false);
+      expect(view.feet.clear).toBe(false);
+      expect(view.eyes.between[0].name).toBe(name === 'unloaded' ? '未ロード' : name);
+    }
+  });
+
+  it('the support plan leaves both rays clear even when the preferred support side faces the elevated target', () => {
+    const base = world(), target = { x: 12.5, y: 1, z: 0.5 };
+    const plan = planRoof(base, { x: 0, y: 0, z: 0 }, { x: -1, z: 0 }, target);
+    expect(plan.problems).toEqual([]);
+    check(base, plan);
+    const laid = new Set(plan.placements.map(c => key(c.x, c.y, c.z)));
+    const read: BlockReader = (x, y, z) => {
+      const solid = laid.has(key(x, y, z)) || base.solid(x, y, z) === true;
+      return { name: solid ? 'cobblestone' : 'air', solid };
+    };
+    expect(endermanLine(read, from, target, ENDERMAN_EYE).clear).toBe(true);
+    expect(endermanLine(read, from, target, ENDERMAN_FEET).clear).toBe(true);
   });
 });

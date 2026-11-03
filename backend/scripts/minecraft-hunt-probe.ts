@@ -20,6 +20,8 @@ import { madeStamp } from './lab/madeStamp.js';
 import { blackBoxOf } from '../src/services/minebot/utils/blackbox.js';
 import { exposureFromSpawner, hideoutsFrom, campSite } from '../src/services/minebot/utils/huntCamp.js';
 import { bodyReader } from '../src/services/minebot/utils/localMap.js';
+import { clearEndermanCampObservation, endermanCampObservation } from '../src/services/minebot/utils/huntEndermanCamp.js';
+import { ENDERMAN_EYE, endermanLine } from '../src/services/minebot/utils/huntEnderman.js';
 
 const port = Number(process.env.MINECRAFT_HUNT_PORT);
 const worldDirectory = process.env.MINECRAFT_HUNT_WORLD_DIRECTORY ?? '';
@@ -113,7 +115,7 @@ async function runSkill(skill: string, args: Record<string, unknown>, seconds: n
 async function act(label: string, hands: unknown[], seconds: number, extra: Record<string, unknown> = {}): Promise<ActRun> {
   const before = packClient();
   const { receipt, parsed, wallMs, error } = await runSkill('act', { hands, ...extra }, seconds);
-  const lines: string[] = Array.isArray(parsed?.lines) ? parsed.lines.map((line: any) => `${line.i}.${line.do} ${line.status}: ${String(line.line).slice(0, 400)}`) : [];
+  const lines: string[] = Array.isArray(parsed?.lines) ? parsed.lines.map((line: any) => `${line.i}.${line.do} ${line.status}: ${String(line.line)}`) : [];
   const run: ActRun = { label, ok: parsed ? parsed.ok === true : receipt?.outcome === 'completed', wallMs, actMs: typeof parsed?.ms === 'number' ? parsed.ms : null, lines, json: parsed,
     stoppedBy: parsed?.stoppedBy, stoppedWhy: parsed?.stoppedWhy, hp: Number.isFinite(Number(actor.health)) ? r1(Number(actor.health)) : null, pack: delta(before, packClient()), ...(error ? { error } : {}) };
   log(`ACT ${label} ${run.ok ? 'ok' : 'NO'} ${(wallMs / 1000).toFixed(1)}s hp ${run.hp} ${run.stoppedBy ? `stoppedBy ${run.stoppedBy} ${String(run.stoppedWhy ?? '').slice(0, 80)} ` : ''}${lines.map(line => line.slice(0, 200)).join(' | ')}${error ? ` ERROR ${error}` : ''}`);
@@ -1172,15 +1174,9 @@ async function endermanHunt(where: 'platform' | 'warped', note: (text: string) =
       }
       return best;
     };
-    // The planner hunts the ones it can see: the eye's line from the body to the enderman's eyes (2.55 over its feet) is clear of solid blocks (the first two metres, where the roof will be, are not counted).
+    // Use the body's entire eye ray, including the nearby trees and the roof left by the previous attempt.
     const seenFromBody = (gx: number, gy: number, gz: number): boolean => {
-      const from = actor.entity.position.offset(0, 1.62, 0), to = new Vec3(gx + 0.5, gy + 2.55, gz + 0.5), length = from.distanceTo(to), steps = Math.ceil(length / 0.4);
-      for (let k = 1; k < steps; k++) {
-        if (k * 0.4 < 2) continue;
-        const point = from.plus(to.minus(from).scaled(k / steps)), block = actor.blockAt(point);
-        if (!block || block.boundingBox === 'block') return false;
-      }
-      return true;
+      return endermanLine(bodyReader(actor), actor.entity.position, { x: gx + 0.5, y: gy, z: gz + 0.5 }, ENDERMAN_EYE).clear;
     };
     let spot: { x: number; z: number; y: number } | null = null;
     if (where === 'warped') {
@@ -1189,29 +1185,42 @@ async function endermanHunt(where: 'platform' | 'warped', note: (text: string) =
         const gx = stand[0] + Math.round(Math.cos(a) * d), gz = stand[2] + Math.round(Math.sin(a) * d), gy = groundAt(gx, gz);
         if (gy !== null && seenFromBody(gx, gy, gz)) spot = { x: gx, z: gz, y: gy };
       }
-      if (!spot) { note(`no open ground in the body's sight at 13 to 20 blocks round ${stand[0]},${stand[2]} (36 tries): enderman ${i + 1} is skipped`); continue; }
+      if (!spot) {
+        const reason = `no open ground in the body's sight at 13 to 20 blocks round ${stand[0]},${stand[2]} (36 tries): enderman ${i + 1} is skipped`;
+        note(reason);
+        rows.push({ i: i + 1, skipped: true, spot: null, enderman: null, targetId: null, roofPosition: null, eyeLine: null, feetLine: null,
+          line: reason, stoppedWhy: reason, stoppedBy: 'skipped', ok: false, killed: false });
+        continue;
+      }
     } else {
       for (const [jx, jz] of [[0, 0], [2, 0], [0, 2], [-2, 0], [0, -2]] as Array<[number, number]>) {
         const found = groundAt(ex + jx, ez + jz);
         if (found !== null) { spot = { x: ex + jx, z: ez + jz, y: found }; break; }
       }
     }
-    await ask(`execute in minecraft:the_nether run summon minecraft:enderman ${(spot?.x ?? ex) + 0.5} ${spot?.y ?? y + 1} ${(spot?.z ?? ez) + 0.5}`);
+    const spawn = { x: (spot?.x ?? ex) + 0.5, y: spot?.y ?? y + 1, z: (spot?.z ?? ez) + 0.5 };
+    await ask(`execute in minecraft:the_nether run summon minecraft:enderman ${spawn.x} ${spawn.y} ${spawn.z}`);
     await sleep(1500);
     const pearlsBefore = await countServer('ender_pearl'), blocksBefore = await countServer('cobblestone');
     const hpBefore = Number(actor.health);
+    clearEndermanCampObservation(actor);
     const run = await act(`enderman#${i + 1}`, [{ do: 'fight', target: 'enderman', seconds: 50, retreatHp: 8 }, { do: 'pickup', range: 6 }], 90);
+    const camp = endermanCampObservation(actor);
     const pearlsAfter = await countServer('ender_pearl'), blocksAfter = await countServer('cobblestone');
     const line = run.lines[0] ?? '';
     const killed = /死んだ/u.test(line);
     if (killed) kills++;
     pearls += pearlsAfter - pearlsBefore; laidTotal += Math.max(0, blocksBefore - blocksAfter);
-    rows.push({ i: i + 1, enderman: [ex, ez], ok: run.ok, killed, seconds: r1(run.wallMs / 1000), hpLost: r1(Math.max(0, hpBefore - Number(actor.health))), cobblestoneUsed: blocksBefore - blocksAfter, pearlDelta: pearlsAfter - pearlsBefore,
-      line: line.slice(0, 260), stoppedBy: run.stoppedBy });
+    rows.push({ i: i + 1, skipped: false, spot: spawn, enderman: [spawn.x, spawn.z], targetId: camp?.targetId ?? null,
+      roofPosition: camp?.afterBuild?.position ?? null, eyeLine: camp?.afterBuild?.eyes ?? null, feetLine: camp?.afterBuild?.feet ?? null,
+      approach: camp?.afterBuild?.approach ?? null, camp,
+      ok: run.ok, killed, seconds: r1(run.wallMs / 1000), hpLost: r1(Math.max(0, hpBefore - Number(actor.health))), cobblestoneUsed: blocksBefore - blocksAfter, pearlDelta: pearlsAfter - pearlsBefore,
+      line, lines: run.lines, stoppedBy: run.stoppedBy, stoppedWhy: run.stoppedWhy ?? run.error ?? null });
     await ask('execute in minecraft:the_nether run kill @e[type=minecraft:enderman]');
     // the roof is left standing; the next enderman is fought from the same hole when the body is still in it
   }
-  return { where, endermen: rows.length, kills, pearls, blocksLaid: laidTotal, rows, finalHp: actor.health };
+  const skipped = rows.filter(row => row.skipped === true).length;
+  return { where, attempts: rows.length, skipped, endermen: rows.length - skipped, kills, pearls, blocksLaid: laidTotal, rows, finalHp: actor.health };
 }
 scene('ender_platform', 'enderman: a flat plate in the Nether, four endermen 13 to 19 blocks off', note => endermanHunt('platform', note));
 scene('ender_warped', 'enderman: the warped forest itself, four endermen', note => endermanHunt('warped', note));
