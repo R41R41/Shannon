@@ -801,6 +801,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const spawnerCell = json.spawner as { x: number; y: number; z: number };
   const wait = cells[c.waiting[0]];
   note(`probe text: ${String(json.text ?? '').slice(0, 700)}`);
+  note(`probe text tail: ${String(json.text ?? '').slice(700, 1500)}; stand cells in the plan: ${(c.build as any[]).filter(row => row[4] !== null && row[4] !== undefined).length} of ${c.build.length}; groups ${new Set((c.build as any[]).map(row => row[5])).size}`);
   note(`lane candidate ${c.direction}: required ${JSON.stringify(c.required)}; waiting cell ${wait.slice(0, 3)}; ${c.build.length} placements; spawn spaces ${json.spawn?.spaces}; blazes in the count box ${json.blaze?.count}`);
   // the probe's own order and groups (each placement: the cell, its part, the cell to stand in and the number of its group)
   const placementsOf = (cand: any, table: any[], factTable: any[]) => (cand.build as Array<[number, number, number | null, number, number | null, number | null]>)
