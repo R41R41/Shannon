@@ -1293,18 +1293,18 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
             return null;
           };
           const hops: Array<{ x: number; y: number; z: number }> = [];
-          for (let k = 0; k < 8; k++) {
-            const heading = ((hopCount + k) % 8) * 45 * Math.PI / 180;
-            const gx = base.x + Math.round(Math.cos(heading) * 14), gz = base.z + Math.round(Math.sin(heading) * 14);
-            if (Math.hypot(gx - stand[0], gz - stand[2]) > 90 || visited.has(`${gx},${gz}`)) continue;
+          for (let ring = 1; ring <= 6 && !hops.length; ring++) for (let k = 0; k < 8 && !hops.length; k++) {
+            const heading = ((hopCount + k) % 8) * 45 * Math.PI / 180, radius = ring * 14;
+            const gx = stand[0] + Math.round(Math.cos(heading) * radius), gz = stand[2] + Math.round(Math.sin(heading) * radius);
+            if (visited.has(`${gx},${gz}`)) continue;
             const gy = ground(gx, gz);
-            if (gy !== null) hops.push({ x: gx, y: gy, z: gz });
+            if (gy !== null) hops.push({ x: gx, y: gy, z: gz }); else visited.add(`${gx},${gz}`);
           }
           hopCount++;
           const move = hops[0];
-          if (move && remaining() >= 12_000) {
+          if (move && remaining() >= 20_000) {
             const to = { x: move.x, y: move.y, z: move.z }; visited.add(`${move.x},${move.z}`);
-            const run = await act(`den-search#${row.i}`, [{ do: 'go', to, range: 1, maxDig: 0, maxPlace: 0, maxDrop: 3, waterOk: false, seconds: 12 }], Math.min(14, remaining() / 1000 - 0.5));
+            const run = await act(`den-search#${row.i}`, [{ do: 'go', to, range: 2, maxDig: 0, maxPlace: 8, canPlace: ['cobblestone'], maxDrop: 5, waterOk: false, seconds: 20 }], Math.min(22, remaining() / 1000 - 0.5));
             row.walk = { to, ok: run.ok, lines: run.lines };
           }
           row.waitSeconds = r1(await pause(1_000) / 1000); finishRow('no_site'); continue;
