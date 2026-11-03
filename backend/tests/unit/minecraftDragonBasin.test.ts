@@ -7,11 +7,9 @@ import { boxDistance, partBox } from '../../src/services/minebot/utils/dragonPar
 import { dragonHazards } from '../../src/services/minebot/utils/dragonDanger.js';
 import { goWalkRouteChecker } from '../../src/services/minebot/utils/primitives/go.js';
 
-// The low ring at the foot of the fountain (feet at y 64, under the sitting dragon's wing zone) and, for the walking-step tests, ground one block higher (feet at 65, inside it).
-const island: Ground = (_x, y, _z) => y === 63 ? 'end_stone' : 'air';
-const islandHigh: Ground = (_x, y, _z) => y === 64 ? 'end_stone' : 'air';
+const island: Ground = (_x, y, _z) => y === 64 ? 'end_stone' : 'air';
 function fixture(terrain: Ground = island, yaw = 0) {
-  const s = makeSim(terrain, { start: [12.5, 64, 0.5] });
+  const s = makeSim(terrain, { start: [12.5, 65, 0.5] });
   s.bot.game.dimension = 'minecraft:the_end';
   const metadata: unknown[] = []; metadata[16] = 6; metadata[9] = 200;
   const d = { id: 100, name: 'ender_dragon', position: new Vec3(0.5, 68, 0.5), yaw, metadata };
@@ -31,14 +29,14 @@ describe('observed basin footing and go entry', () => {
   it.each([0, Math.PI / 2, Math.PI, -Math.PI / 2])('prefers lateral footing and measures the actual walk and nearest part (yaw %s)', yaw => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
     const s = fixture(island, yaw);
-    s.bot.entity.position = new Vec3(0.5 + Math.cos(yaw) * 12, 64, 0.5 - Math.sin(yaw) * 12);
+    s.bot.entity.position = new Vec3(0.5 + Math.cos(yaw) * 12, 65, 0.5 - Math.sin(yaw) * 12);
     const basin = hints(s)?.basin!;
     expect(basin).toHaveLength(3);
     for (const p of basin) {
       expect(Math.hypot(p.x - 0.5, p.z - 0.5)).toBeGreaterThanOrEqual(2);
       expect(Math.hypot(p.x - 0.5, p.z - 0.5)).toBeLessThanOrEqual(3.2);
       expect(p.side).toBeCloseTo(0);
-      expect(p.inWingPush).toBe(false); expect(p.inBreathNow).toBe(false);
+      expect(p.inWingPush).toBe(true); expect(p.inBreathNow).toBe(false);
       expect(p.walkMeters).toBeGreaterThanOrEqual(Math.hypot(p.x - s.bot.entity.position.x, p.z - s.bot.entity.position.z));
       expect(p.walkSeconds).toBeCloseTo(p.walkMeters / 4.317);
       const reach = Math.min(...(['head', 'neck', 'body', 'wing1', 'wing2'] as const).map(part => boxDistance({ ...p, y: p.y + 1.62 }, partBox(s.d, part))));
@@ -51,11 +49,11 @@ describe('observed basin footing and go entry', () => {
   it('excludes the front in the forecast breath disc and reports the rear with a negative side', () => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
     const s = fixture((x, y, z) => Math.abs(x) <= 1 && z >= -15 && z <= 12 ? island(x, y, z) : 'air');
-    s.bot.entity.position = new Vec3(0.5, 64, -11.5);
+    s.bot.entity.position = new Vec3(0.5, 65, -11.5);
     const basin = hints(s)?.basin!;
     expect(basin.length).toBeGreaterThan(0);
     expect(basin.every(p => p.z < 0.5 && p.side < -0.8)).toBe(true);
-    expect(perchClearance(s.bot, s.d, 0, false)({ x: 0.5, y: 64, z: 3.5 })).toBe(false);
+    expect(perchClearance(s.bot, s.d, 0, false)({ x: 0.5, y: 65, z: 3.5 })).toBe(false);
   });
 
   it('invalidates cached routes when the same cloud moves, and excludes footing in it', () => {
@@ -78,10 +76,9 @@ describe('observed basin footing and go entry', () => {
 
   it('offers a one-level rise only when go can really jump up it', () => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
-    const s = fixture(islandHigh); s.world.set(3, 65, 0, 'end_stone');
-    // that footing (feet at 66) lies inside the wing's push zone: it is not offered, whatever go could do
+    const s = fixture(); s.world.set(3, 65, 0, 'end_stone');
     const p = hints(s)?.basin?.find(p => p.x === 3.5 && p.z === 0.5);
-    expect(p).toBeUndefined();
+    expect(p?.y).toBe(66);
     expect(goWalkRouteChecker(s.bot)([{ x: 4, y: 65, z: 0 }, { x: 3, y: 66, z: 0 }])).toBe(true);
   });
 
@@ -118,17 +115,17 @@ describe('observed basin footing and go entry', () => {
     expect(time).toBeLessThanOrEqual(130);
   });
 
-  it.each([5, 6, 7])('allows the wing-only walking step at phase %s while the unchanged reflex still sees wing push', phase => {
-    const s = fixture(islandHigh); s.d.metadata[16] = phase;
+  it.each([5, 6, 7])('allows the wing-only walking step at phase %s, and the reflex no longer counts sitting wings as a danger', phase => {
+    const s = fixture(); s.d.metadata[16] = phase;
     const p = { x: 9.5, y: 65, z: 0.5 };
     expect(approachClear(s.bot, s.d, p)).toBe(false);
     expect(goWalkRouteChecker(s.bot)([{ x: 10, y: 65, z: 0 }, { x: 9, y: 65, z: 0 }])).toBe(true);
     s.bot.entity.position = new Vec3(p.x, p.y, p.z);
-    expect(dragonHazards(s.bot).map(h => h.kind)).toContain('wing');
+    expect(dragonHazards(s.bot).map(h => h.kind)).not.toContain('wing');
   });
 
   it.each([3, 4])('preserves go\'s existing non-perched phase gate at phase %s', phase => {
-    const s = fixture(islandHigh); s.d.metadata[16] = phase;
+    const s = fixture(); s.d.metadata[16] = phase;
     expect(goWalkRouteChecker(s.bot)([{ x: 10, y: 65, z: 0 }, { x: 9, y: 65, z: 0 }])).toBe(true);
   });
 

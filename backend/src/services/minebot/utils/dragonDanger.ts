@@ -140,10 +140,8 @@ export function dragonHazards(bot: any, options: { clearance?: number; now?: num
         const zone = inflate(partBox(placed, part), grown);
         if (bodies.some(me => boxesOverlap(zone, me))) out.push({ kind: part, centre: boxCentre(partBox(placed, part)), radius: 0, box: zone, why: `竜の${part === 'head' ? '頭' : '首'}の1マス内` });
       }
-      for (const part of ['wing1', 'wing2'] as const) {
-        const zone = inflate(shift(inflate(partBox(placed, part), 4, 2, 4), 0, -2, 0), BOX_MARGIN + clearance);
-        if (bodies.some(me => boxesOverlap(zone, me))) out.push({ kind: 'wing', centre: boxCentre(partBox(placed, part)), radius: 0, box: zone, why: '竜の翼の4マス内（押される）' });
-      }
+      // The wings (a push within (4, 2, 4)) are not a danger while the dragon sits: lab r105, r108, r109 and the basin runs took the push 20+ times at the perch with no damage, and the body stood in the zone
+      // to strike (the sit is where the sword reaches). In flight, landing and take-off the wings are not looked at here either way (the perch block is only phases 5 to 7), so only the sitting case is changed.
     }
   }
   // 3. a fireball's line, 40 ticks ahead; and the breath that a fireball gone from sight is laying where it came down

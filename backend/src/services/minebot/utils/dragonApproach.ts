@@ -125,8 +125,6 @@ function basinPositions(bot: any, dragon: any, perch: P3, scanDeadline: number, 
     if (performance.now() >= deadline) return undefined;
     const p = feetCentre(node.cell), dx = p.x - perch.x, dz = p.z - perch.z, r = Math.hypot(dx, dz);
     if (r < 2 || r > 3.2 || !safe(p)) continue;
-    // A cell inside a wing's push zone is not offered: the push there threw the body 20 blocks up in lab r115/r116 (the wing reflex is what keeps it out of the zone); the sitting dragon's zone leaves the low ring (feet at the foot of the fountain) free.
-    if (wings.some(box => boxesOverlap(bodyBoxAt(p), box))) continue;
     candidates.push({ node, p, side: (dx * facing.x + dz * facing.z) / r });
   }
   candidates.sort((a, b) => Math.abs(a.side) - Math.abs(b.side) || a.node.walkMeters - b.node.walkMeters);
