@@ -1092,7 +1092,16 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
         }
         const count = boxCount(), afire = burning();
         if (count === 0 || count > 4 || hp() < 14 || afire) {
-          if (atAttack()) { const back = await act('back to the cover', [{ do: 'go', to: holdCell, range: 0.5, seconds: 12, onFail: 'continue' }], 25, { accept: ['blaze'] }); retreats++; if (retreats <= 8) note(`back to the cover #${retreats} (box count ${count}, hp ${r1(hp())}, ${afire ? 'on fire' : 'not on fire'}): ${back.lines.join(' ').slice(0, 120)}`); }
+          // (the path search may run out of its 1.5 s slice on the way back: the same go is said again, up to four times, and the body rests only once it is in the cover)
+          const atCover = () => actor.entity.position.distanceTo(new Vec3(holdCell.x + 0.5, holdCell.y, holdCell.z + 0.5)) < 1.5;
+          if (!atCover()) {
+            retreats++;
+            for (let tryNo = 1; tryNo <= 4 && !atCover() && !disconnected && hp() > 0; tryNo++) {
+              const back = await act('back to the cover', [{ do: 'go', to: holdCell, range: 0.5, seconds: 12, onFail: 'continue' }], 25, { accept: ['blaze'] });
+              if (retreats <= 8 || tryNo > 1) note(`back to the cover #${retreats}.${tryNo} (box count ${count}, hp ${r1(hp())}, ${afire ? 'on fire' : 'not on fire'}): ${back.lines.join(' ').slice(0, 120)}`);
+            }
+            if (!atCover()) continue;
+          }
           if (hp() < 18) {
             for (let w = 0; w < 6 && hp() < 18 && !disconnected && hp() > 0; w++) { if (Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15); await act('rest', [{ do: 'wait', seconds: 5 }], 15, { accept: ['blaze'] }); }
             note(`rested in the cover: hp ${r1(hp())}`);
