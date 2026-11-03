@@ -7,6 +7,13 @@ export type ChainView = EndObservation | null;
 export type ChainCrystal = EndObservation['crystals']['list'][number];
 export const CHAIN_LIMIT_MS = 40 * 60_000;
 export const CRYSTAL_LIMIT_MS = 15 * 60_000;
+export const CRYSTAL_WAIT_MS = 20_000;
+/** Lab HEAD: do not send a reflex-cut island walk back out at ten health or less. */
+export function chainWalkRetry(result: { lines: string[]; parsed?: any }, retries: number, health: number): boolean {
+  const cut = result.parsed?.outcome?.cutBy ?? result.parsed?.stoppedBy;
+  return retries < 2 && Number.isFinite(health) && health > 10 &&
+    (['reflex', 'interrupted_by_reflex'].includes(cut) || result.lines.some(s => /反射:|interrupted_by_reflex/u.test(s)));
+}
 export const chainCell = (p: P3): P3 => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
 export const chainDistance = (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 export const chainSitting = (phase: number | null | undefined) => phase === 5 || phase === 6 || phase === 7;
@@ -82,16 +89,28 @@ export function chainDragonRush(before: DragonMotionSample | null, now: DragonMo
 export function chainCrystal(view: ChainView, order: 'near' | 'far' = 'near'): ChainCrystal | null {
   return [...(view?.crystals.list ?? [])].sort((a, b) => (order === 'near' ? 1 : -1) * (a.distance - b.distance) || a.id - b.id)[0] ?? null;
 }
-/** Preserve the body's candidate order; never turn a hypothetical cage opening into an ordinary opening. */
+/** Lab HEAD: favour a shared standing point, then the body's shorter WALK distance (not crystal distance).
+ * Keep the selected set in the scene until its observed targets are finished; these are offers, not guaranteed hits. */
+export function chainShootSet(view: ChainView, target?: number): NonNullable<EndObservation['crystals']['shootSets']>[number] | null {
+  const live = view?.crystals.list.filter(c => c.caged === false) ?? [];
+  return (view?.crystals.shootSets ?? []).map(s => ({ ...s, crystals: [...new Set(s.crystals)].filter(id => {
+    const c = live.find(c => c.id === id);
+    return !!c && chainDistance(s.at, c.position) >= 13 && chainDistance(s.at, c.position) <= 64;
+  }) })).filter(s => s.crystals.length && Number.isFinite(s.walkMeters) && (target === undefined || s.crystals.includes(target)))
+    .sort((a, b) => Number(b.crystals.length > 1) - Number(a.crystals.length > 1) ||
+      a.walkMeters - b.walkMeters || b.crystals.length - a.crystals.length)[0] ?? null;
+}
+/** Prefer observed shootSets by walk distance; never turn a hypothetical cage opening into an ordinary opening. */
 export function chainShot(view: ChainView, crystal: ChainCrystal, cageOpened = false, tried: readonly P3[] = []): P3 | null {
   const opening = view?.crystals.openings?.find(o => o.id === crystal.id);
   const candidates = cageOpened ? [...(opening?.afterCageRemoved ?? []), ...(opening?.positions ?? [])] : crystal.caged === false ?
-    [...(view?.crystals.shootSets ?? []).filter(s => s.crystals.includes(crystal.id)).map(s => s.at), ...(opening?.positions ?? [])] : [];
+    [...(view?.crystals.shootSets ?? []).filter(s => s.crystals.includes(crystal.id)).sort((a, b) => a.walkMeters - b.walkMeters).map(s => s.at), ...(opening?.positions ?? [])] : [];
   return candidates.find(p => chainDistance(p, crystal.position) >= 13 && chainDistance(p, crystal.position) <= 64 &&
     !tried.some(q => chainDistance(p, q) < 0.1)) ?? null;
 }
 /** All physical work still belongs to existing hands, including route search and the live shot refusal. */
 export const chainHands = {
+  shield: (): ActHand => ({ do: 'equip', item: 'shield', slot: 'offhand' }),
   go: (to: P3, seconds = 60, range = 0.5): ActHand => ({ do: 'go', to: chainCell(to), range, maxDig: 0, maxPlace: 0, maxDrop: 1, seconds }),
   crossing: (to: P3): ActHand => ({ do: 'go', to: chainCell(to), range: 1.5, canPlace: ['cobblestone'], maxPlace: 100, maxDig: 0, seconds: 120 }),
   up: (toY: number): ActHand => ({ do: 'vertical', dir: 'up', shape: 'pillar', toY: Math.floor(toY), canDig: ['none'], canPlace: ['cobblestone'], maxPlace: 64, maxDig: 0, liquid: 'stop', seconds: 60 }),

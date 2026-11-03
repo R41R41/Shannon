@@ -107,19 +107,34 @@ export function cagePoolExits(bot: any, source: P3): Cell[] {
 }
 /** Ground-only shadow offers: reachable supported cells on the far side of the observed tower from the dragon,
  * with real obsidian intersecting its eye ray. The HEAD may choose one; go owns the route. */
-export function cageShadowFootings(bot: any, dragon: P3, tower: P3): P3[] {
-  const walk = walkGround(bot, { deadline: performance.now() + 50, radius: 16, maxCells: 900 });
+export function cageShadowFootings(bot: any, dragon: P3, tower: P3, radius = 16): P3[] {
+  const walk = walkGround(bot, { deadline: performance.now() + 50, radius, maxCells: radius > 16 ? 5000 : 900 });
   return walk.cells.filter(n => {
     const p = feetCentre(n.cell);
     if ((p.x - tower.x) * (dragon.x - tower.x) + (p.z - tower.z) * (dragon.z - tower.z) >= 0) return false;
-    const length = Math.hypot(dragon.x - p.x, dragon.z - p.z), steps = Math.min(64, Math.ceil(length / 0.5));
+    const length = Math.hypot(dragon.x - p.x, dragon.z - p.z), steps = Math.min(192, Math.ceil(length / 0.5));
     for (let i = 1; i < steps; i++) {
-      const t = i * 0.5 / length; // bounded 32 m ray: the tower is within the walk's 16 m radius + root offset
+      const t = i * 0.5 / length; // bounded 96 m ray; no assumed spike coordinates
       if (walk.read(Math.floor(p.x + (dragon.x - p.x) * t), Math.floor(p.y + 1.62 + (dragon.y - p.y - 1.62) * t),
         Math.floor(p.z + (dragon.z - p.z) * t))?.name === 'obsidian') return true;
     }
     return false;
   }).sort((a, b) => a.walkMeters - b.walkMeters).map(n => feetCentre(n.cell));
+}
+
+/** One block thick enclosure at the CURRENT feet: floor/supports, four sides at body height, then a supported roof.
+ * The centre feet/head cells stay empty. Existing full floor/walls count as support, never as place requests. */
+export function crystalShelterCells(position: P3): P3[] {
+  const f = { x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) };
+  const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const at = (dx: number, dy: number, dz: number) => ({ x: f.x + dx, y: f.y + dy, z: f.z + dz });
+  return [at(0, -1, 0), ...sides.map(([x, z]) => at(x, -1, z)),
+    ...[0, 1].flatMap(y => sides.map(([x, z]) => at(x, y, z))), at(1, 2, 0), at(0, 2, 0)];
+}
+export function crystalShelterWork(bot: any): P3[] | null {
+  const p = bot.entity.position, f = feetCentre({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
+  if (!bot.entity.onGround || !cageDryFooting(bot) || Math.abs(p.x - f.x) > 0.2 || Math.abs(p.z - f.z) > 0.2) return null;
+  return cageGuardWork(bot, crystalShelterCells(p));
 }
 
 /** Read-only recovery offers, after landing. Walks use full support and <=1 m steps; no invented drop or obsidian shaft.
