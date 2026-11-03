@@ -1257,6 +1257,8 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
   const start = Date.now(), endAt = start + 1_500_000, deathsBefore = deaths, pearlStart = packClient().ender_pearl ?? 0;
   const rows: any[] = [], seen = new Set<number>(), candidatesSeen = new Set<number>(), killed = new Set<number>();
   let exploreStep = 0;
+  const rejects: Record<string, number> = {};
+  const reject = (why: string) => { rejects[why] = (rejects[why] ?? 0) + 1; };
   const roofs = new Set<string>(), usedRoofs = new Set<string>(), attempted = new Map<number, number>(), visited = new Set<string>();
   const keyOf = (c: Cell) => `${c.x},${c.y},${c.z}`;
   const xyz = (p: Cell) => ({ x: p.x, y: p.y, z: p.z });
@@ -1352,22 +1354,23 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
       if (distance > (relocate || wide ? 15.5 : 7) || (relocate && !wide && distance < 8.5)) continue;
       for (let dy = -2; dy <= 2; dy++) {
         const c = { x: Math.floor(p.x) + dx, y: Math.floor(p.y + 0.001) + dy, z: Math.floor(p.z) + dz };
-        if (visited.has(keyOf(c))) continue;
+        if (visited.has(keyOf(c))) { reject('visited'); continue; }
         let flat = true;
         for (let ux = -2; ux <= 2 && flat; ux++) for (let uz = -2; uz <= 2; uz++) {
           const floor = read(c.x + ux, c.y - 1, c.z + uz), feet = read(c.x + ux, c.y, c.z + uz), head = read(c.x + ux, c.y + 1, c.z + uz);
           if (!floor?.solid || (floor.top ?? 1) !== 1 || /lava|water|magma|campfire|slab|stairs|fence|wall|leaves/u.test(floor.name)
             || !feet || !head || feet.solid || head.solid || /lava|water|fire|portal|cobweb/u.test(`${feet.name} ${head.name}`)) { flat = false; break; }
         }
-        if (!flat) continue;
+        if (!flat) { reject('not_flat'); continue; }
         const plan = planRoof(world, c, undefined, undefined, true);
-        if (plan.problems.length || (packClient().cobblestone ?? 0) < plan.placements.length || (relocate && !wide && plan.caps === 0)) continue;
+        if (plan.problems.length) { reject('plan:' + String(plan.problems[0]).slice(0, 40)); continue; }
+        if ((packClient().cobblestone ?? 0) < plan.placements.length || (relocate && !wide && plan.caps === 0)) { reject('blocks_or_caps'); continue; }
         const future: BlockReader = (x, y, z) => y === c.y + 2 && Math.abs(x - c.x) <= 1 && Math.abs(z - c.z) <= 1 ? { name: 'cobblestone', solid: true } : read(x, y, z);
         const from = { x: c.x + 0.5, y: c.y, z: c.z + 0.5 }, visible = candidateList(from, future).length;
         let horizons = 0;
         for (let k = 0; k < 8; k++) if (endermanLine(future, from,
           { x: from.x + 12 * Math.cos(k * Math.PI / 4), y: c.y, z: from.z + 12 * Math.sin(k * Math.PI / 4) }, ENDERMAN_EYE).clear) horizons++;
-        if (horizons > 0) options.push({ cell: c, visible, horizons, distance });
+        if (horizons > 0) options.push({ cell: c, visible, horizons, distance }); else reject('no_horizon');
       }
     }
     return options.sort((a, b) => b.visible - a.visible || b.horizons - a.horizons || a.distance - b.distance)[0] ?? null;
@@ -1434,7 +1437,7 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
           else row.reason = 'walk_not_arrived';
         } else if (!roof && remaining() >= 13_000) {
           // The stand-in explores: no level 5x5 clearing within 16 m of here, so it walks about 10 m along the next compass direction (a standable cell on observed ground) and looks again.
-          row.reason = 'no_loaded_clearing_explore'; exploreStep++;
+          row.reason = 'no_loaded_clearing_explore'; exploreStep++; row.rejects = { ...rejects }; for (const k of Object.keys(rejects)) delete rejects[k];
           const p0 = actor.entity.position as Vec3, angle = (exploreStep % 8) * Math.PI / 4, rd = bodyReader(actor);
           let goal: Cell | null = null;
           for (const len of [10, 8, 6, 12]) for (const dy of [0, -1, 1, -2, 2, -3, 3]) {
