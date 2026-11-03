@@ -369,9 +369,7 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
   let clouds = relax.hazards || relax.dragon ? [] : lyingCloudZones(bot);
   if (clouds.length && bot.entity?.position && clouds.some(zone => cloudReaches(zone.centre, zone.radius, bot.entity.position, 0))) clouds = [];
   const perched = isEnd(bot) ? endDragonOf(bot) : null;
-  // r105 windows 4/5: wing push was observed with HP 20 throughout the basin kill. Only the walking exclusion changes;
-  // head/neck contact and existing/forecast breath stay excluded, and the floor reflex still interrupts this go.
-  let clearPerch = !relax.hazards && !relax.dragon && perched && isPerched(dragonPhaseOf(bot, perched)) ? perchClearance(bot, perched, 0, false) : null;
+  let clearPerch = !relax.hazards && !relax.dragon && perched && isPerched(dragonPhaseOf(bot, perched)) ? perchClearance(bot, perched) : null;
   // Preserve the existing way OUT when already inside a danger; the floor reflex keeps ownership of urgent retreat.
   if (clearPerch && bot.entity?.position && !clearPerch(bot.entity.position)) clearPerch = null;
   // Moves that end in a hazard (beside lava, on magma...), or in water when it is not allowed, are not moves.

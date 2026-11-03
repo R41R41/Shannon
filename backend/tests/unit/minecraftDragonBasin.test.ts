@@ -82,7 +82,6 @@ describe('observed basin footing and go entry', () => {
     // that footing (feet at 66) lies inside the wing's push zone: it is not offered, whatever go could do
     const p = hints(s)?.basin?.find(p => p.x === 3.5 && p.z === 0.5);
     expect(p).toBeUndefined();
-    expect(goWalkRouteChecker(s.bot)([{ x: 4, y: 65, z: 0 }, { x: 3, y: 66, z: 0 }])).toBe(true);
   });
 
   it('omits the sole one-level higher footing when the approach ceiling prevents a jump (no implicit canPlace)', () => {
@@ -118,11 +117,11 @@ describe('observed basin footing and go entry', () => {
     expect(time).toBeLessThanOrEqual(130);
   });
 
-  it.each([5, 6, 7])('allows the wing-only walking step at phase %s while the unchanged reflex still sees wing push', phase => {
+  it.each([5, 6, 7])('walking route through the wing push zone is refused at phase %s, as the reflex sees it as a danger', phase => {
     const s = fixture(islandHigh); s.d.metadata[16] = phase;
     const p = { x: 9.5, y: 65, z: 0.5 };
     expect(approachClear(s.bot, s.d, p)).toBe(false);
-    expect(goWalkRouteChecker(s.bot)([{ x: 10, y: 65, z: 0 }, { x: 9, y: 65, z: 0 }])).toBe(true);
+    expect(goWalkRouteChecker(s.bot)([{ x: 10, y: 65, z: 0 }, { x: 9, y: 65, z: 0 }])).toBe(false);
     s.bot.entity.position = new Vec3(p.x, p.y, p.z);
     expect(dragonHazards(s.bot).map(h => h.kind)).toContain('wing');
   });

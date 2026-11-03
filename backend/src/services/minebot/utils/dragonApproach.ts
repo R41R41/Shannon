@@ -114,7 +114,7 @@ function computeApproach(bot: any, dragon: any, perch: P3 | null): DragonApproac
 
 /** The body's own walk into the 2–3.2 m ring, with no digging/placing. A one-level rise is offered only if go can really step up it. */
 function basinPositions(bot: any, dragon: any, perch: P3, scanDeadline: number, deadline: number): DragonApproach['basin'] {
-  const safe = perchClearance(bot, dragon, 0, false), me = bot.entity?.position;
+  const safe = perchClearance(bot, dragon), me = bot.entity?.position;
   if (!me || !safe(me) || performance.now() >= scanDeadline) return undefined;
   const ground = walkGround(bot, { deadline: scanDeadline, radius: 32, maxCells: 2500, safe });
   if (performance.now() >= deadline) return undefined;
