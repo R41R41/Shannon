@@ -770,7 +770,7 @@ scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wid
 // The lane built BY THE BODY's hands (S2, 2026-11-03): the scripted head reads probe kind=lane (no spawner given: the near one), takes the first candidate (fewest cobblestones), and builds what the probe lists in the order
 // it lists it, with go and place hands (up to 4 cells per group, a go to a floor cell within reach first), the blazes alive and shooting. Then it re-reads the plan (what still stands to be built outside the lane), goes to the
 // waiting cell and holds for the rest of the time, fetching what falls. Measures the time to build, the lowest health while building, the cobblestones used and the kills after.
-async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean; torches?: boolean } = {}): Promise<Record<string, unknown>> {
+async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean; torches?: boolean; settle?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const holdSeconds = options.holdSeconds ?? 300, groupSize = options.groupSize ?? 5, thinkMs = 5000;
@@ -787,6 +787,17 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const blazesKnown = () => (Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length;
   const mark = (label: string) => note(`T+${r1((Date.now() - t0) / 1000)} s [${label}] hp ${r1(hp())} blazes known ${blazesKnown()} cobble ${packClient().cobblestone ?? 0} torch ${packClient().torch ?? 0}`);
   mark('start');
+  // settle: the head's turn between steps at the cover: what came back is fought from the cover (attack hold 15 s) and the health is waited for (eat when low), up to a budget; the seconds are told
+  let settledMs = 0;
+  const settle = async (why: string, budgetMs = 90_000) => {
+    const from = Date.now();
+    while (Date.now() - from < budgetMs && !disconnected && hp() > 0 && (blazesKnown() > 0 || hp() < 16)) {
+      if (hp() < 14 && Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15);
+      if (blazesKnown() > 0 && hp() >= 9) await act('hold (settle)', [{ do: 'attack', target: 'blaze', hold: true, seconds: 15 }], 30, { accept: ['blaze'] });
+      else await sleep(2000);
+    }
+    settledMs += Date.now() - from; mark(`settled (${why}) ${r1((Date.now() - from) / 1000)} s`);
+  };
   if (options.away) {
     // the clearing-away: the room fills for a minute (the spawner runs with the body near), the body goes far off (the spawner stops, what it made fades), waits, and comes back to build
     const arrival = sites.netherArrival as number[] | undefined;
@@ -800,6 +811,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     mark('back from away');
     note(`back at the stand after ${options.awaySeconds ?? 150} s away; blazes known now: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
   }
+  if (options.settle) await settle('after the return');
   if (options.torches) {
     // torches first: a greedy cover of the spawner's box (the free cells of the three layers within two blocks of a torch on the floor of the spawner's layer), set with go and place in acts of six
     const sp = sites.blazeSpawner as number[], [tx, ty, tz] = sp;
@@ -879,6 +891,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
         const arg = phase.map(g => ({ stand: g[0].stand!, at: g.slice(0, 8).map(p => p.at) }));
         for (let gi = 0; gi < arg.length && !stopFill && !disconnected && hp() > 0 && deaths === deaths0; gi += 12) {
           if (hp() < 6) { aborted = `hp ${r1(hp())} at pass ${pass} group ${gi}/${arg.length}`; stopFill = true; break; }
+          if (options.settle && (blazesKnown() > 1 || hp() < 16)) await settle(`before fill#${acts + 1}`);
           await sleep(thinkMs);
           const retreat = retreatNow();
           // (the head's own turn: fire on the cover cell is put out by a dig before the fill; the names are said)
@@ -942,6 +955,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
     killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null };
 }
+scene('blaze_lane_fill_settle', 'the lane set with the fill hand after clearing away: fight from the cover what came back, torches first, fill, settle between steps; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, torches: true, settle: true }));
 scene('blaze_lane_fill_torch', 'the lane set with the fill hand after clearing away, torches first (a greedy cover of the box), timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, torches: true }));
 scene('blaze_lane_fill', 'the lane set with the fill hand after clearing away: the room fills 40 s, the body goes far off 150 s, comes back, probe lane, fill acts (12 groups each, health floor 10), then a 300 s hold', note => blazeLaneBuild(note, { away: true, fill: true }));
 scene('blaze_lane_build_away', 'the lane built after clearing away: the room fills for 40 s, the body goes to the Nether arrival for 150 s, comes back and builds from the probe, then a 300 s hold', note => blazeLaneBuild(note, { away: true }));
