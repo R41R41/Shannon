@@ -31,8 +31,8 @@ import { approachClear } from '../src/services/minebot/utils/dragonApproach.js';
 import { dragonNook, insideDragonNook, nookCellSupported, type DragonNook } from '../src/services/minebot/utils/dragonNook.js';
 import { BLOCK_REACH } from '../src/services/minebot/utils/blockReach.js';
 import { isPerched, type P3 } from '../src/services/minebot/utils/dragonParts.js';
-import { cageRoots, cageWall, cageGuardCells, cageGuardWork, cageRecoveryFootings, cageWaterLandings, cageWaterSource, cageWaterExit, cageDryFooting, cagePoolExits, cageShadowFootings, crystalShelterWork, islandFootings } from '../src/services/minebot/utils/endFightGeometry.js';
-import { CHAIN_LIMIT_MS, CRYSTAL_LIMIT_MS, CRYSTAL_WAIT_MS, FAST_CAGE_POLICY, chainCell, chainWalkRetry, chainShootSet, chainDescent, chainDragonSample, chainDragonRush, chainBasin, chainClear, chainCloudClear, chainCrystal, chainDistance, chainHands, chainOnShaft, chainPause, chainRetreat, chainShot, chainSitting, chainTravel, chainWait, type ChainCrystal, type CagePolicy, type DragonMotionSample } from '../src/services/minebot/utils/endFullChainPlan.js';
+import { cageRoots, cageWall, cageGuardCells, cageGuardWork, cageRecoveryFootings, cageWaterLandings, cageWaterSource, cageWaterExit, cageDryFooting, cagePoolExits, cageShadowFootings, crystalShelterState, crystalShelterExits, islandFootings } from '../src/services/minebot/utils/endFightGeometry.js';
+import { CHAIN_LIMIT_MS, CRYSTAL_LIMIT_MS, CRYSTAL_WAIT_MS, CAGE_TRAVEL_WAIT_MS, FAST_CAGE_POLICY, chainCell, chainWalkRetry, chainShootSet, chainDescent, chainDragonSample, chainDragonRush, chainBasin, chainClear, chainCloudClear, chainCompareTravel, chainCrystal, chainDistance, chainHands, chainOnShaft, chainPause, chainRetreat, chainShot, chainSitting, chainTravel, chainWait, type ChainCrystal, type CagePolicy, type DragonMotionSample } from '../src/services/minebot/utils/endFullChainPlan.js';
 
 const port = Number(process.env.MINECRAFT_END_PORT);
 const worldDirectory = process.env.MINECRAFT_END_WORLD_DIRECTORY ?? '';
@@ -1777,7 +1777,7 @@ const runEndChain = async (policy: CagePolicy = FAST_CAGE_POLICY, cageOnly = fal
   const lowest = trackMinHealth(), counts0 = chainArrivalCounts ?? actor.reflexLedger?.counts?.() ?? {};
   const out: Record<string, any> = { scene: sceneName, cagePolicy: policy, tp: false, tpScope: 'after enter arrival', commandCrystalRemoval: false, waterBucket: policy.descent === 'water_drop',
     reflex: 'on', limitSeconds: 2400, crystalLimitSeconds: 900, dragonTargetSeconds: 900, order: 'shootSets_then_near',
-    stages: [], crystals: [], hands: [], interruptions: [], cageDecisions: [], movementDecisions: [], retreatPlans: [], cageRecoveries: [], healthTimeline: [...chainArrivalTimeline], transitions: [], waitingChosen: [], waitEscalations: [], walkRetries: [], shootSetChoices: [], boss: null, bossVerified: false };
+    stages: [], crystals: [], hands: [], interruptions: [], cageDecisions: [], movementDecisions: [], retreatPlans: [], cageRecoveries: [], healthTimeline: [...chainArrivalTimeline], transitions: [], waitingChosen: [], waitEscalations: [], shelterEvents: [], walkRetries: [], shootSetChoices: [], boss: null, bossVerified: false };
   out.stages.push({ stage: 'enter', seconds: (Date.now() - t0) / 1000, endedAt: elapsed() });
   let stage = 'setup', stageAt = Date.now(), crystalDeadline = deadline, paused = false;
   let dragonId: number | null = null, dragonDead = false, entered = false, mustLeave = false, lastPhase: number | null | undefined;
@@ -1826,8 +1826,12 @@ const runEndChain = async (policy: CagePolicy = FAST_CAGE_POLICY, cageOnly = fal
   const segment = (next: string) => { exposureSample(); crystalSegment = next; };
   const onActorDamage = (packet: any) => {
     if (stage !== 'crystals' || packet?.entityId !== actor.entity.id) return;
+    // Protocol damage sources are entity ID + 1 (0 means absent), unlike the victim's entityId.
+    const entityId = (wire: unknown) => typeof wire === 'number' && Number.isInteger(wire) && wire > 0 ? wire - 1 : null;
+    const causeEntityId = entityId(packet.sourceCauseId), directEntityId = entityId(packet.sourceDirectId);
     lastDamage = { at: Date.now(), cause: packet.sourceCauseId, direct: packet.sourceDirectId, type: packet.sourceTypeId,
-      causeName: actor.entities?.[packet.sourceCauseId]?.name ?? null, directName: actor.entities?.[packet.sourceDirectId]?.name ?? null };
+      causeEntityId, directEntityId, causeName: causeEntityId === null ? null : actor.entities?.[causeEntityId]?.name ?? null,
+      directName: directEntityId === null ? null : actor.entities?.[directEntityId]?.name ?? null };
     exposureEvent('damageEvents', { server: lastDamage });
   };
   actor._client?.on('damage_event', onActorDamage);
@@ -1881,7 +1885,7 @@ const runEndChain = async (policy: CagePolicy = FAST_CAGE_POLICY, cageOnly = fal
     if (d?.id === dragonId && (d.health === 0 || d.phase === 9)) dragonDead = true;
     if (d?.phase !== lastPhase) { lastPhase = d?.phase; out.transitions.push([elapsed(), lastPhase ?? null]); }
     if (stage === 'crystals') {
-      const next = chainPause(v, paused);
+      const next = !cageOnly && chainPause(v, paused);
       if (next && !paused) out.interruptions.push({ seconds: elapsed(), reason: 'phase_6', phase: d?.phase, position: v.position });
       paused = next;
     }
@@ -1961,6 +1965,7 @@ const runEndChain = async (policy: CagePolicy = FAST_CAGE_POLICY, cageOnly = fal
     out.retreatPlans.push({ seconds: elapsed(), name, from: v.position, candidates: retreatPlan });
   };
   const retreat = async (reason: string, waitUntil?: number) => {
+    if (!await leaveShelter()) return false;
     const v = read(), away = chainRetreat(v, retreatPlan);
     if (!away) return false; // HEAD keeps the wait clock; lack of an ideal retreat is not a terminal decision.
     // Retreat is allowed during danger; the existing go/reflex owns route safety and may refuse it.
@@ -1973,88 +1978,180 @@ const runEndChain = async (policy: CagePolicy = FAST_CAGE_POLICY, cageOnly = fal
     return (r?.ok ?? true) && chainDistance(read().position, away) <= 1;
   };
   const travelWait = new Map<string, number>();
-  let shelter: { at: P3; cells: P3[] } | null = null;
-  const leaveShelter = async () => {
-    if (!shelter) return;
-    // HEAD opens only its requested new cobblestones, roof first. Preserve the natural/previous floor.
-    const cells = shelter.cells.filter(p => p.y >= shelter!.at.y && actor.blockAt(new Vec3(p.x, p.y, p.z))?.name === 'cobblestone')
-      .reverse().sort((a, b) => b.y - a.y); // centre roof before its side support, so dig's sight ray is clear
-    if (cells.length) await must('shelter_open', chainHands.dig(cells), 30, 'recovery');
-    shelter = null;
+  const reliefs = new Map<string, number>(), proceedTravel = new Set<string>();
+  let shelter: { at: P3; cells: P3[]; health: number; complete: boolean } | null = null;
+  const leaveShelter = async (toward?: P3) => {
+    if (!shelter) return true;
+    // A reflex may have moved us out or destroyed the enclosure. Never return to clean up old blocks.
+    const outside = () => {
+      const at = read().position;
+      // A small knock upward is still INSIDE the walls; retain the doorway state until landing.
+      return !chainOnShaft(at, shelter!.at) || at.y >= shelter!.at.y + 2 || at.y < shelter!.at.y - 0.9;
+    };
+    if (outside()) { out.shelterEvents.push({ seconds: elapsed(), reason: 'already_outside', at: shelter.at, position: read().position }); shelter = null; return true; }
+    const tried = new Set<string>();
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const exits = crystalShelterExits(actor, shelter.at, shelter.cells)
+        .sort((a, b) => toward ? chainDistance(a.at, toward) - chainDistance(b.at, toward) : a.cells.length - b.cells.length);
+      if (exits.some(e => !e.cells.length)) { shelter = null; return true; }
+      const exit = exits.find(e => !tried.has(JSON.stringify(e.at)));
+      if (!exit) break;
+      tried.add(JSON.stringify(exit.at));
+      // One cell per hand; re-read location, remaining blocks and doorway after every interruption.
+      for (const cell of exit.cells) {
+        if (outside()) break;
+        const fresh = crystalShelterExits(actor, shelter.at, shelter.cells).find(e => chainDistance(e.at, exit.at) < 0.1);
+        if (!fresh?.cells.some(p => chainDistance(p, cell) === 0)) continue;
+        const r = await perform('shelter_open', chainHands.dig([cell]), 8, 'recovery');
+        out.shelterEvents.push({ seconds: elapsed(), reason: 'open', cell, ok: r.ok, lines: r.lines, position: read().position });
+        if (!r.ok) break;
+      }
+      if (outside()) { shelter = null; return true; }
+    }
+    const open = crystalShelterExits(actor, shelter.at, shelter.cells).some(e => !e.cells.length);
+    if (open) shelter = null;
+    return open; // Refusal is a new observation, never hand_stopped:shelter_open.
   };
-  const pressureRelief = async (name: string, since: number) => {
+  const pressureRelief = async (name: string, since: number, allowBuild = true) => {
     segment('waiting');
     let v = read();
     const row: any = { seconds: elapsed(), name, waitedMs: Date.now() - since, from: v.position };
     out.waitEscalations.push(row);
+    await must('retreat_shield', chainHands.shield(), 8, 'recovery');
+    if (!await leaveShelter()) { row.choice = 'proceed_without_shelter'; row.reason = 'doorway_refused'; return true; }
     // Lab stand-in HEAD chooses the dragon's far side of an OBSERVED pillar. Geometry only offers supported,
     // obsidian-occluded cells; go still owns the path and every resident reflex keeps priority.
-    await must('retreat_shield', chainHands.shield(), 8, 'recovery');
     v = read(); // equipping or a resident reflex can take time; choose against the current dragon position
     row.dragon = v.dragon ? { id: v.dragon.id, position: v.dragon.position, yaw: v.dragon.yaw } : null;
     const towers = out.crystals.map((c: any) => c.position as P3)
       .sort((a: P3, b: P3) => chainDistance(a, v.position) - chainDistance(b, v.position));
     const shadows = v.dragon?.position ? towers.flatMap((tower: P3) => cageShadowFootings(actor, v.dragon.position, tower, 64)) : [];
     const shadowView = read();
-    const shadow = shadows.filter((p: P3) => chainCloudClear(shadowView, p))
+    const shadow = shadows.filter((p: P3) => chainCloudClear(shadowView, p) && chainDistance(p, shadowView.position) >= 3)
       .sort((a: P3, b: P3) => chainDistance(a, shadowView.position) - chainDistance(b, shadowView.position))[0] ?? null;
     if (shadow) {
       row.choice = 'pillar_shadow'; row.to = shadow;
-      await leaveShelter();
       const r = await go('crystal_shadow', shadow, 20, 'recovery', 0);
       row.ok = r.ok; row.arrived = read().position;
-      if (r.ok) { rememberGround(); return; }
+      if (r.ok) { rememberGround(); return false; }
       row.shadowAttempt = { to: shadow, ok: false, lines: r.lines, arrived: read().position };
       row.fallback = 'shadow_walk_stopped'; // A refused path is not usable shelter; try the actual supported feet below.
     }
     // Lab HEAD fallback, not a new reflex: a one-block-thick enclosure at the actual supported feet, including roof.
     row.choice = 'enclosure'; segment('shelter');
     const centre = feetCentre(chainCell(read().position));
-    if (cageDryFooting(actor) && actor.entity.onGround && chainDistance(read().position, centre) > 0.2)
+    if (allowBuild && chainCloudClear(read(), read().position) && Number(actor.health) > 10 &&
+      cageDryFooting(actor) && actor.entity.onGround && chainDistance(read().position, centre) > 0.2)
       await go('shelter_center', centre, 5, 'recovery', 0);
-    const cells = crystalShelterWork(actor), stock = read().inventory.filter((i: any) => i.name === 'cobblestone').reduce((n: number, i: any) => n + i.count, 0);
-    row.cells = cells; row.stock = stock;
-    if (!cells || stock < cells.length) { row.ok = false; throw new Error(!cells ? 'crystal_shelter_unbuildable' : 'crystal_shelter_stock'); }
-    const at = read().position;
-    if (!shelter || !chainOnShaft(at, shelter.at)) shelter = { at: { ...chainCell(at) }, cells: [] };
-    shelter.cells.push(...cells.filter(p => !shelter!.cells.some(q => chainDistance(p, q) === 0)));
-    if (cells.length) {
-      const r = await perform('crystal_shelter', chainHands.place(cells), 40, 'recovery'); row.ok = r.ok;
-    } else row.ok = true;
-    row.complete = crystalShelterWork(actor)?.length === 0;
+    const state = crystalShelterState(actor), cells = state.work;
+    const stock = read().inventory.filter((i: any) => i.name === 'cobblestone').reduce((n: number, i: any) => n + i.count, 0);
+    row.cells = cells; row.stock = stock; row.buildState = state;
+    row.reason = !allowBuild ? 'shelter_already_tried' : !chainCloudClear(read(), read().position) ? 'cloud_at_feet' :
+      Number(actor.health) <= 10 ? 'low_health' : !cells ? state.reason : stock < cells.length ? 'insufficient_stock' : 'build';
+    if (row.reason === 'build' && cells) {
+      shelter = { at: { ...chainCell(read().position) }, cells: [], health: Number(actor.health), complete: false };
+      row.ok = true;
+      for (const cell of cells) {
+        const current = crystalShelterState(actor);
+        if (!chainOnShaft(read().position, shelter.at) || Math.abs(read().position.y - shelter.at.y) > 0.35 ||
+          !chainCloudClear(read(), read().position) || Number(actor.health) < shelter.health || !current.work) {
+          row.ok = false; row.reason = 'build_changed'; row.changedState = current; break;
+        }
+        if (!current.work.some(p => chainDistance(p, cell) === 0)) continue;
+        const r = await perform('crystal_shelter', chainHands.place([cell]), 8, 'recovery');
+        if (actor.blockAt(new Vec3(cell.x, cell.y, cell.z))?.name === 'cobblestone') shelter.cells.push(cell);
+        if (!r.ok) { row.ok = false; row.reason = 'place_refused'; row.failedCell = cell; row.lines = r.lines; break; }
+      }
+      row.complete = row.ok && chainOnShaft(read().position, shelter.at) && crystalShelterState(actor).work?.length === 0;
+      shelter.complete = row.complete;
+      if (row.complete) return false;
+      if (row.ok) { row.ok = false; row.reason = 'incomplete_after_build'; row.changedState = crystalShelterState(actor); }
+    } else row.ok = false;
+    // No shelter, a hole, low health or an existing cloud: choose different ground now, or continue the task.
+    if (await leaveShelter()) {
+      v = read();
+      const ground = [...retreatPlan, ...cageRecoveryFootings(actor).filter(p => p.kind === 'ground').map(p => p.at)];
+      const alternatives = ground.filter(p => chainDistance(p, v.position) >= 8 && chainRetreat(v, [p]))
+        .sort((a, b) => v.dragon?.position ? chainDistance(b, v.dragon.position) - chainDistance(a, v.dragon.position) : chainDistance(a, v.position) - chainDistance(b, v.position));
+      row.groundAttempts = [];
+      for (const to of alternatives.slice(0, 2)) {
+        if (!chainCloudClear(read(), to)) continue;
+        const r = await go('crystal_far_ground', to, 20, 'recovery', 0);
+        row.groundAttempts.push({ to, ok: r.ok, lines: r.lines });
+        if (r.ok) { row.choice = 'far_ground'; rememberGround(); return false; }
+      }
+    }
+    row.choice = 'proceed_without_shelter'; return true;
+  };
+  const recheckShelter = async (key: string, since: number) => {
+    const v = read();
+    if (!shelter || !(Number(v.health) < shelter.health || !chainCloudClear(v, v.position) ||
+      !chainOnShaft(v.position, shelter.at) || (shelter.complete && crystalShelterState(actor).work?.length !== 0))) return false;
+    out.shelterEvents.push({ seconds: elapsed(), reason: 'shelter_changed', at: shelter.at, position: v.position });
+    await pressureRelief(key, since, false); proceedTravel.add(key); return true;
   };
   const waitPressure = async (key: string) => {
     const since = travelWait.get(key) ?? Date.now(); travelWait.set(key, since);
     if (Date.now() - since >= CRYSTAL_WAIT_MS) {
-      await pressureRelief(key, since); travelWait.set(key, Date.now()); return true;
+      if (cageOnly) return false; // Comparison travel has its own bounded distance/yaw wait below.
+      const count = reliefs.get(key) ?? 0;
+      if (await pressureRelief(key, since, count === 0) || count > 0) proceedTravel.add(key);
+      reliefs.set(key, count + 1); travelWait.set(key, Date.now()); return true;
     }
     return false;
   };
   const travel = async (name: string, to: P3, seconds = 60, range = 0) => {
-    const key = `${name}:${to.x},${to.y},${to.z}`;
+    // The comparison's wait budget follows the crystal even if a reflex changes the offered root.
+    const key = cageOnly && name === 'go_root' ? `compare_root:${pendingCrystalId}` : `${name}:${to.x},${to.y},${to.z}`;
     if (!travelWait.has(key)) travelWait.set(key, Date.now());
     planRetreat(name);
     let previousReason = '', retreated = false;
+    let compareRow: any = null, comparisonCommitted = false;
     for (;;) {
       check(); sample();
       const v = read(), timing = chainTravel(v, v.position, to);
+      if (cageOnly && Date.now() - travelWait.get(key)! >= CRYSTAL_WAIT_MS) {
+        if (!compareRow) {
+          compareRow = { seconds: elapsed(), name, choice: 'compare_observe', waitedMs: Date.now() - travelWait.get(key)! };
+          out.waitEscalations.push(compareRow);
+        }
+        const opportunity = chainCompareTravel(v, v.position, to);
+        if (opportunity.ok || Date.now() - travelWait.get(key)! >= CRYSTAL_WAIT_MS + CAGE_TRAVEL_WAIT_MS) {
+          compareRow.opportunity = opportunity; compareRow.additionalWaitMs = Date.now() - travelWait.get(key)! - CRYSTAL_WAIT_MS;
+          compareRow.choice = opportunity.ok ? 'compare_far_flight' : 'compare_shield_move';
+          await perform('compare_shield', chainHands.shield(), 8, 'recovery');
+          compareRow.shieldUp = actor.shieldBlock?.up === true;
+          comparisonCommitted = true; break;
+        }
+        segment('waiting'); await sleep(100); continue;
+      }
       if (timing.reason !== previousReason) {
         previousReason = timing.reason;
         out.movementDecisions.push({ seconds: elapsed(), name, from: v.position, to, ...timing, fireballs: v.dragonFireballs, breath: v.dragonBreath });
       }
-      if (!paused && timing.ok) { if (shelter) { await leaveShelter(); continue; } break; }
+      if (await recheckShelter(key, travelWait.get(key)!)) continue;
+      if (!paused && (timing.ok || proceedTravel.has(key))) {
+        if (shelter) {
+          const open = await leaveShelter(to);
+          if (!open) proceedTravel.add(key);
+          else continue; // Digging took time: judge timing from a NEW observation before departure.
+        }
+        break;
+      }
       segment('waiting');
-      if (!retreated || !chainCloudClear(v, v.position)) retreated = await retreat(timing.reason, travelWait.get(key)! + CRYSTAL_WAIT_MS);
+      if (!cageOnly && !shelter && (!retreated || !chainCloudClear(v, v.position))) retreated = await retreat(timing.reason, travelWait.get(key)! + CRYSTAL_WAIT_MS);
       await waitPressure(key);
       await sleep(250);
     }
     try {
-      const r = await go(name, to, seconds, 'crystal_travel', range, travelWait.get(key)! + CRYSTAL_WAIT_MS);
-      if (r.ok) { rememberGround(); travelWait.delete(key); }
+      const committed = comparisonCommitted || proceedTravel.has(key);
+      const r = await go(name, to, seconds, committed ? 'recovery' : 'crystal_travel', range,
+        committed ? undefined : travelWait.get(key)! + CRYSTAL_WAIT_MS);
+      if (r.ok) { rememberGround(); travelWait.delete(key); reliefs.delete(key); proceedTravel.delete(key); }
       return r;
     } catch (error) {
       if ((error as Error).message !== 'crystal_travel_cut') throw error;
-      if (!await waitPressure(key)) await retreat('travel_cut', travelWait.get(key)! + CRYSTAL_WAIT_MS);
+      if (!await waitPressure(key) && !cageOnly) await retreat('travel_cut', travelWait.get(key)! + CRYSTAL_WAIT_MS);
       await waitPressure(key); return { ok: false, lines: ['chain_travel_changed'] };
     }
   };
@@ -2071,7 +2168,7 @@ const runEndChain = async (policy: CagePolicy = FAST_CAGE_POLICY, cageOnly = fal
       // HEAD: on natural ground choose the tower's observed far side; at height just release the hand.
       // A ring/air cell is never presumed to be a route into shadow. Floor reflexes keep their normal ownership.
       const v = read();
-      if (!sheltered && v.position.y <= root.y + 0.35 && actor.entity.onGround && v.dragon?.position) {
+      if (!cageOnly && !sheltered && v.position.y <= root.y + 0.35 && actor.entity.onGround && v.dragon?.position) {
         sheltered = true;
         const to = cageShadowFootings(actor, v.dragon.position, tower).find(p => chainCloudClear(v, p));
         if (to) { const r = await go('cage_shadow', to, 12, 'recovery', 0); out.cageDecisions.push({ seconds: elapsed(), reason: 'tower_shadow', to, ok: r.ok }); }
@@ -2380,6 +2477,7 @@ const runEndChain = async (policy: CagePolicy = FAST_CAGE_POLICY, cageOnly = fal
     while (cageOnly ? cageIds.some((id: number) => !out.crystals.find((r: any) => r.id === id)?.cageDone) : !chainClear(read())) {
       segment('waiting');
       check(); sample();
+      await recheckShelter('shelter_changed', Date.now());
       if (paused) {
         if (!retreatPlan.length) planRetreat('phase_pause');
         await retreat('phase_pause');
@@ -2433,6 +2531,7 @@ const runEndChain = async (policy: CagePolicy = FAST_CAGE_POLICY, cageOnly = fal
         // without sending a zero-distance travel that could retreat to an older, farther footing.
         const moved = chainDistance(read().position, to) <= 0.6 ? { ok: true } : await travel('shoot_position', to);
         if (!moved.ok) { await sleep(250); continue; }
+        if (shelter) { await leaveShelter(to); await sleep(250); continue; }
         const before = read(), arrows = (w: any) => w.inventory.filter((i: any) => i.name === 'arrow').reduce((n: number, i: any) => n + i.count, 0);
         if (!before.crystals.list.some((live: any) => live.id === c.id)) { await sleep(500); continue; }
         if (arrows(before) === 0) throw new Error('arrows_exhausted');

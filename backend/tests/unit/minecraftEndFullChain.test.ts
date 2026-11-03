@@ -4,7 +4,7 @@ import ts from 'typescript';
 import { Vec3 } from 'vec3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as plan from '../../src/services/minebot/utils/endFullChainPlan.js';
-import { cageGuardCells, cageGuardWork, cageRecoveryFootings, cageRoots, cageWall, cageWaterLandings, cageWaterSource, cageWaterExit, cageDryFooting, cagePoolExits, cageShadowFootings, crystalShelterCells, crystalShelterWork, islandFootings } from '../../src/services/minebot/utils/endFightGeometry.js';
+import { cageGuardCells, cageGuardWork, cageRecoveryFootings, cageRoots, cageWall, cageWaterLandings, cageWaterSource, cageWaterExit, cageDryFooting, cagePoolExits, cageShadowFootings, crystalShelterCells, crystalShelterWork, crystalShelterState, crystalShelterExits, islandFootings } from '../../src/services/minebot/utils/endFightGeometry.js';
 import { ACT_HANDS } from '../../src/services/minebot/instantSkills/act.js';
 import { handProblem } from '../../src/services/minebot/utils/actHandRules.js';
 import { go, goProblem } from '../../src/services/minebot/utils/primitives/go.js';
@@ -208,7 +208,10 @@ function rig(options: { caged?: boolean; empty?: boolean; missingProof?: boolean
   let fullBucket = options.bucket === true, emptyBucket = false;
   const water = new Set<string>(), key = (at: any) => `${at.x},${at.y},${at.z}`;
   const blocks = new Set<string>();
-  actor.blockAt = (at: any) => ({ name: blocks.has(key(at)) ? 'cobblestone' : water.has(key(at)) ? 'water' : at.y < 70 ? 'end_stone' : 'air' });
+  actor.blockAt = (at: any) => {
+    const name = blocks.has(key(at)) ? 'cobblestone' : water.has(key(at)) ? 'water' : at.y < 70 ? 'end_stone' : 'air';
+    return { name, boundingBox: ['cobblestone', 'end_stone'].includes(name) ? 'block' : 'empty' };
+  };
   const calls: any[] = [], commands: string[] = [], totals: Record<string, number> = {};
   actor.reflexLedger = { counts: () => ({ ...totals }) };
   const read = () => ({ ...v, position: { ...actor.entity.position }, health: actor.health,
@@ -250,7 +253,9 @@ function rig(options: { caged?: boolean; empty?: boolean; missingProof?: boolean
     cageWaterLandings: vi.fn(() => [p(37, 69, 30)]), cageWaterSource: vi.fn((_bot, at) => water.has(key(at))),
     cageWaterExit: vi.fn((_bot, _root, at) => water.has(key(at)) ? [] : null),
     cageDryFooting: vi.fn(() => actor.entity.onGround === true), cageShadowFootings: vi.fn(() => []),
-    crystalShelterWork: vi.fn(() => crystalShelterCells(actor.entity.position).filter(p => actor.blockAt(p).name === 'air')),
+    crystalShelterWork: vi.fn(crystalShelterWork),
+    crystalShelterState: (bot: any) => ({ ...crystalShelterState(bot), work: deps.crystalShelterWork(bot) }),
+    crystalShelterExits,
     safetyLeaseCapabilities: vi.fn(() => actor.floorReflexes?.busy ? ['floor-dragon'] : []),
     activeActionCapabilities: vi.fn(() => []),
     cagePoolExits: vi.fn(() => [p(38, 70, 30)]),
@@ -262,7 +267,7 @@ function rig(options: { caged?: boolean; empty?: boolean; missingProof?: boolean
   const factory = new Function(...Object.keys(deps), `let actorDeaths = 0; ${result.outputText}\nreturn { run: (policy, cageOnly) => runEndChain(policy, cageOnly), entry: scenes.end_full_chain, scenes, die: () => { actorDeaths++; } };`);
   const api = factory(...Object.values(deps)) as { run: (policy?: plan.CagePolicy, cageOnly?: boolean) => Promise<Record<string, any>>; entry: () => Promise<Record<string, any>>; scenes: Record<string, () => Promise<any>>; die: () => void };
   const run = () => api.run(options.policy ?? { descent: 'shaft_down', guard: true, ascentGuard: true });
-  return { ...api, run, actor, v, calls, commands, deps, totals, read, water, setHandler: (h: typeof handler) => { handler = h; },
+  return { ...api, run, actor, v, calls, commands, deps, totals, read, water, blocks, setHandler: (h: typeof handler) => { handler = h; },
     hurt: (hp: number) => { minHealth = Math.min(minHealth, hp); actor.health = hp; actor.emit('health'); } };
 }
 async function settle<T>(promise: Promise<T>, maxMs = 30_000): Promise<T> {
@@ -329,22 +334,24 @@ describe('end_full_chain actual probe scene with mocked I/O', () => {
     expect(out, out.endReason).toMatchObject({ ok: true });
     expect(out.retreatPlans[0].candidates).toEqual([]);
     expect(out.waitEscalations[0]).toMatchObject({ choice: 'enclosure', complete: true });
-    const built = out.hands.find((h: any) => h.name === 'crystal_shelter');
-    expect(built.hand.at).toContainEqual(p(60, 72, 30));
+    const built = out.hands.filter((h: any) => h.name === 'crystal_shelter').flatMap((h: any) => h.hand.at);
+    expect(built).toContainEqual(p(60, 72, 30));
     for (const [x, z] of [[61, 30], [59, 30], [60, 31], [60, 29]]) {
-      expect(built.hand.at).toContainEqual(p(x, 70, z)); expect(built.hand.at).toContainEqual(p(x, 71, z));
+      expect(built).toContainEqual(p(x, 70, z)); expect(built).toContainEqual(p(x, 71, z));
     }
     const opened = out.hands.find((h: any) => h.name === 'shelter_open');
     expect(opened.hand.at.every((p: any) => p.y >= 70)).toBe(true);
     expect(out.hands.findIndex((h: any) => h.name === 'shelter_open')).toBeLessThan(out.hands.findIndex((h: any) => h.name === 'shoot_crystal'));
     expect(vi.getTimerCount()).toBe(0);
   });
-  it.each(['unknown', 'stock'])('reports why enclosure cannot complete: %s', async reason => {
+  it.each(['unknown', 'stock'])('continues without shelter when enclosure cannot complete: %s', async reason => {
     const r = rig({ blocks: reason === 'stock' ? 1 : 64 }); r.v.dragon.distance = 20;
     if (reason === 'unknown') r.deps.crystalShelterWork.mockReturnValue(null);
+    r.setHandler(async h => { if (h.do === 'go' && (h.to.x === 10 || h.seconds === 20)) r.v.dragon.distance = 100; });
     const out = await settle(r.run(), 25_000);
-    expect(out.endReason).toBe(reason === 'unknown' ? 'crystal_shelter_unbuildable' : 'crystal_shelter_stock');
-    expect(out.waitEscalations[0]).toMatchObject({ waitedMs: 20_000, choice: 'enclosure', ok: false });
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.waitEscalations[0]).toMatchObject({ waitedMs: 20_000, choice: 'far_ground', ok: false });
+    if (reason === 'stock') expect(out.waitEscalations[0].reason).toBe('insufficient_stock');
   });
   it('tries an enclosure at the actual supported feet if the observed shadow walk is refused', async () => {
     const r = rig(); r.v.dragon.distance = 20; r.deps.cageShadowFootings.mockReturnValue([p(52.5)]);
@@ -354,6 +361,109 @@ describe('end_full_chain actual probe scene with mocked I/O', () => {
     });
     const out = await settle(r.run(), 25_000); expect(out, out.endReason).toMatchObject({ ok: true });
     expect(out.waitEscalations[0]).toMatchObject({ choice: 'enclosure', fallback: 'shadow_walk_stopped', shadowAttempt: { ok: false }, complete: true });
+  });
+  it.each(['unknown', 'stock', 'off_centre', 'place_refused', 'cloud', 'health'])('proceeds without an enclosure or alternate footing after %s', async reason => {
+    const r = rig({ blocks: reason === 'stock' ? 1 : 64 });
+    r.v.dragon.distance = 20; r.v.dragon.approach.wait = []; r.v.perch = p(60.5, 70, 30.5);
+    if (reason === 'unknown') r.deps.crystalShelterWork.mockReturnValue(null);
+    if (reason === 'cloud') r.v.dragonBreath = [{ x: 60.5, y: 70, z: 30.5, radius: 7, dangerRadius: 7 }];
+    const run = r.run(); await vi.advanceTimersByTimeAsync(1000);
+    if (reason === 'off_centre') r.actor.entity.position.x += 0.35;
+    if (reason === 'health') r.hurt(9);
+    r.setHandler(async h => {
+      if (h.do === 'go' && h.seconds === 5 && reason === 'off_centre') return { ok: false, lines: ['no_path'], ms: 1 };
+      if (h.do === 'place' && reason === 'place_refused') return { ok: false, lines: ['creature_in_cell'], ms: 1 };
+      if (h.do === 'go' && h.to.x === 10) { r.v.dragon.distance = 100; r.v.dragonBreath = []; }
+    });
+    const out = await settle(run, 25_000);
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.waitEscalations[0].choice).toBe('proceed_without_shelter');
+    expect(out.hands.some((h: any) => h.name === 'shoot_crystal')).toBe(true);
+    if (['cloud', 'health'].includes(reason)) expect(out.hands.some((h: any) => h.name === 'crystal_shelter')).toBe(false);
+    if (reason === 'off_centre') expect(out.waitEscalations[0].buildState.reason).toBe('off_centre');
+  });
+  it('forgets an old enclosure once a reflex has moved the body outside (r165)', async () => {
+    const r = rig(); r.v.dragon.distance = 20; r.v.dragon.approach.wait = []; r.v.perch = p(60.5, 70, 30.5);
+    let placed = 0;
+    r.setHandler(async h => {
+      if (h.do === 'place' && ++placed === 10) setTimeout(() => {
+        r.actor.entity.position.x += 13; r.v.dragon.distance = 100;
+      }, 500);
+    });
+    const out = await settle(r.run(), 25_000);
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.shelterEvents.some((e: any) => e.reason === 'already_outside')).toBe(true);
+    expect(out.hands.some((h: any) => h.name === 'shelter_open')).toBe(false);
+    expect(r.blocks.size).toBe(10); // No return for cleanup of the abandoned roof/walls.
+  });
+  it('does not reissue old dig cells after an opening reflex moved the body out (r166)', async () => {
+    const r = rig(); r.v.dragon.distance = 20; r.v.dragon.approach.wait = []; r.v.perch = p(60.5, 70, 30.5);
+    let placed = 0;
+    r.setHandler(async h => {
+      if (h.do === 'place' && ++placed === 10) r.v.dragon.distance = 100;
+      if (h.do === 'dig') {
+        r.blocks.delete(`${h.at[0].x},${h.at[0].y},${h.at[0].z}`); r.actor.entity.position.x += 8;
+        return { ok: false, lines: ['反射: dragon'], ms: 1 };
+      }
+    });
+    const out = await settle(r.run(), 25_000);
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.hands.filter((h: any) => h.name === 'shelter_open')).toHaveLength(1);
+  });
+  it('leaves a completed shelter after the next wait cap instead of repeating empty build plans indefinitely (r164)', async () => {
+    const r = rig(); r.v.dragon.distance = 20; r.v.dragon.approach.wait = []; r.v.perch = p(60.5, 70, 30.5);
+    r.setHandler(async h => { if (h.do === 'go' && h.to.x === 10) r.v.dragon.distance = 100; });
+    const out = await settle(r.run(), 45_000);
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.waitEscalations).toHaveLength(2);
+    expect(out.waitEscalations[0]).toMatchObject({ choice: 'enclosure', complete: true });
+    expect(out.waitEscalations[1]).toMatchObject({ choice: 'proceed_without_shelter', reason: 'shelter_already_tried' });
+    expect(out.hands.filter((h: any) => h.name === 'crystal_shelter')).toHaveLength(10);
+  });
+  it('retains the doorway state through a small upward knock inside the enclosure', async () => {
+    const r = rig(); r.v.dragon.distance = 20; r.v.dragon.approach.wait = []; r.v.perch = p(60.5, 70, 30.5);
+    let placed = 0;
+    r.setHandler(async h => {
+      if (h.do === 'place' && ++placed === 10) {
+        r.actor.entity.position.y += 0.5; r.actor.entity.onGround = false;
+        setTimeout(() => { r.actor.entity.position.y = 70; r.actor.entity.onGround = true; r.v.dragon.distance = 100; }, 500);
+      }
+      if (h.do === 'go' && h.to.x === 10 && !r.actor.entity.onGround) return { ok: false, lines: ['no_path'], ms: 1 };
+    });
+    const out = await settle(r.run(), 25_000);
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.hands.some((h: any) => h.name === 'shelter_open')).toBe(true);
+    expect(out.shelterEvents.some((e: any) => e.reason === 'already_outside')).toBe(false);
+  });
+  it.each(['hole', 'cloud', 'damage'])('abandons a completed enclosure immediately after %s instead of waiting another twenty seconds', async reason => {
+    const r = rig(); r.v.dragon.distance = 20; r.v.dragon.approach.wait = []; r.v.perch = p(60.5, 70, 30.5);
+    let placed = 0;
+    r.setHandler(async h => {
+      if (h.do === 'place' && ++placed === 10) setTimeout(() => {
+        if (reason === 'hole') r.blocks.delete('61,71,30');
+        if (reason === 'cloud') r.v.dragonBreath = [{ x: 60.5, y: 70, z: 30.5, radius: 7, dangerRadius: 7 }];
+        if (reason === 'damage') r.hurt(14);
+      }, 500);
+      if (h.do === 'go' && h.to.x === 10) { r.v.dragon.distance = 100; r.v.dragonBreath = []; }
+    });
+    const out = await settle(r.run(), 25_000);
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(placed).toBe(10);
+    expect(out.shelterEvents.find((e: any) => e.reason === 'shelter_changed').seconds).toBeLessThan(22);
+    expect(out.waitEscalations[1].reason).toBe('shelter_already_tried');
+  });
+  it('rechecks doorway cells after a refused dig without making it a terminal hand failure', async () => {
+    const r = rig(); r.v.dragon.distance = 20; r.v.dragon.approach.wait = []; r.v.perch = p(60.5, 70, 30.5);
+    let placed = 0, failed = 0;
+    r.setHandler(async h => {
+      if (h.do === 'place' && ++placed === 10) r.v.dragon.distance = 100;
+      if (h.do === 'dig' && failed++ < 4) return { ok: false, lines: ['out_of_reach'], ms: 1 };
+      if (h.do === 'go' && h.to.x === 10 && failed === 4) return { ok: false, lines: ['no_path'], ms: 1 };
+    });
+    const out = await settle(r.run(), 25_000);
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.hands.filter((h: any) => h.name === 'shelter_open' && !h.ok)).toHaveLength(4);
+    expect(out.hands.filter((h: any) => h.name === 'shelter_open').every((h: any) => h.hand.at.length === 1)).toBe(true);
   });
   it('centres within the current supported cell before enclosure if a reflex left the feet near its edge', async () => {
     const r = rig(); r.v.dragon.distance = 20;
@@ -418,7 +528,7 @@ describe('end_full_chain actual probe scene with mocked I/O', () => {
       if (label && !seen.has(label)) {
         seen.add(label); r.actor.floorReflexes.busy = 'flee';
         await new Promise(resolve => setTimeout(resolve, 600));
-        r.actor._client.emit('damage_event', { entityId: 10, sourceDirectId: 90, sourceCauseId: 77, sourceTypeId: 3 });
+        r.actor._client.emit('damage_event', { entityId: 10, sourceDirectId: 91, sourceCauseId: 78, sourceTypeId: 3 });
         r.hurt(r.actor.health - 1); r.actor.floorReflexes.busy = null;
       }
     });
@@ -426,13 +536,28 @@ describe('end_full_chain actual probe scene with mocked I/O', () => {
     for (const s of ['walking', 'shooting', 'climbing', 'cage', 'descending']) {
       expect(out.crystalExposure.segments[s].reflexSeconds).toBeGreaterThanOrEqual(0.4);
       expect(out.crystalExposure.segments[s].damageTaken).toBe(1);
-      expect(out.crystalExposure.hits.find((h: any) => h.segment === s)).toMatchObject({ damage: 1, position: { y: expect.any(Number) }, server: { directName: 'dragon_fireball', direct: 90 } });
+      expect(out.crystalExposure.hits.find((h: any) => h.segment === s)).toMatchObject({ damage: 1, position: { y: expect.any(Number) }, server: { directName: 'dragon_fireball', direct: 91, directEntityId: 90 } });
     }
     expect(r.actor._client.listenerCount('damage_event')).toBe(0); expect(r.actor.listenerCount('health')).toBe(0);
     const dead = rig(); dead.setHandler(async h => { if (h.do === 'shoot') { dead.hurt(0); dead.die(); return { ok: false, lines: ['dead'], ms: 0 }; } });
     const failed = await settle(dead.run()); expect(failed.endReason).toBe('actor_dead');
     expect(failed.crystalExposure.segments.shooting.damageTaken).toBe(20);
     expect(failed.crystalExposure.hits[0].server).toBeNull(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each([false, true])('decodes damage source ID + 1, preserving wire values and absent sources: absent=%s', async absent => {
+    const r = rig();
+    r.actor.entities = { 0: { name: 'unrelated' }, 73: { name: 'ender_dragon' },
+      2036: { name: 'area_effect_cloud' }, 2037: { name: 'enderman' } };
+    r.setHandler(async h => {
+      if (h.do === 'shoot') {
+        r.actor._client.emit('damage_event', { entityId: 10, sourceCauseId: absent ? 0 : 74, sourceDirectId: absent ? 0 : 2037, sourceTypeId: 23 });
+        r.hurt(14);
+      }
+    });
+    const out = await settle(r.run()); expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.crystalExposure.hits[0].server).toMatchObject(absent ?
+      { cause: 0, direct: 0, causeEntityId: null, directEntityId: null, causeName: null, directName: null } :
+      { cause: 74, direct: 2037, causeEntityId: 73, directEntityId: 2036, causeName: 'ender_dragon', directName: 'area_effect_cloud' });
   });
   it('uses the default fast water policy, recovers the same source and shoots only after returning to ground', async () => {
     const r = rig({ caged: true, bucket: true }); const out = await settle(r.entry());
@@ -454,6 +579,69 @@ describe('end_full_chain actual probe scene with mocked I/O', () => {
     expect(out.hands.some((h: any) => /shoot|climb_guard|attack/u.test(h.name))).toBe(false);
     expect(out.hands.some((h: any) => h.name === 'guard_ring')).toBe(guard);
     expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(['cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'])('after 20 + at most 30 seconds reaches ascent/descent under normal reflex ownership: %s', async name => {
+    const r = rig({ caged: true, bucket: name.includes('water'), scene: name });
+    r.v.crystals.list.push({ ...crystal(22, true, 40), position: p(45, 90) }); r.v.crystals.remaining = 2;
+    r.v.dragon.distance = 20; r.v.dragon.phase = 6; // Comparison must not wait for the normal phase-0 gate.
+    r.deps.cageShadowFootings.mockReturnValue([p(52.5)]);
+    let rootSignal: AbortSignal | undefined;
+    r.setHandler(async (h, signal) => {
+      if (h.do === 'go' && h.to.x === 36 && !rootSignal) {
+        rootSignal = signal;
+        await new Promise(resolve => setTimeout(resolve, 1200)); // heading stays unsuitable; no timing cancellation
+        expect(signal?.aborted).toBe(false);
+        r.v.dragon.distance = 100; r.v.dragon.phase = 0;
+      }
+    });
+    const run = r.scenes[name](); await vi.advanceTimersByTimeAsync(49_900);
+    expect(r.calls.some(c => c.hands[0].to?.x === 36)).toBe(false);
+    const out = await settle(run, 8000);
+    expect(out, out.endReason).toMatchObject({ ok: true, comparisonComplete: true, endReason: 'cages_returned' });
+    const choice = out.waitEscalations[0];
+    expect(choice).toMatchObject({ choice: 'compare_shield_move', shieldUp: false });
+    expect(choice.waitedMs).toBeGreaterThanOrEqual(20_000);
+    expect(choice.additionalWaitMs).toBeGreaterThanOrEqual(30_000);
+    expect(choice.additionalWaitMs).toBeLessThan(30_100);
+    expect(out.hands.some((h: any) => /shelter|shadow|crystal_retreat/u.test(h.name))).toBe(false);
+    expect(out.hands.findIndex((h: any) => h.name === 'compare_shield')).toBeLessThan(out.hands.findIndex((h: any) => h.name === 'go_root'));
+    expect(out.hands.some((h: any) => h.name === 'pillar_up')).toBe(true);
+    expect(out.hands.some((h: any) => /shaft_down|water_drop/u.test(h.name))).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('during the extra comparison wait requires both distance and yaw, then departs before the thirty-second cap', async () => {
+    const name = 'cage_descent_compare_shaft_fast', r = rig({ caged: true, scene: name });
+    r.v.crystals.list.push({ ...crystal(22, true, 40), position: p(45, 90) }); r.v.crystals.remaining = 2;
+    r.v.dragon.distance = 20; r.v.dragon.yaw = -Math.PI / 2; r.v.dragon.phase = 6;
+    const run = r.scenes[name](); await vi.advanceTimersByTimeAsync(25_000);
+    r.v.dragon.distance = 100; await vi.advanceTimersByTimeAsync(2000);
+    expect(r.calls.some(c => c.hands[0].to?.x === 36)).toBe(false);
+    r.v.dragon.yaw = Math.PI / 2;
+    r.setHandler(async h => { if (h.do === 'go' && h.to.x === 36) r.v.dragon.phase = 0; });
+    const out = await settle(run);
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.waitEscalations[0]).toMatchObject({ choice: 'compare_far_flight', opportunity: { ok: true } });
+    expect(out.waitEscalations[0].additionalWaitMs).toBeLessThan(8000);
+  });
+  it('retains the comparison deadline across a reflex refusal and a newly offered root', async () => {
+    const name = 'cage_descent_compare_shaft_fast', r = rig({ caged: true, scene: name });
+    r.v.crystals.list.push({ ...crystal(22, true, 40), position: p(45, 90) }); r.v.crystals.remaining = 2;
+    r.v.dragon.distance = 20;
+    let cut = false;
+    r.deps.cageRoots.mockImplementation(() => [p(cut ? 35 : 36, 70, 30)]);
+    r.setHandler(async h => {
+      if (h.do === 'go' && h.to.x === 36 && !cut) {
+        cut = true; return { ok: false, lines: ['反射: dragon'], ms: 1 };
+      }
+      if (h.do === 'go' && h.to.x === 35) r.v.dragon.distance = 100;
+    });
+    const out = await settle(r.scenes[name](), 55_000);
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    const moves = out.hands.filter((h: any) => h.name === 'go_root');
+    expect(moves.slice(0, 2).map((h: any) => h.hand.to.x)).toEqual([36, 35]);
+    expect(moves[1].seconds - moves[0].seconds).toBeLessThan(1);
+    expect(moves[0].seconds).toBeGreaterThanOrEqual(50);
+    expect(out.hands.some((h: any) => /shelter/u.test(h.name))).toBe(false);
   });
   it('refuses a comparison missing a second natural cage', async () => {
     const r = rig({ caged: true, scene: 'cage_descent_compare_shaft_fast' });
@@ -858,9 +1046,17 @@ describe('shared cage/arrival geometry', () => {
       expect(crystalShelterWork(s.bot)).toEqual([]);
       expect(s.world.nameAt(36, 72, 30)).toBe('cobblestone');
       expect(s.world.nameAt(36, 70, 30)).toBe('air'); expect(s.world.nameAt(36, 71, 30)).toBe('air');
-      const exit = [...cells].reverse().sort((a, b) => b.y - a.y); accepted(plan.chainHands.dig(exit));
-      const opened = await settle(dig(context(), { at: exit, tool: 'iron_pickaxe', collect: false }));
-      expect(opened, JSON.stringify(opened)).toMatchObject({ ok: true });
+      const exit = crystalShelterExits(s.bot, p(36, 70, 30), cells)[0];
+      expect(exit.cells).toEqual([p(37, 71, 30), p(37, 70, 30)]);
+      for (const cell of exit.cells) {
+        accepted(plan.chainHands.dig([cell]));
+        const opened = await settle(dig(context(), { at: [cell], tool: 'iron_pickaxe', collect: false }));
+        expect(opened, JSON.stringify(opened)).toMatchObject({ ok: true });
+      }
+      expect(crystalShelterExits(s.bot, p(36, 70, 30), cells).some(e => !e.cells.length)).toBe(true);
+      expect((await settle(go(context(), { ...plan.chainHands.go(exit.at, 5, 0), goals: [exit.at] } as any))).ok).toBe(true);
+      expect(crystalShelterExits(s.bot, p(36, 70, 30), cells)).toEqual([]);
+      expect(s.world.nameAt(36, 72, 30)).toBe('cobblestone'); // Roof cleanup is not a departure prerequisite.
       expect(s.world.nameAt(36, 69, 30)).toBe('end_stone');
       expect(cageDryFooting(s.bot)).toBe(true);
     } finally { clearInterval(clock); }
@@ -873,6 +1069,44 @@ describe('shared cage/arrival geometry', () => {
     for (const name of [null, 'iron_bars', 'water']) { s.world.set(37, 71, 30, name); expect(crystalShelterWork(s.bot)).toBeNull(); }
     s.world.set(37, 71, 30, 'air'); s.bot.entity.position.x = 36.85; expect(crystalShelterWork(s.bot)).toBeNull();
     s.bot.entity.position.x = 36.5; s.bot.entity.onGround = false; expect(crystalShelterWork(s.bot)).toBeNull();
+  });
+  it('reports the exact unsupported/occupied cell and creature before asking place', () => {
+    const s = makeHandsSim((_x, y, _z) => y <= 69 ? 'end_stone' : 'air', { start: [36.5, 70, 30.5] });
+    const cell = p(35, 71, 30);
+    s.bot.entities[12] = { id: 12, name: 'enderman', height: 2.9, position: new Vec3(35.5, 70, 30.5) };
+    expect(crystalShelterState(s.bot)).toMatchObject({ reason: 'creature_in_cell', work: null, entity: 'enderman' });
+    delete s.bot.entities[12];
+    s.world.set(cell.x, cell.y, cell.z, null);
+    expect(crystalShelterState(s.bot)).toMatchObject({ reason: 'unloaded', cell, work: null });
+    s.world.set(cell.x, cell.y, cell.z, 'iron_bars');
+    expect(crystalShelterState(s.bot)).toMatchObject({ reason: 'occupied', cell, block: 'iron_bars' });
+    s.world.set(36, 69, 30, 'air');
+    expect(crystalShelterState(s.bot).reason).toBe('no_dry_full_floor');
+  });
+  it('retains the floor and existing walls, exposing only owned door cells after a wall/roof hole', () => {
+    const s = makeHandsSim((_x, y, _z) => y <= 69 ? 'end_stone' : 'air', { start: [36.5, 70, 30.5] });
+    const cells = crystalShelterWork(s.bot)!;
+    for (const q of cells) s.world.set(q.x, q.y, q.z, 'cobblestone');
+    s.world.set(37, 71, 30, 'air'); s.world.set(36, 72, 30, 'air');
+    expect(crystalShelterState(s.bot).work).toEqual([p(37, 71, 30), p(36, 72, 30)]);
+    const owned = cells.filter(q => q.x !== 35);
+    const exits = crystalShelterExits(s.bot, p(36, 70, 30), owned);
+    expect(exits.find(e => e.at.x === 37.5)?.cells).toEqual([p(37, 70, 30)]);
+    expect(exits.some(e => e.at.x === 35.5)).toBe(false); // A pre-existing/unowned wall is not dug.
+    expect(exits.flatMap(e => e.cells).every(q => q.y >= 70 && q.y < 72)).toBe(true);
+  });
+  it('offers the roof before closing all head walls and rechecks missing supports in construction order', () => {
+    const s = makeHandsSim((_x, y, _z) => y <= 68 || (y === 69 && _x === 36 && _z === 30) ? 'end_stone' : 'air', { start: [36.5, 70, 30.5] });
+    const work = crystalShelterWork(s.bot)!;
+    expect(work).toHaveLength(14); // Existing centre floor plus four new side supports.
+    for (const q of work) {
+      const neighbours = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+      expect(neighbours.some(([x,y,z]) => ['end_stone','cobblestone'].includes(s.world.nameAt(q.x+x,q.y+y,q.z+z) ?? ''))).toBe(true);
+      s.world.set(q.x, q.y, q.z, 'cobblestone');
+      expect(crystalShelterWork(s.bot)).not.toContainEqual(q);
+    }
+    expect(work.indexOf(work.find(q => q.x === 36 && q.y === 72 && q.z === 30)!)).toBeLessThan(work.indexOf(work.find(q => q.x === 35 && q.y === 71)!));
+    expect(crystalShelterState(s.bot)).toMatchObject({ reason: 'complete', work: [] });
   });
   it.each([false, true])('prepares a pool, climbs, drops into water and scoops using existing hands and real physics, guard=%s', async guard => {
     vi.useFakeTimers(); vi.spyOn(performance, 'now').mockReturnValue(0);
