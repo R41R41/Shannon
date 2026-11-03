@@ -788,6 +788,23 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const blazesKnown = () => (Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length;
   const mark = (label: string) => note(`T+${r1((Date.now() - t0) / 1000)} s [${label}] hp ${r1(hp())} blazes known ${blazesKnown()} cobble ${packClient().cobblestone ?? 0} torch ${packClient().torch ?? 0}`);
   mark('start');
+  // the stand of the sites file may hold no floor (the staged c1 stand has air under it and the body stands a cell east): the nearest cell with a floor and room, within two, becomes the stand
+  if (options.ambush) {
+    await sleep(2000);
+    const solidAt = (x: number, y: number, z: number) => actor.blockAt(new Vec3(x, y, z))?.boundingBox === 'block';
+    const roomAt = (x: number, y: number, z: number) => !solidAt(x, y, z) && !solidAt(x, y + 1, z);
+    if (!(solidAt(stand[0], stand[1] - 1, stand[2]) && roomAt(stand[0], stand[1], stand[2]))) {
+      let best: number[] | null = null, bestD = Infinity;
+      for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) for (const dy of [0, 1, -1]) {
+        const x = stand[0] + dx, y = stand[1] + dy, z = stand[2] + dz;
+        if (!(solidAt(x, y - 1, z) && roomAt(x, y, z))) continue;
+        const d = Math.hypot(dx, dz) + Math.abs(dy) * 0.5;
+        if (d < bestD) { bestD = d; best = [x, y, z]; }
+      }
+      if (best) { note(`the stand ${stand.join(',')} has no floor: the stand is ${best.join(',')}`); stand[0] = best[0]; stand[1] = best[1]; stand[2] = best[2]; await placeActor('the_nether', stand[0], stand[1], stand[2], 24); await sleep(2000); }
+      else note(`the stand ${stand.join(',')} has no floor and no cell with a floor within two`);
+    }
+  }
   // settle: the head's turn between steps at the cover: what came back is fought from the cover (attack hold 15 s) and the health is waited for (eat when low), up to a budget; the seconds are told
   let settledMs = 0;
   const settle = async (why: string, budgetMs = 90_000) => {
@@ -859,6 +876,18 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     }
     note(`pad ${label}: floor cells wanted ${wanted}, placed ${placed} (rings ${rings})`);
     return { wanted, placed };
+  };
+  // (a fire in or beside a cell makes go refuse it: the fires of the cell's six faces, itself and the cell above are dug out)
+  const putOutFiresAround = async (cell: { x: number; y: number; z: number }, label: string) => {
+    const fires: Array<{ x: number; y: number; z: number }> = [];
+    for (const [dx, dy, dz] of [[0, 0, 0], [0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1]] as const) {
+      const b = actor.blockAt(new Vec3(cell.x + dx, cell.y + dy, cell.z + dz));
+      if (b && /fire/u.test(b.name)) fires.push({ x: cell.x + dx, y: cell.y + dy, z: cell.z + dz });
+    }
+    if (!fires.length) return 0;
+    const put = await act(`put the fire out at the ${label}`, [{ do: 'dig', at: fires, collect: false, onFail: 'continue' }], 20, { accept: ['blaze'] });
+    note(`fire put out at the ${label} (${fires.length}): ${put.lines.join(' | ').slice(0, 120)}`);
+    return fires.length;
   };
   let sealState: { walls: number; ok: boolean } | null = null;
   if (options.checkOnly) { await padAround({ x: stand[0], y: stand[1], z: stand[2] }, 2, 'cover'); sealState = await sealStand(); }
@@ -1124,6 +1153,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
       out = /着いた/u.test(goOut.lines.join(' ')) ? 'reached' : `failed: ${goOut.lines.join(' ').slice(0, 140)}`;
       if (out === 'reached') { const padded = await padAround({ x: attackCell.x, y: attackCell.y, z: attackCell.z }, 2, 'attack'); out += ` (pad ${padded.placed}/${padded.wanted})`; }
       for (let tryNo = 1; tryNo <= 3; tryNo++) {
+        await putOutFiresAround(holdCell, 'cover');
         const goBack = await act('check: back to the cover', [{ do: 'go', to: holdCell, range: 0.5, seconds: 12, onFail: 'continue' }], 25, { accept: ['blaze'] });
         const at = actor.entity.position;
         if (at.distanceTo(new Vec3(holdCell.x + 0.5, holdCell.y, holdCell.z + 0.5)) < 1.5) { back = `reached at try ${tryNo}`; break; }
@@ -1154,6 +1184,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
           if (!atCover()) {
             retreats++;
             for (let tryNo = 1; tryNo <= 4 && !atCover() && !disconnected && hp() > 0; tryNo++) {
+              if (tryNo > 1) await putOutFiresAround(holdCell, 'cover');
               const back = await act('back to the cover', [{ do: 'go', to: holdCell, range: 0.5, seconds: 12, onFail: 'continue' }], 25, { accept: ['blaze'] });
               if (retreats <= 8 || tryNo > 1) note(`back to the cover #${retreats}.${tryNo} (box count ${count}, hp ${r1(hp())}, ${afire ? 'on fire' : 'not on fire'}): ${back.lines.join(' ').slice(0, 120)}`);
             }
