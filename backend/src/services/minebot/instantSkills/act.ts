@@ -245,7 +245,7 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       const to = hand.to ? cellOf(ctx, hand, hand.to) : null;
       const path = hand.path ? cellsOf(ctx, hand, hand.path) : null;
       if ((hand.to && !to) || (hand.path && !path)) return bad('walk のマスが読めない');
-      return walk(ctx, { to: to ?? undefined, path: path ?? undefined, range: hand.range ?? 0.5, sprint: hand.sprint ?? false });
+      return walk(ctx, { to: to ?? undefined, path: path ?? undefined, range: hand.range ?? 0.5, sprint: hand.sprint ?? (bot.game?.dimension === 'overworld') });
     }
     case 'go': {
       // Where to go is the planner's, as cells; the way (what to tread, dig, lay, and drawing it again) is the body's (utils/primitives/go).
