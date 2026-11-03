@@ -46,6 +46,39 @@ export function chainRetreat(view: ChainView, candidates: readonly P3[]): P3 | n
       (!!view?.perch && Math.hypot(p.x - view.perch.x, p.z - view.perch.z) >= 18))) ?? null;
 }
 export const chainOnShaft = (at: P3, root: P3) => Math.floor(at.x) === Math.floor(root.x) && Math.floor(at.z) === Math.floor(root.z);
+export type CageDescent = 'shaft_down' | 'water_drop';
+export interface CagePolicy { descent: CageDescent; guard: boolean; ascentGuard?: boolean }
+/** Lab HEAD choice, deliberately visible here instead of an environment/body switch. */
+export const FAST_CAGE_POLICY: CagePolicy = { descent: 'water_drop', guard: false };
+export function chainDescent(requested: CageDescent, height: number, bucket: boolean, landingKnown: boolean) {
+  const reason = requested === 'shaft_down' ? 'requested_shaft' : !Number.isFinite(height) || height < 3 ? 'below_three' :
+    !bucket ? 'no_water_bucket' : !landingKnown ? 'no_landing_column' : 'prepared_water';
+  return { mode: reason === 'prepared_water' ? 'water_drop' as const : 'shaft_down' as const, reason };
+}
+export interface DragonMotionSample { at: number; id: number; position: P3 }
+export const chainDragonSample = (view: ChainView, at: number): DragonMotionSample | null => {
+  const d = view?.dragon;
+  return d?.position && [at, d.id, d.position.x, d.position.y, d.position.z].every(Number.isFinite) ?
+    { at, id: d.id, position: { ...d.position } } : null;
+};
+/** Stand-in HEAD judgement throughout cage work, never a floor reflex. Estimate m/s from two observations;
+ * a >=4 m/s closing path passing within 12 m in the next 3 s calls for a pause. Thresholds are hypotheses for S1.
+ * Missing/stale motion also pauses; yaw alone cannot prove a charge. No seed, phase or world coordinate is assumed. */
+export function chainDragonRush(before: DragonMotionSample | null, now: DragonMotionSample | null, feet: P3) {
+  const dt = before && now ? (now.at - before.at) / 1000 : 0;
+  if (!before || !now || before.id !== now.id || dt < 0.2 || dt > 1.5 || ![feet.x, feet.y, feet.z].every(Number.isFinite))
+    return { ok: false, reason: 'motion_unknown', velocity: null, speed: null, closing: null, closestSeconds: null, miss: null };
+  const a = before.position, b = now.position;
+  const velocity = { x: (b.x - a.x) / dt, y: (b.y - a.y) / dt, z: (b.z - a.z) / dt };
+  const speed = Math.hypot(velocity.x, velocity.y, velocity.z), distance = chainDistance(feet, b);
+  const dot = (feet.x - b.x) * velocity.x + (feet.y - b.y) * velocity.y + (feet.z - b.z) * velocity.z;
+  const closing = distance ? dot / distance : speed;
+  const closestSeconds = speed ? dot / (speed * speed) : 0;
+  const t = Math.max(0, Math.min(3, closestSeconds));
+  const miss = chainDistance(feet, { x: b.x + velocity.x * t, y: b.y + velocity.y * t, z: b.z + velocity.z * t });
+  const rush = closing >= 4 && closestSeconds >= 0 && closestSeconds <= 3 && miss <= 12;
+  return { ok: !rush, reason: rush ? 'dragon_rush' : 'motion_clear', velocity, speed, closing, closestSeconds, miss };
+}
 export function chainCrystal(view: ChainView, order: 'near' | 'far' = 'near'): ChainCrystal | null {
   return [...(view?.crystals.list ?? [])].sort((a, b) => (order === 'near' ? 1 : -1) * (a.distance - b.distance) || a.id - b.id)[0] ?? null;
 }
@@ -62,7 +95,11 @@ export const chainHands = {
   go: (to: P3, seconds = 60, range = 0.5): ActHand => ({ do: 'go', to: chainCell(to), range, maxDig: 0, maxPlace: 0, maxDrop: 1, seconds }),
   crossing: (to: P3): ActHand => ({ do: 'go', to: chainCell(to), range: 1.5, canPlace: ['cobblestone'], maxPlace: 100, maxDig: 0, seconds: 120 }),
   up: (toY: number): ActHand => ({ do: 'vertical', dir: 'up', shape: 'pillar', toY: Math.floor(toY), canDig: ['none'], canPlace: ['cobblestone'], maxPlace: 64, maxDig: 0, liquid: 'stop', seconds: 60 }),
-  down: (toY: number): ActHand => ({ do: 'vertical', dir: 'down', shape: 'shaft', toY: Math.floor(toY), canDig: ['cobblestone'], canPlace: ['none'], maxDig: 64, maxPlace: 0, liquid: 'stop', seconds: 60 }),
+  down: (toY: number, water?: P3): ActHand => water ?
+    { do: 'go', to: chainCell(water), range: 0, waterOk: true, maxDrop: 1, maxDig: 0, maxPlace: 0, seconds: 15 } :
+    { do: 'vertical', dir: 'down', shape: 'shaft', toY: Math.floor(toY), canDig: ['cobblestone'], canPlace: ['none'], maxDig: 64, maxPlace: 0, liquid: 'stop', seconds: 60 },
+  water: (at: P3): ActHand => ({ do: 'use', item: 'water_bucket', at: [chainCell(at)], face: 'down' }),
+  scoop: (at: P3): ActHand => ({ do: 'use', item: 'bucket', at: [chainCell(at)] }),
   dig: (at: P3[]): ActHand => ({ do: 'dig', at, tool: 'iron_pickaxe', collect: false }),
   place: (at: P3[]): ActHand => ({ do: 'place', at, block: 'cobblestone' }),
   shoot: (id: number): ActHand => ({ do: 'shoot', target: id, item: 'bow', charge: 1.05, n: 1 }),

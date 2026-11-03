@@ -4,10 +4,12 @@ import ts from 'typescript';
 import { Vec3 } from 'vec3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as plan from '../../src/services/minebot/utils/endFullChainPlan.js';
-import { cageGuardCells, cageGuardWork, cageRecoveryFootings, cageRoots, cageWall, islandFootings } from '../../src/services/minebot/utils/endFightGeometry.js';
+import { cageGuardCells, cageGuardWork, cageRecoveryFootings, cageRoots, cageWall, cageWaterLandings, cageWaterSource, cageWaterExit, cageDryFooting, cagePoolExits, cageShadowFootings, islandFootings } from '../../src/services/minebot/utils/endFightGeometry.js';
 import { ACT_HANDS } from '../../src/services/minebot/instantSkills/act.js';
 import { handProblem } from '../../src/services/minebot/utils/actHandRules.js';
-import { goProblem } from '../../src/services/minebot/utils/primitives/go.js';
+import { go, goProblem } from '../../src/services/minebot/utils/primitives/go.js';
+import { use } from '../../src/services/minebot/utils/primitives/use.js';
+import { dig } from '../../src/services/minebot/utils/primitives/dig.js';
 import { feetCentre } from '../../src/services/minebot/utils/dragonWalk.js';
 import { vertical } from '../../src/services/minebot/utils/primitives/vertical.js';
 import { place } from '../../src/services/minebot/utils/primitives/place.js';
@@ -35,6 +37,26 @@ function accepted(hand: any) {
 }
 
 describe('end_full_chain stand-in HEAD choices', () => {
+  it.each([
+    [3, true, true, 'water_drop'], [23, true, true, 'water_drop'], [2, true, true, 'shaft_down'],
+    [30, false, true, 'shaft_down'], [30, true, false, 'shaft_down'], [NaN, true, true, 'shaft_down'],
+  ])('selects a prepared water descent only for height %s, bucket %s, landing %s', (height, bucket, known, mode) => {
+    expect(plan.chainDescent('water_drop', height as number, bucket as boolean, known as boolean).mode).toBe(mode);
+    expect(plan.chainDescent('shaft_down', height as number, bucket as boolean, known as boolean).mode).toBe('shaft_down');
+  });
+  it('estimates velocity and pauses for a closing charge, allowing receding, slow and passing flight', () => {
+    const sample = (x: number, z = 0, at = 1000) => ({ at, id: 77, position: p(x, 90, z) });
+    const feet = p(0, 90, 0), before = sample(40);
+    expect(plan.chainDragonRush(before, sample(30, 0, 1500), feet)).toMatchObject({ ok: false, reason: 'dragon_rush', speed: 20, closing: 20, miss: 0 });
+    expect(plan.chainDragonRush(before, sample(50, 0, 1500), feet).ok).toBe(true);
+    expect(plan.chainDragonRush(before, sample(39, 0, 1500), feet).ok).toBe(true);
+    expect(plan.chainDragonRush(sample(40, 30), sample(30, 30, 1500), feet).ok).toBe(true);
+    expect(plan.chainDragonRush(sample(140), sample(130, 0, 1500), feet).ok).toBe(true);
+    for (const previous of [null, sample(40, 0, 1450), sample(40, 0, -1000), { ...before, id: 76 }])
+      expect(plan.chainDragonRush(previous, sample(30, 0, 1500), feet).reason).toBe('motion_unknown');
+    expect(plan.chainDragonSample(null, 1000)).toBeNull();
+    const v = view(); v.dragon.position.x = NaN; expect(plan.chainDragonSample(v, 1000)).toBeNull();
+  });
   it('parses the entire probe, including code outside the extracted scene', () => {
     const checked = ts.transpileModule(source, { reportDiagnostics: true, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } });
     expect(checked.diagnostics).toEqual([]);
@@ -107,7 +129,8 @@ describe('end_full_chain stand-in HEAD choices', () => {
   it('accepts every generated go/shoot/vertical/dig/place argument through the real act schema and range checks', () => {
     const h = plan.chainHands, guard = cageGuardCells(p(36.5, 90), [p(38, 90)]);
     for (const hand of [h.crossing(p(90)), h.go(p(10)), h.go(p(10), 12, 0), h.up(90), h.down(70), h.dig([p(38, 90)]),
-      h.place(guard.ring), h.place(guard.close), h.shoot(21), h.attack(), { do: 'equip', item: 'shield', slot: 'offhand' }, { do: 'eat' }]) accepted(hand);
+      h.place(guard.ring), h.place(guard.close), h.shoot(21), h.attack(), h.water(p(37, 69)), h.scoop(p(37, 69)), h.down(70, p(37, 69)),
+      { do: 'equip', item: 'shield', slot: 'offhand' }, { do: 'eat' }]) accepted(hand);
     expect(goProblem(h.go(p(10), 4))).toMatch(/5〜120/u);
     for (const seconds of [5, 120]) accepted(h.go(p(10), seconds));
   });
@@ -115,7 +138,8 @@ describe('end_full_chain stand-in HEAD choices', () => {
 
 async function runSelection(wanted: string[], ok = true, writeFails = false) {
   const report: any = { scenes: {}, errors: [] }, calls: string[] = [], writes: string[] = [];
-  const scenes = Object.fromEntries(['enter', 'parts', 'end_full_chain', 'dragon_kill_basin_walk'].map(name => [name, async () => { calls.push(name); return { ok }; }]));
+  const scenes = Object.fromEntries(['enter', 'parts', 'end_full_chain', 'dragon_kill_basin_walk', 'cage_descent_compare',
+    'cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'].map(name => [name, async () => { calls.push(name); return { ok }; }]));
   const killEntries = new Function(`${source.match(/^const killEntries =.*$/m)![0]} return killEntries;`)();
   const javascript = (s: string) => ts.transpileModule(s, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
   const include = new Function('wanted', javascript(`${source.match(/^const include =.*$/m)![0]} return include;`))(wanted);
@@ -132,6 +156,12 @@ async function runSelection(wanted: string[], ok = true, writeFails = false) {
 }
 
 describe('standalone scene dispatch and durable report', () => {
+  it.each(['cage_descent_compare', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'])('runs only the exact comparison entry %s after enter', async name => {
+    const r = await runSelection(['enter', name]);
+    expect(r.calls).toEqual(['enter', name]); expect(r.exitCode).toBe(0);
+    expect(r.writes).toEqual(['/isolated/report.json']); expect(r.restoreDragon).not.toHaveBeenCalled();
+    expect((await runSelection(['enter', name, 'parts'])).calls).toEqual([]);
+  });
   it.each([['end_full_chain'], ['enter', 'end_full_chain']])('runs %j alone, saves report.json and never restores or respawns the dragon', async (...names) => {
     const r = await runSelection(names as string[]);
     expect(r.calls).toEqual(names); expect(r.writes).toEqual(['/isolated/report.json']);
@@ -149,17 +179,22 @@ describe('standalone scene dispatch and durable report', () => {
   });
 });
 
-function rig(options: { caged?: boolean; empty?: boolean; missingProof?: boolean; miss?: boolean; misses?: number; arrows?: number; blocks?: number } = {}) {
+function rig(options: { caged?: boolean; empty?: boolean; missingProof?: boolean; miss?: boolean; misses?: number; arrows?: number; blocks?: number;
+  policy?: plan.CagePolicy; scene?: string; bucket?: boolean } = {}) {
   vi.useFakeTimers(); vi.setSystemTime(1_000_000);
   const actor: any = new EventEmitter(); actor.health = 20; actor.game = { dimension: 'the_end' }; actor.floorReflexes = {};
   actor.entity = { position: new Vec3(120.5, 70, 30.5), onGround: true };
   const v = view(); if (options.caged) v.crystals.list[0].caged = true;
   if (options.empty) { v.crystals.list = []; v.crystals.remaining = 0; v.dragon.phase = 3; }
   let arrows = options.arrows ?? 64, minHealth = 20, missed = 0;
+  let fullBucket = options.bucket === true, emptyBucket = false;
+  const water = new Set<string>(), key = (at: any) => `${at.x},${at.y},${at.z}`;
+  actor.blockAt = (at: any) => ({ name: water.has(key(at)) ? 'water' : 'air' });
   const calls: any[] = [], commands: string[] = [], totals: Record<string, number> = {};
   actor.reflexLedger = { counts: () => ({ ...totals }) };
   const read = () => ({ ...v, position: { ...actor.entity.position }, health: actor.health,
-    inventory: [{ name: 'arrow', count: arrows }, { name: 'cobblestone', count: options.blocks ?? 64 }] });
+    inventory: [{ name: 'arrow', count: arrows }, { name: 'cobblestone', count: options.blocks ?? 64 },
+      ...(fullBucket ? [{ name: 'water_bucket', count: 1 }] : []), ...(emptyBucket ? [{ name: 'bucket', count: 1 }] : [])] });
   let handler: ((h: any, signal?: AbortSignal) => Promise<any>) | undefined;
   const act = async (hands: any[], _seconds: number, _extra: any, signal?: AbortSignal) => {
     hands.forEach(accepted); calls.push({ hands, signal, at: Date.now() });
@@ -170,6 +205,8 @@ function rig(options: { caged?: boolean; empty?: boolean; missingProof?: boolean
         actor.entity.position = new Vec3(h.to.x + 0.5, h.to.y, h.to.z + 0.5);
         if (h.to.x === 14 && v.crystals.remaining === 0) v.dragon.phase = 6;
       }
+      if (h.do === 'use' && h.item === 'water_bucket') { water.add(key(h.at[0])); fullBucket = false; emptyBucket = true; }
+      if (h.do === 'use' && h.item === 'bucket') { water.delete(key(h.at[0])); fullBucket = true; emptyBucket = false; }
       if (h.do === 'vertical') actor.entity.position.y = h.toY;
       if (h.do === 'shoot') {
         arrows--;
@@ -183,20 +220,25 @@ function rig(options: { caged?: boolean; empty?: boolean; missingProof?: boolean
     await new Promise(resolve => setTimeout(resolve, 10));
     return { ok: true, lines: [line], parsed: { ok: true }, ms: 10 };
   };
-  const deps: Record<string, any> = { ...plan, actor, wanted: ['enter', 'end_full_chain'], report: { scenes: { enter: {} } },
+  const deps: Record<string, any> = { ...plan, Vec3, actor, wanted: ['enter', options.scene ?? 'end_full_chain'], report: { scenes: { enter: {} } },
     scenes: {}, chainArrivalAt: Date.now(), chainArrivalMinHealth: 20, chainArrivalCounts: null, chainArrivalTimeline: [], disconnected: null, body: { observe: () => ({ state: { world: read() } }) },
     trackMinHealth: () => ({ stop: () => minHealth }), feetCentre, act,
     islandFootings: vi.fn((_bot, to) => [to.x === 120.5 ? p(91.5) : p(60.5)]),
     cageRoots: vi.fn(() => [p(36, 70, 30)]), cageWall: vi.fn(() => [p(38, 90, 30)]), cageGuardCells,
     cageGuardWork: vi.fn((_bot, cells) => cells),
+    cageWaterLandings: vi.fn(() => [p(37, 69, 30)]), cageWaterSource: vi.fn((_bot, at) => water.has(key(at))),
+    cageWaterExit: vi.fn((_bot, _root, at) => water.has(key(at)) ? [] : null),
+    cageDryFooting: vi.fn(() => actor.entity.onGround === true), cageShadowFootings: vi.fn(() => []),
+    cagePoolExits: vi.fn(() => [p(38, 70, 30)]),
     cageRecoveryFootings: vi.fn(() => actor.entity.onGround ? [{ at: { ...actor.entity.position },
       ground: { ...actor.entity.position, y: 70 }, kind: actor.entity.position.y <= 70 ? 'ground' : 'shaft' }] : []),
     ask: async (s: string) => { commands.push(s); }, gear: vi.fn(), wearIron: vi.fn(), protect: vi.fn(), releaseReflex: vi.fn(), ACTOR: 'MinebotTrial',
     evidence: vi.fn(async () => ({ boss: { verified: true, witness: { entityId: options.missingProof ? 76 : 77 } } })),
     sleep: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)) };
-  const factory = new Function(...Object.keys(deps), `let actorDeaths = 0; ${result.outputText}\nreturn { run: scenes.end_full_chain, die: () => { actorDeaths++; } };`);
-  const api = factory(...Object.values(deps)) as { run: () => Promise<Record<string, any>>; die: () => void };
-  return { ...api, actor, v, calls, commands, deps, totals, read, setHandler: (h: typeof handler) => { handler = h; },
+  const factory = new Function(...Object.keys(deps), `let actorDeaths = 0; ${result.outputText}\nreturn { run: (policy, cageOnly) => runEndChain(policy, cageOnly), entry: scenes.end_full_chain, scenes, die: () => { actorDeaths++; } };`);
+  const api = factory(...Object.values(deps)) as { run: (policy?: plan.CagePolicy, cageOnly?: boolean) => Promise<Record<string, any>>; entry: () => Promise<Record<string, any>>; scenes: Record<string, () => Promise<any>>; die: () => void };
+  const run = () => api.run(options.policy ?? { descent: 'shaft_down', guard: true, ascentGuard: true });
+  return { ...api, run, actor, v, calls, commands, deps, totals, read, water, setHandler: (h: typeof handler) => { handler = h; },
     hurt: (hp: number) => { minHealth = Math.min(minHealth, hp); actor.health = hp; } };
 }
 async function settle<T>(promise: Promise<T>, maxMs = 30_000): Promise<T> {
@@ -206,6 +248,130 @@ async function settle<T>(promise: Promise<T>, maxMs = 30_000): Promise<T> {
 }
 
 describe('end_full_chain actual probe scene with mocked I/O', () => {
+  it('uses the default fast water policy, recovers the same source and shoots only after returning to ground', async () => {
+    const r = rig({ caged: true, bucket: true }); const out = await settle(r.entry());
+    expect(out, out.endReason).toMatchObject({ ok: true, cagePolicy: plan.FAST_CAGE_POLICY, cageTargetMet: true });
+    expect(out.hands.filter((h: any) => /water_/u.test(h.name)).map((h: any) => h.name))
+      .toEqual(['water_dig_pool', 'water_prepare', 'water_drop', 'water_exit_pool', 'water_scoop']);
+    expect(out.hands.some((h: any) => /guard|shaft_down/u.test(h.name))).toBe(false);
+    expect(out.crystals[0].cageAttempts[0]).toMatchObject({ descent: { mode: 'water_drop' }, waterRecovered: true, landingWaterSeen: true, waterMisses: 0, unintendedFalls: 0, ok: true });
+    expect(out.crystals[0].cageMetrics).toMatchObject({ targetMet: true, descentDamage: 0, damageTaken: 0 });
+    expect(out.crystals[0].shots[0].position.y).toBe(70); expect(r.water.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each([false, true])('compares both natural cages without shooting, guard=%s, with no ascent ring', async guard => {
+    const name = guard ? 'cage_descent_compare_shaft_guard' : 'cage_descent_compare_shaft_fast';
+    const r = rig({ caged: true, scene: name });
+    r.v.crystals.list.push({ ...crystal(22, true, 40), position: p(45, 90) }); r.v.crystals.remaining = 2;
+    const out = await settle(r.scenes[name]());
+    expect(out, out.endReason).toMatchObject({ ok: true, endReason: 'cages_returned', cageTargetMet: true, crystalsRemaining: 2 });
+    expect(out.crystals.filter((c: any) => c.cageDone)).toHaveLength(2);
+    expect(out.hands.some((h: any) => /shoot|climb_guard|attack/u.test(h.name))).toBe(false);
+    expect(out.hands.some((h: any) => h.name === 'guard_ring')).toBe(guard);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('refuses a comparison missing a second natural cage', async () => {
+    const r = rig({ caged: true, scene: 'cage_descent_compare_shaft_fast' });
+    expect(await settle(r.scenes.cage_descent_compare_shaft_fast())).toMatchObject({ ok: false, endReason: 'two_natural_cages_required' });
+    expect(r.calls.some(c => c.hands[0].do === 'vertical')).toBe(false);
+  });
+  it('keeps waiting time in the 30-second exposure limit and marks a completed but slow comparison unsuccessful', async () => {
+    const r = rig({ caged: true, scene: 'cage_descent_compare_shaft_fast' }); let delayed = false;
+    r.v.crystals.list.push({ ...crystal(22, true, 40), position: p(45, 90) }); r.v.crystals.remaining = 2;
+    r.setHandler(async h => { if (h.do === 'vertical' && h.dir === 'up' && !delayed) { delayed = true; await new Promise(resolve => setTimeout(resolve, 31_000)); } });
+    const out = await settle(r.scenes.cage_descent_compare_shaft_fast(), 45_000);
+    expect(out).toMatchObject({ ok: false, endReason: 'cages_returned', comparisonComplete: true, cageTargetMet: false });
+    expect(out.crystals[0].cageMetrics.pillarMs).toBeGreaterThanOrEqual(31_000);
+  });
+  it('does not call a shaft fallback a completed water comparison', async () => {
+    const r = rig({ caged: true, scene: 'cage_descent_compare' });
+    r.v.crystals.list.push({ ...crystal(22, true, 40), position: p(45, 90) }); r.v.crystals.remaining = 2;
+    const out = await settle(r.scenes.cage_descent_compare());
+    expect(out).toMatchObject({ ok: false, endReason: 'cages_returned', comparisonComplete: false });
+    expect(out.crystals[0].cageAttempts[0].descent).toMatchObject({ mode: 'shaft_down', reason: 'no_water_bucket' });
+  });
+  it('retains an unintended falling episode through recovery and records a death even when check stops the attempt immediately', async () => {
+    const r = rig({ caged: true }); let pushed = false;
+    r.setHandler(async h => {
+      if (h.do === 'vertical' && h.dir === 'up' && !pushed) {
+        pushed = true; r.actor.entity.position = new Vec3(33.5, 78, 30.5); r.actor.entity.velocity = new Vec3(0, -0.8, 0);
+        return { ok: false, lines: ['被弾'], ms: 0 };
+      }
+      r.actor.entity.velocity = new Vec3(0, 0, 0);
+    });
+    const out = await settle(r.run()); expect(out.ok).toBe(true);
+    expect(out.crystals[0].cageMetrics).toMatchObject({ unintendedFalls: 1, targetMet: false });
+    const dead = rig({ caged: true }); dead.setHandler(async h => { if (h.do === 'vertical') dead.die(); });
+    const stopped = await settle(dead.run()); expect(stopped.endReason).toBe('actor_dead');
+    expect(stopped.crystals[0].cageAttempts[0]).toMatchObject({ deaths: 1, ok: false });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('falls back before dropping if the prepared water column changed, recording the actual shaft choice', async () => {
+    const r = rig({ caged: true, bucket: true, policy: plan.FAST_CAGE_POLICY });
+    const check = r.deps.cageWaterExit.getMockImplementation();
+    r.deps.cageWaterExit.mockImplementation((...args: any[]) => r.actor.entity.position.y >= 90 ? null : check(...args));
+    const out = await settle(r.run());
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.crystals[0].cageAttempts[0]).toMatchObject({ actualDescent: 'shaft_down', fallback: 'water_or_column_changed', waterRecovered: true });
+    expect(out.hands.some((h: any) => h.name === 'water_drop')).toBe(false);
+  });
+  it('fails a lost water source with an empty bucket instead of reporting recovery or starting another cage', async () => {
+    const r = rig({ caged: true, bucket: true, policy: plan.FAST_CAGE_POLICY });
+    const check = r.deps.cageWaterExit.getMockImplementation();
+    r.deps.cageWaterExit.mockImplementation((...args: any[]) => {
+      if (r.actor.entity.position.y >= 90) { r.water.clear(); return null; }
+      return check(...args);
+    });
+    const out = await settle(r.run());
+    expect(out).toMatchObject({ ok: false, endReason: 'water_source_lost_without_bucket' });
+    expect(out.crystals[0].cageAttempts[0]).toMatchObject({ waterRecovered: false, ok: false });
+    expect(out.hands.some((h: any) => h.name === 'water_drop' || h.name === 'shoot_crystal')).toBe(false);
+  });
+  it('records a missed pool and damage, stops without shooting and does not report a successful descent', async () => {
+    const r = rig({ caged: true, bucket: true, policy: plan.FAST_CAGE_POLICY });
+    r.setHandler(async h => {
+      if (h.do === 'go' && h.to.y === 69) {
+        r.actor.entity.position = new Vec3(38.5, 69, 30.5); r.hurt(12); r.actor.emit('health');
+        return { ok: true, lines: ['arrived elsewhere'], ms: 10 };
+      }
+    });
+    const out = await settle(r.run());
+    expect(out).toMatchObject({ ok: false, endReason: 'water_landing_missed', cageTargetMet: false });
+    expect(out.crystals[0].cageMetrics).toMatchObject({ waterMisses: 1, descentDamage: 8, targetMet: false });
+    expect(out.hands.some((h: any) => h.name === 'shoot_crystal')).toBe(false);
+  });
+  it.each(['up', 'dig', 'down'])('aborts %s during an observed charge, then rechecks the column and resumes after flight is clear', async mode => {
+    const r = rig({ caged: true }); let cut = false, pending: AbortSignal | undefined;
+    r.setHandler(async (h, signal) => {
+      if (!cut && ((mode === 'dig' && h.do === 'dig') || (h.do === 'vertical' && h.dir === mode))) {
+        cut = true; pending = signal;
+        const at = r.actor.entity.position;
+        r.v.dragon.position = { x: at.x + 25, y: at.y, z: at.z };
+        const move = setInterval(() => { r.v.dragon.position.x -= 1; }, 100);
+        setTimeout(() => { clearInterval(move); r.v.dragon.position = p(200, 100); }, 1000);
+        return new Promise(resolve => signal!.addEventListener('abort', () => resolve({ ok: false, lines: ['cancelled'], ms: 100 }), { once: true }));
+      }
+    });
+    const out = await settle(r.run());
+    expect(pending?.aborted).toBe(true); expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.interruptions.some((i: any) => ['dragon_rush', 'motion_unknown'].includes(i.reason))).toBe(true);
+    expect(r.deps.cageRecoveryFootings.mock.calls.length).toBeGreaterThan(3); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('does not relaunch a water drop after a cancellation in mid-air; the actual wet landing authorizes cleanup', async () => {
+    const r = rig({ caged: true, bucket: true, policy: plan.FAST_CAGE_POLICY }); let launched = false;
+    r.setHandler(async (h, signal) => {
+      if (h.do === 'go' && h.to.y === 69) {
+        expect(launched).toBe(false); launched = true;
+        r.actor.entity.position = new Vec3(37.5, 80, 30.5); r.actor.entity.onGround = false;
+        const dragon = r.v.dragon; delete r.v.dragon;
+        setTimeout(() => { r.actor.entity.position.y = 69; r.actor.entity.onGround = true; r.actor.entity.isInWater = true; r.v.dragon = dragon; }, 400);
+        return new Promise(resolve => signal!.addEventListener('abort', () => resolve({ ok: false, lines: ['cancelled'], ms: 100 }), { once: true }));
+      }
+    });
+    const out = await settle(r.run());
+    expect(out, out.endReason).toMatchObject({ ok: true });
+    expect(out.hands.filter((h: any) => h.name === 'water_drop')).toHaveLength(1);
+    expect(out.crystals[0].cageAttempts[0]).toMatchObject({ dropCut: 'cage_motion_cut', landingWaterSeen: true, waterRecovered: true });
+  });
   it('refuses a run without floor reflexes before provisioning or moving', async () => {
     const r = rig(); delete r.actor.floorReflexes;
     expect(await r.run()).toMatchObject({ ok: false, endReason: 'floor_reflex_required', reflex: 'unavailable' });
@@ -494,6 +660,80 @@ describe('end_full_chain actual probe scene with mocked I/O', () => {
 });
 
 describe('shared cage/arrival geometry', () => {
+  it.each([false, true])('prepares a pool, climbs, drops into water and scoops using existing hands and real physics, guard=%s', async guard => {
+    vi.useFakeTimers(); vi.spyOn(performance, 'now').mockReturnValue(0);
+    const s = makeHandsSim((_x, y, _z) => y <= 69 ? 'end_stone' : 'air',
+      { start: [36.5, 70, 30.5], items: [{ name: 'cobblestone', count: 64 }, { name: 'iron_pickaxe', count: 1 }, { name: 'water_bucket', count: 1 }] });
+    const root = p(36, 70, 30), source = cageWaterLandings(s.bot, root, 90)[0];
+    expect(source).toEqual(p(37, 69, 30));
+    const context = () => ({ bot: s.bot, stop: new AbortController().signal, deadline: Date.now() + 60_000, facing: 'north' as const, base: plan.chainCell(s.bot.entity.position) });
+    const timer = setInterval(s.tick, 50);
+    let touchedWater = false, descending = false;
+    const columns: string[] = [];
+    const watch = () => {
+      touchedWater ||= s.bot.entity.isInWater;
+      const q = s.bot.entity.position;
+      if (descending && q.y < 89 && q.y > source.y + 1 && s.bot.entity.velocity.y < -0.2) columns.push(`${Math.floor(q.x)},${Math.floor(q.z)}`);
+    };
+    s.bot.on('physicsTick', watch);
+    try {
+      expect((await settle(dig(context(), { at: [source], tool: 'iron_pickaxe', collect: false }))).ok).toBe(true);
+      expect((await settle(use(context(), { item: 'water_bucket', at: source, against: 'down' }))).ok).toBe(true);
+      expect(cageWaterSource(s.bot, source)).toBe(true); expect(s.world.nameAt(root.x, root.y, root.z)).toBe('air');
+      expect((await settle(vertical(context(), plan.chainHands.up(90) as any))).ok).toBe(true);
+      if (guard) {
+        const cells = cageGuardCells(s.bot.entity.position, [p(38, 90, 30)]);
+        expect((await settle(place(context(), { at: cells.ring, block: 'cobblestone' }))).ok).toBe(true);
+        expect((await settle(place(context(), { at: cells.close, block: 'cobblestone' }))).ok).toBe(true);
+        const remove = cageWaterExit(s.bot, root, source, 90)!; expect(remove).toHaveLength(3);
+        expect((await settle(dig(context(), { at: remove, tool: 'iron_pickaxe', collect: false }))).ok).toBe(true);
+      }
+      expect(cageWaterExit(s.bot, root, source, 90)).toEqual([]);
+      const h = plan.chainHands.down(70, source); accepted(h);
+      descending = true;
+      const dropped = await settle(go(context(), { ...h, goals: [source] } as any));
+      expect(dropped, JSON.stringify(dropped)).toMatchObject({ ok: true });
+      expect(touchedWater).toBe(true); expect(plan.chainOnShaft(s.bot.entity.position, source)).toBe(true);
+      expect(columns.length).toBeGreaterThan(0); expect(new Set(columns)).toEqual(new Set([`${source.x},${source.z}`]));
+      const dry = cagePoolExits(s.bot, source)[0]; expect(dry).toBeDefined(); expect(plan.chainOnShaft(dry, root)).toBe(false);
+      expect((await settle(go(context(), { goals: [dry], range: 0, seconds: 10, waterOk: true, maxDig: 0, maxPlace: 0, maxDrop: 1 }))).ok).toBe(true);
+      expect(cageDryFooting(s.bot)).toBe(true);
+      expect((await settle(use(context(), { item: 'bucket', at: source }))).ok).toBe(true);
+      expect(cageWaterSource(s.bot, source)).toBe(false); expect(s.count('water_bucket')).toBe(1);
+    } finally { clearInterval(timer); s.bot.removeListener('physicsTick', watch); }
+  });
+  it('offers only contained, loaded, adjacent natural pools and rejects a blocked drop or changed water source', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const s = makeHandsSim((_x, y, _z) => y <= 69 ? 'end_stone' : 'air', { start: [36.5, 70, 30.5] });
+    const root = p(36, 70, 30), source = p(37, 69, 30);
+    expect(cageWaterLandings(s.bot, root, 90)).toHaveLength(4);
+    expect(cageWaterLandings(s.bot, root, 72)).toEqual([]);
+    s.world.set(37, 82, 30, null); expect(cageWaterLandings(s.bot, root, 90)).not.toContainEqual(source);
+    s.world.set(37, 82, 30, 'air'); s.world.set(37, 68, 30, 'air');
+    expect(cageWaterLandings(s.bot, root, 90)).not.toContainEqual(source);
+    s.world.set(37, 68, 30, 'end_stone'); s.world.set(38, 69, 30, 'air');
+    expect(cageWaterLandings(s.bot, root, 90)).not.toContainEqual(source);
+    s.world.set(38, 69, 30, 'end_stone'); s.world.set(37, 69, 30, 'water');
+    expect(cageWaterExit(s.bot, root, source, 90)).toEqual([]);
+    for (const obstruction of ['iron_bars', 'obsidian', 'cobblestone', null]) {
+      s.world.set(37, 78, 30, obstruction); expect(cageWaterExit(s.bot, root, source, 90)).toBeNull();
+    }
+    s.world.set(37, 78, 30, 'air'); s.world.set(37, 69, 30, 'water~1');
+    expect(cageWaterExit(s.bot, root, source, 90)).toBeNull();
+    s.world.set(37, 69, 30, 'water'); s.world.set(37, 68, 30, 'air');
+    expect(cageWaterExit(s.bot, root, source, 90)).toBeNull();
+  });
+  it('requires dry support for scooping and derives a supported tower shadow from the observed dragon side', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const s = makeHandsSim((x, y, z) => y <= 69 ? 'end_stone' : x >= 39 && x <= 41 && z >= 29 && z <= 31 && y <= 90 ? 'obsidian' : 'air', { start: [36.5, 70, 30.5] });
+    expect(cageDryFooting(s.bot)).toBe(true);
+    const shadow = cageShadowFootings(s.bot, p(60, 80, 30.5), p(40.5, 90, 30.5));
+    expect(shadow.length).toBeGreaterThan(0); expect(shadow.every(q => q.x < 40.5)).toBe(true);
+    const reverse = cageShadowFootings(s.bot, p(20, 80, 30.5), p(40.5, 90, 30.5));
+    expect(reverse.length).toBeGreaterThan(0); expect(reverse.every(q => q.x > 40.5)).toBe(true);
+    s.world.set(36, 69, 30, 'water'); expect(cageDryFooting(s.bot)).toBe(false);
+    s.world.set(36, 69, 30, 'end_stone'); s.bot.entity.position.y = 72; expect(cageDryFooting(s.bot)).toBe(false);
+  });
   it('can build the upper-ascent ring, climb two more levels, guard the top and descend using real client physics and existing hands', async () => {
     vi.useFakeTimers();
     const s = makeHandsSim((x, y, z) => y === 69 ? 'end_stone' : x === 36 && z === 30 && y >= 70 && y < 88 ? 'cobblestone' : 'air',
