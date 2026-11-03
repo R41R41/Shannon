@@ -13,7 +13,7 @@ import { breathCloudsOf, dragonPhaseOf, endDragonOf, fireballPath, fireballsOf, 
  * parts of a dragon in flight are not aimed at, so the boxes are only drawn for the perched one.
  */
 export type HazardKind = 'breath' | 'flame' | 'fireball' | 'head' | 'neck' | 'wing';
-export interface Hazard { kind: HazardKind; centre: P3; /** The radius of a round zone (0 for a box). */ radius: number; box?: Box; why: string; /** A cloud a fireball gone from sight has just laid, not yet among the client's entities (it is laid in the tick the ball goes, its harm comes 20 ticks after): a rise now clears it, a rise before the ball came does not. */ pending?: true }
+export interface Hazard { kind: HazardKind; centre: P3; /** The radius of a round zone (0 for a box). */ radius: number; box?: Box; /** The actual fireball polyline, distinct from its repulsion centre. */ line?: readonly P3[]; why: string; /** A cloud a fireball gone from sight has just laid, not yet among the client's entities (it is laid in the tick the ball goes, its harm comes 20 ticks after): a rise now clears it, a rise before the ball came does not. */ pending?: true }
 
 export { BREATH_RADIUS_MIN };
 /** A fireball's line is dangerous within this far (the cloud it lays and the blast round it). */
@@ -51,7 +51,7 @@ export function cloudReaches(c: P3, r: number, feet: P3, clearance = 0): boolean
 }
 
 /** The distance from a point to a polyline (the nearest point on it too). */
-function nearestOnPath(points: P3[], p: P3): { distance: number; at: P3 } | null {
+function nearestOnPath(points: readonly P3[], p: P3): { distance: number; at: P3 } | null {
   let best: { distance: number; at: P3 } | null = null;
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i], b = points[i + 1];
@@ -62,6 +62,14 @@ function nearestOnPath(points: P3[], p: P3): { distance: number; at: P3 } | null
     if (!best || distance < best.distance) best = { distance, at };
   }
   return best;
+}
+
+/** A body already inside a fireball's line may walk straight out, never nearer the line or back into it. No entry from outside. */
+export function exitsFireballLine(hazard: Hazard, path: readonly P3[]): boolean {
+  if (hazard.kind !== 'fireball' || !hazard.line || path.length < 2) return false;
+  const distances = path.map(at => nearestOnPath(hazard.line!, { x: at.x, y: at.y + 0.9, z: at.z })?.distance ?? Infinity);
+  if (distances[0] > FIREBALL_REACH || distances[distances.length - 1] <= FIREBALL_REACH) return false;
+  return distances.every((distance, i) => i === 0 || (distances[i - 1] > FIREBALL_REACH ? distance > FIREBALL_REACH : distance >= distances[i - 1] - 1e-6));
 }
 
 /**
@@ -97,15 +105,16 @@ function landedFireballs(bot: object, flying: Array<{ id: number; impact: P3 | n
  * The hazards that reach the body now. `clearance` widens every zone (the reflex starts at 0 and runs on until the body is `clearance` clear of
  * them, so that it does not stop on the edge and start again at the next tick).
  */
-export function dragonHazards(bot: any, options: { clearance?: number; now?: number } = {}): Hazard[] {
+export function dragonHazards(bot: any, options: { clearance?: number; now?: number; /** Also test a walking route, including zones that do not reach the body yet. */ along?: readonly P3[] } = {}): Hazard[] {
   if (!isEnd(bot) || !bot.entity?.position) return [];
   const clearance = options.clearance ?? 0, now = options.now ?? Date.now();
   const feet = bot.entity.position as P3;
+  const positions = options.along ?? [feet];
   const out: Hazard[] = [];
   // 1. the breath lying about
   const clouds = breathCloudsOf(bot);
   for (const cloud of clouds) {
-    if (cloudReaches(cloud.position, cloud.radius ?? 0, feet, clearance)) {
+    if (positions.some(at => cloudReaches(cloud.position, cloud.radius ?? 0, at, clearance))) {
       out.push({ kind: 'breath', centre: cloud.position, radius: Math.max(cloud.radius ?? 0, BREATH_RADIUS_MIN), why: `竜の息の雲 (${cloud.position.x.toFixed(0)},${cloud.position.y.toFixed(0)},${cloud.position.z.toFixed(0)}) 半径${round1(Math.max(cloud.radius ?? 0, BREATH_RADIUS_MIN))}` });
     }
   }
@@ -121,19 +130,19 @@ export function dragonHazards(bot: any, options: { clearance?: number; now?: num
         const centre = { x: spot.x, y: groundBelow(bot, spot), z: spot.z };
         // Where the real cloud already lies, it is the cloud above that counts.
         const lying = clouds.some(cloud => Math.hypot(cloud.position.x - centre.x, cloud.position.z - centre.z) <= 3);
-        if (!lying && cloudReaches(centre, BREATH_RADIUS_MIN, feet, clearance)) {
+        if (!lying && positions.some(at => cloudReaches(centre, BREATH_RADIUS_MIN, at, clearance))) {
           out.push({ kind: 'flame', centre, radius: BREATH_RADIUS_MIN, why: `竜が息を吐く（phase ${phase}）頭の2.5先 (${centre.x.toFixed(0)},${centre.y.toFixed(0)},${centre.z.toFixed(0)}) 半径${BREATH_RADIUS_MIN}` });
         }
       }
-      const me = bodyBoxAt(feet);
+      const bodies = positions.map(bodyBoxAt);
       const grown = CONTACT + BOX_MARGIN + clearance;
       for (const part of ['head', 'neck'] as const) {
         const zone = inflate(partBox(placed, part), grown);
-        if (boxesOverlap(zone, me)) out.push({ kind: part, centre: boxCentre(partBox(placed, part)), radius: 0, box: zone, why: `竜の${part === 'head' ? '頭' : '首'}の1マス内` });
+        if (bodies.some(me => boxesOverlap(zone, me))) out.push({ kind: part, centre: boxCentre(partBox(placed, part)), radius: 0, box: zone, why: `竜の${part === 'head' ? '頭' : '首'}の1マス内` });
       }
       for (const part of ['wing1', 'wing2'] as const) {
         const zone = inflate(shift(inflate(partBox(placed, part), 4, 2, 4), 0, -2, 0), BOX_MARGIN + clearance);
-        if (boxesOverlap(zone, me)) out.push({ kind: 'wing', centre: boxCentre(partBox(placed, part)), radius: 0, box: zone, why: '竜の翼の4マス内（押される）' });
+        if (bodies.some(me => boxesOverlap(zone, me))) out.push({ kind: 'wing', centre: boxCentre(partBox(placed, part)), radius: 0, box: zone, why: '竜の翼の4マス内（押される）' });
       }
     }
   }
@@ -146,14 +155,14 @@ export function dragonHazards(bot: any, options: { clearance?: number; now?: num
     flying.push({ id: ball.id, impact: path.impact });
     const line = [{ x: ball.position.x, y: ball.position.y, z: ball.position.z }, ...path.points, ...(path.impact ? [path.impact] : [])];
     const near = nearestOnPath(line, chest);
-    if (near && near.distance <= FIREBALL_REACH + clearance) {
-      out.push({ kind: 'fireball', centre: fireballPush(line, path.impact, near.at, feet), radius: FIREBALL_REACH, why: `竜の火の玉 #${ball.id} の線から${near.distance.toFixed(1)}m（${path.impact ? `着弾 (${path.impact.x.toFixed(0)},${path.impact.y.toFixed(0)},${path.impact.z.toFixed(0)})` : '40tick先まで当たらず'}）` });
+    if (near && (options.along ? positions.some(at => (nearestOnPath(line, { x: at.x, y: at.y + 0.9, z: at.z })?.distance ?? Infinity) <= FIREBALL_REACH + clearance) : near.distance <= FIREBALL_REACH + clearance)) {
+      out.push({ kind: 'fireball', centre: fireballPush(line, path.impact, near.at, feet), radius: FIREBALL_REACH, line, why: `竜の火の玉 #${ball.id} の線から${near.distance.toFixed(1)}m（${path.impact ? `着弾 (${path.impact.x.toFixed(0)},${path.impact.y.toFixed(0)},${path.impact.z.toFixed(0)})` : '40tick先まで当たらず'}）` });
     }
   }
   for (const landing of landedFireballs(bot, flying, now)) {
     // Once the cloud itself is in sight it is the cloud above that counts.
     const lying = clouds.some(cloud => Math.hypot(cloud.position.x - landing.impact.x, cloud.position.z - landing.impact.z) <= 4);
-    if (!lying && cloudReaches(landing.impact, BREATH_RADIUS_MIN, feet, clearance)) {
+    if (!lying && positions.some(at => cloudReaches(landing.impact, BREATH_RADIUS_MIN, at, clearance))) {
       out.push({ kind: 'breath', centre: landing.impact, radius: BREATH_RADIUS_MIN, pending: true, why: `竜の火の玉が (${landing.impact.x.toFixed(0)},${landing.impact.y.toFixed(0)},${landing.impact.z.toFixed(0)}) に落ちた: 息の雲が出る` });
     }
   }

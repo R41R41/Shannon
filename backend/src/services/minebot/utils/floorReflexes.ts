@@ -20,7 +20,7 @@ import { engagedWithAny } from './engagement.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 import { entityHealth } from './mapMarks.js';
 import { eyeOf, probeSight } from './probeTools.js';
-import { dragonHazards, hazardCentres } from './dragonDanger.js';
+import { cloudReaches, dragonHazards, exitsFireballLine, hazardCentres, type Hazard } from './dragonDanger.js';
 import { isEnd } from './dragonState.js';
 import { clutchWanted, runFallClutch, scoopBack, scoopWanted, type FallMemory } from './fallClutch.js';
 
@@ -692,9 +692,10 @@ function scanHeading(bot: FloorBody, at: Vec3, yaw: number): { safe: boolean; ju
   return { safe: walkHeading(bot, at, yaw, at.y + JUMP_APEX).safe, jump: true };
 }
 
-function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number): { safe: boolean; jump: boolean } {
+/** `route` asks for a complete, loaded walking trace to that distance, rejecting jumps and walls along its whole length. */
+function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number, route?: { distance: number; path: Vec3[] }): { safe: boolean; jump: boolean } {
   const terrain = bot as unknown as TerrainBody;
-  if (typeof terrain.blockAt !== 'function') return { safe: true, jump: false };
+  if (typeof terrain.blockAt !== 'function') return { safe: !route, jump: false };
   const dx = -Math.sin(yaw), dz = -Math.cos(yaw), heading: Heading = { dx, dz };
   let jump = false;
   try {
@@ -702,10 +703,16 @@ function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number): { sa
     const here = terrain.blockAt(new Vec3(Math.floor(at.x), start, Math.floor(at.z)));
     const swimmingNow = holdsWater(here) || (here?.boundingBox !== 'block' && holdsWater(terrain.blockAt(new Vec3(Math.floor(at.x), start + 1, Math.floor(at.z)))));
     let reachesShallow = false, feetY = at.y, fromX = Math.floor(at.x), fromZ = Math.floor(at.z);
+    let traced = 0;
+    const traceTo = (until: number) => {
+      if (!route) return;
+      for (let d = traced + SCAN_SAMPLE; d < until - EDGE; d += SCAN_SAMPLE) route.path.push(new Vec3(at.x + dx * d, feetY, at.z + dz * d));
+    };
     // The cells the line crosses, in order, how far along it each is entered, and the cells beside it that the body's width reaches there.
     const cells: Array<{ cx: number; cz: number; x: number; z: number; d: number; beside: Map<string, [number, number]> }> = [];
     let lastX = fromX, lastZ = fromZ;
-    for (let d = SCAN_SAMPLE; d <= FLEE_LOOKAHEAD + 1e-9; d += SCAN_SAMPLE) {
+    const distance = route?.distance ?? FLEE_LOOKAHEAD;
+    for (let d = SCAN_SAMPLE; d <= distance + 1e-9; d += SCAN_SAMPLE) {
       const x = at.x + dx * d, z = at.z + dz * d, cx = Math.floor(x), cz = Math.floor(z);
       if (cx !== lastX || cz !== lastZ) { cells.push({ cx, cz, x, z, d, beside: new Map() }); lastX = cx; lastZ = cz; }
       const current = cells[cells.length - 1];
@@ -718,8 +725,10 @@ function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number): { sa
     // The height of the feet in each cell passed (the first is where the body is).
     const passed = [{ d: 0, y: at.y }];
     for (const { cx, cz, x, z, d, beside } of cells) {
+      traceTo(d);
       const stand = Math.floor(feetY - 0.01);
       const floor = terrain.blockAt(new Vec3(cx, stand, cz)), feet = terrain.blockAt(new Vec3(cx, stand + 1, cz)), head = terrain.blockAt(new Vec3(cx, stand + 2, cz));
+      if (route && [floor, feet, head].some(block => !block)) return { safe: false, jump };
       if ([floor, feet, head].some(block => isLethalToStandIn(block?.name))) return { safe: false, jump };
       // What the feet would rest on: the floor cell, or the one under it when that is open (a step down).
       const resting = floor && floor.boundingBox === 'block' ? floor : terrain.blockAt(new Vec3(cx, stand - 1, cz));
@@ -731,11 +740,12 @@ function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number): { sa
       if (!swim) reachesShallow = true;
       // A wall in the first two blocks: the run would be into it. (Further on the flee has stopped by then, and the frame is left as it is.)
       const column = readColumn(terrain, cx, cz, fromX, fromZ, stand, feetY, [floor, feet, head], heading);
-      if (column.kind === 'wall' && d <= 2) return { safe: false, jump };
+      if (column.kind === 'wall' && (route || d <= 2)) return { safe: false, jump };
       // Any drop that would cost health (more than three blocks, or lava below), judged as the edge guard does with one point to spare,
       // from the floor the body stands on at the cell before: a slope is a row of small drops, not one big one.
       if (!blockSpan(floor, heading) && edgeRisk(bot as any, x, feetY, z, 1) !== null) return { safe: false, jump };
       if (column.kind === 'ground') {
+        if (route && column.jump) return { safe: false, jump: true };
         if (!groundIsSafe(terrain, cx, cz, column.top) || descentIsDangerous(passed, d, column.top, apex)) return { safe: false, jump };
         if (column.jump && d <= 2) jump = true;
         feetY = column.top;
@@ -747,10 +757,14 @@ function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number): { sa
         if (down.top !== null) feetY = down.top;
       }
       passed.push({ d, y: feetY });
+      route?.path.push(new Vec3(x, feetY, z));
+      traced = d;
       fromX = cx; fromZ = cz;
     }
     if (swimmingNow && !reachesShallow) return { safe: false, jump };
-  } catch { return { safe: true, jump: false }; }
+    traceTo(distance);
+    if (route) route.path.push(new Vec3(at.x + dx * distance, feetY, at.z + dz * distance));
+  } catch { return { safe: !route, jump: false }; }
   return { safe: true, jump };
 }
 
@@ -1024,8 +1038,64 @@ const DRAGON_RISE_GAP_MS = 1200;
 const DRAGON_RISE_MAX = 3;
 const DRAGON_RISE_WINDOW_MS = 20_000;
 const DRAGON_DETAIL_MAX = 160;
+/**
+ * Only after the ordinary retreat has no heading, and only inside an existing cloud: walk to the nearest reachable horizontal edge.
+ * The usual centre repulsion can veto every turn (including a turn through a wing); it is not a test of the hazards along a route.
+ * Here wings may be crossed, but head/neck contact, predicted breath and any newly entered cloud or fireball line may not.
+ * A fireball line already on the body may only be left, never approached.
+ * The whole route is read at its ground height, without jumping, to the cloud's edge plus the usual clearance (not just the 5 m look-ahead).
+ */
+export function dragonCloudEscapePlan(bot: FloorBody, hazards: Hazard[], previous?: number, continuing?: readonly Hazard[]): { yaw: number; jump: false; cloudEscape: readonly Hazard[] } | null {
+  const at = bot.entity?.position;
+  if (!at) return null;
+  const sameCloud = (a: Hazard, b: Hazard) => a.centre.x === b.centre.x && a.centre.y === b.centre.y && a.centre.z === b.centre.z;
+  const clouds = hazards.filter(h => h.kind === 'breath' && !h.pending && (continuing ? continuing.some(c => sameCloud(c, h)) : cloudReaches(h.centre, h.radius, at)));
+  if (!clouds.length) return null;
+  const headings = clouds.flatMap(cloud => {
+    const away = Math.atan2(cloud.centre.x - at.x, cloud.centre.z - at.z);
+    return Array.from({ length: 16 }, (_, i) => away + i * Math.PI / 8);
+  });
+  if (previous !== undefined) headings.push(previous);
+  const candidates = headings.map(yaw => {
+    const dx = -Math.sin(yaw), dz = -Math.cos(yaw);
+    const distance = Math.max(...clouds.map(cloud => {
+      const x = at.x - cloud.centre.x, z = at.z - cloud.centre.z, along = x * dx + z * dz;
+      return -along + Math.sqrt(along * along + (cloud.radius + DRAGON_CLEARANCE) ** 2 - x * x - z * z);
+    }));
+    return { yaw, distance };
+  }).filter(c => c.distance <= DRAGON_RETREAT_BLOCKS)
+    .sort((a, b) => a.distance - b.distance || (previous === undefined ? 0 : angleBetween(a.yaw, previous) - angleBetween(b.yaw, previous)));
+  let best: { yaw: number; distance: number; wings: number } | null = null;
+  for (const candidate of candidates) {
+    if (best && candidate.distance > best.distance + 1e-6) break;
+    const path: Vec3[] = [at.clone()];
+    const distance = Math.ceil((candidate.distance + SCAN_SAMPLE) / SCAN_SAMPLE) * SCAN_SAMPLE;
+    const ground = walkHeading(bot, at, candidate.yaw, undefined, { distance, path });
+    if (!ground.safe || ground.jump) continue;
+    const crossed = dragonHazards(bot, { along: path });
+    if (crossed.some(h => {
+      if (h.kind === 'wing') return false;
+      if (h.kind === 'fireball') return !exitsFireballLine(h, path);
+      return !(h.kind === 'breath' && !h.pending && clouds.some(c => sameCloud(c, h)));
+    })) continue;
+    const wings = crossed.filter(h => h.kind === 'wing').length;
+    if (!best || wings < best.wings) best = { yaw: candidate.yaw, distance: candidate.distance, wings };
+    if (!wings) break;
+  }
+  return best ? { yaw: best.yaw, jump: false, cloudEscape: clouds } : null;
+}
+/** Preserve a successful ordinary retreat; use the cloud escape only when it would otherwise stop. */
+function dragonRetreatPlan(bot: FloorBody, hazards: Hazard[], previous?: number, continuing?: readonly Hazard[]): { yaw: number; jump: boolean; cloudEscape?: readonly Hazard[] } | null {
+  if (continuing) {
+    const escape = dragonCloudEscapePlan(bot, hazards, previous, continuing);
+    if (escape) return escape;
+    // A newly blocked route must stop; do not substitute an unchecked ordinary turn while still in the cloud.
+    if (hazards.some(h => h.kind === 'breath')) return null;
+  }
+  return fleeHeadingPlan(bot, hazardCentres(hazards), previous, { noJump: true, wide: true }) ?? dragonCloudEscapePlan(bot, hazards, previous);
+}
 export async function runDragonRetreat(bot: FloorBody, port: FloorBody, tickMs = 50): Promise<{ success: boolean; result: string; moved: number; ended: 'clear' | 'blocked' | 'cap' }> {
-  const origin = bot.entity!.position.clone(), memory: { heading?: number } = {};
+  const origin = bot.entity!.position.clone(), memory: { heading?: number; cloudEscape?: readonly Hazard[] } = {};
   let ticks = 0, ended: 'clear' | 'blocked' | 'cap' = 'cap';
   try {
     for (; ticks < DRAGON_RETREAT_TICKS; ticks++) {
@@ -1033,9 +1103,10 @@ export async function runDragonRetreat(bot: FloorBody, port: FloorBody, tickMs =
       const hazards = body && bot.lavaReflex?.engaged !== true && bot.breathingReflex?.engaged !== true ? dragonHazards(bot, { clearance: ticks === 0 ? 0 : DRAGON_CLEARANCE }) : [];
       if (!hazards.length) { ended = 'clear'; break; }
       if (body!.position.distanceTo(origin) >= DRAGON_RETREAT_BLOCKS) break;
-      const plan = fleeHeadingPlan(bot, hazardCentres(hazards), memory.heading, { noJump: true, wide: true });
+      const plan = dragonRetreatPlan(bot, hazards, memory.heading, memory.cloudEscape);
       if (!plan) { ended = 'blocked'; break; }
       memory.heading = plan.yaw;
+      memory.cloudEscape = plan.cloudEscape;
       port.look?.(plan.yaw, 0, true);
       port.setControlState('forward', true); port.setControlState('sprint', false); port.setControlState('jump', false);
       await new Promise(resolve => setTimeout(resolve, tickMs));
@@ -2178,7 +2249,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     const said = hazards.map(hazard => hazard.why).join('・');
     // No level, safe way out: nothing is started (a run that ends where it began would cut the planner's act for nothing, every time). Told once in a while, as a fact only.
     let way: ReturnType<typeof fleeHeadingPlan> = null;
-    try { way = fleeHeadingPlan(bot, hazardCentres(hazards), undefined, { noJump: true, wide: true }); } catch { way = null; }
+    try { way = dragonRetreatPlan(bot, hazards); } catch { way = null; }
     if (!way) {
       // A ball in the air, or one just down whose cloud is not yet in sight: look again at the next tick (the cloud decides, and its first harm is 20 ticks after it is laid).
       state.dragonNextAt = t + (hazards.some(hazard => hazard.kind === 'fireball' || hazard.pending) ? DRAGON_COMING_GAP_MS : DRAGON_BLOCKED_GAP_MS);
