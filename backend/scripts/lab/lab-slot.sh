@@ -55,6 +55,9 @@ resources_problem() {   # prints what is too little, empty when all is fine
 
 prod_lock_held() { [ -e "$PROD_LOCK" ] && ! (exec 7>"$PROD_LOCK"; flock -n 7); }
 
+PORT_BASE=${LAB_PORT_BASE:-${LAB_PORT_FROM:-25590}}     # slot i uses port PORT_BASE + i (exported as LAB_PORT; the VM: 25590 + slot)
+port_listening() { ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":$1\$"; }
+
 lab_listeners() {   # ports 25570-25599 with a listener
   ss -ltn 2>/dev/null | awk '{print $4}' | sed -n 's/.*:\(255[7-9][0-9]\)$/\1/p' | sort -u | tr '\n' ' '
 }
@@ -86,6 +89,16 @@ status() {
   done
   if [ -e "$HANDS_LOCK" ] && ! (exec 7>"$HANDS_LOCK"; flock -n 7); then echo "$HANDS_LOCK: HELD"; else echo "$HANDS_LOCK: free"; fi
   echo "labs listening (25570-25599): $(lab_listeners)"
+  # the queue, oldest first (a waiter writes waiting.<pid> and removes it when it starts or gives up)
+  for w in $(ls -tr "$SCRATCH"/waiting.* 2>/dev/null); do
+    wp=${w##*.}
+    if kill -0 "$wp" 2>/dev/null; then echo "waiting: $(sed 's/since=\([0-9]*\)/since=\1/' "$w" | cut -c1-220)  ($(( ($(date +%s) - $(sed -n 's/.*since=\([0-9]*\).*/\1/p' "$w")) / 60 )) min)"; else rm -f "$w"; fi
+  done
+  # a tmux lab session of the minebot-lab socket whose port no slot holds: left over
+  held_ports=" $(cat "$SCRATCH"/slot*.holder 2>/dev/null | sed -n 's/.* port=\([0-9]*\) .*/\1/p' | tr '\n' ' ')"
+  for s in $(tmux -L minebot-lab ls 2>/dev/null | sed -n 's/^\(codex-progressive-lab-[0-9]*\):.*/\1/p'); do
+    case "$held_ports" in *" ${s##*-} "*) ;; *) echo "STALE tmux session $s (its port is not held by a slot; tmux -L minebot-lab kill-session -t $s if nobody uses it)";; esac
+  done
   echo "production Minecraft tasks active: $(run_active)"
   if prod_lock_held; then echo "$PROD_LOCK: HELD   $(cat "$PROD_LOCK" 2>/dev/null | head -c 200)"; else echo "$PROD_LOCK: free"; fi
   echo "disk free on $HOME: $(disk_free_gb "$HOME") GB   memory: $(free -m | awk 'NR==2{printf "%d MB available of %d MB", $7, $2}')"
@@ -95,6 +108,7 @@ status() {
 }
 
 WAIT=0; LABEL=""; ALLOW_RUN=0
+WAITING="$SCRATCH/waiting.$$"
 if [ "${1:-}" = "status" ]; then status; exit 0; fi
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -125,26 +139,33 @@ while :; do
     for i in $(seq 0 $((COUNT - 1))); do
       lock="$SCRATCH/slot.lock"; [ "$i" -gt 0 ] && lock="$SCRATCH/slot.$i.lock"
       exec 8>"$lock"
-      if flock -n 8; then taken=$i; break; fi
+      if flock -n 8; then
+        # rule 8: the slot's own port must not be listened to by anyone (a lab that does not come through a slot, a leftover): then the next slot, never a clash at start
+        if port_listening $((PORT_BASE + i)); then why="the port $((PORT_BASE + i)) of slot $i is listened to by another server (${why})"; exec 8>&-; continue; fi
+        taken=$i; break
+      fi
       exec 8>&-
     done
     [ -n "$taken" ] && break
   fi
+  [ -e "$WAITING" ] || echo "pid=$$ since=$(date +%s) label=${LABEL:-$1} why-first=$why" > "$WAITING"
   if [ "$(date +%s)" -ge "$deadline" ]; then echo "lab-slot: $why" >&2; exit 3; fi
   sleep 5
 done
+rm -f "$WAITING"
 lock="$SCRATCH/slot.lock"; [ "$taken" -gt 0 ] && lock="$SCRATCH/slot.$taken.lock"
 
 # a lab that is not ours may still be listening (left over by a crashed run): with the only slot in hand it is certain
 # (with several slots the others' servers listen legitimately, so the check is for the one-slot VM)
 others=$(lab_listeners)
-if [ "$COUNT" -eq 1 ] && [ -n "$others" ]; then
-  echo "lab-slot: something listens in 25570-25599 ($others); stop it first (tmux -L minebot-lab ls) (rule 4)" >&2
-  [ "${LAB_SLOT_IGNORE_LISTENERS:-0}" = 1 ] || exit 5
+if [ "$COUNT" -eq 1 ] && [ -n "$others" ] && ! port_listening "$PORT_BASE"; then
+  : # the one slot is ours and its own port is free: a server on another port does not clash (rule 8 replaces the blanket refusal of rule 4)
 fi
 
-echo "pid=$$ slot=$taken since=$(date -Is) label=${LABEL:-$1} cmd=$*" > "$lock.holder"
-trap 'rm -f "$lock.holder"' EXIT
-export LAB_SLOT=$taken MINEBOT_LAB_SCRATCH="$SCRATCH"
+LAB_PORT=$((PORT_BASE + taken))
+echo "pid=$$ slot=$taken port=$LAB_PORT since=$(date -Is) label=${LABEL:-$1} cmd=$*" > "$lock.holder"
+# the end of the lab, however it ends: the slot's server and tmux session go with it (nothing of ours stays on the port)
+trap 'rm -f "$lock.holder" "$WAITING"; tmux -L minebot-lab kill-session -t "codex-progressive-lab-$LAB_PORT" 2>/dev/null' EXIT
+export LAB_SLOT=$taken LAB_PORT MINEBOT_LAB_SCRATCH="$SCRATCH"
 "$@"
 exit $?
