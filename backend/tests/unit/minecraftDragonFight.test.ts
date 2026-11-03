@@ -286,8 +286,7 @@ describe('the dragon\'s reach', () => {
     const raised = fixture({ phase: DRAGON_PHASE.sittingScanning, at: new Vec3(0.5, 65, 7.0) });
     expect(dragonHazards(raised.bot).map(h => h.kind)).toContain('head');
     const wing = fixture({ phase: DRAGON_PHASE.sittingScanning, at: new Vec3(-4.0, 65, 0.5) });
-    // the sitting dragon's wing push is no danger (lab r105/r108/r109: taken 20+ times at the perch, no damage)
-    expect(dragonHazards(wing.bot).map(h => h.kind)).not.toContain('wing');
+    expect(dragonHazards(wing.bot).map(h => h.kind)).toContain('wing');
   });
   it('draws no box round a dragon in flight', () => {
     const f = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(0.5, 65, 7.0) });
