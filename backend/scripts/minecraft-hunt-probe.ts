@@ -1086,7 +1086,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
         const atAttack = () => actor.entity.position.distanceTo(aPos) < 1.3;
         // (a push may have dropped the body into the pit below the cover: back up by the way, placing and digging cobblestone, before anything else)
         if (actor.entity.position.y < holdCell.y - 1.5) {
-          const up = await act('climb back to the cover', [{ do: 'go', to: holdCell, range: 0.6, seconds: 20, canPlace: ['cobblestone'], maxPlace: 8, canDig: ['cobblestone', 'netherrack', 'nether_bricks'], maxDig: 8, onFail: 'continue' }], 40, { accept: ['blaze'] });
+          const up = await act('climb back to the cover', [{ do: 'go', to: holdCell, range: 0.6, seconds: 20, canPlace: ['cobblestone'], maxPlace: 8, onFail: 'continue' }], 40, { accept: ['blaze'] });
           if (++climbs <= 5) note(`the body is at y ${r1(actor.entity.position.y)}, below the cover (y ${holdCell.y}): ${up.lines.join(' ').slice(0, 200)}`);
           continue;
         }
