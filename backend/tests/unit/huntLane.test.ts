@@ -174,7 +174,7 @@ describe('laneReport: read-only lane geometry and counts', () => {
     expect(east(lowFloor).build[0].standAt).toEqual(EAST_FROM);
   });
 
-  it('uses the shared cardinal hazard rules and actual floor, without a separate diagonal or edge rule', () => {
+  it('uses the shared cardinal hazard rules and actual floor, and refuses a cell beside an open hole (a push would drop the body)', () => {
     for (const name of ['fire', 'soul_fire', 'lava', 'water', 'magma_block']) {
       const read = flat({ '6,20,1': name }), c = east(read);
       expect(c.build.some(p => p.standAt)).toBe(true);
@@ -187,7 +187,8 @@ describe('laneReport: read-only lane geometry and counts', () => {
     const hole: Record<string, string> = {};
     for (let y = 15; y <= 19; y++) hole[`6,${y},0`] = 'air';
     const c = east(flat(hole));
-    expect(c.build[0].standAt).toEqual(EAST_FROM);
+    expect(c.build[0].standAt).not.toEqual(EAST_FROM);
+    for (const p of c.build) if (p.standAt) expect(Math.abs(p.standAt.x - 6) + Math.abs(p.standAt.z) > 1).toBe(true);
   });
 
   it('prefers fewer walking steps before the old waiting-cell rank', () => {
@@ -291,6 +292,20 @@ describe('laneReport: read-only lane geometry and counts', () => {
     for (const p of east(burning).build) expect(p).toMatchObject({ standAt: null, group: null, noStand: 'hazard', fireNear: null });
     const unreadNeighbours: CampReader = (x, y, z) => y === 22 ? null : flat()(x, y, z);
     expect(east(unreadNeighbours).build.every(p => p.standAt === null && p.noStand === 'unloaded')).toBe(true);
+  });
+
+  it('never gives a footing on a one-wide bridge: a push to its side drops the body into the hollow below', () => {
+    // flat ground at x <= 0, a bridge of stone at x 1..6, z 2 one cell below the feet, hollow everywhere else under y 20
+    const bridge: CampReader = (x, y, z) => {
+      const name = x === 0 && y === 21 && z === 0 ? 'spawner' : y < 20 ? (x <= 0 || (z === 2 && x >= 1 && x <= 6 && y === 19) ? 'stone' : 'air') : 'air';
+      return { name, solid: !['air', 'water', 'lava', 'fire', 'soul_fire'].includes(name) };
+    };
+    const report = laneReport(bridge, { x: 0, y: 21, z: 0 }, { x: -2, y: 20, z: 2 });
+    const stands = report.candidates.flatMap(c => c.build).filter(p => p.standAt);
+    expect(stands.length).toBeGreaterThan(0);
+    for (const p of stands) expect(p.standAt!.x <= 0 || p.standAt!.z !== 2).toBe(true);
+    const target = report.candidates.flatMap(c => c.build).filter(p => key(p.at) === key({ x: 2, y: 22, z: -1 }));
+    for (const p of target) expect(p.standAt === null ? p.noStand === 'hazard' || p.noStand === 'out_of_reach' : p.standAt.x <= 0).toBe(true);
   });
 
   it('keeps one-based groups consecutive, with a common footing and at most six placements', () => {
