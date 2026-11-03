@@ -1355,11 +1355,13 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
       for (let dy = -2; dy <= 2; dy++) {
         const c = { x: Math.floor(p.x) + dx, y: Math.floor(p.y + 0.001) + dy, z: Math.floor(p.z) + dz };
         if (visited.has(keyOf(c))) { reject('visited'); continue; }
-        let flat = true;
+        let flat = true, outerBad = 0;      // the 3x3 under the roof must be level and clear; the ring round it may have up to six bad cells (a lumpy forest floor)
         for (let ux = -2; ux <= 2 && flat; ux++) for (let uz = -2; uz <= 2; uz++) {
           const floor = read(c.x + ux, c.y - 1, c.z + uz), feet = read(c.x + ux, c.y, c.z + uz), head = read(c.x + ux, c.y + 1, c.z + uz);
-          if (!floor?.solid || (floor.top ?? 1) !== 1 || /lava|water|magma|campfire|slab|stairs|fence|wall|leaves/u.test(floor.name)
-            || !feet || !head || feet.solid || head.solid || /lava|water|fire|portal|cobweb/u.test(`${feet.name} ${head.name}`)) { flat = false; break; }
+          const bad = !floor?.solid || (floor.top ?? 1) !== 1 || /lava|water|magma|campfire|slab|stairs|fence|wall|leaves/u.test(floor.name)
+            || !feet || !head || feet.solid || head.solid || /lava|water|fire|portal|cobweb/u.test(`${feet.name} ${head.name}`);
+          if (bad && Math.abs(ux) <= 1 && Math.abs(uz) <= 1) { flat = false; break; }
+          if (bad && ++outerBad > 6) { flat = false; break; }
         }
         if (!flat) { reject('not_flat'); continue; }
         const plan = planRoof(world, c, undefined, undefined, true);
