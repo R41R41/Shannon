@@ -1239,11 +1239,10 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
   // No enderman kill/summon or platform/roof construction. Only equipment and the initial site are fixture setup.
   await equip({ stone_sword: 1, stone_pickaxe: 1, cooked_beef: 16 }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
-  const spawningBefore = await ask('gamerule doMobSpawning');
-  const spawningValue = /\b(true|false)\b/u.exec(spawningBefore)?.[1];
-  if (!spawningValue) throw new Error('ENDER_DEN_CANNOT_READ_DO_MOB_SPAWNING');
-  const spawnWasEnabled = spawningValue === 'true';
-  await ask('gamerule doMobSpawning true');
+  // 1.21.11 renamed doMobSpawning to spawn_mobs: read whichever answers (the old spelling is refused there), set both
+  const spawnRule = /\b(true|false)\b/u.exec(await ask('gamerule spawn_mobs'))?.[1] ?? /\b(true|false)\b/u.exec(await ask('gamerule doMobSpawning'))?.[1] ?? 'true';
+  const spawnWasEnabled = spawnRule === 'true';
+  await ask('gamerule spawn_mobs true'); await ask('gamerule doMobSpawning true');
   const fixtureSetupMs = Date.now() - fixtureAt;
   const start = Date.now(), endAt = start + 600_000, deathsBefore = deaths, pearlStart = packClient().ender_pearl ?? 0;
   let den: EndermanDenSpec | null = null, kills = 0, pearls = 0, setupMs = 0, noSiteMs = 0, decisionWaitMs = 0, pickupMs = 0, healthLost = 0, wallMs = 0;
@@ -1344,7 +1343,7 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
     wallMs = Date.now() - start;
     actor.removeListener('health', hurt);
     // Restore the scene's global spawning switch even if an action fails. Never kill surviving natural endermen.
-    await ask(`gamerule doMobSpawning ${spawnWasEnabled ? 'true' : 'false'}`);
+    await ask(`gamerule spawn_mobs ${spawnWasEnabled ? 'true' : 'false'}`); await ask(`gamerule doMobSpawning ${spawnWasEnabled ? 'true' : 'false'}`);
   }
   const fightAttempts = rows.filter(row => row.skipped === false).length;
   pearls = Math.max(0, (packClient().ender_pearl ?? 0) - pearlStart);
