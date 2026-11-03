@@ -2650,7 +2650,7 @@ for (const [name, policy] of Object.entries(cageComparePolicies)) scenes[name] =
 type KillStyle = 'sword_stage' | 'bed' | 'bow';
 type KillNookBuilder = 'operator' | 'body';
 const KILL_LIMIT_MS = 25 * 60 * 1000;
-const killEntries = ['dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain', 'cage_descent_compare', 'cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'];
+const killEntries = ['dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_far', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain', 'cage_descent_compare', 'cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'];
 const killCell = (p: P3): P3 => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
 const packCount = (name: string): number => actor.inventory.items().filter((item: any) => item.name === name).reduce((n: number, item: any) => n + item.count, 0);
 let killArena: { ground: P3; perch: P3; yaw: number } | null = null;
@@ -3278,21 +3278,23 @@ const swordAssist = async (mode: 'strike' | 'stage') => {
     minHealth: lowest.stop(), dragonHealthEnd: health, windows, reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
 };
 /** Lab HEAD's waiting choice, relative to the first observed perch/facing; basin destinations belong entirely to the observation. */
-function basinWaitingCell(view: ReturnType<typeof endObservation>): P3 | null {
+function basinWaitingCell(view: ReturnType<typeof endObservation>, far = false): P3 | null {
   const centre = view?.perch, d = view?.dragon;
   if (!centre || !d) return null;
   const read = bodyReader(actor), facing = { x: Math.sin(d.yaw), z: Math.cos(d.yaw) };
   const cells: Array<{ p: P3; score: number }> = [];
-  for (let dx = -14; dx <= 14; dx++) for (let dz = -14; dz <= 14; dz++) {
+  // far: the waiting spot while the dragon flies (40 to 60 m out, sideways of the facing, in the open: the strafing fireballs are seen coming and dodged there, not met at the portal)
+  const reach = far ? 60 : 14, rMin = far ? 40 : 10, rMax = far ? 60 : 14, sideMax = far ? 0.4 : 0.25, depth = far ? 10 : 32;
+  for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
     const x = Math.floor(centre.x) + dx, z = Math.floor(centre.z) + dz;
     const rx = x + 0.5 - centre.x, rz = z + 0.5 - centre.z, r = Math.hypot(rx, rz);
-    if (r < 10 || r > 14) continue;
+    if (r < rMin || r > rMax) continue;
     const side = Math.abs((rx * facing.x + rz * facing.z) / r);
-    if (side > 0.25) continue;
-    for (let y = Math.floor(centre.y) + 1; y >= centre.y - 32; y--) {
+    if (side > sideMax) continue;
+    for (let y = Math.floor(centre.y) + 1; y >= centre.y - depth; y--) {
       if (!standing(read, { x, y, z })) continue;
       const p = feetCentre({ x, y, z });
-      cells.push({ p, score: side * 100 + Math.abs(r - 12) + Math.hypot(p.x - actor.entity.position.x, p.z - actor.entity.position.z) * 0.01 });
+      cells.push({ p, score: side * 100 + Math.abs(r - (far ? 50 : 12)) + Math.hypot(p.x - actor.entity.position.x, p.z - actor.entity.position.z) * 0.01 });
       break;
     }
   }
@@ -3301,7 +3303,7 @@ function basinWaitingCell(view: ReturnType<typeof endObservation>): P3 | null {
 }
 // The tp baseline and the walking scene use the same first observed basin candidate. Floor reflexes stay ON;
 // after entry, keep swinging throughout phases 6/7/5, independently of the short head-strike windows.
-const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 'all' | 'caged' = 'none') => {
+const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 'all' | 'caged' = 'none', far = false) => {
   const initial = await prepareKillRun(true);
   // Crystal-count experiment: the crystals the experiment keeps are put back where they stood (the dragon heals while one lives); the dragon's health is sampled every 5 s.
   const keptCrystals = killCrystalSnapshot.filter(c => keep === 'all' || (keep === 'caged' && c.caged === true));
@@ -3330,7 +3332,7 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 
       if (sitting && !wasSitting) sitId++;
       wasSitting = sitting;
       // walking mode: the waiting cell is chosen sideways of the facing of THIS landing (the facing changes from landing to landing), taken once while it is still landing (phase 3, a few seconds in)
-      if (mode === 'walk' && d && view?.perch && d.phase === 3 && d.phaseFor >= 3 && waitedLanding !== landingId) {
+      if (mode === 'walk' && d && view?.perch && d.phase === 3 && d.phaseFor >= (far ? 1 : 3) && waitedLanding !== landingId) {
         waitedLanding = landingId;
         const waiting = basinWaitingCell(view);
         // no tp: the body walks to the waiting cell itself (a hand cut by a reflex is simply not completed; the next look decides)
@@ -3380,7 +3382,7 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 
       // this sit's facing, 10 to 14 m off (by go); the tp baseline goes back by tp.
       if (mode === 'tp' && actorDeaths === deaths0 && !dragonDead) await standAt(initial.ground.x, initial.ground.y, initial.ground.z);
       else if (actorDeaths === deaths0 && !dragonDead) {
-        const away = basinWaitingCell(endView());
+        const away = basinWaitingCell(endView(), far);
         const left = away ? await act([{ do: 'go', to: killCell(away), range: 1, seconds: 12 }], 16) : null;
         row.leave = { to: away, ok: left?.ok ?? null, ms: left?.ms ?? null, line: left ? left.lines.join(' | ').slice(0, 160) : null, hpAfter: Number(actor.health) };
       }
@@ -3396,6 +3398,7 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 
 scenes.dragon_kill_basin_assist = () => basinAssist('tp');
 scenes.dragon_kill_basin_walk = () => basinAssist('walk');
 scenes.dragon_kill_basin_walk_pumpkin = () => basinAssist('walk', true);
+scenes.dragon_kill_basin_far = () => basinAssist('walk', false, 'none', true);
 scenes.dragon_kill_basin_crystals_all = () => basinAssist('walk', false, 'all');
 scenes.dragon_kill_basin_crystals_caged = () => basinAssist('walk', false, 'caged');
 scenes.dragon_kill_sword_assist = () => swordAssist('strike');
