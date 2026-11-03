@@ -998,6 +998,30 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   let killed = 0, shieldHits = 0, woundsTaken = 0, unseenActs = 0;
   const onDead = (entity: any) => { if (String(entity?.name ?? '') === 'blaze') killed++; };
   actor.on('entityDead', onDead);
+  // each second, every blaze within 12 m: its distance from the eyes, whether the line from the eyes to it is clear, and the height difference (read at the end as a table: does a blaze come on while it cannot see the body, and stop while it can)
+  const watchRows = new Map<number, Array<{ d: number; los: boolean; dy: number }>>();
+  const watch = setInterval(() => {
+    try {
+      const eye = actor.entity.position.offset(0, 1.62, 0);
+      for (const e of Object.values(actor.entities ?? {}) as any[]) {
+        if (String(e?.name) !== 'blaze' || !e.position) continue;
+        const target = e.position.offset(0, 0.9, 0), delta = target.minus(eye), d = delta.norm();
+        if (d > 12 || d < 0.1) continue;
+        const hit = (actor.world as any).raycast(eye, delta.normalize(), d, (b: any) => b.boundingBox === 'block');
+        const rows = watchRows.get(e.id) ?? []; rows.push({ d, los: !hit, dy: e.position.y - actor.entity.position.y }); watchRows.set(e.id, rows);
+      }
+    } catch { /* a raycast on an unloaded chunk: skip this second */ }
+  }, 1000);
+  const watchReport = () => {
+    const bands: Array<[string, (d: number) => boolean]> = [['<2m', d => d < 2], ['2-3m', d => d >= 2 && d < 3], ['3-5m', d => d >= 3 && d < 5], ['5-12m', d => d >= 5]];
+    const out: string[] = [];
+    for (const los of [false, true]) for (const [label, inBand] of bands) {
+      const rates: number[] = [], levels: number[] = [];
+      for (const rows of watchRows.values()) for (let i = 0; i + 1 < rows.length; i++) if (rows[i].los === los && inBand(rows[i].d)) { rates.push(rows[i + 1].d - rows[i].d); levels.push(rows[i].dy); }
+      if (rates.length) out.push(`${los ? 'sees' : 'blind'} ${label}: ${rates.length} s, change of distance ${r1(rates.reduce((a, b) => a + b, 0) / rates.length)} m/s (${r1(rates.filter(v => v < -0.15).length / rates.length * 100)}% closing, ${r1(rates.filter(v => Math.abs(v) <= 0.15).length / rates.length * 100)}% still), height diff ${r1(levels.reduce((a, b) => a + b, 0) / levels.length)}`);
+    }
+    return out;
+  };
   let n = 0;
   try {
     while (Date.now() - holdStart < holdSeconds * 1000 && !disconnected && hp() > 0 && deaths === deaths0) {
@@ -1007,7 +1031,8 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
       if (/落とし物 blaze_rod/u.test(run.lines.join(' '))) await act('fetch', [{ do: 'pickup', range: 4, onFail: 'continue' }, { do: 'go', to: holdCell, range: 0.4, seconds: 8, onFail: 'continue' }], 30, { accept: ['blaze'] });
       if (n % 3 === 1) note(`hold#${n}: hp ${r1(hp())} kills ${killed} rods +${(packClient().blaze_rod ?? 0) - rods0}`);
     }
-  } finally { clearInterval(sampler); actor.removeListener('entityDead', onDead); }
+  } finally { clearInterval(sampler); clearInterval(watch); actor.removeListener('entityDead', onDead); }
+  for (const line of watchReport()) note(`blaze watch ${line}`);
   return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
     killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null, shieldHits, woundsTaken: r1(woundsTaken), actsWithBlazeUnseen: unseenActs, holdActs: n };
 }
