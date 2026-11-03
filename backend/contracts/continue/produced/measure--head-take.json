@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "8b205a045d078bbdac08abd4ca6fec33465c29c9",
- "madeAt": "2026-11-02T19:49:48.206Z",
+ "bodyRevision": "1d2fedcd0d33750343f9d851dd4d310ecbbddf5b",
+ "madeAt": "2026-11-03T10:24:24.215Z",
  "answers": null,
  "fixtureSha256": null,
  "output": {
@@ -10,25 +10,25 @@
    "receipt": "completed",
    "incident": {
     "op": "take",
-    "id": "head:node_stalled:lab:1793648975345",
+    "id": "head:node_stalled:lab:1793701453615",
     "done": true,
-    "hold": "head:node_stalled:lab:1793648975345",
+    "hold": "head:node_stalled:lab:1793701453615",
     "unfreeze": null,
     "held": true,
     "frozen": true,
     "freeze": "The game is frozen",
-    "box": "/home/azureuser/.cache/minebot-lab/continue-s2-cont/blackbox/continue-lab-task/head_node_stalled_lab_1793648975345.json.gz",
-    "scene": "/home/azureuser/.cache/minebot-lab/continue-s2-cont/run/scenes/head_node_stalled_lab_1793648975345"
+    "box": "/home/azureuser/.cache/minebot-lab/continue-s2-contvm/blackbox/continue-lab-task/head_node_stalled_lab_1793701453615.json.gz",
+    "scene": "/home/azureuser/.cache/minebot-lab/continue-s2-contvm/run/scenes/head_node_stalled_lab_1793701453615"
    },
    "observed": {
-    "id": "head:node_stalled:lab:1793648975345",
+    "id": "head:node_stalled:lab:1793701453615",
     "task": "continue-lab-task",
     "why": "lab: node p3 did not move for 120 s"
    },
    "holdWritten": {
-    "id": "head:node_stalled:lab:1793648975345",
+    "id": "head:node_stalled:lab:1793701453615",
     "task": "continue-lab-task",
-    "at": "2026-11-02T19:49:37.920Z",
+    "at": "2026-11-03T10:24:16.240Z",
     "frozen": true,
     "freeze": "The game is frozen",
     "command": "",
@@ -40,11 +40,11 @@
     ]
    },
    "gameTimes": [
-    5209,
-    5209
+    5929,
+    5929
    ],
    "boxHead": {
-    "id": "head:node_stalled:lab:1793648975345",
+    "id": "head:node_stalled:lab:1793701453615",
     "why": "lab: node p3 did not move for 120 s",
     "notes": 20,
     "first": "decision row 5: lab note",
@@ -55,21 +55,21 @@
   "resume": {
    "incident": {
     "op": "resume",
-    "id": "head:node_stalled:lab:1793648975345",
+    "id": "head:node_stalled:lab:1793701453615",
     "done": true,
     "hold": null,
     "unfreeze": "The game is running normally"
    },
    "gameTimes": [
-    5213,
-    5247
+    5933,
+    5967
    ],
    "hold": null,
    "holdFile": false,
    "act": "completed"
   },
   "actTake": {
-   "id": "head:wait_loop:lab:1793648983044",
+   "id": "head:wait_loop:lab:1793701461341",
    "heavy": true,
    "why": "lab: wait loop",
    "held": true,
