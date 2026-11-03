@@ -4,6 +4,7 @@ import { Vec3 } from 'vec3';
 import { fill, fillProblem, type FillArgs } from '../../src/services/minebot/utils/primitives/fill.js';
 import { go } from '../../src/services/minebot/utils/primitives/go.js';
 import { place } from '../../src/services/minebot/utils/primitives/place.js';
+import { dig } from '../../src/services/minebot/utils/primitives/dig.js';
 import { StepStopped, type StepContext } from '../../src/services/minebot/utils/primitives/common.js';
 import { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.js';
 import * as actions from '../../src/services/minebot/execution/ActionExecution.js';
@@ -14,6 +15,9 @@ vi.mock('../../src/services/minebot/utils/primitives/go.js', async importOrigina
 }));
 vi.mock('../../src/services/minebot/utils/primitives/place.js', async importOriginal => ({
   ...await importOriginal<typeof import('../../src/services/minebot/utils/primitives/place.js')>(), place: vi.fn(),
+}));
+vi.mock('../../src/services/minebot/utils/primitives/dig.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../src/services/minebot/utils/primitives/dig.js')>(), dig: vi.fn(),
 }));
 
 const key = (p: { x: number; y: number; z: number }) => `${p.x},${p.y},${p.z}`;
@@ -29,8 +33,9 @@ function field() {
     blockAt: (p: Vec3) => {
       const at = p.floored(), name = blocks.has(key(at)) ? blocks.get(key(at)) : at.y < 64 ? 'stone' : 'air';
       if (name === null) return null;
-      const solid = name === 'stone' || name === 'cobblestone';
-      return { name, position: at, boundingBox: solid ? 'block' : 'empty', shapes: solid ? [[0, 0, 0, 1, 1, 1]] : [], type: solid ? 1 : 0 };
+      const partial = /_(stairs|slab|fence)$/u.test(name!);
+      const solid = name === 'stone' || name === 'cobblestone' || partial;
+      return { name, position: at, boundingBox: solid ? 'block' : 'empty', shapes: solid ? [[0, 0, 0, 1, partial ? 0.5 : 1, 1]] : [], type: solid ? 1 : 0 };
     },
     setControlState: vi.fn(), clearControlStates: vi.fn(), deactivateItem: vi.fn(), activateItem: vi.fn(), stopDigging: vi.fn(),
     pathfinder: { stop: vi.fn(), setGoal: vi.fn() },
@@ -48,9 +53,13 @@ function field() {
     return { ok: true, text: '置いた', progress: { unit: 'block' as const, done: 1, left: 0 } };
   };
   vi.mocked(go).mockImplementation(walk); vi.mocked(place).mockImplementation(lay);
+  vi.mocked(dig).mockImplementation(async (_ctx, a) => {
+    for (const at of a.at) blocks.set(key(at), 'air');
+    return { ok: true, text: '火を消した' };
+  });
   return { bot, blocks, slots, stop, ctx, args, walk, lay };
 }
-beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-03T00:00:00Z')); vi.mocked(go).mockReset(); vi.mocked(place).mockReset(); });
+beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-03T00:00:00Z')); vi.mocked(go).mockReset(); vi.mocked(place).mockReset(); vi.mocked(dig).mockReset(); });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('fill preflight and plan boundary', () => {
@@ -93,6 +102,146 @@ describe('fill preflight and plan boundary', () => {
     expect(fillProblem(a)).not.toBeNull(); await expect(fill(ctx, a)).rejects.toThrow('invalid_input');
     expect(go).not.toHaveBeenCalled(); expect(place).not.toHaveBeenCalled();
     if (['groups_empty', 'groups_13', 'at_empty', 'at_9', 'nan', 'infinite', 'missing_axis', 'extra_group', 'extra_cell'].includes(why)) expect(ACT_HANDS.safeParse([{ do: 'fill', ...a }]).success).toBe(false);
+  });
+});
+
+describe('fill shared standability and bounded extinguishing', () => {
+  it.each(['stone_stairs', 'stone_slab', 'oak_fence'])('accepts %s under home and stand, including the actual fractional return height', async name => {
+    const f = field();
+    f.blocks.set('0,63,0', name); f.blocks.set('1,63,0', name);
+    vi.mocked(go).mockImplementation(async (c, a) => {
+      const out = await f.walk(c, a);
+      if (key(a.goals[0]) === key(f.args.retreatTo)) f.bot.entity.position.y = 63.5;
+      return out;
+    });
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'done', placed: 2, safe: true });
+  });
+
+  it.each(['0,64,0', '0,65,0', '-1,64,0', '0,66,0'])('extinguishes home fire at %s before moving, through dig with collect:false', async at => {
+    const f = field(); f.blocks.set(at, 'fire');
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'done', placed: 2, safe: true });
+    expect(dig).toHaveBeenCalledTimes(1);
+    const [part, args] = vi.mocked(dig).mock.calls[0];
+    expect(args).toEqual({ at: [Object.fromEntries(at.split(',').map((value, i) => [['x', 'y', 'z'][i], Number(value)]))], collect: false });
+    expect(part.stop).not.toBe(f.ctx.stop);
+    expect(vi.mocked(dig).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(go).mock.invocationCallOrder[0]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('checks and extinguishes a group stand before its outward go', async () => {
+    const f = field(); f.blocks.set('2,64,0', 'soul_fire');
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'done', placed: 2, safe: true });
+    expect(vi.mocked(dig).mock.calls[0][1]).toEqual({ at: [{ x: 2, y: 64, z: 0 }], collect: false });
+    expect(vi.mocked(dig).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(go).mock.invocationCallOrder[0]);
+  });
+
+  it('extinguishes a new fire at home before the return go', async () => {
+    const f = field();
+    vi.mocked(place).mockImplementation(async (c, a) => { const out = await f.lay(c, a); f.blocks.set('-1,64,0', 'fire'); return out; });
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'done', placed: 2, safe: true });
+    expect(dig).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dig).mock.invocationCallOrder[0]).toBeGreaterThan(vi.mocked(place).mock.invocationCallOrder.at(-1)!);
+    expect(vi.mocked(dig).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(go).mock.invocationCallOrder.at(-1)!);
+  });
+
+  it.each(['home', 'stand', 'return'])('stops after two unsuccessful digs at %s and reports why', async where => {
+    const f = field(), fire = where === 'stand' ? '2,64,0' : '-1,64,0';
+    if (where === 'return') vi.mocked(place).mockImplementation(async (c, a) => { const out = await f.lay(c, a); f.blocks.set(fire, 'fire'); return out; });
+    else f.blocks.set(fire, 'fire');
+    vi.mocked(dig).mockResolvedValue({ ok: false, text: '届かない', reason: 'out_of_reach' });
+    const out = await fill(f.ctx, f.args);
+    expect(out.fill).toMatchObject({ code: 'NO_STAND', placed: where === 'return' ? 2 : 0, safe: where === 'stand' });
+    expect(out.text).toContain('fire_near'); expect(out.text).toContain(where === 'stand' ? '立ち位置 1,64,0' : '帰還先 0,64,0');
+    expect(dig).toHaveBeenCalledTimes(2);
+    expect(go).toHaveBeenCalledTimes(where === 'home' ? 0 : 1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rereads the fires after each dig and extinguishes a second fire', async () => {
+    const f = field(); f.blocks.set('-1,64,0', 'fire');
+    vi.mocked(dig).mockImplementation(async (_c, a) => {
+      f.blocks.set(key(a.at[0]), 'air');
+      if (vi.mocked(dig).mock.calls.length === 1) f.blocks.set('0,65,0', 'soul_fire');
+      return { ok: true, text: '消した' };
+    });
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'done', safe: true });
+    expect(vi.mocked(dig).mock.calls.map(([, a]) => a.at[0])).toEqual([{ x: -1, y: 64, z: 0 }, { x: 0, y: 65, z: 0 }]);
+  });
+
+  it.each(['stand', 'home'])('rechecks and extinguishes a fire that appears during the go to %s', async where => {
+    const f = field();
+    vi.mocked(go).mockImplementation(async (c, a) => {
+      const out = await f.walk(c, a);
+      if (key(a.goals[0]) === key(where === 'home' ? f.args.retreatTo : f.args.groups[0].stand)) f.blocks.set(where === 'home' ? '-1,64,0' : '2,64,0', 'fire');
+      return out;
+    });
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'done', placed: 2, safe: true });
+    expect(dig).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares the two-dig limit across all rechecks of the same footing', async () => {
+    const f = field(); f.blocks.set('-1,64,0', 'fire');
+    vi.mocked(place).mockImplementation(async (c, a) => { const out = await f.lay(c, a); f.blocks.set('-1,64,0', 'fire'); return out; });
+    vi.mocked(go).mockImplementation(async (c, a) => {
+      const out = await f.walk(c, a);
+      if (key(a.goals[0]) === key(f.args.retreatTo)) f.blocks.set('-1,64,0', 'fire');
+      return out;
+    });
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ code: 'NO_STAND', placed: 2, safe: false });
+    expect(dig).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['no_floor', 'head_wall', 'lava', 'unloaded'])('does not dig when a fire coexists with %s', async why => {
+    const f = field(); f.blocks.set('-1,64,0', 'fire');
+    if (why === 'no_floor') f.blocks.set('0,63,0', 'air');
+    if (why === 'head_wall') f.blocks.set('0,65,0', 'stone');
+    if (why === 'lava') f.blocks.set('0,64,1', 'lava');
+    if (why === 'unloaded') f.blocks.set('0,65,1', null);
+    const out = await fill(f.ctx, f.args);
+    expect(out.fill).toMatchObject({ status: 'failed', code: 'NO_STAND', placed: 0 });
+    expect(out.text).toContain(why === 'head_wall' ? 'no_head_room' : why === 'lava' ? 'hazard_near' : why);
+    expect(dig).not.toHaveBeenCalled(); expect(go).not.toHaveBeenCalled(); expect(place).not.toHaveBeenCalled();
+  });
+
+  it('checks a blocked group before go and returns NO_STAND with its shared reason', async () => {
+    const f = field(); f.blocks.set('1,65,0', 'stone');
+    const out = await fill(f.ctx, f.args);
+    expect(out.fill).toMatchObject({ code: 'NO_STAND', placed: 0, safe: true });
+    expect(out.text).toContain('no_head_room'); expect(out.text).toContain('立ち位置 1,64,0');
+    expect(vi.mocked(go).mock.calls.map(([, a]) => a.goals[0])).toEqual([f.args.retreatTo]);
+    expect(place).not.toHaveBeenCalled(); expect(dig).not.toHaveBeenCalled();
+  });
+
+  it('reports NO_STAND if the dig throws while the fire is still present', async () => {
+    const f = field(); f.blocks.set('2,64,0', 'fire');
+    vi.mocked(dig).mockRejectedValue(new Error('dig failed'));
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ code: 'NO_STAND', placed: 0, safe: true });
+    expect(place).not.toHaveBeenCalled(); expect(dig).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['hp', 'reflex', 'death', 'cancel'])('preserves the %s stop during extinguishing', async why => {
+    const f = field(); f.blocks.set('-1,64,0', 'fire');
+    vi.mocked(dig).mockImplementation(async () => {
+      if (why === 'hp') f.bot.health = 10;
+      if (why === 'reflex') f.bot.lavaReflex = { engaged: true };
+      if (why === 'death') f.bot.health = 0;
+      if (why === 'cancel') f.stop.abort('external');
+      return { ok: false, text: '中断' };
+    });
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ code: why === 'hp' ? 'HP_FLOOR' : why === 'reflex' ? 'REFLEX' : why === 'death' ? 'DEAD' : 'TIME_LIMIT', placed: 0, safe: false });
+    expect(dig).toHaveBeenCalledTimes(1); expect(go).not.toHaveBeenCalled(); expect(place).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('cancels an in-flight extinguishing dig at the reserved return deadline', async () => {
+    const f = field(); f.args.seconds = 5; f.blocks.set('-1,64,0', 'fire');
+    vi.mocked(dig).mockImplementation(part => new Promise((_resolve, reject) =>
+      part.stop.addEventListener('abort', () => reject(new StepStopped(String(part.stop.reason))), { once: true })));
+    const pending = fill(f.ctx, f.args);
+    await vi.advanceTimersByTimeAsync(3500);
+    expect((await pending).fill).toMatchObject({ code: 'TIME_LIMIT', placed: 0, safe: false });
+    expect(dig).toHaveBeenCalledTimes(1); expect(go).not.toHaveBeenCalled(); expect(place).not.toHaveBeenCalled();
+    expect(f.bot.listenerCount('health')).toBe(0); expect(f.bot.listenerCount('physicsTick')).toBe(0); expect(vi.getTimerCount()).toBe(0);
   });
 });
 

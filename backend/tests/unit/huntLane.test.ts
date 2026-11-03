@@ -3,6 +3,7 @@ import { Vec3 } from 'vec3';
 import { laneProbeFields, laneReport, type LaneCandidate, type LaneCell } from '../../src/services/minebot/utils/huntLane.js';
 import type { CampReader } from '../../src/services/minebot/utils/huntCamp.js';
 import { solidBetween } from '../../src/services/minebot/utils/probeTools.js';
+import { standableAt } from '../../src/services/minebot/utils/standability.js';
 
 const SPAWNER = { x: 0, y: 20, z: 0 }, FROM = { x: 1, y: 20, z: 1 };
 const key = (p: LaneCell) => `${p.x},${p.y},${p.z}`;
@@ -141,7 +142,7 @@ describe('laneReport: read-only lane geometry and counts', () => {
     expect(text).not.toMatch(/\(|\)|x=|y=|z=|netherrack|spawner|c1|run59/u);
   });
 
-  it('offers only full floors with two open body cells, within 4.3 metres of the eye, and never places in the body', () => {
+  it('offers collision floors with two open body cells, within 4.3 metres of the eye, and never places in the body', () => {
     const read = flat(), c = east(read), offered = c.build.filter(p => p.standAt);
     expect(offered.length).toBeGreaterThan(10);
     const projected = new Set<string>();
@@ -163,29 +164,30 @@ describe('laneReport: read-only lane geometry and counts', () => {
       expect(solidBetween(current, [q.x + 0.5, q.y + 1.62, q.z + 0.5], [p.at.x + 0.5, p.at.y + 0.5, p.at.z + 0.5])).toEqual([]);
       if (!p.blockedByCreature && p.at.state === 'air' && (p.supportNow === true || (p.supportAfter && projected.has(key(p.supportAfter))))) projected.add(key(p.at));
     }
-    // A slab is a collision block, but not a full floor even when its reader says solid.
-    const slab = east(flat({ '5,19,0': 'stone_slab' }));
-    expect(slab.build.filter(p => p.standAt).every(p => key(p.standAt!) !== '5,20,0')).toBe(true);
-    // A non-full custom box must not be promoted to a full floor either.
+    // Partial collision floors agree with fill and the walking destination.
+    for (const name of ['stone_slab', 'stone_stairs', 'oak_fence']) {
+      const partial = east(flat({ '5,19,0': name }));
+      expect(partial.build[0]).toMatchObject({ standAt: EAST_FROM, walk: 0 });
+    }
     const lowBlock = { name: 'stone', solid: true, top: 0.5 };
     const lowFloor: CampReader = (x, y, z) => x === 5 && y === 19 && z === 0 ? lowBlock : read(x, y, z);
-    expect(east(lowFloor).build.filter(p => p.standAt).every(p => key(p.standAt!) !== '5,20,0')).toBe(true);
+    expect(east(lowFloor).build[0].standAt).toEqual(EAST_FROM);
   });
 
-  it('avoids fire even diagonally adjacent, as well as water, lava, magma and an open edge', () => {
+  it('uses the shared cardinal hazard rules and actual floor, without a separate diagonal or edge rule', () => {
     for (const name of ['fire', 'soul_fire', 'lava', 'water', 'magma_block']) {
-      const c = east(flat({ '6,20,1': name }));
+      const read = flat({ '6,20,1': name }), c = east(read);
       expect(c.build.some(p => p.standAt)).toBe(true);
       for (const p of c.build) if (p.standAt) {
-        const q = p.standAt;
-        expect(Math.max(Math.abs(q.x - 6), Math.abs(q.z - 1)) > 1 || q.y > 21 || q.y < 18).toBe(true);
+        expect(standableAt(read, p.standAt).ok).toBe(true);
         expect(p.fireNear).toBe(false);
       }
+      expect(c.build[0].standAt).toEqual(EAST_FROM);
     }
     const hole: Record<string, string> = {};
     for (let y = 15; y <= 19; y++) hole[`6,${y},0`] = 'air';
     const c = east(flat(hole));
-    expect(c.build.filter(p => p.standAt).every(p => key(p.standAt!) !== '5,20,0')).toBe(true);
+    expect(c.build[0].standAt).toEqual(EAST_FROM);
   });
 
   it('prefers fewer walking steps before the old waiting-cell rank', () => {
@@ -195,7 +197,7 @@ describe('laneReport: read-only lane geometry and counts', () => {
     expect(c.build[0].walk).toBe(0);
     const from = { x: 7, y: 20, z: -1 }, nearby = east(flat(), from).build[0];
     expect(nearby).toMatchObject({ standAt: from, walk: 0 });
-    const c2 = east(flat({ '6,20,1': 'fire' }));
+    const c2 = east(flat({ '6,20,0': 'fire' }), { x: 4, y: 20, z: 0 });
     expect(c2.build[0].standAt).not.toEqual({ x: 5, y: 20, z: 0 });
     expect(c2.build[0].standAt).not.toBeNull();
     // Among the safe cells, (4,20,0) is the nearest and still sees the first enclosure cell.
@@ -203,12 +205,15 @@ describe('laneReport: read-only lane geometry and counts', () => {
   });
 
   it('uses the old distance and shelter rank when walking steps tie', () => {
-    // The origin's slab is traversable, but is not offered as a full-floor placement footing.
+    // A creature excludes the origin as a placement footing; the two side footings tie on walking steps.
     const from = { x: 7, y: 20, z: 0 }, base = { '7,19,0': 'stone_slab' };
-    const first = east(flat(base), from).build[0];
+    const firstAt = (read: CampReader) => laneReport(read, SPAWNER, from, { entities: [
+      { id: 20, name: 'piglin', position: { x: 7.5, y: 20, z: 0.5 } },
+    ] }).candidates.find(c => c.direction === 'east')!.build[0];
+    const first = firstAt(flat(base));
     expect(first).toMatchObject({ standAt: { x: 7, y: 20, z: -1 }, walk: 1 });
     // Both side footings are one step away and equally far from the waiting cell.
-    const sheltered = east(flat({ ...base, '4,21,1': 'stone' }), from).build[0];
+    const sheltered = firstAt(flat({ ...base, '4,21,1': 'stone' }));
     expect(sheltered).toMatchObject({ standAt: { x: 7, y: 20, z: 1 }, walk: 1 });
   });
 
@@ -255,6 +260,14 @@ describe('laneReport: read-only lane geometry and counts', () => {
     expect(at(c, { x: 5, y: 20, z: -1 })).toMatchObject({ standAt: null, walk: null, group: null, noStand: 'unreachable' });
     expect(c.build.every(p => p.standAt === null)).toBe(true);
     expect(east(read).build.some(p => p.standAt)).toBe(true);
+  });
+
+  it('does not cross a fire barrier to reach an otherwise safe placement footing', () => {
+    const base = flat(), from = { x: 12, y: 20, z: 0 };
+    const read: CampReader = (x, y, z) => x === 10 && y === 20 ? { name: 'fire', solid: false } : base(x, y, z);
+    expect(standableAt(read, from).ok).toBe(true);
+    const p = at(east(read, from), { x: 5, y: 20, z: -1 });
+    expect(p).toMatchObject({ standAt: null, walk: null, noStand: 'unreachable' });
   });
 
   it('stops at 2000 visited feet cells and reports unreachable beyond the boundary', () => {
