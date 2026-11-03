@@ -1,11 +1,11 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "1d2fedcd0d33750343f9d851dd4d310ecbbddf5b",
- "madeAt": "2026-11-03T10:18:50.003Z",
+ "bodyRevision": "080b1d321880840d837e8eba419157161dadefaf",
+ "madeAt": "2026-11-03T11:46:58.522Z",
  "answers": null,
  "fixtureSha256": null,
- "catalogHash": "6fda8faf701d20c7",
+ "catalogHash": "3ece0cfd9d1fac45",
  "offered": [
   {
    "name": "act",
@@ -1036,7 +1036,7 @@
   },
   {
    "name": "probe",
-   "description": "調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ sight（target のブロックか生き物 #id が目から見えるか・届くか・間のブロック）/ column（x,z の縦の列。yFrom・yTo。落差・水・溶岩・砂利）/ around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）/ frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。lane（spawner の四方向のレーン計画。省略時は近い湧き場。丸石・建築順・支え・生き物・待ち場からの距離と危険。build 末尾の standAtCell は cells の足マス参照、group は同じ立ち位置で最大6マス、立ち位置なしは両方 null。facts 末尾の standFact は standFacts の参照で noStand・blockedByCreature・fireNear。目から4.3以内で視線が通り、火・液体・マグマ・縁を避ける。go で立ち位置へ→同じ group の place、占有マスは組の末尾で再確認。fireNear は立ち位置なしなら null、安全なら false。経路は別途確認する、読むだけ）。結果は JSON（text が先頭。危ない事実をそのまま書く）。",
+   "description": "調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ sight（target のブロックか生き物 #id が目から見えるか・届くか・間のブロック）/ column（x,z の縦の列。yFrom・yTo。落差・水・溶岩・砂利）/ around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）/ frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。lane（spawner の四方向のレーン計画。省略時は近い湧き場。丸石・建築順・支え・生き物・待ち場からの距離と危険。build の standAtCell は cells の足マス参照、group は同じ立ち位置で最大6マス、末尾の walk は from（既定は足）からの歩数、立ち位置なしは全て null。facts 末尾の standFact は standFacts の参照で noStand・blockedByCreature・fireNear。目から4.3以内で視線が通り、火・液体・マグマ・縁を避ける。計画のマスを避け、掘らず置かず四方向・上下1段までを2000マス探索し、歩数・従来順位の順に立ち位置を選ぶ。着けない場合は noStand: unreachable。go で立ち位置へ→同じ group の place、占有マスは組の末尾で再確認。fireNear は立ち位置なしなら null、安全なら false。読むだけ）。結果は JSON（text が先頭。危ない事実をそのまま書く）。",
    "inputSchema": {
     "type": "object",
     "properties": {

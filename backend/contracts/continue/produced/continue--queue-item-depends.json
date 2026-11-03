@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "1d2fedcd0d33750343f9d851dd4d310ecbbddf5b",
- "madeAt": "2026-11-03T10:18:50.005Z",
+ "bodyRevision": "080b1d321880840d837e8eba419157161dadefaf",
+ "madeAt": "2026-11-03T11:46:58.524Z",
  "answers": "continue/queue-item-depends",
  "fixtureSha256": "50d5f46d38ba9c8ee39af5b06fef58a40ddb8b4944fb89525493353cbaa07e1e",
  "note": "two of the five items (the queue holds three); the rest is in the lab",
