@@ -1,4 +1,5 @@
 import { probeWorksite } from '../utils/probeWorksite.js';
+import { endermanDenCandidates } from '../utils/huntEndermanDen.js';
 import { z } from 'zod';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
@@ -27,7 +28,7 @@ import { laneProbeFields } from '../utils/huntLane.js';
  *   lane    four read-only lane plans: cells, counts, support order, occupants, reach, safe footings and groups of up to six.
  * The answer is JSON: { v: 1, kind, text, ... } with the sentence first, the dangerous facts said as they are.
  */
-export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite', 'frames', 'camp', 'lane'] as const;
+export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite', 'frames', 'camp', 'lane', 'den'] as const;
 const Pos = z.object({ x: z.number(), y: z.number(), z: z.number() }).strict();
 
 const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ '
@@ -49,7 +50,7 @@ class Probe extends InstantSkill {
     this.description = DESCRIPTION;
     this.maxDurationMs = 30_000;
     this.params = [
-      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan・worksite・frames・camp・lane', required: true },
+      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan・worksite・frames・camp・lane・den', required: true },
       { name: 'to', type: 'json', schema: Pos, description: 'path: 行きたいマス' },
       { name: 'from', type: 'json', schema: Pos, description: 'path・sight・lane: 出発・目の位置の足のマス（既定は足）' },
       { name: 'target', type: 'json', schema: z.union([Pos, z.string().max(64), z.number()]), description: 'sight: ブロック {x,y,z} か生き物 "#id"' },
@@ -123,6 +124,12 @@ export async function runProbe(bot: any, input: ProbeInput): Promise<{ success: 
     return { success: true, result: JSON.stringify({ v, kind, text, ...rest }) };
   };
   switch (input.kind) {
+    case 'den': {
+      // The enderman den candidates (huntEndermanDen.ts): read only, nearest and best first, at most 8. The body does not choose or dig one; the head picks an entrance and passes it as the fight hand's den.
+      const found = endermanDenCandidates(bot as any, { limit: 8 });
+      const lines = found.map(c => `入口 (${c.entrance.x},${c.entrance.y},${c.entrance.z}) 向き ${c.direction}・見通し ${c.sightDistance}m・未掘削 ${c.remaining}/4${c.penalties.length ? '（' + c.penalties.join('、') + '）' : ''}`);
+      return answer({ v: 1, kind: 'den', text: found.length ? `横穴の候補 ${found.length} 件: ${lines.join(' / ')}` : '横穴を掘れる壁の候補は見つからない（半径内に、4 マスを掘れて溶岩・空洞に開かず入口から外が見える壁が無い）', candidates: found.map(c => ({ entrance: c.entrance, direction: c.direction, dig: c.dig, wait: c.wait, outside: c.outside, sightDistance: c.sightDistance, distance: c.distance, remaining: c.remaining, score: c.score, penalties: c.penalties })) } as any);
+    }
     case 'worksite': {
       if (!input.target || typeof input.target !== 'object') return bad('worksite には target のブロック座標が要る');
       // A coordinate that is not a finite number (called directly, not through the schema) would turn into null in the JSON answer.
