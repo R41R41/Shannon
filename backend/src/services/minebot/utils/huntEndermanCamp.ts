@@ -114,6 +114,7 @@ export class EndermanCamp {
   private began = Date.now();
   private tries = new Map<string, number>();
   private staredSince = 0;
+  private restares = 0;
   private blindSince = 0;
   private guardWas: boolean | null = null;
   private replans = 0;
@@ -413,7 +414,13 @@ export class EndermanCamp {
     if (this.phase === 'provoke') {
       if (!view.eyes.clear) {
         // Losing sight ends the stare, but must not consume the branch for the bounded recovery (including its return step).
-        if (this.staredSince) await this.legs(live, now);
+        if (this.staredSince) {
+          await this.legs(live, now);
+          // A stare cut short by the line (not a finished one) may be taken once more after the bounded recovery; a finished stare is never repeated.
+          if (now - this.staredSince < ENDERMAN_STARE_MS && this.restares < 1 && this.observation.angryAt === null) {
+            this.restares++; this.staredSince = 0; this.observation.stareEndedAt = null;
+          }
+        }
         this.blindSince ||= now;
         if (now - this.blindSince <= SIGHT_MS && this.recover(live, view, now)) this.moveShift(now);
         return this.notVisible(view, now, box);
