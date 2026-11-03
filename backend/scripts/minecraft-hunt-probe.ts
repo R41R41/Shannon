@@ -835,6 +835,10 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
           if (hp() < 6) { aborted = `hp ${r1(hp())} at pass ${pass} group ${gi}/${arg.length}`; stopFill = true; break; }
           await sleep(thinkMs);
           const retreat = retreatNow();
+          // (the head's own turn: fire on the cover cell is put out by a dig before the fill; the names are said)
+          { const nm = (dy: number) => String(actor.blockAt(new Vec3(retreat.x, retreat.y + dy, retreat.z))?.name); const names = [nm(-1), nm(0), nm(1)]; note(`cover cell ${retreat.x},${retreat.y},${retreat.z}: under ${names[0]} / feet ${names[1]} / head ${names[2]}`);
+            const fires = [0, 1].filter(dy => /fire/u.test(nm(dy))).map(dy => ({ x: retreat.x, y: retreat.y + dy, z: retreat.z }));
+            if (fires.length) { const put = await act('put the fire out', [{ do: 'dig', at: fires, collect: false, onFail: 'continue' }], 20, { accept: ['blaze'] }); note(`fire put out: ${put.lines.join(' | ').slice(0, 160)}`); } }
           const run = await act(`fill#${++acts}`, [{ do: 'fill', block: 'cobblestone', groups: arg.slice(gi, gi + 12), retreatHp: 10, retreatTo: retreat, seconds: 60 }], 90, { accept: ['blaze'] });
           const f = ((run.json?.lines ?? []) as any[]).map(line => line.fill).find(Boolean);
           built += Number(f?.placed ?? 0); failedCells += Array.isArray(f?.remaining) ? f.remaining.length : 0;
