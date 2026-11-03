@@ -832,6 +832,15 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     mark('torches done');
   }
   let json = await readLane();
+  // (a probe read just after the move may see unloaded or empty blocks: read again, up to three times, until half of the cells have a standing cell)
+  for (let again = 0; again < 3 && json?.found; again++) {
+    const rows = (json.candidates?.[0]?.build ?? []) as any[];
+    const withStand = rows.filter(row => row[4] !== null && row[4] !== undefined).length;
+    if (rows.length === 0 || withStand >= rows.length / 2) break;
+    note(`probe read ${again + 1}: standing cells for ${withStand} of ${rows.length}; read again in 8 s`);
+    await sleep(8000);
+    json = await readLane();
+  }
   mark('probe read');
   if (!json?.found) { clearInterval(sampler); throw new Error(`no lane report: ${String(json?.text ?? '').slice(0, 200)}`); }
   const c = json.candidates[0], cells = json.cells as Array<[number, number, number, string | null, string]>, facts = json.facts as Array<[number, boolean | null, number, number, string, boolean]>;
