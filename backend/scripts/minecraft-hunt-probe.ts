@@ -808,6 +808,12 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     await sleep((options.awaySeconds ?? 150) * 1000);
     await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
     await sleep(5000);   // (the blocks under the body arrive after the move: a fill read at once said there was no floor)
+    // (a body put down before the blocks under it had arrived falls to the floor below: it is put on the stand again, up to three times)
+    for (let again = 0; again < 3 && !disconnected && Math.abs(actor.entity.position.y - stand[1]) > 0.7; again++) {
+      note(`the body stands at y ${r1(actor.entity.position.y)}, not on the stand (y ${stand[1]}): put back (${again + 1})`);
+      await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+      await sleep(4000);
+    }
     mark('back from away');
     note(`back at the stand after ${options.awaySeconds ?? 150} s away; blazes known now: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
   }
