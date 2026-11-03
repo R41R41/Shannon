@@ -285,6 +285,8 @@ export function installLavaReflex(bot: ReflexBody): void {
         let block: any = null;
         try { block = bot.blockAt(cell); } catch { block = null; }
         if (!isFire(block)) continue;
+        // (review 2026-11-03: the punch holds no lease; once this reflex (a wall escape, the lava climb) has taken the body, or the body is gone, no further dig is sent over its work)
+        if (state.engaged || !bot.entity) break;
         let timer: NodeJS.Timeout | undefined;
         try { await Promise.race([digger.dig!(block, true), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('punch timeout')), PUNCH_GRACE_MS); })]); }
         finally { if (timer) clearTimeout(timer); }

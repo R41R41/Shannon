@@ -699,6 +699,43 @@ async function blazeLane(note: (text: string) => void, options: { seconds?: numb
   } finally { clearInterval(sampler); clearInterval(census); actor.removeListener('entityDead', onDead); }
   return { seconds: r1((Date.now() - started) / 1000), kills: killed, killsPerMin: r1(killed / Math.max((Date.now() - started) / 60_000, 0.1)), rods: (await countServer('blaze_rod')) - rods0, shieldWear: shieldUsed() - shield0, deathsHere: deaths, lowestHp: Math.min(...track, 20), hpTrack: track.filter((_, index) => index % 5 === 0).join(' ') };
 }
+// Light against the spawner (S2, 2026-11-03; the coordinator's order d47, step 2): does a spawn box of light level 15 stop the spawner's blazes? The spawner is quiet while the box is filled with `light` blocks (they
+// have no collision: the free space stays), the body waits in a sealed cell next to the box, and for 180 s the blazes the client knows near the spawner are counted every 15 s. Run once without the light for the
+// baseline. The survivors are killed at the start so that what is counted was spawned during the run.
+async function blazeLight(note: (text: string) => void, options: { lit: boolean; seconds?: number }): Promise<Record<string, unknown>> {
+  const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
+  if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
+  const seconds = options.seconds ?? 180;
+  await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
+  await equip({ stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  const nether = 'execute in minecraft:the_nether run';
+  const [sx, sy, sz] = spawner;
+  await ask('gamerule doMobSpawning false');
+  await ask(`${nether} kill @e[type=minecraft:blaze]`);
+  if (options.lit) await ask(`${nether} fill ${sx - 4} ${sy - 1} ${sz - 4} ${sx + 4} ${sy + 2} ${sz + 4} minecraft:light[level=15] replace minecraft:air`);
+  // a sealed cell for the body, east of the box at distance 6 on the side with the most solid cells; just a shell, no opening toward the spawner but a window one cell high
+  const cx = sx + 6, cy = sy, cz = sz;
+  await ask(`${nether} fill ${cx - 1} ${cy - 1} ${cz - 1} ${cx + 1} ${cy + 2} ${cz + 1} minecraft:cobblestone`);
+  await ask(`${nether} fill ${cx} ${cy} ${cz} ${cx} ${cy + 1} ${cz} minecraft:air`);
+  await sleep(1500);
+  await ask(`${nether} tp ${ACTOR} ${cx + 0.5} ${cy} ${cz + 0.5}`);
+  await sleep(2000);
+  await ask('gamerule doMobSpawning true');
+  const started = Date.now();
+  const counts: number[] = [];
+  const near = (): number => (Object.values(actor.entities ?? {}) as any[]).filter(entity => String(entity?.name) === 'blaze' && entity.position
+    && Math.abs(entity.position.x - sx) <= 5 && Math.abs(entity.position.z - sz) <= 5 && Math.abs(entity.position.y - sy) <= 5).length;
+  while (Date.now() - started < seconds * 1000 && !disconnected && Number(actor.health) > 0) {
+    await sleep(15_000);
+    counts.push(near());
+    note(`light=${options.lit} ${Math.round((Date.now() - started) / 1000)} s: ${counts[counts.length - 1]} blazes near the spawner`);
+  }
+  const lightAt = await ask(`${nether} data get block ${sx + 1} ${sy} ${sz}`);
+  return { lit: options.lit, seconds: r1((Date.now() - started) / 1000), counts: counts.join(' '), maxNear: Math.max(...counts, 0), probeBlock: lightAt.replace(/\s+/gu, ' ').slice(0, 120), deathsHere: deaths };
+}
+scene('blaze_light_off', 'baseline: the spawn box as it is, blazes near the spawner counted every 15 s for 180 s after killing the survivors', note => blazeLight(note, { lit: false }));
+scene('blaze_light_on', 'light blocks of level 15 over the whole spawn box, blazes near the spawner counted every 15 s for 180 s after killing the survivors', note => blazeLight(note, { lit: true }));
 scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wide 2-high lane of three cells beyond the plugged cell beside the spawner; the body in a sealed cell at its end, attack hold; 600 s, survivors not killed', note => blazeLane(note));
 // The lane built BY THE BODY's hands (S2, 2026-11-03): the scripted head reads probe kind=lane (no spawner given: the near one), takes the first candidate (fewest cobblestones), and builds what the probe lists in the order
 // it lists it, with go and place hands (up to 4 cells per group, a go to a floor cell within reach first), the blazes alive and shooting. Then it re-reads the plan (what still stands to be built outside the lane), goes to the
