@@ -1,5 +1,6 @@
 import type { CampCellBlock, CampReader } from './huntCamp.js';
 import { solidBetween } from './probeTools.js';
+import { standableAt } from './standability.js';
 
 /** A reading of the specified shape, never a builder or a choice of when to build. */
 export interface LaneCell { x: number; y: number; z: number }
@@ -54,7 +55,6 @@ export interface LaneReport {
 
 const AIR = new Set(['air', 'cave_air', 'void_air']);
 const HAZARDS = new Set(['lava', 'water', 'fire', 'soul_fire']);
-const STAND_HAZARDS = new Set([...HAZARDS, 'magma_block', 'campfire', 'soul_campfire']);
 const HORIZONTAL = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 const STAND_REACH = 4.3;
 const WALK_LIMIT = 2000;
@@ -99,21 +99,16 @@ function placementLine(read: CampReader, from: LaneCell, to: LaneCell): 'clear' 
 /** One bounded BFS per plan. Future blocks cannot be a route or a new floor. */
 function walkingSteps(read: CampReader, from: LaneCell, planned: ReadonlySet<string>): Map<string, number> {
   const steps = new Map<string, number>();
-  const empty = (p: LaneCell) => !planned.has(key(p)) && AIR.has(read(p.x, p.y, p.z)?.name ?? '');
-  const standable = (p: LaneCell) => {
-    const feet = read(p.x, p.y, p.z), head = read(p.x, p.y + 1, p.z), floor = read(p.x, p.y - 1, p.z);
-    return !!feet && !!head && !!floor && AIR.has(feet.name) && AIR.has(head.name)
-      && !STAND_HAZARDS.has(floor.name) && (solid(floor) || /(?:_stairs|_slab)$/u.test(floor.name));
-  };
+  const empty = (p: LaneCell) => !planned.has(key(p)) && open(read(p.x, p.y, p.z));
   // The body may start in a future block's cell, but cannot enter any such cell along the route.
-  if (!standable(from)) return steps;
+  if (!standableAt(read, from).ok) return steps;
   const queue = [from];
   steps.set(key(from), 0);
   for (let i = 0; i < queue.length && steps.size < WALK_LIMIT; i++) {
     const p = queue[i], nextStep = steps.get(key(p))! + 1;
     for (const [dx, dz] of HORIZONTAL) for (const dy of [0, 1, -1]) {
       const q = add(p, dx, dy, dz), k = key(q);
-      if (steps.has(k) || !empty(q) || !empty(add(q, 0, 1, 0)) || !standable(q)) continue;
+      if (steps.has(k) || !standableAt(read, q, { ignore: planned }).ok) continue;
       // A step up needs clearance above the starting head; a step down needs it above the landing head.
       if (dy === 1 && !empty(add(p, 0, 2, 0))) continue;
       if (dy === -1 && !empty(add(q, 0, 2, 0))) continue;
@@ -144,28 +139,10 @@ export function laneReport(reader: CampReader, spawner: LaneCell, from: LaneCell
     const k = key(p), known = standing.get(k);
     if (known) return known;
     const check = (): 'safe' | NonNullable<LanePlacement['noStand']> => {
-      const feet = read(p.x, p.y, p.z), head = read(p.x, p.y + 1, p.z), floor = read(p.x, p.y - 1, p.z);
-      if (floor && !fullFloor(floor)) return 'out_of_reach';
-      if (!feet || !head || !floor) return 'unloaded';
-      if ([feet, head, floor].some(b => STAND_HAZARDS.has(b.name))) return 'hazard';
-      if (!AIR.has(feet.name) || !AIR.has(head.name) || entities.some(e => overlaps(e, p) || overlaps(e, add(p, 0, 1, 0)))) return 'out_of_reach';
-      let unknown = false;
-      // Include diagonals and the floor/head's adjacent layer. Never promise safety beside an unread cell.
-      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 2; dy++) {
-        const b = read(p.x + dx, p.y + dy, p.z + dz);
-        if (!b) unknown = true;
-        else if (STAND_HAZARDS.has(b.name)) return 'hazard';
-      }
-      // As in camp, a push onto an open neighbouring cell must not drop the body into a hole.
-      for (const [dx, dz] of HORIZONTAL) {
-        if (fullFloor(read(p.x + dx, p.y, p.z + dz)) || fullFloor(read(p.x + dx, p.y + 1, p.z + dz))) continue;
-        const a = read(p.x + dx, p.y - 1, p.z + dz), b = read(p.x + dx, p.y - 2, p.z + dz);
-        if (!(fullFloor(a) && !STAND_HAZARDS.has(a!.name)) && !(fullFloor(b) && !STAND_HAZARDS.has(b!.name))) {
-          if (!a || !b) unknown = true;
-          else return 'hazard';
-        }
-      }
-      return unknown ? 'unloaded' : 'safe';
+      const state = standableAt(read, p);
+      if (!state.ok) return state.why === 'unloaded' ? 'unloaded'
+        : ['floor_hazard', 'fire_near', 'hazard_near'].includes(state.why) ? 'hazard' : 'out_of_reach';
+      return entities.some(e => overlaps(e, p) || overlaps(e, add(p, 0, 1, 0))) ? 'out_of_reach' : 'safe';
     };
     const result = check(); standing.set(k, result); return result;
   };
