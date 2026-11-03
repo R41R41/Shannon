@@ -1,6 +1,7 @@
 import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { buildMovements } from '../setMovements.js';
+import { installGroundSprint, watchGroundSprint } from '../groundSprint.js';
 import { nextLeg, FAR_LEG_M } from '../farLegs.js';
 import { bodyReader, feetCell, relativeWords, type Cell, type MapBlock } from '../localMap.js';
 import { probePath } from '../probeTools.js';
@@ -166,6 +167,7 @@ export function walkMovements(bot: any, sprint = true): any {
   // this file says; the search is given the same. The safe-parkour bound (a gap's drop) stays at MAX_DROP: it was set above, in its closure.
   movements.maxDropDown = MAX_DROP + 1;
   installWalkRules(movements);
+  installGroundSprint(movements);
   return movements;
 }
 
@@ -201,12 +203,14 @@ export interface GoWithOptions {
  */
 export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, notes: WayNotes, options: GoWithOptions = {}): Promise<GoOutcome> {
   const bot = ctx.bot;
+  const sprint = watchGroundSprint(bot);
   let route: any[] = [];
   let search: SearchSaid | null = null;
   const onRoute = (results: any) => {
     route = Array.isArray(results?.path) ? results.path : [];
     search = { status: String(results?.status ?? '?'), nodes: route.length };
     try { options.onRoute?.(route, search.status); } catch { /* a look at the route never stops the walk */ }
+    sprint.route(route);
   };
   const onDug = (block: any) => { if (block?.name && isLeaves(String(block.name))) notes.leaves++; };
   const opening = new Map<string, number>();
@@ -277,7 +281,7 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
     // which digs): a pick-up that restored it dug a vein cell the mine hand was digging, a dig twice, found by a unit test that failed 1 in 2 under load.
     try { bot.pathfinder.setGoal(null); } catch { /* the walk's result stands */ }
   }
-  function detach() { bot.removeListener?.('path_update', onRoute); bot.removeListener?.('diggingCompleted', onDug); }
+  function detach() { bot.removeListener?.('path_update', onRoute); bot.removeListener?.('diggingCompleted', onDug); sprint.close(); }
   if (!crossed && portalWalks.has(bot) && dimensionOf(bot) !== dimension0) crossed = true;
   return { reached: !crossed && atGoal(bot, goal), timedOut: timedOut && !crossed, stuck: stuck && !crossed, error: crossed ? null : error, search, opens, crossed };
 }
