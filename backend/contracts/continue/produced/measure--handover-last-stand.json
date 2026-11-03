@@ -1,26 +1,26 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "196826c329d686994706c2ccf5299084bc488ab6",
- "madeAt": "2026-11-03T15:57:32.602Z",
+ "bodyRevision": "83e482e6b5ed5bdbc09f6f40eb197e1fcaf9208b",
+ "madeAt": "2026-11-03T17:39:56.420Z",
  "answers": null,
  "fixtureSha256": null,
  "output": {
   "seen": {
    "capability": "floor-last-stand",
-   "target": 162
+   "target": 161
   },
   "handover": {
    "from": "floor-last-stand",
-   "target": 162,
+   "target": 161,
    "waitedMs": 3,
-   "reflexSettledAt": "2026-11-03T15:57:27.279Z",
+   "reflexSettledAt": "2026-11-03T17:39:51.098Z",
    "confirmed": true,
    "shield": "none"
   },
   "notes": [
    {
-    "command": "lab:q20",
+    "command": "lab:q19",
     "point": "reservation",
     "shield": false,
     "flagUp": false,
@@ -32,10 +32,10 @@
     "reserved": false,
     "reflex": "floor-last-stand",
     "kind": "motor_state",
-    "at": "2026-11-03T15:57:27.278Z"
+    "at": "2026-11-03T17:39:51.098Z"
    },
    {
-    "command": "lab:q20",
+    "command": "lab:q19",
     "point": "stop",
     "shield": false,
     "flagUp": false,
@@ -46,10 +46,10 @@
     "deactivatedSince": 0,
     "reflex": "floor-last-stand",
     "kind": "motor_state",
-    "at": "2026-11-03T15:57:27.279Z"
+    "at": "2026-11-03T17:39:51.098Z"
    },
    {
-    "command": "lab:q20",
+    "command": "lab:q19",
     "point": "acquire",
     "shield": false,
     "flagUp": false,
@@ -61,10 +61,10 @@
     "confirmed": true,
     "result": "none",
     "kind": "motor_state",
-    "at": "2026-11-03T15:57:27.281Z"
+    "at": "2026-11-03T17:39:51.101Z"
    },
    {
-    "command": "lab:q20",
+    "command": "lab:q19",
     "point": "first_op",
     "shield": false,
     "flagUp": false,
@@ -75,7 +75,7 @@
     "deactivatedSince": 0,
     "op": "setMovements",
     "kind": "motor_state",
-    "at": "2026-11-03T15:57:27.283Z"
+    "at": "2026-11-03T17:39:51.103Z"
    }
   ],
   "outcome": "failed",
@@ -84,8 +84,8 @@
    "end": "finished",
    "released": true,
    "code": "limit_time",
-   "startedAt": "2026-11-03T15:57:27.278Z"
+   "startedAt": "2026-11-03T17:39:51.098Z"
   },
-  "sentToLockMs": 40
+  "sentToLockMs": 7
  }
 }
