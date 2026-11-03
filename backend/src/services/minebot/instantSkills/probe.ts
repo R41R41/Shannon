@@ -24,7 +24,7 @@ import { laneProbeFields } from '../utils/huntLane.js';
  *   frames  the stronghold's end portal frames within `radius` blocks of (x, z), or the next points of the 16-block rings to walk (S2: the same as find-structure stronghold);
  *   camp    the Nether's blaze spawner, the cells within three blocks of it to stand on (a floor, two open cells, no edge, no fire) and the hideouts (footings no blaze of it can see; to go to when
  *           the health runs low) (S2: the same as find-structure blaze_spawner).
- *   lane    four read-only lane plans: cells, cobblestone counts, support order, occupants, reach and hazards.
+ *   lane    four read-only lane plans: cells, counts, support order, occupants, reach, safe footings and groups of up to six.
  * The answer is JSON: { v: 1, kind, text, ... } with the sentence first, the dangerous facts said as they are.
  */
 export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite', 'frames', 'camp', 'lane'] as const;
@@ -36,7 +36,7 @@ const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: pa
   + 'worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）/ '
   + 'frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ '
   + 'camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。'
-  + 'lane（spawner の四方向のレーン計画。省略時は近い湧き場。必要な丸石・建築順・支え・生き物・待ち場から4.5以内の手の距離・危険を読むだけ）。'
+  + 'lane（spawner の四方向のレーン計画。省略時は近い湧き場。丸石・建築順・支え・生き物・待ち場からの距離と危険。build 末尾の standAtCell は cells の足マス参照、group は同じ立ち位置で最大6マス、立ち位置なしは両方 null。facts 末尾の standFact は standFacts の参照で noStand・blockedByCreature・fireNear。目から4.3以内で視線が通り、火・液体・マグマ・縁を避ける。go で立ち位置へ→同じ group の place、占有マスは組の末尾で再確認。fireNear は立ち位置なしなら null、安全なら false。経路は別途確認する、読むだけ）。'
   + '結果は JSON（text が先頭。危ない事実をそのまま書く）。';
 
 const cellOf = (value: { x: number; y: number; z: number }): Cell => ({ x: Math.floor(value.x), y: Math.floor(value.y), z: Math.floor(value.z) });
@@ -116,7 +116,8 @@ export async function runProbe(bot: any, input: ProbeInput): Promise<{ success: 
   const feet = feetCell(bot);
   if (!feet) return { success: false, result: '体が無い（接続が切れた）', failureType: 'disconnected' };
   const read = bodyReader(bot);
-  // The sentence first (the contract), then the fields; every kind's fields are bounded far under the receipt's 16,000 characters.
+  // The sentence first (the contract), then the fields. Large four-direction lane plans with footings
+  // can exceed the caller's 16,000-character receipt; never silently omit their required build columns here.
   const answer = (value: { v: 1; kind: string; text: string }) => {
     const { v, kind, text, ...rest } = value;
     return { success: true, result: JSON.stringify({ v, kind, text, ...rest }) };
