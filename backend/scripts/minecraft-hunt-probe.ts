@@ -702,7 +702,7 @@ async function blazeLane(note: (text: string) => void, options: { seconds?: numb
 // Light against the spawner (S2, 2026-11-03; the coordinator's order d47, step 2): does a spawn box of light level 15 stop the spawner's blazes? The spawner is quiet while the box is filled with `light` blocks (they
 // have no collision: the free space stays), the body waits in a sealed cell next to the box, and for 180 s the blazes the client knows near the spawner are counted every 15 s. Run once without the light for the
 // baseline. The survivors are killed at the start so that what is counted was spawned during the run.
-async function blazeLight(note: (text: string) => void, options: { lit: boolean; seconds?: number }): Promise<Record<string, unknown>> {
+async function blazeLight(note: (text: string) => void, options: { lit: boolean; seconds?: number; torchSpacing?: number }): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
   if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
   const seconds = options.seconds ?? 180;
@@ -713,6 +713,34 @@ async function blazeLight(note: (text: string) => void, options: { lit: boolean;
   const [sx, sy, sz] = spawner;
   await ask('gamerule doMobSpawning false');
   await ask(`${nether} kill @e[type=minecraft:blaze]`);
+  let torches = 0, tried = 0;
+  if (options.torchSpacing) {
+    // torches (light 14) set by the scripted head's own cover of the box: the cells a blaze could be put on are the air cells at the spawner's layer with something solid under them; a torch lights every cell
+    // within two blocks of it to 12 or more, so torches are chosen greedily until each such cell has one within two (the spacing option only names the run)
+    const free = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y, z)); return !!b && b.boundingBox !== 'block' && !['lava', 'fire', 'water'].includes(b.name); };
+    // targets: every feet cell a blaze's box fits in (the cell and the one over it free) in the three layers the spawner uses (feet one under to one over the spawner's); candidates: the floor cells of the spawner's layer
+    const cellsToLight: Array<[number, number, number]> = [], candidates: Array<[number, number]> = [];
+    for (let dx = -4; dx <= 4; dx++) for (let dz = -4; dz <= 4; dz++) {
+      const x = sx + dx, z = sz + dz, below = actor.blockAt(new Vec3(x, sy - 1, z));
+      if (!(dx === 0 && dz === 0) && free(x, sy, z) && below && below.boundingBox === 'block') candidates.push([x, z]);
+      for (const y of [sy - 1, sy, sy + 1]) if (!(dx === 0 && dz === 0 && y === sy) && free(x, y, z) && free(x, y + 1, z)) cellsToLight.push([x, y, z]);
+    }
+    const dist = (a: [number, number, number], t: [number, number]) => Math.abs(a[0] - t[0]) + Math.abs(a[2] - t[1]) + Math.abs(a[1] - sy);
+    const uncovered = new Set(cellsToLight.map(c => c.join(',')));
+    const chosen: Array<[number, number]> = [];
+    while (uncovered.size) {
+      let best: [number, number] | null = null, bestN = 0;
+      for (const t of candidates) {
+        let n = 0; for (const key of uncovered) { const c = key.split(',').map(Number) as [number, number, number]; if (dist(c, t) <= 2) n++; }
+        if (n > bestN) { bestN = n; best = t; }
+      }
+      if (!best) break;
+      chosen.push(best);
+      for (const key of [...uncovered]) { const c = key.split(',').map(Number) as [number, number, number]; if (dist(c, best) <= 2) uncovered.delete(key); }
+    }
+    for (const [x, z] of chosen) { await ask(`${nether} setblock ${x} ${sy} ${z} minecraft:torch`); torches++; }
+    note(`torches placed: ${torches} for ${cellsToLight.length} feet cells to light, ${uncovered.size} left uncovered`);
+  }
   if (options.lit) await ask(`${nether} fill ${sx - 4} ${sy - 1} ${sz - 4} ${sx + 4} ${sy + 2} ${sz + 4} minecraft:light[level=15] replace minecraft:air`);
   // a sealed cell for the body, east of the box at distance 6 on the side with the most solid cells; just a shell, no opening toward the spawner but a window one cell high
   const cx = sx + 6, cy = sy, cz = sz;
@@ -732,15 +760,17 @@ async function blazeLight(note: (text: string) => void, options: { lit: boolean;
     note(`light=${options.lit} ${Math.round((Date.now() - started) / 1000)} s: ${counts[counts.length - 1]} blazes near the spawner`);
   }
   const lightAt = await ask(`${nether} data get block ${sx + 1} ${sy} ${sz}`);
-  return { lit: options.lit, seconds: r1((Date.now() - started) / 1000), counts: counts.join(' '), maxNear: Math.max(...counts, 0), probeBlock: lightAt.replace(/\s+/gu, ' ').slice(0, 120), deathsHere: deaths };
+  return { lit: options.lit, torches, seconds: r1((Date.now() - started) / 1000), counts: counts.join(' '), maxNear: Math.max(...counts, 0), probeBlock: lightAt.replace(/\s+/gu, ' ').slice(0, 120), deathsHere: deaths };
 }
 scene('blaze_light_off', 'baseline: the spawn box as it is, blazes near the spawner counted every 15 s for 180 s after killing the survivors', note => blazeLight(note, { lit: false }));
+scene('blaze_torch_3', 'torches on the floor in a grid of spacing 3 over the spawn box, blazes near the spawner counted every 15 s for 180 s', note => blazeLight(note, { lit: false, torchSpacing: 3 }));
+scene('blaze_torch_4', 'torches on the floor in a grid of spacing 4 over the spawn box (fewer), blazes counted for 180 s', note => blazeLight(note, { lit: false, torchSpacing: 4 }));
 scene('blaze_light_on', 'light blocks of level 15 over the whole spawn box, blazes near the spawner counted every 15 s for 180 s after killing the survivors', note => blazeLight(note, { lit: true }));
 scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wide 2-high lane of three cells beyond the plugged cell beside the spawner; the body in a sealed cell at its end, attack hold; 600 s, survivors not killed', note => blazeLane(note));
 // The lane built BY THE BODY's hands (S2, 2026-11-03): the scripted head reads probe kind=lane (no spawner given: the near one), takes the first candidate (fewest cobblestones), and builds what the probe lists in the order
 // it lists it, with go and place hands (up to 4 cells per group, a go to a floor cell within reach first), the blazes alive and shooting. Then it re-reads the plan (what still stands to be built outside the lane), goes to the
 // waiting cell and holds for the rest of the time, fetching what falls. Measures the time to build, the lowest health while building, the cobblestones used and the kills after.
-async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number } = {}): Promise<Record<string, unknown>> {
+async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const holdSeconds = options.holdSeconds ?? 300, groupSize = options.groupSize ?? 5, thinkMs = 5000;
@@ -753,6 +783,17 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const sampler = setInterval(() => { const value = hp(); if (Number.isFinite(value)) track.push(r1(value)); }, 1000);
   const cobble0 = packClient().cobblestone ?? 0;
   const t0 = Date.now(), deaths0 = deaths;
+  if (options.away) {
+    // the clearing-away: the room fills for a minute (the spawner runs with the body near), the body goes far off (the spawner stops, what it made fades), waits, and comes back to build
+    const arrival = sites.netherArrival as number[] | undefined;
+    if (!arrival) throw new Error('no netherArrival in the sites');
+    await act('warm', [{ do: 'wait', seconds: 40 }], 60, { accept: ['blaze'] });
+    note(`blazes known before leaving: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
+    await placeActor('the_nether', arrival[0], arrival[1], arrival[2], 24);
+    await sleep((options.awaySeconds ?? 150) * 1000);
+    await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+    note(`back at the stand after ${options.awaySeconds ?? 150} s away; blazes known now: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
+  }
   let json = await readLane();
   if (!json?.found) { clearInterval(sampler); throw new Error(`no lane report: ${String(json?.text ?? '').slice(0, 200)}`); }
   const c = json.candidates[0], cells = json.cells as Array<[number, number, number, string | null, string]>, facts = json.facts as Array<[number, boolean | null, number, number, string, boolean]>;
@@ -773,17 +814,24 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     // the groups in the order of their first cell; a group is the cells that go on being set from one standing cell
     const groups: Array<typeof placements> = [];
     for (const p of placements) { const last = groups[groups.length - 1]; if (last && p.group !== -1 && last[0].group === p.group) last.push(p); else groups.push([p]); }
-    for (let gi = 0; gi < groups.length && !disconnected && hp() > 0 && deaths === deaths0; gi++) {
+    // the cover first (the waiting cell's enclosure, the plug and the roof of the lane), then the lid; two groups to one act (12 hands: a go and up to five places each)
+    const rank = (g: typeof placements) => ['enclosure', 'plug', 'roof', 'lid'].indexOf(g[0].part);
+    groups.sort((a, b) => rank(a) - rank(b));
+    for (let gi = 0; gi < groups.length && !disconnected && hp() > 0 && deaths === deaths0; gi += 2) {
       if (hp() < 6) { aborted = `hp ${r1(hp())} at pass ${pass} group ${gi}/${groups.length}`; break; }
-      const group = groups[gi];
-      const head = group[0];
-      const floor = head.stand ?? { x: wait[0], y: wait[1], z: wait[2] };
+      const pair = groups.slice(gi, gi + 2);
+      const head = pair[0][0];
       await sleep(thinkMs);
-      const run = await act(`build#${++acts}`, [{ do: 'go', to: floor, range: 0.8, seconds: 12, onFail: 'continue' },
-        ...group.map(p => ({ do: 'place', at: [p.at], block: 'cobblestone', onFail: 'continue' }))], 45, { accept: ['blaze'] });
+      const hands: unknown[] = [];
+      for (const group of pair) {
+        const floor = group[0].stand ?? { x: wait[0], y: wait[1], z: wait[2] };
+        hands.push({ do: 'go', to: floor, range: 0.8, seconds: 12, onFail: 'continue' });
+        for (const p of group.slice(0, 5)) hands.push({ do: 'place', at: [p.at], block: 'cobblestone', onFail: 'continue' });
+      }
+      const run = await act(`build#${++acts}`, hands.slice(0, 12), 60, { accept: ['blaze'] });
       const text = run.lines.join(' ');
-      built += group.length; failedCells += (text.match(/置けない|止まった/gu) ?? []).length;
-      if (acts % 6 === 1 || /反射/u.test(text)) note(`build#${acts} pass ${pass} (${head.part}) hp ${r1(hp())}: ${text.slice(0, 200)}`);
+      built += hands.length; failedCells += (text.match(/置けない|止まった/gu) ?? []).length;
+      if (acts % 4 === 1 || /反射/u.test(text)) note(`build#${acts} pass ${pass} (${head.part}) hp ${r1(hp())}: ${text.slice(0, 200)}`);
     }
     json = await readLane();
     const again = json?.candidates?.find((x: any) => x.direction === c.direction);
@@ -816,6 +864,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
     killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null };
 }
+scene('blaze_lane_build_away', 'the lane built after clearing away: the room fills for 40 s, the body goes to the Nether arrival for 150 s, comes back and builds from the probe, then a 300 s hold', note => blazeLaneBuild(note, { away: true }));
 scene('blaze_lane_build', 'the lane built by the scripted head from probe kind=lane with go and place hands while the blazes are alive, then a 300 s hold', note => blazeLaneBuild(note));
 async function blazeSlit(note: (text: string) => void, options: { seconds?: number; fetch?: boolean; flush?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
