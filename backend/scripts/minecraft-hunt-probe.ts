@@ -770,7 +770,7 @@ scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wid
 // The lane built BY THE BODY's hands (S2, 2026-11-03): the scripted head reads probe kind=lane (no spawner given: the near one), takes the first candidate (fewest cobblestones), and builds what the probe lists in the order
 // it lists it, with go and place hands (up to 4 cells per group, a go to a floor cell within reach first), the blazes alive and shooting. Then it re-reads the plan (what still stands to be built outside the lane), goes to the
 // waiting cell and holds for the rest of the time, fetching what falls. Measures the time to build, the lowest health while building, the cobblestones used and the kills after.
-async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean; torches?: boolean; settle?: boolean; lidOnly?: boolean; window?: number; ambush?: boolean } = {}): Promise<Record<string, unknown>> {
+async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean; torches?: boolean; settle?: boolean; lidOnly?: boolean; window?: number; ambush?: boolean; checkOnly?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const holdSeconds = options.holdSeconds ?? 300, groupSize = options.groupSize ?? 5, thinkMs = 5000;
@@ -799,6 +799,27 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     }
     settledMs += Date.now() - from; mark(`settled (${why}) ${r1((Date.now() - from) / 1000)} s`);
   };
+  // (a fireball's push drops a body that stands beside an open hole: every open neighbour of the stand with no full floor one or two cells down is walled at feet height; the floor cell under it goes first, set against the stand's own floor, then the wall on it)
+  const sealStand = async () => {
+    const cellAt = (x: number, y: number, z: number) => actor.blockAt(new Vec3(x, y, z));
+    const below: Array<{ x: number; y: number; z: number }> = [], walls: Array<{ x: number; y: number; z: number }> = [];
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const x = stand[0] + dx, z = stand[2] + dz, feet = cellAt(x, stand[1], z);
+      if (!feet || feet.boundingBox === 'block') continue;
+      if (cellAt(x, stand[1] - 1, z)?.boundingBox !== 'block' && cellAt(x, stand[1] - 2, z)?.boundingBox !== 'block') {
+        if (cellAt(x, stand[1] - 1, z)?.boundingBox !== 'block') below.push({ x, y: stand[1] - 1, z });
+        walls.push({ x, y: stand[1], z });
+      }
+    }
+    if (!walls.length) { note('no open neighbour of the stand without a floor'); return { walls: 0, ok: true }; }
+    const hands: unknown[] = [];
+    if (below.length) hands.push({ do: 'place', at: below, block: 'cobblestone', onFail: 'continue' });
+    hands.push({ do: 'place', at: walls, block: 'cobblestone', onFail: 'continue' });
+    const run = await act('seal the holes beside the stand', hands, 30, { accept: ['blaze'] });
+    const text = run.lines.join(' ');
+    note(`sealed ${walls.length} open neighbours of the stand (${below.length} floor cells first): ${text.slice(0, 220)}`);
+    return { walls: walls.length, ok: !/置けない|止まった|失敗/u.test(text) };
+  };
   if (options.away) {
     // the clearing-away: the room fills for a minute (the spawner runs with the body near), the body goes far off (the spawner stops, what it made fades), waits, and comes back to build
     const arrival = sites.netherArrival as number[] | undefined;
@@ -815,23 +836,12 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
       await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
       await sleep(4000);
     }
-    if (options.lidOnly) {
-      // (a fireball's push drops a body that stands beside an open hole: every open neighbour of the stand with no full floor one or two cells down is walled at feet height first)
-      const cellAt = (x: number, y: number, z: number) => actor.blockAt(new Vec3(x, y, z));
-      const sealed: Array<{ x: number; y: number; z: number }> = [];
-      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-        const x = stand[0] + dx, z = stand[2] + dz, feet = cellAt(x, stand[1], z);
-        if (!feet || feet.boundingBox === 'block') continue;
-        if (cellAt(x, stand[1] - 1, z)?.boundingBox !== 'block' && cellAt(x, stand[1] - 2, z)?.boundingBox !== 'block') sealed.push({ x, y: stand[1], z });
-      }
-      if (sealed.length) {
-        const run = await act('seal the holes beside the stand', [{ do: 'place', at: sealed, block: 'cobblestone', onFail: 'continue' }], 30, { accept: ['blaze'] });
-        note(`sealed ${sealed.length} open neighbours of the stand at feet height: ${run.lines.join(' ').slice(0, 200)}`);
-      } else note('no open neighbour of the stand without a floor');
-    }
+    if (options.lidOnly) await sealStand();
     mark('back from away');
     note(`back at the stand after ${options.awaySeconds ?? 150} s away; blazes known now: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
   }
+  let sealState: { walls: number; ok: boolean } | null = null;
+  if (options.checkOnly) sealState = await sealStand();
   if (options.settle) await settle('after the return');
   if (options.torches) {
     // torches first: a greedy cover of the spawner's box (the free cells of the three layers within two blocks of a torch on the floor of the spawner's layer), set with go and place in acts of six
@@ -1084,6 +1094,24 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     if (h < lastHp) { const drop = lastHp - h; if (drop > 1.25) { hitLoss += drop; hitCount++; } else if (burning()) burnLoss += drop; else smallLoss += drop; }
     lastHp = h;
   }, 250);
+  if (options.checkOnly) {
+    // the preview: one minute or two; the lane report as JSON, the cells with a stand, the way out to the attack cell and back (the way back said again up to three times), the sealing of the holes
+    const standCells = (c.build as any[]).filter(row => row[4] !== null && row[4] !== undefined).length;
+    let out = 'no attack cell', back = 'not tried';
+    if (attackCell) {
+      const goOut = await act('check: out to the attack cell', [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 12, canPlace: ['cobblestone'], maxPlace: 4, onFail: 'continue' }], 25, { accept: ['blaze'] });
+      out = /着いた/u.test(goOut.lines.join(' ')) ? 'reached' : `failed: ${goOut.lines.join(' ').slice(0, 140)}`;
+      for (let tryNo = 1; tryNo <= 3; tryNo++) {
+        const goBack = await act('check: back to the cover', [{ do: 'go', to: holdCell, range: 0.5, seconds: 12, onFail: 'continue' }], 25, { accept: ['blaze'] });
+        const at = actor.entity.position;
+        if (at.distanceTo(new Vec3(holdCell.x + 0.5, holdCell.y, holdCell.z + 0.5)) < 1.5) { back = `reached at try ${tryNo}`; break; }
+        back = `failed at try ${tryNo}: ${goBack.lines.join(' ').slice(0, 140)}`;
+      }
+    }
+    note(`CHECK: lane report as JSON yes; stand cells ${standCells} of ${c.build.length}; sealing ${sealState ? (sealState.walls ? (sealState.ok ? 'done' : 'failed') : 'not needed') : 'not run'}; out ${out}; back ${back}; body at ${actor.entity.position.floored().toString()}`);
+    clearInterval(sampler); clearInterval(watch); clearInterval(lossWatch); clearInterval(fireballWatch);
+    return { check: true, standCells, cells: c.build.length, sealed: sealState?.walls ?? 0, sealOk: sealState?.ok ?? null, out, back };
+  }
   try {
     while (Date.now() - holdStart < holdSeconds * 1000 && !disconnected && hp() > 0 && deaths === deaths0) {
       if (attackCell) {
@@ -1139,6 +1167,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
     killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null, shieldHits, woundsTaken: r1(woundsTaken), actsWithBlazeUnseen: unseenActs, holdActs: n, hitLoss: r1(hitLoss), burnLoss: r1(burnLoss), burnSeconds: r1(burnSeconds), outs, retreats };
 }
+scene('blaze_ambush_check', 'the one-to-two minute preview of the ambush: stand, lane report, stand cells, sealing of the holes beside the stand, the way out to the attack cell and back; no clearing-away, no hold', note => blazeLaneBuild(note, { fill: true, lidOnly: true, ambush: true, checkOnly: true, holdSeconds: 1 }));
 scene('blaze_ambush', 'the lid cover set with the fill hand after clearing away; in the cover until one to four blazes are in the counting box, then out to a cell beside the spawner and 3 s strikes; back at once when none, more than four, below 14 hp or on fire (rest to 18); health lost split into fireball drops and fire; a blaze table at the end; 480 s', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, ambush: true, holdSeconds: 480 }));
 scene('blaze_lid_window', 'the lid only with a window: two head-height cells next to the body towards the spawner stay open; fill, then attack hold 400 s; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, window: 2, holdSeconds: 400 }));
 scene('blaze_lid_fill', 'the lid only (the lid cells of the lane probe) set with the fill hand right after clearing away, no torches, then attack hold from the cover for 300 s; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, holdSeconds: 300 }));
