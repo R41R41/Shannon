@@ -705,7 +705,7 @@ async function blazeLane(note: (text: string) => void, options: { seconds?: numb
 async function blazeLight(note: (text: string) => void, options: { lit: boolean; seconds?: number; torchSpacing?: number }): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
   if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
-  const seconds = options.seconds ?? (options.torchSpacing ? 60 : 180);
+  const seconds = options.seconds ?? 180;
   await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
   await equip({ stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
@@ -715,18 +715,28 @@ async function blazeLight(note: (text: string) => void, options: { lit: boolean;
   await ask(`${nether} kill @e[type=minecraft:blaze]`);
   let torches = 0, tried = 0;
   if (options.torchSpacing) {
-    // torches (light 14) on the floor in a grid of the given spacing over the box; a cell within two blocks of one has light 12 or more
-    const solidBelow = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y - 1, z)); return !!b && b.boundingBox === 'block'; };
-    const offsets: number[] = []; for (let o = -Math.floor(4 / options.torchSpacing) * options.torchSpacing; o <= 4; o += options.torchSpacing) offsets.push(o);
-    for (const dx of offsets) for (const dz of offsets) {
-      const x = sx + dx, z = sz + dz;
-      if (dx === 0 && dz === 0) continue;
-      // (the server decides: air at the feet cell and something that is not air under it)
-      const said = await ask(`${nether} execute if block ${x} ${sy} ${z} minecraft:air unless block ${x} ${sy - 1} ${z} minecraft:air unless block ${x} ${sy - 1} ${z} minecraft:lava run setblock ${x} ${sy} ${z} minecraft:torch`);
-      if (/Changed the block/u.test(said)) torches++;
-      if (tried++ < 4) note(`first torch try at ${x},${sy},${z}: ${said.replace(/s+/gu, ' ').slice(0, 160)}; floor ${actor.blockAt(new Vec3(x, sy - 1, z))?.name}, here ${actor.blockAt(new Vec3(x, sy, z))?.name}`);
+    // torches (light 14) set by the scripted head's own cover of the box: the cells a blaze could be put on are the air cells at the spawner's layer with something solid under them; a torch lights every cell
+    // within two blocks of it to 12 or more, so torches are chosen greedily until each such cell has one within two (the spacing option only names the run)
+    const free = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y, z)); return !!b && b.boundingBox !== 'block' && !['lava', 'fire', 'water'].includes(b.name); };
+    const cellsToLight: Array<[number, number]> = [];
+    for (let dx = -4; dx <= 4; dx++) for (let dz = -4; dz <= 4; dz++) {
+      const x = sx + dx, z = sz + dz, below = actor.blockAt(new Vec3(x, sy - 1, z));
+      if (!(dx === 0 && dz === 0) && free(x, sy, z) && below && below.boundingBox === 'block') cellsToLight.push([x, z]);
     }
-    note(`torches placed: ${torches} (spacing ${options.torchSpacing})`);
+    const uncovered = new Set(cellsToLight.map(([x, z]) => `${x},${z}`));
+    const chosen: Array<[number, number]> = [];
+    while (uncovered.size) {
+      let best: [number, number] | null = null, bestN = 0;
+      for (const [x, z] of cellsToLight) {
+        let n = 0; for (const key of uncovered) { const [ux, uz] = key.split(',').map(Number); if (Math.abs(ux - x) + Math.abs(uz - z) <= 2) n++; }
+        if (n > bestN) { bestN = n; best = [x, z]; }
+      }
+      if (!best) break;
+      chosen.push(best);
+      for (const key of [...uncovered]) { const [ux, uz] = key.split(',').map(Number); if (Math.abs(ux - best[0]) + Math.abs(uz - best[1]) <= 2) uncovered.delete(key); }
+    }
+    for (const [x, z] of chosen) { await ask(`${nether} setblock ${x} ${sy} ${z} minecraft:torch`); torches++; }
+    note(`torches placed: ${torches} for ${cellsToLight.length} cells to light`);
   }
   if (options.lit) await ask(`${nether} fill ${sx - 4} ${sy - 1} ${sz - 4} ${sx + 4} ${sy + 2} ${sz + 4} minecraft:light[level=15] replace minecraft:air`);
   // a sealed cell for the body, east of the box at distance 6 on the side with the most solid cells; just a shell, no opening toward the spawner but a window one cell high
