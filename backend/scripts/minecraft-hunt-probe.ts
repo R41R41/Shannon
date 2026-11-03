@@ -1495,7 +1495,7 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
   const fixtureAt = Date.now();
   await ask('difficulty normal');
   // No enderman kill/summon or platform/roof construction. Only equipment and the initial site are fixture setup.
-  await equip({ stone_sword: 1, stone_pickaxe: 1, cooked_beef: 16 }, { armor: 'iron', shield: true });
+  await equip({ stone_sword: 1, stone_pickaxe: 1, cooked_beef: 16, cobblestone: 32 }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
   // 1.21.11 renamed doMobSpawning to spawn_mobs: read whichever answers (the old spelling is refused there), set both
   const spawnRule = /\b(true|false)\b/u.exec(await ask('gamerule spawn_mobs'))?.[1] ?? /\b(true|false)\b/u.exec(await ask('gamerule doMobSpawning'))?.[1] ?? 'true';
@@ -1504,8 +1504,8 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
   const fixtureSetupMs = Date.now() - fixtureAt;
   const start = Date.now(), endAt = start + 600_000, deathsBefore = deaths, pearlStart = packClient().ender_pearl ?? 0;
   let den: EndermanDenSpec | null = null, kills = 0, pearls = 0, setupMs = 0, noSiteMs = 0, decisionWaitMs = 0, pickupMs = 0, healthLost = 0, wallMs = 0;
-  const seenIds = new Set<number>(), killedIds = new Set<number>(), visited = new Set<string>();
-  let hopCount = 0;
+  const seenIds = new Set<number>(), anyEnderman = new Set<number>(), killedIds = new Set<number>(), visited = new Set<string>();
+  let hopCount = 0, siteGiven = false;
   const rows: Array<Record<string, unknown>> = [];
   const remaining = () => Math.max(0, endAt - Date.now());
   const pause = async (ms: number): Promise<number> => { const at = Date.now(); await sleep(Math.min(ms, remaining())); return Date.now() - at; };
@@ -1515,6 +1515,8 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
   try {
     while (remaining() > 0 && !disconnected) {
       hurt();
+      // every enderman the body's entity list holds, at every turn (the old count stopped at the first turn that found no wall: 'seen 0' then meant 'looked at none', not 'none there')
+      for (const e of Object.values(actor.entities ?? {}) as Array<{ name?: string; id: number }>) if (e.name === 'enderman') anyEnderman.add(e.id);
       const at = Date.now(), hpBefore = Number(actor.health), pearlsBefore = packClient().ender_pearl ?? 0, lostAtStart = healthLost;
       const row: Record<string, unknown> = { i: rows.length + 1, startedSeconds: r1((at - start) / 1000), targetId: null, skipped: true,
         killed: false, setupSeconds: 0, pickupSeconds: 0, waitSeconds: 0, pearlDelta: 0, healthLost: 0 };
@@ -1542,6 +1544,12 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
         if (best) { den = { entrance: best.entrance, direction: best.direction }; note(`横穴を選択 ${JSON.stringify(den)}・見通し ${best.sightDistance}m`); }
         else {
           row.result = 'no_candidate'; row.reason = '候補なし';
+          // The wall search of this stand-in for the head is weak (a survey found walls 30 to 80 blocks east of c1's warpedStand, and the body's own search reached none in
+          // ten minutes). To measure the den itself, the first time no wall is in reach the body is put at a site the survey found, once; recorded as a fixture (siteGiven).
+          if (!siteGiven && Math.hypot(stand[0] - 304, stand[2] + 118) < 6) {
+            siteGiven = true; row.reason = '候補なし。測定のため一度だけ、調査で見つけた壁の前へ置く（fixture）'; row.siteGiven = [339, 51, -170];
+            await placeActor('the_nether', 339, 51, -170, 24); await sleep(1500); finishRow('no_site'); continue;
+          }
           // The head substitute looks for a wall the way a person would: it walks a 14-block hop in the next of eight headings (45 degrees apart, the first not yet
           // visited), within 90 blocks of warpedStand, and looks again from there (a survey of the stand's surroundings found walls only 30 to 80 blocks off it).
           // No digging or placing to get there; the hop is a plain go on known level ground.
@@ -1622,7 +1630,7 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
     denominator: '全判断の試み（候補なし・見えない・観測歩行・体力待ちを含む）。fightAttempts と固有IDも併記',
     kills, killRate: rows.length ? kills / rows.length : 0, fightKillRate: fightAttempts ? kills / fightAttempts : 0,
     pearls, killsPerMinute: kills / Math.max(wallMs / 60_000, 0.001), deaths: deaths - deathsBefore,
-    uniqueSeen: seenIds.size, killedIds: [...killedIds], healthLost: r1(healthLost),
+    uniqueSeen: seenIds.size, endermenInList: anyEnderman.size, killedIds: [...killedIds], healthLost: r1(healthLost),
     clock: { setupMs, noSiteMs, decisionWaitMs, pickupMs, fightAndOtherMs: Math.max(0, wallMs - setupMs - noSiteMs - decisionWaitMs - pickupMs) }, rows };
 });
 

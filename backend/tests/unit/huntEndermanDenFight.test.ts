@@ -109,6 +109,17 @@ async function toPhase(f: Field, phase: string): Promise<void> {
   expect(f.den.phase).toBe(phase);
 }
 const stopCode = (step: DenStep): string | undefined => step.kind === 'stop' ? step.outcome.code : undefined;
+/** Inject only after the kill, once pickup has actually brought the body outside. Keep the return route observable. */
+function onPickupOutside(f: Field, effect: () => void) {
+  const trace: { at: Vec3 | null; positions: Vec3[] } = { at: null, positions: [] };
+  f.bot.on('physicsTick', () => {
+    if (!trace.at && endermanDenObservation(f.bot)?.phase === 'pickup' && f.bot.entity.position.x <= -0.3) {
+      trace.at = f.bot.entity.position.clone(); effect();
+    }
+    if (trace.at) trace.positions.push(f.bot.entity.position.clone());
+  });
+  return trace;
+}
 
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-03T00:00:00Z'));
@@ -250,6 +261,106 @@ describe('fight / act のden接続', () => {
     expect(endermanDenObservation(f.bot)?.pickupMs).toBeLessThanOrEqual(5_000);
     expect(endermanDenObservation(f.bot)?.setupComplete).toBe(true);
     expect(f.bot.gazeGuard.enabled).toBe(true);
+  });
+  it.each([
+    { code: 'den_hurt', hp: 13, reflex: false, reason: '受けた体力 7', returns: true },
+    { code: 'reflex', hp: 13, reflex: true, reason: '反射が体を握った', returns: false },
+    { code: 'retreat', hp: 7, reflex: false, reason: '体力 7 < 8', returns: false },
+  ])('倒した後の回収中の $code は成功にせず、帰還は被弾だけで反射が無い時に試みる', async ({ code, hp, reflex, reason, returns }) => {
+    const f = field(), keys = vi.spyOn(f.bot, 'setControlState'), look = vi.spyOn(f.bot, 'look');
+    const trace = onPickupOutside(f, () => {
+      expect(f.bot.health).toBe(20); expect(f.bot.mob.health).toBeLessThanOrEqual(0);
+      f.bot.health = hp; f.bot.emit('health');
+      if (reflex) f.bot.lavaReflex = { engaged: true };
+      keys.mockClear(); look.mockClear();
+    });
+    const result = await settle(fight(f.ctx, { target: '#200', den: f.bot.field.den, seconds: 50 }));
+    expect(trace.at).not.toBeNull();
+    expect(result).toMatchObject({ ok: false, code, reason: code, progress: { unit: 'blow', done: 1 } });
+    expect(result.text).toContain('倒した（死んだ）が、回収中に'); expect(result.text).toContain(reason);
+    expect(endermanDenObservation(f.bot)).toMatchObject({ killed: true, stopReason: code, healthLost: 20 - hp });
+    expect(f.bot.attacks).toHaveLength(1); expect(mocks.dig).toHaveBeenCalledTimes(4); expect(mocks.go).not.toHaveBeenCalled();
+    if (returns) {
+      const outside = denCenter(denOffset(f.bot.field.den, -1)), rear = denCenter(denOffset(f.bot.field.den, 1));
+      expect(trace.positions.some(p => p.distanceTo(outside) <= 0.14)).toBe(true);
+      expect(f.bot.entity.position.distanceTo(rear)).toBeLessThan(0.2);
+      expect(keys.mock.calls.some(([, on]) => on)).toBe(true); expect(look).toHaveBeenCalled();
+    } else {
+      expect(f.bot.entity.position).toEqual(trace.at);
+      expect(keys.mock.calls.some(([, on]) => on)).toBe(false); expect(look).not.toHaveBeenCalled();
+    }
+    expect(endermanDenObservation(f.bot)!.pickupMs).toBeLessThanOrEqual(5_000);
+    expect(f.bot.gazeGuard.enabled).toBe(true); expect(Object.values(f.bot.control).every(on => !on)).toBe(true);
+  });
+  it('倒した後、回収の移動中に手の期限を迎えたら limit_time の失敗で返し、動かない', async () => {
+    const f = field(), endAt = Date.now() + 50_000, keys = vi.spyOn(f.bot, 'setControlState'), look = vi.spyOn(f.bot, 'look');
+    const trace = onPickupOutside(f, () => { vi.setSystemTime(endAt); keys.mockClear(); look.mockClear(); });
+    const result = await settle(fight(f.ctx, { target: '#200', den: f.bot.field.den, seconds: 50 }));
+    expect(trace.at).not.toBeNull();
+    expect(result).toMatchObject({ ok: false, code: 'limit_time', reason: 'limit_time', progress: { unit: 'blow', done: 1 } });
+    expect(result.text).toContain('倒した（死んだ）が、回収中に 横穴の手の期限に達した');
+    expect(endermanDenObservation(f.bot)).toMatchObject({ killed: true, stopReason: 'limit_time' });
+    expect(f.bot.entity.position).toEqual(trace.at);
+    expect(keys.mock.calls.some(([, on]) => on)).toBe(false); expect(look).not.toHaveBeenCalled();
+    expect(f.bot.attacks).toHaveLength(1);
+  });
+  it('落とし物の出現を待つ間の期限切れも collect の limit_time として返す', async () => {
+    const f = field(); await toPhase(f, 'hold');
+    vi.setSystemTime(f.ctx.deadline - 100);
+    const before = f.bot.entity.position.clone();
+    const result = await settle(f.den.collect());
+    expect(result).toMatchObject({ ok: false, code: 'limit_time', reason: '横穴の手の期限に達した' });
+    expect(f.bot.entity.position).toEqual(before); expect(f.den.observation.stopReason).toBe('limit_time');
+  });
+  it.each(['wall', 'stuck', 'reflex', 'deadline', 'fresh_hurt'] as const)('被弾後の帰還が %s で中止されても再試行せず、元の den_hurt を残す', async why => {
+    const f = field(), endAt = Date.now() + 50_000, keys = vi.spyOn(f.bot, 'setControlState');
+    const trace = onPickupOutside(f, () => {
+      f.bot.health = 13; f.bot.emit('health'); keys.mockClear();
+      if (why === 'wall') f.bot.field.set(f.bot.field.den.entrance, 'netherrack');
+      if (why === 'stuck') clearInterval(f.timer);
+      if (why === 'reflex' || why === 'deadline' || why === 'fresh_hurt') {
+        vi.spyOn(f.bot, 'look').mockImplementationOnce(async () => {
+          if (why === 'reflex') f.bot.lavaReflex = { engaged: true };
+          if (why === 'deadline') vi.setSystemTime(endAt);
+          if (why === 'fresh_hurt') { f.bot.health = 12; f.bot.emit('health'); }
+        });
+      }
+    });
+    const result = await settle(fight(f.ctx, { target: '#200', den: f.bot.field.den, seconds: 50 }));
+    expect(trace.at).not.toBeNull();
+    expect(result).toMatchObject({ ok: false, code: 'den_hurt', reason: 'den_hurt' });
+    expect(result.text).toContain('倒した（死んだ）が、回収中に 受けた体力 7');
+    expect(f.bot.entity.position).toEqual(trace.at); expect(endermanDenObservation(f.bot)?.stopReason).toBe('den_hurt');
+    if (why !== 'stuck') expect(keys.mock.calls.some(([, on]) => on)).toBe(false);
+    if (why !== 'deadline') expect(endermanDenObservation(f.bot)!.pickupMs).toBeLessThanOrEqual(5_000);
+    expect(f.bot.attacks).toHaveLength(1); expect(mocks.dig).toHaveBeenCalledTimes(4); expect(mocks.go).not.toHaveBeenCalled();
+    expect(Object.values(f.bot.control).every(on => !on)).toBe(true);
+  });
+  it('被弾が回収に出る前なら collect は den_hurt を返し、穴の奥から外へ出直さない', async () => {
+    const f = field(); await toPhase(f, 'hold');
+    f.bot.health = 13; f.bot.emit('health');
+    const before = f.bot.entity.position.clone(), look = vi.spyOn(f.bot, 'look');
+    expect(await settle(f.den.collect())).toMatchObject({ ok: false, code: 'den_hurt', reason: expect.stringContaining('受けた体力 7') });
+    expect(f.bot.entity.position).toEqual(before); expect(look).not.toHaveBeenCalled();
+  });
+  it('回収へ向き直る間に被弾してまだ奥にいれば、帰還のために外へ出ない', async () => {
+    const f = field(); await toPhase(f, 'hold');
+    f.bot.entities[900] = { id: 900, name: 'item', position: new Vec3(-0.6, 64, 0.5) };
+    const before = f.bot.entity.position.clone(), keys = vi.spyOn(f.bot, 'setControlState');
+    const look = vi.spyOn(f.bot, 'look').mockImplementationOnce(async () => { f.bot.health = 13; f.bot.emit('health'); });
+    expect(await settle(f.den.collect())).toMatchObject({ ok: false, code: 'den_hurt' });
+    expect(f.bot.entity.position).toEqual(before); expect(look).toHaveBeenCalledTimes(1);
+    expect(keys.mock.calls.some(([, on]) => on)).toBe(false);
+  });
+  it('回収中に別個体が近づいた場合は回収省略を伝え、target_killed の成功を保つ', async () => {
+    const f = field();
+    const trace = onPickupOutside(f, () => { f.bot.entities[201] = { ...f.bot.mob, id: 201, position: new Vec3(-2.5, 64, 0.5) }; });
+    const result = await settle(fight(f.ctx, { target: '#200', den: f.bot.field.den, seconds: 50 }));
+    expect(trace.at).not.toBeNull();
+    expect(result).toMatchObject({ ok: true, code: 'target_killed' });
+    expect(result.text).toContain('死んだ'); expect(result.text).toContain('他の個体が近いので回収中止');
+    expect(endermanDenObservation(f.bot)).toMatchObject({ killed: true, stopReason: 'den_pickup_threat' });
+    expect(f.bot.entity.position).toEqual(trace.at); expect(f.bot.attacks).toHaveLength(1);
   });
   it('近くに他の個体がいれば穴から回収に出ない', async () => {
     const f = field(); await toPhase(f, 'hold');
