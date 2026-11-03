@@ -14,7 +14,7 @@ import { solidBetween } from './probeTools.js';
  *    1.43 a blow of its reaches (a mob's attack box is its own, widened by 0.83 each way, against the body's 0.6).
  *  - It is angered by being looked in the eye: the dot of the look and the line to its eyes (2.55 above its feet) above 1 - 0.025 / distance, with the line
  *    clear. The body's own gaze guard (utils/gazeGuard) turns the look off that cone every tick; this hand suspends it while it stares.
- *  - An angry enderman within four blocks teleports away when it is looked in the eye, so once it is angry the body looks at its waist.
+ *  - Staring freezes an angry enderman within 16m and can teleport it away within 4m. After a short stare the body aims at its legs.
  *  - A hit by a creature does not make it teleport (a projectile does: a bow is no tool for it).
  *
  * This file holds the plan of the roof (pure: the blocks it needs, in the order they can be laid, each against one already standing), the choice of block, and
@@ -26,6 +26,10 @@ export const ENDERMAN_EYE = 2.55;
 export const ENDERMAN_HEIGHT = 2.9;
 /** Aim below the roof after provoking; the eyes are deliberately not required for a blow. */
 export const ENDERMAN_FEET = 1.0;
+/** The lower legs, rather than 60% of height (or even 1m, which nearly grazes the eye cone at 48m). */
+export const ENDERMAN_LEGS = 0.5;
+export const ROOF_CENTRE_TOLERANCE = 0.2;
+export const ENDERMAN_STARE_MS = 500;
 const HAND_REACH = 4.4;
 
 export type Cell3 = { x: number; y: number; z: number };
@@ -40,6 +44,8 @@ export interface RoofPlan {
   cell: Cell3;
   /** The blocks to lay, in order, each against one standing (or laid before it): floor fills first, then the support column, then the roof. */
   placements: Cell3[];
+  /** Temporary supports only (never existing terrain, floor fills or roof caps). Remove these after the caps stand. */
+  supports: Cell3[];
   /** How many of them are the 3x3 roof itself (the rest are fills and the supports). */
   caps: number;
   /** What is wrong with the site, in words (empty: the plan stands). */
@@ -52,10 +58,12 @@ const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
  * are both solid), a block in each neighbouring cell at the floor's level that is open and would let an enderman stand lower than the body and reach it, and
  * the support column the first cap is set against. `toward` (the enderman's side) only decides which side the support column goes on (the far one: it blocks
  * the look). Every placement must be within the hand's reach of the eyes and have a standing block to be set against when its turn comes.
+ * `completeNine` is the live roof camp's rule. The default retains the older wall-equivalence plan for existing callers.
  */
-export function planRoof(world: RoofWorld, cell: Cell3, toward?: { x: number; z: number }, target?: Cell3): RoofPlan {
+export function planRoof(world: RoofWorld, cell: Cell3, toward?: { x: number; z: number }, target?: Cell3, completeNine = false): RoofPlan {
   const problems: string[] = [];
-  const plan = (placements: Cell3[], caps: number): RoofPlan => ({ cell, placements, caps, problems });
+  const supports: Cell3[] = [];
+  const plan = (placements: Cell3[], caps: number): RoofPlan => ({ cell, placements, supports, caps, problems });
   const { x: cx, y: cy, z: cz } = cell;
   const eye = new Vec3(cx + 0.5, cy + 1.62, cz + 0.5);
   const body = new Set([key(cx, cy, cz), key(cx, cy + 1, cz)]);
@@ -79,7 +87,7 @@ export function planRoof(world: RoofWorld, cell: Cell3, toward?: { x: number; z:
   for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
     const x = cx + dx, z = cz + dz;
     const centre = dx === 0 && dz === 0;
-    if (!centre && solid(x, cy, z) === true && solid(x, cy + 1, z) === true) continue;
+    if (!completeNine && !centre && solid(x, cy, z) === true && solid(x, cy + 1, z) === true) continue;
     const there = solid(x, cy + 2, z);
     if (there === null) { problems.push(`屋根のマス (${x},${cy + 2},${z}) が未ロード`); continue; }
     if (there === true) continue;
@@ -143,7 +151,7 @@ export function planRoof(world: RoofWorld, cell: Cell3, toward?: { x: number; z:
       }
     }
     if (!found) { problems.push('屋根の最初の1個を当てる足場が作れない（周りに固いブロックが届かない）'); break; }
-    for (const c of found) lay(c);
+    for (const c of found) { lay(c); if (c.y >= cy) supports.push(c); }
   }
   if (targets.size) problems.push(`置けない屋根のマスが ${targets.size} ある（手が届かないか、当てる面が無い）`);
   return plan(order, caps.length);
@@ -169,6 +177,21 @@ export function endermanLine(read: BlockReader, from: Cell3, target: Cell3, up: 
     if ((!b || b.solid === true) && !between.some(c => c.x === at.x && c.y === at.y && c.z === at.z)) between.push(at);
   }
   return { clear: !between.length, between: between.map(at => ({ at, name: read(at.x, at.y, at.z)?.name ?? '未ロード' })) };
+}
+
+/** Per-axis, rather than radial: 1.8 - 0.2 = 1.6m still exceeds the enemy's 1.4283m attack box on at least one axis. */
+export function atRoofCentre(position: Cell3, cell: Cell3): boolean {
+  return Math.abs(position.x - (cell.x + 0.5)) <= ROOF_CENTRE_TOLERANCE + 1e-6
+    && Math.abs(position.z - (cell.z + 0.5)) <= ROOF_CENTRE_TOLERANCE + 1e-6 && Math.abs(position.y - cell.y) <= 0.1;
+}
+
+/** A visible point on the legs' AABB, within survival's 3m eye-to-point reach. The head/eye ray is deliberately irrelevant here. */
+export function endermanStrikePoint(read: BlockReader, from: Cell3, target: Cell3): Vec3 | null {
+  const x = Math.max(target.x - 0.29, Math.min(target.x + 0.29, from.x));
+  const z = Math.max(target.z - 0.29, Math.min(target.z + 0.29, from.z));
+  const point = new Vec3(x, target.y + ENDERMAN_LEGS, z);
+  if (point.distanceTo(new Vec3(from.x, from.y + 1.62, from.z)) > 3) return null;
+  return endermanLine(read, from, point, 0).clear ? point : null;
 }
 
 const CAMP_HAZARD = /^(lava|water|bubble_column|fire|soul_fire|magma_block|campfire|soul_campfire|cactus|sweet_berry_bush|wither_rose|powder_snow|cobweb|.*_portal|end_gateway)$/u;
@@ -261,11 +284,11 @@ export function roofSites(world: RoofWorld, around: Cell3, radius = 7, toward?: 
 
 /**
  * The block to build with: the first kind in the order the body spends them that it carries enough of, else the kind it carries most of (told short).
- * Gravity blocks and the like are not in the list.
+ * Gravity blocks and the like are not in the list. The live roof camp requests cobblestone only; other callers retain their material order.
  */
-export function roofBlockFor(bot: { inventory?: { items?: () => Array<{ name: string; count: number }> } }, need: number): { name: string; count: number } | null {
+export function roofBlockFor(bot: { inventory?: { items?: () => Array<{ name: string; count: number }> } }, need: number, cobblestoneOnly = false): { name: string; count: number } | null {
   const have = new Map<string, number>();
-  for (const item of bot.inventory?.items?.() ?? []) if (BUILDING_BLOCKS.includes(item.name)) have.set(item.name, (have.get(item.name) ?? 0) + item.count);
+  for (const item of bot.inventory?.items?.() ?? []) if (cobblestoneOnly ? item.name === 'cobblestone' : BUILDING_BLOCKS.includes(item.name)) have.set(item.name, (have.get(item.name) ?? 0) + item.count);
   for (const name of BUILDING_BLOCKS) if ((have.get(name) ?? 0) >= need) return { name, count: have.get(name)! };
   const most = [...have].sort((a, b) => b[1] - a[1])[0];
   return most ? { name: most[0], count: most[1] } : null;

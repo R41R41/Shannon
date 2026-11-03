@@ -19,9 +19,10 @@ import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonF
 import { madeStamp } from './lab/madeStamp.js';
 import { blackBoxOf } from '../src/services/minebot/utils/blackbox.js';
 import { exposureFromSpawner, hideoutsFrom, campSite } from '../src/services/minebot/utils/huntCamp.js';
-import { bodyReader } from '../src/services/minebot/utils/localMap.js';
-import { clearEndermanCampObservation, endermanCampObservation } from '../src/services/minebot/utils/huntEndermanCamp.js';
-import { ENDERMAN_EYE, endermanLine } from '../src/services/minebot/utils/huntEnderman.js';
+import { bodyReader, type Cell, type BlockReader } from '../src/services/minebot/utils/localMap.js';
+import { clearEndermanCampObservation, endermanCampObservation, roofWorldOf } from '../src/services/minebot/utils/huntEndermanCamp.js';
+import { ENDERMAN_EYE, atRoofCentre, endermanAngry, endermanLine, endermanStrikePoint, looksAtEyes, planRoof } from '../src/services/minebot/utils/huntEnderman.js';
+import { isDying } from '../src/services/minebot/utils/primitives/use.js';
 import { denCenter, denClearRay, denOffset, denStandable, endermanDenCandidates, inspectEndermanDen, type EndermanDenSpec } from '../src/services/minebot/utils/huntEndermanDen.js';
 import { clearEndermanDenObservation, endermanDenObservation, type DenEntity } from '../src/services/minebot/utils/huntEndermanDenFight.js';
 
@@ -98,25 +99,30 @@ const shieldUsed = () => Number(actor.inventory?.slots?.[45]?.durabilityUsed ?? 
 const context = { scopeKey: 'hunt', taskId: 'hunt-task', taskRevision: 1, bodyId: 'minecraft:hunt-probe', sessionId: 'hunt-session', generation: 1, goal: 'hunt probe', completionCondition: 'none' };
 let commandNumber = 0;
 interface ActRun { label: string; ok: boolean; wallMs: number; actMs: number | null; lines: string[]; json: any; stoppedBy?: string; stoppedWhy?: string; hp: number | null; pack: Record<string, number>; error?: string }
-async function runSkill(skill: string, args: Record<string, unknown>, seconds: number): Promise<{ receipt: any; parsed: any; wallMs: number; error?: string }> {
+interface RunLimits { deadlineAt?: number; stopWhen?: () => string | null }
+async function runSkill(skill: string, args: Record<string, unknown>, seconds: number, limits: RunLimits = {}): Promise<{ receipt: any; parsed: any; wallMs: number; error?: string }> {
   const id = `hunt-${++commandNumber}`;
   const command: any = { schemaVersion: 1, id, serverId: 'hunt-probe', connectionId: 'hunt', kind: 'skill', skill, arguments: args,
-    context: { ...context, ...madeStamp(body) }, lease: { id: 'hunt-lease', generation: 1, holder: 'hunt-task' }, deadlineAt: new Date(Date.now() + seconds * 1000).toISOString() };
+    context: { ...context, ...madeStamp(body) }, lease: { id: 'hunt-lease', generation: 1, holder: 'hunt-task' }, deadlineAt: new Date(Math.min(Date.now() + seconds * 1000, limits.deadlineAt ?? Infinity)).toISOString() };
   const controller = new AbortController();
   const watchdog = setTimeout(() => controller.abort('probe_watchdog'), (seconds + 20) * 1000);
+  const safety = limits.stopWhen ? setInterval(() => { const reason = limits.stopWhen?.(); if (reason) controller.abort(reason); }, 50) : null;
+  const clock = limits.deadlineAt ? setTimeout(() => controller.abort('scene_deadline'), Math.max(0, limits.deadlineAt - Date.now())) : null;
   const started = Date.now();
   let receipt: any = null, error: string | undefined;
   try { receipt = await body.execute(command, controller.signal); } catch (thrown) { error = String((thrown as Error)?.message ?? thrown); }
   clearTimeout(watchdog);
+  if (safety) clearInterval(safety);
+  if (clock) clearTimeout(clock);
   const wallMs = Date.now() - started;
-  await sleep(500);
+  await sleep(Math.min(500, Math.max(0, (limits.deadlineAt ?? Date.now() + 500) - Date.now())));
   let parsed: any = null;
   try { parsed = JSON.parse(receipt?.result ?? ''); } catch { parsed = null; }
   return { receipt, parsed, wallMs, ...(error ? { error } : {}) };
 }
-async function act(label: string, hands: unknown[], seconds: number, extra: Record<string, unknown> = {}): Promise<ActRun> {
+async function act(label: string, hands: unknown[], seconds: number, extra: Record<string, unknown> = {}, limits: RunLimits = {}): Promise<ActRun> {
   const before = packClient();
-  const { receipt, parsed, wallMs, error } = await runSkill('act', { hands, ...extra }, seconds);
+  const { receipt, parsed, wallMs, error } = await runSkill('act', { hands, ...extra }, seconds, limits);
   const lines: string[] = Array.isArray(parsed?.lines) ? parsed.lines.map((line: any) => `${line.i}.${line.do} ${line.status}: ${String(line.line)}`) : [];
   const run: ActRun = { label, ok: parsed ? parsed.ok === true : receipt?.outcome === 'completed', wallMs, actMs: typeof parsed?.ms === 'number' ? parsed.ms : null, lines, json: parsed,
     stoppedBy: parsed?.stoppedBy, stoppedWhy: parsed?.stoppedWhy, hp: Number.isFinite(Number(actor.health)) ? r1(Number(actor.health)) : null, pack: delta(before, packClient()), ...(error ? { error } : {}) };
@@ -1228,6 +1234,279 @@ async function endermanHunt(where: 'platform' | 'warped', note: (text: string) =
 }
 scene('ender_platform', 'enderman: a flat plate in the Nether, four endermen 13 to 19 blocks off', note => endermanHunt('platform', note));
 scene('ender_warped', 'enderman: the warped forest itself, four endermen', note => endermanHunt('warped', note));
+
+// ===== natural roof hunt: ONLY this scene stands in for the head's choices; no site/target policy is installed in the body ===================
+scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×3屋根・中央固定。召喚なし、観測から場所と #id を選ぶ', async note => {
+  if (timedSeconds && timedSeconds !== 1500) throw new Error('ENDER_ROOF_NATURAL_REQUIRES_MINECRAFT_HUNT_SECONDS_1500');
+  const stand = sites.warpedStand as number[] | undefined;
+  if (!stand || stand.length !== 3 || !stand.every(Number.isFinite)) throw new Error('no warpedStand in the sites');
+  const fixtureAt = Date.now();
+  await ask('difficulty normal');
+  // Fixed starting equipment, no mid-run supply, buffs, platform or mob manipulation. The initial transfer is the only teleport of the actor.
+  const equipment = { stone_sword: 3, stone_pickaxe: 1, cooked_beef: 32, cobblestone: 128 };
+  await equip(equipment, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  await ask(`effect clear ${ACTOR}`);
+  let spawning: { key: string; was: string } | null = null;
+  for (const key of ['spawn_mobs', 'doMobSpawning']) {
+    const was = /\b(true|false)\b/u.exec(await ask(`gamerule ${key}`))?.[1];
+    if (was) { spawning = { key, was }; break; }
+  }
+  if (!spawning) throw new Error('CANNOT_OBSERVE_NATURAL_SPAWNING_RULE');
+  const fixtureSetupMs = Date.now() - fixtureAt;
+  const start = Date.now(), endAt = start + 1_500_000, deathsBefore = deaths, pearlStart = packClient().ender_pearl ?? 0;
+  const rows: any[] = [], seen = new Set<number>(), candidatesSeen = new Set<number>(), killed = new Set<number>();
+  const roofs = new Set<string>(), usedRoofs = new Set<string>(), attempted = new Map<number, number>(), visited = new Set<string>();
+  const keyOf = (c: Cell) => `${c.x},${c.y},${c.z}`;
+  const xyz = (p: Cell) => ({ x: p.x, y: p.y, z: p.z });
+  const remaining = () => Math.max(0, endAt - Date.now());
+  const pause = (ms: number) => sleep(Math.min(ms, remaining()));
+  const endermen = (): any[] => (Object.values(actor.entities ?? {}) as any[]).filter(e => e?.name === 'enderman' && e.isValid !== false
+    && e.position && !killed.has(e.id) && !isDying(actor, e));
+  const angry = () => endermen().filter(e => endermanAngry(actor.registry, e));
+  const candidateList = (from = actor.entity.position, read = bodyReader(actor)) => endermen().filter(e => {
+    const d = e.position.distanceTo(new Vec3(from.x, from.y, from.z));
+    return d >= 8 && d <= 48 && endermanLine(read, from, e.position, ENDERMAN_EYE).clear;
+  }).sort((a, b) => a.position.distanceTo(new Vec3(from.x, from.y, from.z)) - b.position.distanceTo(new Vec3(from.x, from.y, from.z)));
+  let roof: Cell | null = null, active: any = null, noCandidateSince: number | null = null, wallMs = 0, healthLost = 0;
+  let maxCentreDrift: number | null = null, maxAxisDrift: number | null = null, lastHp = Number(actor.health), hurtAt = 0;
+  const damage: any[] = [], jumps: any[] = [], observations: any[] = [];
+  const previous = new Map<number, { position: Vec3; at: number; lookingAtEyes: boolean; eyeVisible: boolean }>();
+  const clock = { siteAndMoveMs: 0, fightMs: 0, pickupAndReturnMs: 0, waitAndDecisionMs: 0 };
+  const closeRow = () => {
+    const row = rows.at(-1);
+    if (row && row.seconds === undefined) row.seconds = (Date.now() - start) / 1000 - row.startedSeconds;
+  };
+  const drift = () => {
+    const c = active ? endermanCampObservation(actor)?.roofCell ?? roof : roof, p = actor.entity?.position;
+    return c && p ? { centre: { x: c.x + 0.5, y: c.y, z: c.z + 0.5 }, dx: p.x - c.x - 0.5,
+      dz: p.z - c.z - 0.5, dy: p.y - c.y, horizontal: Math.hypot(p.x - c.x - 0.5, p.z - c.z - 0.5) } : null;
+  };
+  const hurt = () => {
+    const hp = Number(actor.health), lost = Math.max(0, lastHp - hp);
+    if (lost) {
+      hurtAt = Date.now(); healthLost += lost;
+      const entry = { seconds: (hurtAt - start) / 1000, lost, position: xyz(actor.entity.position), drift: drift(),
+        phase: active ? endermanCampObservation(actor)?.latest?.phase ?? 'build' : 'head', targetId: active?.targetId ?? null,
+        angryIds: angry().map(e => e.id), attackerId: null };
+      damage.push(entry); active?.damage.push(entry);
+    }
+    lastHp = hp;
+  };
+  const onDead = (e: any) => {
+    if (e?.id === active?.targetId && e.name === 'enderman') { active.killedAt = Date.now(); killed.add(e.id); }
+  };
+  const onTargetHurt = (e: any) => { if (e?.id === active?.targetId) active.targetHurtAt = Date.now(); };
+  // Samples include waits/build/moves, not just fights. Counts are loaded entity IDs, never asserted to be new spawns or a whole-forest census.
+  let nextObservation = 0;
+  const sample = () => {
+    if (!actor.entity?.position || disconnected) return;
+    const now = Date.now(), list = endermen(), candidates = candidateList();
+    // Include building, fighting and pickup in the continuous zero-candidate clock too.
+    if (candidates.length || angry().length) noCandidateSince = null; else noCandidateSince ??= now;
+    for (const e of list) seen.add(e.id);
+    for (const e of candidates) candidatesSeen.add(e.id);
+    const d = drift(), camp = active ? endermanCampObservation(actor) : null;
+    if (d && camp?.verifiedCaps === 9 && ['provoke', 'hold'].includes(camp.latest?.phase ?? '')) {
+      maxCentreDrift = Math.max(maxCentreDrift ?? 0, d.horizontal);
+      maxAxisDrift = Math.max(maxAxisDrift ?? 0, Math.abs(d.dx), Math.abs(d.dz));
+      active.maxCentreDrift = Math.max(active.maxCentreDrift ?? 0, d.horizontal);
+      active.maxAxisDrift = Math.max(active.maxAxisDrift ?? 0, Math.abs(d.dx), Math.abs(d.dz));
+    }
+    if (active) {
+      const e = actor.entities?.[active.targetId];
+      if (e?.position && !killed.has(e.id)) {
+        if (endermanAngry(actor.registry, e)) active.angryAt ??= now;
+        if (active.angryAt && endermanStrikePoint(bodyReader(actor), actor.entity.position, e.position)) active.reachedAt ??= now;
+        const before = previous.get(e.id);
+        if (before && now - before.at <= 500 && before.position.distanceTo(e.position) >= 4) {
+          const event = { seconds: (now - start) / 1000, targetId: e.id, from: xyz(before.position), to: xyz(e.position), sampleGapMs: now - before.at,
+            distanceBefore: before.position.distanceTo(actor.entity.position), distanceAfter: e.position.distanceTo(actor.entity.position),
+            lookingAtEyesBefore: before.lookingAtEyes, eyeVisibleBefore: before.eyeVisible,
+            lookingAtEyes: looksAtEyes(actor.entity.position.offset(0, 1.62, 0), actor.entity.yaw, actor.entity.pitch, e.position),
+            angry: endermanAngry(actor.registry, e), hurtWithinMs: hurtAt ? now - hurtAt : null,
+            targetHurtWithinMs: active.targetHurtAt ? now - active.targetHurtAt : null,
+            phase: camp?.latest?.phase ?? 'build', drift: d, cause: null, source: 'position_jump_4m' };
+          jumps.push(event); active.positionJumps.push(event);
+        }
+        previous.set(e.id, { position: e.position.clone(), at: now,
+          lookingAtEyes: looksAtEyes(actor.entity.position.offset(0, 1.62, 0), actor.entity.yaw, actor.entity.pitch, e.position),
+          eyeVisible: endermanLine(bodyReader(actor), actor.entity.position, e.position, ENDERMAN_EYE).clear });
+      }
+    }
+    if (now >= nextObservation) {
+      observations.push({ seconds: (now - start) / 1000, position: xyz(actor.entity.position), observed: list.length, observedIds: list.map(e => e.id),
+        candidates: candidates.length, candidateIds: candidates.map(e => e.id), angryIds: angry().map(e => e.id), drift: d, phase: camp?.latest?.phase ?? 'head' });
+      nextObservation = now + 1000;
+    }
+  };
+  /** A small clearing observed in loaded blocks, with a level 5x5 floor. Rank by real eye rays AFTER the nine roof caps exist, then open horizons. */
+  const chooseClearing = (relocate: boolean) => {
+    const p = actor.entity.position as Vec3, read0 = bodyReader(actor), cache = new Map<string, ReturnType<BlockReader>>();
+    const read: BlockReader = (x, y, z) => { const k = `${x},${y},${z}`; if (!cache.has(k)) cache.set(k, read0(x, y, z)); return cache.get(k)!; };
+    const world = roofWorldOf(actor), options: Array<{ cell: Cell; visible: number; horizons: number; distance: number }> = [];
+    const radius = relocate ? 16 : 7;
+    for (let dx = -radius; dx <= radius; dx++) for (let dz = -radius; dz <= radius; dz++) {
+      const distance = Math.hypot(Math.floor(p.x) + dx + 0.5 - p.x, Math.floor(p.z) + dz + 0.5 - p.z);
+      if (distance > (relocate ? 15.5 : 7) || (relocate && distance < 8.5)) continue;
+      for (let dy = -2; dy <= 2; dy++) {
+        const c = { x: Math.floor(p.x) + dx, y: Math.floor(p.y + 0.001) + dy, z: Math.floor(p.z) + dz };
+        if (visited.has(keyOf(c))) continue;
+        let flat = true;
+        for (let ux = -2; ux <= 2 && flat; ux++) for (let uz = -2; uz <= 2; uz++) {
+          const floor = read(c.x + ux, c.y - 1, c.z + uz), feet = read(c.x + ux, c.y, c.z + uz), head = read(c.x + ux, c.y + 1, c.z + uz);
+          if (!floor?.solid || (floor.top ?? 1) !== 1 || /lava|water|magma|campfire|slab|stairs|fence|wall|leaves/u.test(floor.name)
+            || !feet || !head || feet.solid || head.solid || /lava|water|fire|portal|cobweb/u.test(`${feet.name} ${head.name}`)) { flat = false; break; }
+        }
+        if (!flat) continue;
+        const plan = planRoof(world, c, undefined, undefined, true);
+        if (plan.problems.length || (packClient().cobblestone ?? 0) < plan.placements.length || (relocate && plan.caps === 0)) continue;
+        const future: BlockReader = (x, y, z) => y === c.y + 2 && Math.abs(x - c.x) <= 1 && Math.abs(z - c.z) <= 1 ? { name: 'cobblestone', solid: true } : read(x, y, z);
+        const from = { x: c.x + 0.5, y: c.y, z: c.z + 0.5 }, visible = candidateList(from, future).length;
+        let horizons = 0;
+        for (let k = 0; k < 8; k++) if (endermanLine(future, from,
+          { x: from.x + 12 * Math.cos(k * Math.PI / 4), y: c.y, z: from.z + 12 * Math.sin(k * Math.PI / 4) }, ENDERMAN_EYE).clear) horizons++;
+        if (horizons > 0) options.push({ cell: c, visible, horizons, distance });
+      }
+    }
+    return options.sort((a, b) => b.visible - a.visible || b.horizons - a.horizons || a.distance - b.distance)[0] ?? null;
+  };
+  const doAct = async (label: string, hands: unknown[], seconds: number, safe = false) => act(label, hands,
+    Math.max(0.1, Math.min(seconds, remaining() / 1000)), { accept: ['enderman'] }, { deadlineAt: endAt,
+      ...(safe ? { stopWhen: () => angry().length ? 'angry_enderman_during_walk_or_pickup' : null } : {}) });
+  const walk = (to: Cell) => ({ do: 'go', to, range: 0, maxDig: 0, maxPlace: 0, maxDrop: 0, waterOk: false, seconds: 12 });
+  const returnHands = (to: Cell) => {
+    const p = actor.entity.position, read = bodyReader(actor);
+    if (!atRoofCentre(p, to) && Math.floor(p.x) === to.x && Math.floor(p.z) === to.z) {
+      // go's exact-cell success may already hold at the edge of that cell. The scripted head explicitly walks out and back on observed level ground.
+      // Never do this in combat: doAct's 50ms anger watch cancels both legs if a new hostile is observed.
+      const next = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => ({ x: to.x + dx, y: to.y, z: to.z + dz })).find(c => {
+        const floor = read(c.x, c.y - 1, c.z), feet = read(c.x, c.y, c.z), head = read(c.x, c.y + 1, c.z);
+        return floor?.solid === true && (floor.top ?? 1) === 1 && feet?.solid === false && head?.solid === false
+          && !/lava|water|fire|magma|portal|cobweb|slab|stairs|fence|wall/u.test(`${floor.name} ${feet.name} ${head.name}`);
+      });
+      if (next) return [walk(next), walk(to)];
+    }
+    return [walk(to)];
+  };
+  const timer = setInterval(sample, 100);
+  actor.on('health', hurt); actor.on('entityDead', onDead); actor.on('entityHurt', onTargetHurt);
+  let stopReason = 'clock';
+  note('テレポートの原因・正確な発生数は取得できないため null。4m以上の座標飛びを推定事象として状況付きで記録する。');
+  note('空振りの確定数は null。振りと700ms内の被ダメージによる命中推定、その差 unconfirmedSwings を分けて記録する。被弾の攻撃者IDも null。');
+  note('敵対は読み込まれた個体の creepy flag。誰を狙っているか・未ロード個体の敵対は確認できない。観測数は自然湧きの新規発生数ではない。');
+  try {
+    await ask(`gamerule ${spawning.key} true`);
+    if (!/\btrue\b/u.test(await ask(`gamerule ${spawning.key}`))) throw new Error('NATURAL_SPAWNING_NOT_ENABLED');
+    while (remaining() > 0 && !disconnected) {
+      sample(); hurt();
+      if (deaths > deathsBefore) { stopReason = 'death'; break; }
+      const row: any = { i: rows.length + 1, startedSeconds: (Date.now() - start) / 1000, targetId: null, kind: 'decision', notes: [] };
+      const at = Date.now(), list = endermen(), candidates = candidateList(), hostile = angry();
+      closeRow();
+      row.observed = list.length; row.observedIds = list.map(e => e.id); row.candidates = candidates.length; row.candidateIds = candidates.map(e => e.id);
+      row.angryIds = hostile.map(e => e.id); row.roof = roof; rows.push(row);
+      if (!hostile.length && Number(actor.food) < 18 && remaining() >= 6_000) {
+        row.reason = 'eat'; row.lines = (await doAct(`roof-eat#${row.i}`, [{ do: 'eat' }], 10, true)).lines;
+        clock.waitAndDecisionMs += Date.now() - at; continue;
+      }
+      if (remaining() < 6_000 || Number(actor.health) < 8) {
+        row.reason = remaining() < 6_000 ? 'deadline_wait' : 'low_hp_wait'; await pause(1000); clock.waitAndDecisionMs += Date.now() - at; continue;
+      }
+      if (roof && !hostile.length && !atRoofCentre(actor.entity.position, roof)) {
+        row.kind = 'return'; row.reason = 'return_to_centre';
+        const run = await doAct(`roof-return#${row.i}`, returnHands(roof), 25, true);
+        row.lines = run.lines; row.returnedToCentre = atRoofCentre(actor.entity.position, roof);
+        row.position = xyz(actor.entity.position); clock.pickupAndReturnMs += Date.now() - at; continue;
+      }
+      if (candidates.length || hostile.length) noCandidateSince = null; else noCandidateSince ??= Date.now();
+      const relocation = !hostile.length && noCandidateSince !== null && Date.now() - noCandidateSince >= 17_500;
+      if ((!roof || relocation) && !hostile.length) {
+        const choice = chooseClearing(!!roof);
+        row.kind = 'site'; row.choice = choice; row.relocation = relocation;
+        if (choice && remaining() >= 13_000) {
+          const before = actor.entity.position.clone(); visited.add(keyOf(choice.cell));
+          const run = await doAct(`roof-site#${row.i}`, [walk(choice.cell)], 13, true);
+          row.lines = run.lines; row.moveDistance = before.distanceTo(actor.entity.position); row.position = xyz(actor.entity.position);
+          if (run.ok && Math.floor(actor.entity.position.x) === choice.cell.x && Math.floor(actor.entity.position.z) === choice.cell.z
+            && Math.abs(actor.entity.position.y - choice.cell.y) < 0.1) { roof = choice.cell; noCandidateSince = null; }
+          else row.reason = 'walk_not_arrived';
+        } else { row.reason = 'no_loaded_clearing_or_blocks'; await pause(1000); }
+        clock.siteAndMoveMs += Date.now() - at; continue;
+      }
+      // Never pick a new neutral target or relocate while any observed individual is still angry.
+      const target = hostile.find(e => e.id === rows.at(-2)?.targetId) ?? hostile[0]
+        ?? candidates.find(e => Date.now() - (attempted.get(e.id) ?? 0) >= 15_000);
+      if (!target) { row.reason = 'no_eligible_target'; await pause(500); clock.waitAndDecisionMs += Date.now() - at; continue; }
+      if (!roof) { row.reason = 'angry_before_site'; await pause(500); clock.waitAndDecisionMs += Date.now() - at; continue; }
+      row.kind = 'fight'; row.targetId = target.id; row.targetPosition = xyz(target.position); row.position = xyz(actor.entity.position);
+      Object.assign(row, { angryAt: null, reachedAt: null, killedAt: null, maxCentreDrift: null, maxAxisDrift: null, positionJumps: [], damage: [] });
+      attempted.set(target.id, Date.now()); previous.delete(target.id); clearEndermanCampObservation(actor); active = row;
+      const before = packClient().ender_pearl ?? 0;
+      const seconds = Math.min(55, Math.floor(remaining() / 1000) - 1);
+      const run = await doAct(`roof-fight#${row.i}`, [{ do: 'fight', target: `#${target.id}`, seconds, retreatHp: 8 }], seconds + 0.25);
+      sample(); const camp = endermanCampObservation(actor);
+      const fightEnd = Date.now(); clock.fightMs += fightEnd - at;
+      row.lines = run.lines; row.code = run.json?.lines?.[0]?.code ?? run.stoppedBy ?? run.error ?? null; row.camp = camp;
+      row.angryAt ??= camp?.angryAt ?? null;
+      row.stareToAngrySeconds = camp?.stareAt != null && row.angryAt != null && row.angryAt >= camp.stareAt ? (row.angryAt - camp.stareAt) / 1000 : null;
+      row.angryToReachSeconds = row.angryAt != null && row.reachedAt != null ? (row.reachedAt - row.angryAt) / 1000 : null;
+      row.reachToKillSeconds = row.reachedAt != null && row.killedAt != null ? (row.killedAt - row.reachedAt) / 1000 : null;
+      row.fightToKillSeconds = row.killedAt != null ? (row.killedAt - at) / 1000 : null;
+      const counts = /与えた打撃 (\d+)（振り (\d+)）/u.exec(run.lines.join('\n'));
+      row.landed = counts ? Number(counts[1]) : null; row.swings = counts ? Number(counts[2]) : null;
+      row.unconfirmedSwings = counts ? Number(counts[2]) - Number(counts[1]) : null; row.misses = null; row.teleports = null;
+      if (row.stareToAngrySeconds === null) row.notes.push('注視開始または敵対確認が無い／開始時から敵対');
+      if (row.angryToReachSeconds === null) row.notes.push('敵対または可視の脚への3m内到達が未観測');
+      if (row.fightToKillSeconds === null) row.notes.push('対象の死を未観測');
+      row.notes.push('misses/teleports は推定と確定を分けるため null（scene notes参照）');
+      if (camp?.verifiedCaps === 9 && camp.afterBuild) {
+        usedRoofs.add(keyOf(camp.roofCell));
+        if (camp.capsPlaced > 0) roofs.add(keyOf(camp.roofCell));
+        roof = { ...camp.roofCell };
+      }
+      row.killed = killed.has(target.id); row.pickup = null;
+      active = null;
+      if (row.killed && !angry().length && remaining() >= 6_000) {
+        const pickupAt = Date.now(), back = camp?.roofCell ?? roof;
+        const pickup = await doAct(`roof-pickup#${row.i}`, [{ do: 'pickup', range: 6, seconds: 10 }, ...returnHands(back)], 24, true);
+        row.pickup = { ok: pickup.ok, lines: pickup.lines, seconds: (Date.now() - pickupAt) / 1000,
+          returnedToCentre: atRoofCentre(actor.entity.position, back), position: xyz(actor.entity.position) };
+        if (!row.pickup.returnedToCentre) row.notes.push('go後の中央±0.2m未達。頭の代役が帰還をやり直してから次の対象を選ぶ');
+        clock.pickupAndReturnMs += Date.now() - pickupAt;
+      } else if (row.killed) row.notes.push('敵対個体あり／残り時間不足のため回収を見送った');
+      row.pearlsCollected = Math.max(0, (packClient().ender_pearl ?? 0) - before); row.seconds = (Date.now() - at) / 1000;
+      note(`#${target.id} ${row.code}・${killed.size}撃破・${(packClient().ender_pearl ?? 0) - pearlStart}パール`);
+    }
+    if (disconnected) stopReason = disconnected;
+  } catch (error) { stopReason = String((error as Error)?.message ?? error); note(`場面を中断: ${stopReason}`); }
+  finally {
+    wallMs = Date.now() - start; closeRow(); clearInterval(timer); actor.removeListener('health', hurt); actor.removeListener('entityDead', onDead); actor.removeListener('entityHurt', onTargetHurt);
+    if (!disconnected) await ask(`gamerule ${spawning.key} ${spawning.was}`);
+  }
+  const fights = rows.filter(row => row.kind === 'fight'), provoked = fights.filter(row => row.angryAt !== null), arrived = provoked.filter(row => row.reachedAt !== null);
+  const mean = (name: string) => { const xs = fights.map(row => row[name]).filter((v: unknown): v is number => typeof v === 'number'); return xs.length ? xs.reduce((a: number, b: number) => a + b, 0) / xs.length : null; };
+  const summary = { natural: true, seconds: 1500, fixtureSetupMs, wallMs, stopReason, equipment: { ...equipment, armor: 'iron', shield: true },
+    observedUnique: seen.size, eyeCandidateUnique: candidatesSeen.size, fightAttempts: fights.length, angryAttempts: provoked.length,
+    provokedAttempts: fights.filter(row => row.stareToAngrySeconds !== null).length,
+    arrivedAttempts: arrived.length, arrivalRatio: provoked.length ? arrived.length / provoked.length : null,
+    stareToAngrySeconds: mean('stareToAngrySeconds'), angryToReachSeconds: mean('angryToReachSeconds'), reachToKillSeconds: mean('reachToKillSeconds'), fightToKillSeconds: mean('fightToKillSeconds'),
+    swings: fights.every(r => r.swings !== null) ? fights.reduce((n, r) => n + r.swings, 0) : null,
+    unconfirmedSwings: fights.every(r => r.unconfirmedSwings !== null) ? fights.reduce((n, r) => n + r.unconfirmedSwings, 0) : null,
+    misses: null, teleports: null, positionJumps: jumps, maxCentreDrift, maxAxisDrift, damage, healthLost,
+    roofsBuilt: roofs.size, roofsUsed: usedRoofs.size, roofRebuilds: Math.max(0, usedRoofs.size - 1), kills: killed.size, killedIds: [...killed],
+    killsPerMinute: killed.size / Math.max(wallMs / 60_000, 0.001), pearls: (packClient().ender_pearl ?? 0) - pearlStart, deaths: deaths - deathsBefore,
+    clock: { ...clock, otherMs: Math.max(0, wallMs - Object.values(clock).reduce((a, b) => a + b, 0)) },
+    denominator: '観測はロード済み固有ID。到達率は敵対を確認したfight試行が分母（同一IDへの再試行を含む）。設営・移動・回収・判断を全てwallMsに含む。',
+    sampleIntervalMs: 100, observationIntervalMs: 1000,
+    notes: ['misses/teleports/attackerId/cause: クライアント観測だけでは確定不可。命中未確認の振り・座標飛びを別途記録。',
+      '時間の平均は観測できた試行だけ。未観測・開始時から敵対・未到達・未撃破は rows の各時間を null とし理由を併記。',
+      '到達率の分母0、時間標本なし、完成屋根の下で中央測定なしの場合は該当値 null。',
+      'fightMs は屋根の建築・仮柱撤去・中央補正を含む。fixtureSetupMs は25分の外。回収と帰還は既存pickup/goの手。',
+      'roofRebuilds は完成して利用した異なる屋根中心数から最初の1か所を除いた数。同じ中心での部分補修は新設に数えない。',
+      '初期位置と荷物だけfixture。計測中の召喚・mob削除・追加支給・地形コマンド・テレポートなし。自然湧き設定の有効化もwallMs内。'] };
+  return { ...summary, summary, observations, rows };
+});
 
 // ===== natural endermen, one explicitly selected wall den (the scripted head chooses, the body executes) ======================================
 scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見える最寄りの #id だけを誘う。召喚・補充・整地なし', async note => {

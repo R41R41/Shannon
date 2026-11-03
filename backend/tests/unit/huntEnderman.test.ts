@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { describe, expect, it } from 'vitest';
-import { ENDERMAN_EYE, ENDERMAN_FEET, endermanLine, endermanView, looksAtEyes, planRoof, roofBlockFor, roofSites, type Cell3, type RoofPlan, type RoofWorld } from '../../src/services/minebot/utils/huntEnderman.js';
+import { ENDERMAN_EYE, ENDERMAN_FEET, atRoofCentre, endermanLine, endermanStrikePoint, endermanView, looksAtEyes, planRoof, roofBlockFor, roofSites, type Cell3, type RoofPlan, type RoofWorld } from '../../src/services/minebot/utils/huntEnderman.js';
 import type { BlockReader } from '../../src/services/minebot/utils/localMap.js';
 
 // The roof over an enderman hunt (S2, 2026-11-02): a plan that leaves no cell round the body where an enderman (2.9 tall, 0.6 wide) can stand lower than the roof
@@ -43,6 +43,17 @@ function check(base: RoofWorld, plan: RoofPlan) {
 }
 
 describe('planRoof: the 3x3 over the body', () => {
+  it('the live nine-cap plan includes a cap above existing walls, and identifies only its own temporary supports', () => {
+    const wall = planRoof(world({ solids: [[1, 0, 0], [1, 1, 0]] }), { x: 0, y: 0, z: 0 }, undefined, undefined, true);
+    expect(wall.caps).toBe(9);
+    expect(wall.placements).toContainEqual({ x: 1, y: 2, z: 0 });
+    expect(wall.supports).toEqual([]);
+    const flat = planRoof(world(), { x: 0, y: 0, z: 0 }, undefined, undefined, true);
+    expect(flat.supports).toHaveLength(2);
+    expect(flat.supports.every(c => c.y >= 0 && c.y < 2)).toBe(true);
+    expect(atRoofCentre({ x: 0.7, y: 0, z: 0.3 }, flat.cell)).toBe(true);
+    expect(atRoofCentre({ x: 0.701, y: 0, z: 0.5 }, flat.cell)).toBe(false);
+  });
   it('on flat ground: the support column, then the nine caps (11 blocks), each laid against one standing', () => {
     const w = world();
     const plan = planRoof(w, { x: 0, y: 0, z: 0 });
@@ -201,6 +212,9 @@ describe('the working lines after the roof is placed', () => {
     expect(view.eyes.between[0].name).toBe('cobblestone');
     expect(view.feet.clear).toBe(true);
     expect(view.approach.clear).toBe(true);
+    expect(endermanStrikePoint(roofRead(), from, target)).not.toBeNull();
+    expect(endermanStrikePoint(roofRead({ '1,1,0': 'stone' }), from, target)).toBeNull();
+    expect(endermanStrikePoint(roofRead(), from, { x: 8.5, y: 0, z: 0.5 })).toBeNull();
   });
 
   it('a clear eye ray does not prove an approach: a two-high passage has no route for a three-high enderman', () => {

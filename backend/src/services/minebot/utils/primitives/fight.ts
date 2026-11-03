@@ -48,8 +48,8 @@ const { goals } = pathfinder;
  *
  * An enderman with `den` uses the planner's two-high, two-deep wall den (huntEndermanDenFight): only its four cells may be excavated, BEFORE angering the specified
  * #id. The body provokes outside, returns to the rear cell, strikes only visible legs within 3m, and briefly collects drops when no other creature is near.
- * Without `den`, the legacy roof remains (utils/huntEnderman, huntEndermanCamp): the body lays a 3x3 roof over itself at feet+2 from what building
- * blocks it carries, stares the enderman in the eye from under it (the gaze guard is let go for the stare), and from then on stands in the hole under the shield
+ * Without `den`, the roof camp (utils/huntEnderman, huntEndermanCamp) lays nine cobblestone caps at feet+2, removes its temporary supports,
+ * centres within ±0.2m, stares briefly from under it, then aims at the legs and stands under the shield
  * and strikes what comes within reach: it is not followed, and it is not looked in the eye once it is angry (it would teleport away). The roof is the hand's own
  * work and needs no canPlace: the blocks are named in the line when they are short. A bow is no tool for it (it dodges arrows).
  *
@@ -581,6 +581,21 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
         if (step.kind === 'wait') { releaseKeys(); await wait(ctx, TICK_MS); continue; }
         // The roof was laid with building blocks in the hand: the weapon is taken up again for the blows.
         await equipWeapon();
+        // Roof combat uses only the legs' ray and 3m eye-to-point reach. Generic aim (60% of height) can fall inside the eye cone at 48m.
+        unfollow(); releaseKeys();
+        const point = endermanCamp.strikePoint(live);
+        if (point) {
+          blindSince = 0;
+          const turned = await guard(ctx, Promise.resolve(bot.lookAt(point, true)), 300);
+          if (turned && !reflexHeld(bot) && Date.now() - lastSwing >= cooldownMs(bot.heldItem?.name) && endermanCamp.strikePoint(live)) {
+            lastSwing = Date.now(); blows++; swings.push(lastSwing); bot.attack(live);
+          }
+        } else if (box <= REACH) {
+          blindSince ||= now;
+          if (now - blindSince > BLIND_MS) return fail('unreachable', `は ${r1(box)}m の所にいるが間に壁がある（${BLIND_MS / 1000}秒見えない）。別の個体か、足場を変える`, lastAt);
+        } else blindSince = 0;
+        await wait(ctx, TICK_MS);
+        continue;
       }
 
       // Closing in.

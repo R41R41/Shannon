@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 import minecraftData from 'minecraft-data';
 import blockLoader from 'prismarine-block';
@@ -9,8 +9,9 @@ import { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.
 import { createMotorPort, executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 import { cooldownMs } from '../../src/services/minebot/utils/primitives/attack.js';
 import { installGazeGuard } from '../../src/services/minebot/utils/gazeGuard.js';
-import { ENDERMAN_EYE, endermanView, looksAtEyes, roofInteriorStep } from '../../src/services/minebot/utils/huntEnderman.js';
-import { endermanCampObservation } from '../../src/services/minebot/utils/huntEndermanCamp.js';
+import { ENDERMAN_EYE, ENDERMAN_LEGS, ENDERMAN_STARE_MS, atRoofCentre, endermanView, looksAtEyes, roofInteriorStep } from '../../src/services/minebot/utils/huntEnderman.js';
+import { EndermanCamp, endermanCampObservation } from '../../src/services/minebot/utils/huntEndermanCamp.js';
+import type { StepContext } from '../../src/services/minebot/utils/primitives/common.js';
 import { bodyReader } from '../../src/services/minebot/utils/localMap.js';
 
 // The enderman hunt on a practice field (S2, 2026-11-02): the body lays a 3x3 roof over itself, stares the enderman in the eye from under it (the gaze guard is let go
@@ -47,6 +48,7 @@ function makeField(options: Options) {
   const slots: any[] = new Array(46).fill(null);
   slots[36] = itemOf('iron_sword', 1, 36);
   slots[9] = itemOf('cobblestone', options.blocks ?? 64, 9);
+  slots[10] = itemOf('stone_pickaxe', 1, 10);
   if (options.shield !== false) slots[45] = itemOf('shield', 1, 45);
   if (options.pumpkin) slots[5] = itemOf('carved_pumpkin', 1, 5);
   const stats = { swings: 0, hits: 0, hitsOnBot: 0, blocked: 0, teleports: 0, laid: [] as string[], guardOffWhileStaring: 0, stareTicks: 0, angryAtMs: 0, reachedBodyAtMs: 0, minGap: 99, keys: [] as string[] };
@@ -59,6 +61,15 @@ function makeField(options: Options) {
     inventory: { slots, items: () => slots.slice(9, 45).filter(Boolean) }, quickBarSlot: 0, usingHeldItem: false,
     executingSkill: false, interruptExecution: false, stopDigging: () => undefined,
     blockAt: world.blockAt, getControlState: (name: string) => control[name],
+    // The new temporary-column removal uses the same server-confirmed dig as a real hand; local air alone is insufficient.
+    _client: new EventEmitter(), digTime: () => 100,
+    dig: async (block: any) => {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const key = `${block.position.x},${block.position.y},${block.position.z}`;
+      if (!placed.has(key)) throw new Error('only a block placed by the fixture may be removed');
+      placed.delete(key);
+      bot._client.emit('block_change', { location: block.position, type: mcData.blocksByName.air.minStateId });
+    },
     setControlState: (name: string, value: boolean) => { if (control[name] !== value) stats.keys.push(`${Date.now() - start}ms ${name}=${value} @${bot.entity.position.x.toFixed(1)}`); control[name] = value; },
     clearControlStates: () => { for (const key of Object.keys(control)) control[key] = false; },
     getEquipmentDestSlot: (destination: string) => ({ 'off-hand': 45, hand: 36, head: 5, torso: 6, legs: 7, feet: 8 } as Record<string, number>)[destination],
@@ -200,6 +211,9 @@ describe('fight an enderman from a roofed hole', () => {
     // the roof is where the plan says: nine caps at the body's feet + 2
     const caps = field.stats.laid.filter(key => Number(key.split(',')[1]) === FLOOR + 2);
     expect(caps).toHaveLength(9);
+    expect([...field.placed.keys()].filter(key => Number(key.split(',')[1]) < FLOOR + 2)).toEqual([]);
+    expect(endermanCampObservation(field.bot)?.supportsRemoved).toBe(2);
+    expect(endermanCampObservation(field.bot)?.verifiedCaps).toBe(9);
     // it was angered by the stare (the guard was let go for it), it never reached the body, and it was never looked in the eye within four blocks
     expect(field.stats.angryAtMs).toBeGreaterThan(0);
     expect(field.stats.stareTicks).toBeGreaterThanOrEqual(5);
@@ -360,4 +374,71 @@ describe('fight an enderman from a roofed hole', () => {
       expect(field.stats.hitsOnBot).toBe(0);
     } finally { field.stop(); }
   }, 60_000);
+});
+
+describe('roof centre and short eye contact', () => {
+  const roofWalls = (): Array<[number, number, number]> => {
+    const walls: Array<[number, number, number]> = [];
+    for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) walls.push([x, FLOOR + 2, z]);
+    return walls;
+  };
+  const contextFor = (bot: any): StepContext => ({ bot, stop: new AbortController().signal, deadline: Date.now() + 20_000,
+    facing: 'north', base: { x: 0, y: FLOOR, z: 0 } });
+
+  it('corrects an off-centre position within the same cell before staring (real player physics)', async () => {
+    const field = makeField({ at: new Vec3(12.5, FLOOR, 0.5), walls: roofWalls() });
+    field.bot.entity.position.x = 0.86;
+    const ctx = contextFor(field.bot), camp = new EndermanCamp(ctx, field.mob);
+    try {
+      for (let i = 0; i < 25 && !endermanCampObservation(field.bot)?.stareAt; i++) {
+        const step = await camp.advance(field.mob, Date.now(), 12, false);
+        expect(step.kind).not.toBe('stop');
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      expect(endermanCampObservation(field.bot)?.stareAt).not.toBeNull();
+      expect(atRoofCentre(field.bot.entity.position, { x: 0, y: FLOOR, z: 0 })).toBe(true);
+      expect(field.bot.getControlState('forward')).toBe(false);
+    } finally { camp.release(); field.stop(); }
+  });
+
+  it('immediately aims at legs on anger even at 48m; a reset flag does not restart the stare', async () => {
+    const field = makeField({ at: new Vec3(48.5, FLOOR, 0.5), walls: roofWalls() }); field.stop();
+    const camp = new EndermanCamp(contextFor(field.bot), field.mob), look = vi.spyOn(field.bot, 'lookAt');
+    try {
+      const now = Date.now();
+      expect((await camp.advance(field.mob, now, 48, false)).kind).toBe('wait');
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(field.mob.position.offset(0, ENDERMAN_EYE, 0));
+      expect((await camp.advance(field.mob, now + 250, 48, true)).kind).toBe('fight');
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(field.mob.position.offset(0, ENDERMAN_LEGS, 0));
+      expect(field.bot.gazeGuard.enabled).toBe(true);
+      expect(looksAtEyes(field.bot.entity.position.offset(0, 1.62, 0), field.bot.entity.yaw, field.bot.entity.pitch, field.mob.position)).toBe(false);
+      await camp.advance(field.mob, now + 300, 48, false);
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(field.mob.position.offset(0, ENDERMAN_LEGS, 0));
+    } finally { camp.release(); }
+  });
+
+  it('ends eye contact at 0.5s and waits for metadata looking at legs, without another stare', async () => {
+    const field = makeField({ at: new Vec3(12.5, FLOOR, 0.5), walls: roofWalls() }); field.stop();
+    const camp = new EndermanCamp(contextFor(field.bot), field.mob), look = vi.spyOn(field.bot, 'lookAt');
+    try {
+      const now = Date.now(); await camp.advance(field.mob, now, 12, false);
+      expect((await camp.advance(field.mob, now + ENDERMAN_STARE_MS, 12, false)).kind).toBe('wait');
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(field.mob.position.offset(0, ENDERMAN_LEGS, 0));
+      const step = await camp.advance(field.mob, now + ENDERMAN_STARE_MS + 501, 12, false);
+      expect(step.kind).toBe('stop');
+      if (step.kind === 'stop') expect(step.outcome.code).toBe('enderman_not_angry');
+    } finally { camp.release(); }
+  });
+
+  it('refuses combat after a push outside ±0.2m, even while still in the centre block', async () => {
+    const field = makeField({ at: new Vec3(2.5, FLOOR, 0.5), walls: roofWalls(), angry: true }); field.stop();
+    const camp = new EndermanCamp(contextFor(field.bot), field.mob);
+    try {
+      await camp.advance(field.mob, Date.now(), 2, true);
+      field.bot.entity.position.x = 0.75;
+      const step = await camp.advance(field.mob, Date.now() + 50, 2, true);
+      expect(step.kind).toBe('stop');
+      expect(field.control.forward).toBe(false);
+    } finally { camp.release(); }
+  });
 });

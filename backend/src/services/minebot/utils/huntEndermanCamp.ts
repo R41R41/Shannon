@@ -1,11 +1,12 @@
 import { Vec3 } from 'vec3';
 import pathfinder from 'mineflayer-pathfinder';
-import { ENDERMAN_EYE, endermanView, planRoof, roofBlockFor, roofInterior, roofInteriorStep, roofSites, type EndermanLine, type EndermanView, type RoofPlan, type RoofWorld } from './huntEnderman.js';
+import { ENDERMAN_EYE, ENDERMAN_LEGS, ENDERMAN_STARE_MS, atRoofCentre, endermanStrikePoint, endermanView, planRoof, roofBlockFor, roofInterior, roofInteriorStep, roofSites, type EndermanLine, type EndermanView, type RoofPlan, type RoofWorld } from './huntEnderman.js';
 import { bodyReader, feetCell, type Cell } from './localMap.js';
 import { nativeActionHost } from '../execution/ActionExecution.js';
 import { reflexHeld } from './floorReflexes.js';
 import { PLACE_REPLACEABLE, place } from './primitives/place.js';
-import { cellText, inventoryCount, letGo, stopped, wait, type StepContext, type StepOutcome } from './primitives/common.js';
+import { dig } from './primitives/dig.js';
+import { cellText, guard, inventoryCount, letGo, stopped, wait, type StepContext, type StepOutcome } from './primitives/common.js';
 import { goWith, walkMovements } from './primitives/walk.js';
 
 const { goals } = pathfinder;
@@ -22,8 +23,8 @@ const { goals } = pathfinder;
 const BUILD_MS = 14_000;
 /** A cell that will not be laid in this many tries is the plan's to mend: once, and then the hand says why. */
 const CELL_TRIES = 2;
-/** The enderman is stared at for this long before it is said that it cannot be angered from here. */
-const STARE_MS = 5_000;
+/** Metadata may trail the short stare. Wait looking at legs, never extend the eye contact. */
+const ANGER_ACK_MS = 500;
 /**
  * The existing sight budget. Recovery spends this budget too; a step never restarts it.
  */
@@ -45,6 +46,13 @@ export interface CampObservationRecord {
   afterBuild: CampObservation | null;
   latest: CampObservation | null;
   recovery: Array<{ from: Cell; to: Cell; at: number; result: 'moving' | 'arrived' | 'stopped' }>;
+  stareAt: number | null;
+  stareEndedAt: number | null;
+  angryAt: number | null;
+  legsAt: number | null;
+  verifiedCaps: number;
+  capsPlaced: number;
+  supportsRemoved: number;
 }
 // Body diagnostics only, outside the head/act contract. Ports and the raw bot share the same key.
 const observations = new WeakMap<object, CampObservationRecord>();
@@ -116,6 +124,8 @@ export class EndermanCamp {
   private recoveryEnded = false;
   private recoveryBlocker: EndermanLine | null = null;
   private readonly observation: CampObservationRecord;
+  private temporary = new Map<string, { cell: Cell; name: string }>();
+  private centringSince = 0;
 
   constructor(private readonly ctx: StepContext, private readonly target: any) {
     const bot = ctx.bot;
@@ -123,9 +133,10 @@ export class EndermanCamp {
     this.standing = this.cell;
     this.targetId = target.id;
     this.plan = this.planFrom(this.cell);
-    this.block = roofBlockFor(bot, this.plan.placements.length);
+    this.block = roofBlockFor(bot, this.plan.placements.length, true);
     if (!this.plan.placements.length) this.phase = 'provoke';
-    this.observation = { targetId: this.targetId, roofCell: { ...this.cell }, afterBuild: null, latest: null, recovery: [] };
+    this.observation = { targetId: this.targetId, roofCell: { ...this.cell }, afterBuild: null, latest: null, recovery: [],
+      stareAt: null, stareEndedAt: null, angryAt: null, legsAt: null, verifiedCaps: 0, capsPlaced: 0, supportsRemoved: 0 };
     observations.set(nativeActionHost(bot), this.observation);
   }
 
@@ -133,7 +144,7 @@ export class EndermanCamp {
   private planFrom(cell: Cell): RoofPlan {
     const at = this.target.position;
     const dx = at.x - (cell.x + 0.5), dz = at.z - (cell.z + 0.5), length = Math.hypot(dx, dz);
-    return planRoof(this.worldOf(), cell, length > 0.5 ? { x: dx / length, z: dz / length } : undefined, at);
+    return planRoof(this.worldOf(), cell, length > 0.5 ? { x: dx / length, z: dz / length } : undefined, at, true);
   }
 
   /** What stops the hunt before anything is done: no site, or not enough to build with. Null when it can begin. */
@@ -144,7 +155,7 @@ export class EndermanCamp {
     }
     const need = this.plan.placements.length;
     if (need > 0 && (!this.block || this.block.count < need)) {
-      return { code: 'missing_item', text: `屋根に建築用ブロックが ${need} 個要る（持っているのは ${this.block ? `${this.block.name}×${this.block.count}` : 'なし'}。丸石・土・ネザーラックなど）` };
+      return { code: 'missing_item', text: `屋根に建築用ブロックが ${need} 個要る（丸石。持っているのは ${this.block ? `${this.block.name}×${this.block.count}` : 'なし'}）` };
     }
     if (String(bot.inventory?.slots?.[5]?.name ?? '') === 'carved_pumpkin') {
       return { code: 'pumpkin', text: 'くり抜きかぼちゃを被っているとエンダーマンは怒らない（外してから）' };
@@ -152,10 +163,15 @@ export class EndermanCamp {
     return null;
   }
 
-  /** The cells still to lay, in the plan's order. */
+  /** The cells still to lay, in the plan's order. Once all nine caps stand, supports are only for removal. */
   private remaining(): Cell[] {
     const bot = this.ctx.bot;
-    return this.plan.placements.filter(c => { const block = bot.blockAt?.(new Vec3(c.x, c.y, c.z), false); return !block || block.boundingBox !== 'block'; });
+    const capsComplete = this.capsStanding() === 9;
+    return this.plan.placements.filter(c => {
+      if (capsComplete && this.plan.supports.some(s => s.x === c.x && s.y === c.y && s.z === c.z)) return false;
+      const block = bot.blockAt?.(new Vec3(c.x, c.y, c.z), false);
+      return !block || block.boundingBox !== 'block';
+    });
   }
 
   /** The look held off the enderman's eyes by the body's gaze guard is let go while the hand stares, and put back. */
@@ -168,11 +184,54 @@ export class EndermanCamp {
   /** Put everything back (the hand's end). */
   release(): void { this.stopShift(); this.guard(true); }
 
+  /** Keep centring inside this single known cell. An angry target never authorizes movement out of the protected centre. */
+  private async centre(now: number, angry: boolean): Promise<CampStep | null> {
+    const bot = this.ctx.bot, p = bot.entity.position, c = this.standing;
+    if (atRoofCentre(p, c)) { this.centringSince = 0; return null; }
+    if (angry || this.angeredAt || bot.entity.onGround !== true || Math.abs(p.y - c.y) > 0.1
+      || Math.floor(p.x) !== c.x || Math.floor(p.z) !== c.z || (this.centringSince && now - this.centringSince > 2_000)) {
+      return this.failure('roof_failed', 'moved', '屋根中央の各軸±0.2mに留まれない。場所・対象を選び直す', feetCell(bot) ?? c);
+    }
+    this.centringSince ||= now;
+    this.guard(true);
+    const turn = await guard(this.ctx, Promise.resolve(bot.lookAt(new Vec3(c.x + 0.5, p.y + 1.62, c.z + 0.5), true)), 300);
+    if (!turn || reflexHeld(bot)) return this.failure('roof_failed', 'moved', '屋根中央へ向き直れなかった', c);
+    try {
+      bot.setControlState('sprint', false); bot.setControlState('jump', false);
+      bot.setControlState('sneak', true); bot.setControlState('forward', true);
+      await wait(this.ctx, 50);
+    } finally {
+      for (const name of ['forward', 'sneak']) { try { bot.setControlState(name, false); } catch { /* lease ended */ } }
+    }
+    return { kind: 'wait' };
+  }
+
+  private capsStanding(): number {
+    const world = this.worldOf(); let count = 0;
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) if (world.solid(this.cell.x + dx, this.cell.y + 2, this.cell.z + dz) === true) count++;
+    this.observation.verifiedCaps = count;
+    return count;
+  }
+
+  private async legs(live: any, now: number): Promise<void> {
+    this.guard(true);
+    this.observation.stareEndedAt ??= this.observation.stareAt === null ? null : now;
+    const turned = await guard(this.ctx, Promise.resolve(this.ctx.bot.lookAt(live.position.offset(0, ENDERMAN_LEGS, 0), true)), 300);
+    if (turned) this.observation.legsAt ??= now;
+  }
+
+  /** Rechecked by fight after turning, since the same target may teleport during the turn. */
+  strikePoint(live: any): Vec3 | null {
+    if (!atRoofCentre(this.ctx.bot.entity.position, this.standing)) return null;
+    return endermanStrikePoint(bodyReader(this.ctx.bot), this.ctx.bot.entity.position, live.position);
+  }
+
   /** The roof and the anger, as the line tells them. */
   describe(angry: boolean): string {
     const roof = this.plan.placements.length ? `屋根 ${this.laid}/${this.plan.placements.length}` : '屋根は既にある';
+    const verified = this.observation.verifiedCaps === 9 ? `・天井9/9・仮柱撤去 ${this.observation.supportsRemoved}` : '';
     const shifts = this.observation.recovery;
-    return `${roof}・${this.angeredAt ? '怒らせた' : angry ? '怒っている' : '怒っていない'}${shifts.length ? `・屋根内の微動 ${shifts.length}/${RECOVERY_LIMIT}（${shifts[shifts.length - 1].result}）` : ''}`;
+    return `${roof}・${this.angeredAt ? '怒らせた' : angry ? '怒っている' : '怒っていない'}${verified}${shifts.length ? `・屋根内の微動 ${shifts.length}/${RECOVERY_LIMIT}（${shifts[shifts.length - 1].result}）` : ''}`;
   }
 
   private observe(live: any, now: number): CampObservation {
@@ -182,7 +241,7 @@ export class EndermanCamp {
       targetPosition: { x: live.position.x, y: live.position.y, z: live.position.z },
       targetId: this.targetId, phase: this.phase, at: now };
     this.observation.latest = view;
-    this.observation.afterBuild ??= view;
+    if (atRoofCentre(position, this.cell)) this.observation.afterBuild ??= view;
     return view;
   }
 
@@ -272,21 +331,39 @@ export class EndermanCamp {
     const bot = this.ctx.bot;
     if (live?.id !== this.targetId || live?.isValid === false || !live?.position) return this.failure('target_lost', 'lost', `対象 #${this.targetId} が見えない。同じ対象以外へ乗り換えない`);
     if (this.ctx.stop.aborted || now >= this.ctx.deadline) return this.failure('limit_time', 'limit_time', '狩りの停止・期限に達した');
-    if (angry && !this.angeredAt) this.angeredAt = now;
+    if (angry && !this.angeredAt) { this.angeredAt = now; this.observation.angryAt = now; await this.legs(live, now); }
 
     if (this.phase === 'build') {
       // An angry enderman within reach is the fight's: the shield, the blow, and the roof when it has gone.
       if (angry && box <= CONTACT) return { kind: 'fight' };
       if (now - this.began > BUILD_MS) return this.failure('roof_failed', 'build_stalled', `屋根を ${BUILD_MS / 1000} 秒で建て終えられなかった（${this.laid}/${this.plan.placements.length}）。場所を変えるか、ブロックを増やして呼び直す`, this.cell);
-      const left = this.remaining();
-      if (!left.length) { this.phase = angry ? 'hold' : 'provoke'; this.observe(live, now); return { kind: 'wait' }; }
-      // The body stays in its cell: a blow or a push that moved it makes the plan another one (once, and only before a block is laid).
+      // Preserve the existing pre-placement replan if pushed into another cell; once anything is laid, never relocate the plan.
       const feet = feetCell(bot);
       if (feet && (feet.x !== this.cell.x || feet.z !== this.cell.z || feet.y !== this.cell.y)) {
         if (this.laid > 0 || this.replans > 1) return this.failure('roof_failed', 'moved', `屋根を建てている間に ${cellText(this.cell)} から ${cellText(feet)} へ動かされた（${this.laid}/${this.plan.placements.length}）`, feet);
         this.cell = feet; this.standing = feet; this.observation.roofCell = { ...feet }; this.plan = this.planFrom(feet); this.replans++;
         if (this.plan.problems.length) return this.failure('no_site', 'no_site', `ここには屋根の穴を作れない: ${this.plan.problems.join('。')}`, feet);
         return { kind: 'wait' };
+      }
+      const centring = await this.centre(now, angry);
+      if (centring) return centring;
+      const left = this.remaining();
+      if (!left.length) {
+        if (this.capsStanding() !== 9) return this.failure('roof_failed', 'roof_incomplete', '下面2mの屋根9個を確認できない', this.cell);
+        const temporary = [...this.temporary.entries()].reverse()[0];
+        if (temporary) {
+          const [key, support] = temporary, block = bot.blockAt(new Vec3(support.cell.x, support.cell.y, support.cell.z), false);
+          if (!block || (block.boundingBox === 'block' && block.name !== support.name)) return this.failure('roof_failed', 'support_changed', '仮の柱が変化したため撤去を止めた', support.cell);
+          if (block.boundingBox === 'block') {
+            if (angry) return this.failure('roof_failed', 'support_unsafe', '敵対中は仮の柱を掘らない', support.cell);
+            const removed = await dig(this.ctx, { at: [support.cell], collect: false });
+            if (!removed.ok) return this.failure('roof_failed', 'support_not_removed', `仮の柱を外せない: ${removed.text}`, support.cell);
+            this.observation.supportsRemoved++;
+          }
+          this.temporary.delete(key);
+          return { kind: 'wait' };
+        }
+        this.phase = angry ? 'hold' : 'provoke'; this.observe(live, now); return { kind: 'wait' };
       }
       const next = left[0];
       const k = `${next.x},${next.y},${next.z}`;
@@ -299,13 +376,17 @@ export class EndermanCamp {
       this.tries.set(k, tried + 1);
       if (!this.block || inventoryCount(bot, this.block.name) < 1) return this.failure('roof_failed', 'missing_item', `屋根の途中でブロックが尽きた（${this.laid}/${this.plan.placements.length}）`, next);
       const result = await place(this.ctx, { block: this.block.name, at: [next] });
-      if (result.ok) this.laid++;
+      if (result.ok) {
+        this.laid++;
+        if (next.y === this.cell.y + 2 && Math.abs(next.x - this.cell.x) <= 1 && Math.abs(next.z - this.cell.z) <= 1) this.observation.capsPlaced++;
+        if (this.plan.supports.some(c => c.x === next.x && c.y === next.y && c.z === next.z)) this.temporary.set(k, { cell: next, name: this.block.name });
+      }
       else await wait(this.ctx, 120);
       return { kind: 'wait' };
     }
 
     if (this.phase === 'provoke' && angry) { this.phase = 'hold'; this.guard(true); this.blindSince = 0; }
-    if (this.phase === 'hold' && !angry) { this.phase = 'provoke'; this.staredSince = 0; this.blindSince = 0; }
+    // A missing/reset flag after confirmed anger is not permission to stare at this same nearby target again.
     let view = this.observe(live, now);
     // Once angered, stop the recovery turn immediately and hold the verified swept space.
     if (this.shift && angry) {
@@ -325,25 +406,33 @@ export class EndermanCamp {
     }
     const feet = feetCell(bot);
     if (!feet || feet.x !== this.standing.x || feet.y !== this.standing.y || feet.z !== this.standing.z) return this.failure('roof_failed', 'moved', '屋根内の確認した立ち位置から動かされた', feet ?? this.cell);
+    const centring = await this.centre(now, angry);
+    if (centring) return centring;
+    if (this.capsStanding() !== 9) return this.failure('roof_failed', 'roof_incomplete', '屋根9個の保護が失われた', this.cell);
 
     if (this.phase === 'provoke') {
       if (!view.eyes.clear) {
+        // Losing sight ends the stare, but must not consume the branch for the bounded recovery (including its return step).
+        if (this.staredSince) await this.legs(live, now);
         this.blindSince ||= now;
         if (now - this.blindSince <= SIGHT_MS && this.recover(live, view, now)) this.moveShift(now);
         return this.notVisible(view, now, box);
       }
+      if (this.observation.stareEndedAt !== null || (this.staredSince && now - this.staredSince >= ENDERMAN_STARE_MS)) {
+        await this.legs(live, now);
+        if (now - this.staredSince >= ENDERMAN_STARE_MS + ANGER_ACK_MS) return this.failure('enderman_not_angry', 'not_provoked', `約0.5秒目を見ても敵対を確認できない（${box.toFixed(1)}m）。同じ場所で目を見続けない`, this.cell);
+        return { kind: 'wait' };
+      }
       this.blindSince = 0;
       this.staredSince ||= now;
-      if (now - this.staredSince > STARE_MS) {
-        this.guard(true);
-        return this.failure('enderman_not_angry', 'not_provoked', `${STARE_MS / 1000} 秒目を見ても怒らない（${box.toFixed(1)}m。遠すぎるか、まばたきの間に外れた）。近づくか、別の個体へ`, this.cell);
-      }
+      this.observation.stareAt ??= now;
       this.guard(false);
       try { void Promise.resolve(bot.lookAt(live.position.offset(0, ENDERMAN_EYE, 0), true)).catch(() => undefined); } catch { /* the port is no longer ours */ }
       return { kind: 'wait' };
     }
 
     // hold delegates range, sight and prolonged obstruction to the existing fight loop. The observed route is not a prerequisite for teleporting here.
+    await this.legs(live, now);
     return { kind: 'fight' };
   }
 }
