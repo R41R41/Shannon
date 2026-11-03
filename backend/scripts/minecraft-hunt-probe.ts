@@ -1246,7 +1246,7 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
   const fixtureSetupMs = Date.now() - fixtureAt;
   const start = Date.now(), endAt = start + 600_000, deathsBefore = deaths, pearlStart = packClient().ender_pearl ?? 0;
   let den: EndermanDenSpec | null = null, kills = 0, pearls = 0, setupMs = 0, noSiteMs = 0, decisionWaitMs = 0, pickupMs = 0, healthLost = 0, wallMs = 0;
-  const seenIds = new Set<number>(), killedIds = new Set<number>(), visited = new Set<string>();
+  const seenIds = new Set<number>(), anyEnderman = new Set<number>(), killedIds = new Set<number>(), visited = new Set<string>();
   let hopCount = 0;
   const rows: Array<Record<string, unknown>> = [];
   const remaining = () => Math.max(0, endAt - Date.now());
@@ -1257,6 +1257,8 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
   try {
     while (remaining() > 0 && !disconnected) {
       hurt();
+      // every enderman the body's entity list holds, at every turn (the old count stopped at the first turn that found no wall: 'seen 0' then meant 'looked at none', not 'none there')
+      for (const e of Object.values(actor.entities ?? {}) as Array<{ name?: string; id: number }>) if (e.name === 'enderman') anyEnderman.add(e.id);
       const at = Date.now(), hpBefore = Number(actor.health), pearlsBefore = packClient().ender_pearl ?? 0, lostAtStart = healthLost;
       const row: Record<string, unknown> = { i: rows.length + 1, startedSeconds: r1((at - start) / 1000), targetId: null, skipped: true,
         killed: false, setupSeconds: 0, pickupSeconds: 0, waitSeconds: 0, pearlDelta: 0, healthLost: 0 };
@@ -1364,7 +1366,7 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
     denominator: '全判断の試み（候補なし・見えない・観測歩行・体力待ちを含む）。fightAttempts と固有IDも併記',
     kills, killRate: rows.length ? kills / rows.length : 0, fightKillRate: fightAttempts ? kills / fightAttempts : 0,
     pearls, killsPerMinute: kills / Math.max(wallMs / 60_000, 0.001), deaths: deaths - deathsBefore,
-    uniqueSeen: seenIds.size, killedIds: [...killedIds], healthLost: r1(healthLost),
+    uniqueSeen: seenIds.size, endermenInList: anyEnderman.size, killedIds: [...killedIds], healthLost: r1(healthLost),
     clock: { setupMs, noSiteMs, decisionWaitMs, pickupMs, fightAndOtherMs: Math.max(0, wallMs - setupMs - noSiteMs - decisionWaitMs - pickupMs) }, rows };
 });
 
