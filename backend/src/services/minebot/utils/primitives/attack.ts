@@ -297,7 +297,11 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
       // A blow is struck from behind the raised shield. With no shield up (none carried, or lowered by something else), and a shot about to land or a blaze that sees the body charged
       // long enough to shoot, a hovering shooter's blow waits (utils/huntBlaze StrikeGate: 1.5 s in all within each 8 s).
       // (S2, 2026-11-03: a blow lands with the shield raised, lab; the shield stays up for it, and with it up there is no window to wait for.)
-      const held = !raised && !!near && HOVERING_SHOOTERS.has(String(near.entity.name)) && !gate.may(Date.now(), strikeHold(bot, watch, Date.now()));
+      // A fireball about to land is the shield reflex's moment (it turns the look to the shot): no blow, and no look at the target over it, while one is on its way (review 2026-11-03).
+      const why = !!near && HOVERING_SHOOTERS.has(String(near.entity.name)) ? strikeHold(bot, watch, Date.now()) : null;
+      const shotComing = why !== null && why.startsWith('火の玉');
+      // (the gate's patience still bounds it: 1.5 s in all within each 8 s, so a stream of fireballs does not stop every blow)
+      const held = !!near && HOVERING_SHOOTERS.has(String(near.entity.name)) && !gate.may(Date.now(), shotComing || !raised ? why : null);
       if (near && !held && Date.now() - lastSwing >= cooldownMs(bot.heldItem?.name)) {
         raise();
         try { await bot.lookAt(near.entity.position.offset(0, (near.entity.height ?? 1.8) * 0.6, 0), true); } catch { /* looked */ }
