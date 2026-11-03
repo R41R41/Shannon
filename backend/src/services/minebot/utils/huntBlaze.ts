@@ -1,5 +1,5 @@
 import { Vec3 } from 'vec3';
-import { impact } from './shieldBlock.js';
+import { flyOn, impact } from './shieldBlock.js';
 import { toldVelocity } from './toldVelocity.js';
 import { seesBodyAt } from './threatExposure.js';
 
@@ -13,9 +13,8 @@ import { seesBodyAt } from './threatExposure.js';
  * holds a key.
  *
  * What the Nether taught on the way (paid runs 26, 29, 31; the L77 lab): a blaze shoots three small fireballs six ticks apart after it has
- * been charged for about three seconds, then rests five seconds; each blow of the body's own is struck with the shield lowered (the server
- * refuses a blow from behind a raised one), and the shield counts as up again only five ticks after it is raised, so a blow is the one moment a
- * fireball can land (5 points, and the fire). Each fireball the shield stops wears it by six points of its 336: six blazes shoot about 13 points a
+ * been charged for about three seconds, then rests five seconds; a blow of the body's own is struck from behind the raised shield (the server does not refuse it: lab, 2026-11-03; it was believed to, and the shield
+ * was lowered for each blow, which counts as up again only five ticks after it is raised: the one moment a fireball could land, 5 points and the fire). Each fireball the shield stops wears it by six points of its 336: six blazes shoot about 13 points a
  * second, which is a shield in 25 seconds. So a blow is struck when no shot is on its way and no blaze that sees the body has been charged long
  * enough to be about to shoot; when the body is hit for it anyway, the wait is bounded (a fight with nothing struck is no safer).
  */
@@ -148,5 +147,74 @@ export class StrikeGate {
     if (this.spent >= GATE_PATIENCE_MS) { this.holding = false; return true; }
     if (!this.holding) { this.holding = true; this.count++; }
     return false;
+  }
+}
+
+/** Readings for shield_rush only. Unknown phases never become safe merely because time passed. */
+export class RushShooterWatch {
+  readonly shooters = new Map<number, { entity: any; flame: boolean | null; restUntil: number; missing: boolean; shots: number }>();
+  private balls = new Map<number, { entity: any; said: Vec3; position: Vec3; velocity: Vec3; tick: number }>();
+  private tick = 0;
+  constructor(private readonly bot: BlazeBody, private readonly dead: (id: number, entity: any) => boolean = () => false) {}
+
+  update(now: number): void {
+    this.tick++;
+    const loaded = new Set<number>();
+    for (const e of Object.values(this.bot.entities ?? {}) as any[]) {
+      if (e?.name !== 'blaze' || !e.position || e.isValid === false || this.dead(e.id, e)) continue;
+      loaded.add(e.id);
+      const flame = blazeCharged(this.bot.registry, e), row = this.shooters.get(e.id);
+      // Even out of sight the metadata edges are retained; after an unload a true flame has unknown age.
+      if (!row) this.shooters.set(e.id, { entity: e, flame, restUntil: 0, missing: false, shots: 0 });
+      else {
+        if (row.flame === true && flame === false && !row.missing) row.restUntil = now + 4500;
+        // Missing is reset below using the previous tick's presence, not the view's line of sight.
+        row.entity = e; row.flame = flame; row.missing = false;
+        if (flame !== false) row.restUntil = 0;
+      }
+    }
+    for (const [id, row] of this.shooters) if (!loaded.has(id)) { row.missing = true; row.restUntil = 0; }
+    const live = new Set<number>();
+    for (const e of Object.values(this.bot.entities ?? {}) as any[]) {
+      if (!e?.position || !(e.type === 'projectile' || String(e.name).includes('fireball'))) continue;
+      if (!['small_fireball', 'fireball', 'arrow', 'spectral_arrow', 'wither_skull', 'dragon_fireball'].includes(String(e.name))) continue;
+      live.add(e.id);
+      const old = this.balls.get(e.id);
+      if (!old || !old.said.equals(e.position)) {
+        const told = toldVelocity(this.bot, e.id) ?? e.velocity;
+        const velocity = told?.norm() > 0.05 ? told.clone() : old && this.tick > old.tick
+          ? e.position.minus(old.said).scaled(1 / (this.tick - old.tick)) : new Vec3(0, 0, 0);
+        this.balls.set(e.id, { entity: e, said: e.position.clone(), position: e.position.clone(), velocity, tick: this.tick });
+        if (!old && e.name === 'small_fireball') {
+          const owner = [...this.shooters.values()].filter(r => r.entity.position.distanceTo(e.position) < 3)
+            .sort((a, b) => a.entity.position.distanceTo(e.position) - b.entity.position.distanceTo(e.position))[0];
+          if (owner) owner.shots++;
+        }
+      } else {
+        const next = flyOn(String(e.name), { position: old.position, velocity: old.velocity });
+        old.position = next.position; old.velocity = next.velocity;
+      }
+    }
+    // An unloaded ball is still carried to the prediction horizon, never erased into an immediate window.
+    for (const [id, b] of this.balls) if (!live.has(id)) {
+      if (this.tick - b.tick > 24) this.balls.delete(id);
+      else { const next = flyOn(String(b.entity.name), b); b.position = next.position; b.velocity = next.velocity; }
+    }
+  }
+  seeing(feet = this.bot.entity!.position): any[] {
+    return [...this.shooters.values()].filter(r => !r.missing && r.entity.position.distanceTo(feet) <= 32
+      && seesBodyAt(this.bot as never, r.entity, feet)).map(r => r.entity);
+  }
+  incoming(feet = this.bot.entity!.position): Array<{ entity: any; position: Vec3; ticks: number }> {
+    return [...this.balls.values()].flatMap(b => {
+      const hit = b.velocity.norm() > 0.05 ? impact(feet, String(b.entity.name), b) : { ticks: 0 };
+      return hit ? [{ entity: b.entity, position: b.position, ticks: hit.ticks }] : [];
+    }).sort((a, b) => a.ticks - b.ticks);
+  }
+  mayClose(feet: Vec3, now: number): boolean {
+    return !this.incoming(feet).length && this.seeing(feet).every(e => {
+      const r = this.shooters.get(e.id)!;
+      return r.flame === false && now < r.restUntil;
+    });
   }
 }

@@ -346,12 +346,12 @@ describe('go: what is never entered', () => {
     expect(listed.text).toContain('(8,64,3)');
   });
 
-  it('says where the fire is that makes a place unsafe, and that the dig hand puts it out (a spawner room\'s floor)', async () => {
-    const sim = makeSim(over(flat, box('fire', 5, 5, FLOOR, FLOOR, 0, 0)));
-    const beside = await drive(sim, run(sim, {}, goal(4, FLOOR, 0)));
+  it('says where the fire is that makes a place unsafe, and that the dig hand puts it out, when the fire is beyond reach of the body (a spawner room floor)', async () => {
+    const far = makeSim(over(flat, box('fire', 31, 31, FLOOR, FLOOR, 0, 0)));
+    const beside = await drive(far, run(far, {}, goal(30, FLOOR, 0)));
     expect(beside.reason).toBe('unsafe');
     expect(beside.text).toContain('fire の隣');
-    expect(beside.text).toContain('火 (5,64,0) は dig で消せる');
+    expect(beside.text).toContain('火 (31,64,0) は dig で消せる');
     expect(beside.text.length).toBeLessThanOrEqual(160);
     // Lava is not put out by a dig: its line is the old one.
     const lava = makeSim(over(flat, box('lava', 5, 5, FLOOR, FLOOR, 0, 0)));

@@ -87,7 +87,9 @@ export const GO_AVOID_COST = 20;
  */
 export const GO_REDO_COST = 60;
 /** The most times one go walks the part of a way a search found before its time ran out (each must come 2 m nearer). */
-export const GO_PARTIAL_WALKS = 6;
+export const GO_PARTIAL_WALKS = 12;
+/** A search of the road is cut after this long when the caller gave no `searchMs`: the part of the way it found (nearest the goal) is walked and the search goes on from there (S2, 2026-11-03: a Nether walk of 196 m in 11 minutes was 5 s searches each ending as search_timeout; S4's lab: the best part found in the first seconds is as good as the one at five). */
+const SEARCH_SLICE_MS = 1500;
 /**
  * Run 46 (hold 4, q15 go at the amethyst-side deepslate: 120 s, 50 digs refused, a 3 m box): the exposure guard refuses a dig that would open a way to the body for a
  * hostile behind the rock (a zombie 8 to 16 m off), the route is drawn at the next cell, which the guard refuses too, and so on. A cell refused is closed to the routes for as long as
@@ -688,6 +690,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const deadline = Math.min(ctx.deadline, startedAt + (args.seconds ?? GO_DEFAULTS.seconds) * 1000);
   const rule = digRuleOf(bot.registry, args.canDig);
   const searchCap = args.searchMs ?? 5000;
+  /** What one search of the road is given (the stop says this long). */
+  const searchSlice = args.searchMs === undefined ? Math.min(searchCap, SEARCH_SLICE_MS) : searchCap;
   const place = placeNamesOf(bot, args.canPlace);
   const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, exposed: new Map(), avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
   const start = feetCell(bot)!;
@@ -712,6 +716,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
 
   // ---- how a line ends (the contract's result lines) ----
   const packNote = fullPackWatch(bot);
+  /** Fires this go put out beside or in its place (a blaze camp's cells burn again and again). */
+  let doused = 0;
   const tail = () => `${cellText(feetCell(bot) ?? start)} 道 ${state.steps} 歩・掘 ${state.dug}・置 ${state.placed}・引き直し ${state.redraws} 回`;
   const fail = (code: string, reason: string, hint: string): StepOutcome => {
     const at = feetCell(bot) ?? start;
@@ -722,7 +728,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const why = spent ? `${reason}（置く物 ${place.held.join('・')} を ${state.placed} 個置いて使い切った）` : reason;
     const advice = spent && (code === 'not_loaded' || code === 'dead_end') ? '置く物を集めてからもう一度' : hint;
     const full = packNote();
-    const fixed = ` ${tail()}${full ? `。${full}` : ''}`;
+    const fixed = ` ${tail()}${doused ? `。火を ${doused} 個消した` : ''}${full ? `。${full}` : ''}`;
     // The contract's line: the code, the reason, where and the counts, then the hint; what does not fit of the 160 is cut from the back (the hint first).
     const room = 160 - head.length - fixed.length;
     const withHint = advice ? `。${advice}` : '';
@@ -731,7 +737,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   };
   /** What a stop for want of blocks to lay says to do: name the cheap blocks the pack holds (dug netherrack, stone ...), else gather some. */
   const noBlocksHint = (fallback = '置ける物を集めるか、canPlace を足す'): string => { const held = bridgeBlocksHeld(bot, args.canPlace); return held ? `荷の ${held} を canPlace に足すか、集める` : fallback; };
-  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
+  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${doused ? `。火を ${doused} 個消した` : ''}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
   /** The stop at the time limit: when the body is held in flowing water, that is in the line (whatever the length of `seconds`). */
@@ -741,6 +747,18 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     return fail('limit_time', `${args.seconds ?? GO_DEFAULTS.seconds} 秒の上限に着いた（行き先まで あと ${left}m）${held}`, wet ? '上流の水源を汲むかブロックで塞ぐか、別の道を' : 'seconds を増やすか、行き先を近くに');
   };
 
+  // ---- fire in or beside a place is put out where the body can reach it (S2, S4's c1 camp: a blaze's fireballs light the cells round its camp again and again, each refusal was a dig of the planner's own) ----
+  for (const cell of cells) {
+    for (let round = 0; round < 4 && doused < 8; round++) {
+      const why = hazardAtFeet(bot, cell.x, cell.y, cell.z);
+      if (!why || !/^(?:soul_)?fire /u.test(why)) break;
+      const fire = fireNear(bot, cell.x, cell.y, cell.z);
+      if (!fire || distanceTo(bot, fire) > 4.2 || ctx.stop?.aborted) break;
+      const out = await dig(ctx, { at: [fire], collect: false });
+      if (!out.ok) break;
+      doused++;
+    }
+  }
   // ---- the places: the ones nobody may stand in are dropped; none left is `unsafe` ----
   const safeCells = cells.filter(cell => !hazardAtFeet(bot, cell.x, cell.y, cell.z));
   if (!safeCells.length) {
@@ -990,7 +1008,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const plan = async (movements: any, goal: any, ms: number, track = true): Promise<Plan> => {
     toolKept.clear();
     const searchStarted = Date.now();
-    const generator = nav.getPathFromTo(movements, bot.entity.position, goal, { timeout: Math.max(300, Math.min(ms, searchCap)) });
+    const generator = nav.getPathFromTo(movements, bot.entity.position, goal, { timeout: Math.max(300, Math.min(ms, searchSlice)) });
     let result = generator.next().value?.result ?? { status: 'noPath', path: [] };
     // The search answers a tick (40 ms) at a time while it is still going; here it is let finish (its own time bounds it), the body's other work
     // (its packets, its physics, the act's watch) getting its turn between the ticks.
@@ -1022,7 +1040,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const tip = found.path.length ? found.path[found.path.length - 1] : null;
     const tipCell = tip ? nodeCell(tip) : null;
     const reach = tipCell ? `、${cellText(tipCell)} まで・あと ${Math.hypot(tipCell.x - aim.x, tipCell.y - aim.y, tipCell.z - aim.z).toFixed(0)}m` : '';
-    return fail('search_timeout', `道探しが ${(searchCap / 1000).toFixed(searchCap < 1000 ? 2 : 0)} 秒で終わらない（道の有無は不明。${found.visited.toLocaleString('en-US')} マス調べた${reach}）`,
+    return fail('search_timeout', `道探しが ${(searchSlice / 1000).toFixed(searchSlice < 1000 ? 2 : searchSlice % 1000 ? 1 : 0)} 秒で終わらない（道の有無は不明。${found.visited.toLocaleString('en-US')} マス調べた${reach}）`,
       '10m 以内の中継点へ go か、dig と walk の階段・縦穴で');
   };
 
@@ -1304,7 +1322,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         // not walked, and the stop said search_timeout (道探しが終わらない). It is the limit: said as such, with what is left and what the part needs.
         const over = tip ? budgetOf(countOf(found), found.places) : null;
         if (over && partialWalks < GO_PARTIAL_WALKS) {
-          return fail(over.code, `道探しは ${(searchCap / 1000).toFixed(searchCap < 1000 ? 2 : 0)} 秒で終わらず、見つかった途中までの道（${cellText(nodeCell(tip!))} まで）でも${over.text.replace(/^この道は/u, '')}`,
+          return fail(over.code, `道探しは ${(searchSlice / 1000).toFixed(searchSlice < 1000 ? 2 : searchSlice % 1000 ? 1 : 0)} 秒で終わらず、見つかった途中までの道（${cellText(nodeCell(tip!))} まで）でも${over.text.replace(/^この道は/u, '')}`,
             over.code === 'limit_dig' ? 'maxDig を増やして出し直す（下りは 1 段に 2 前後掘る）' : 'maxPlace を増やして出し直す');
         }
         if (tip && partialWalks < GO_PARTIAL_WALKS) {

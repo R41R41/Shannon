@@ -294,11 +294,12 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
           && creatureSight(bot, entity).visible);
         if (!hovering || Date.now() - lastInReach >= HOLD_HOVER_PATIENCE_MS) { unreached = true; break; }
       }
-      // A blow is struck with the shield lowered, and a shield counts as up only five ticks after it is raised: while a shot is about to land or a blaze that sees the body has
-      // been charged long enough to shoot, a hovering shooter's blow waits (utils/huntBlaze StrikeGate: 1.5 s in all within each 8 s).
-      const held = !!near && HOVERING_SHOOTERS.has(String(near.entity.name)) && !gate.may(Date.now(), strikeHold(bot, watch, Date.now()));
+      // A blow is struck from behind the raised shield. With no shield up (none carried, or lowered by something else), and a shot about to land or a blaze that sees the body charged
+      // long enough to shoot, a hovering shooter's blow waits (utils/huntBlaze StrikeGate: 1.5 s in all within each 8 s).
+      // (S2, 2026-11-03: a blow lands with the shield raised, lab; the shield stays up for it, and with it up there is no window to wait for.)
+      const held = !raised && !!near && HOVERING_SHOOTERS.has(String(near.entity.name)) && !gate.may(Date.now(), strikeHold(bot, watch, Date.now()));
       if (near && !held && Date.now() - lastSwing >= cooldownMs(bot.heldItem?.name)) {
-        lower();
+        raise();
         try { await bot.lookAt(near.entity.position.offset(0, (near.entity.height ?? 1.8) * 0.6, 0), true); } catch { /* looked */ }
         // Marked before the swing: the hurt that answers it may come at once.
         struck.add(near.entity.id); swungAt.set(near.entity.id, Date.now()); blows++; lastSwing = Date.now();

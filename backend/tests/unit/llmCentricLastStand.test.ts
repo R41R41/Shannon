@@ -151,6 +151,11 @@ describe('the LLM-centric last stand at low health with no way out', () => {
     expect(pick(near, [{ name: 'oak_planks', type: 30, count: 2 }], bedrock)).toMatchObject({ kind: 'pillar', block: 'oak_planks' });
     expect(pick(near, [{ name: 'dirt', type: 31, count: 2 }, { name: 'stone_slab', type: 32, count: 9 }, STICK], bedrock)).toMatchObject({ kind: 'pillar', block: 'dirt' });
     expect(pick(near, [{ name: 'stone_slab', type: 32, count: 9 }, STICK], bedrock)).toBeNull();
+    // S2: a cell under the feet that nothing carried can harvest (nether bricks, no pickaxe) is not dug: the dig hand would refuse it at once, so the stand goes to another way; with a pickaxe it is dug.
+    const bricks = { '0,64,0': { name: 'nether_bricks', boundingBox: 'block', diggable: true, hardness: 2, harvestTools: { 99: true } } as unknown as Cell };
+    expect(pick(near, [], bricks)).toBeNull();
+    expect(pick(near, [COBBLE], bricks)?.kind).toBe('pillar');
+    expect(pick(near, [{ name: 'iron_pickaxe', type: 99, count: 1 }], bricks)?.kind).toBe('dig');
     // A kind that failed last time is skipped.
     const { bot } = fixture({ mobs: { 2: mob(2, 'zombie', new Vec3(2.5, 65, 0.5)) }, items: [COBBLE] });
     expect(lastStandChoice(bot, 'hit')?.kind).toBe('dig');

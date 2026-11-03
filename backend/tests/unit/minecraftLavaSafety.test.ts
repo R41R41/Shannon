@@ -113,6 +113,52 @@ describe('a body standing in a block of fire walks out of it (paid run L77c stoo
     expect(controls.forward).toBe(false);
   });
 
+  // S2 (2026-11-02, the c1 blaze camp): the flames a fireball leaves are put out where the body stands (a quick dig) before the body is walked out of its place (which stopped its act).
+  it('puts out the fire it stands in with a quick dig first, and is walked out only when the fire stands for two seconds all the same', async () => {
+    vi.useFakeTimers();
+    try {
+      const controls: Record<string, boolean> = {};
+      const punch = vi.fn(async () => true);
+      const bot = body(burningGround, new Vec3(1.5, 71, 0.5), { health: 9, setControlState: (c: string, v: boolean) => { controls[c] = v; }, look: () => undefined, punchOutFire: punch });
+      const state: any = { engaged: false, engagements: 0, clearTicks: 0 };
+      expect(lavaReflexTick(bot, state)).toBeNull();
+      expect(punch).toHaveBeenCalledTimes(1);
+      expect(controls).toEqual({});
+      let engagedAt = -1;
+      for (let ms = 100; ms <= 3000 && engagedAt < 0; ms += 100) {
+        await vi.advanceTimersByTimeAsync(100);
+        if (lavaReflexTick(bot, state) === 'engaged') engagedAt = ms;
+      }
+      // the fire never went out in this world: the walk out comes once the episode has lasted its two seconds, after more than one dig
+      expect(engagedAt).toBeGreaterThanOrEqual(2000);
+      expect(punch.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(controls).toMatchObject({ forward: true, sprint: true });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('walks out at once when the dig fails twice (a body that cannot dig is not left in the flames)', async () => {
+    vi.useFakeTimers();
+    try {
+      const punch = vi.fn(async () => { throw new Error('cannot dig'); });
+      const bot = body(burningGround, new Vec3(1.5, 71, 0.5), { health: 9, setControlState: () => undefined, look: () => undefined, punchOutFire: punch });
+      const state: any = { engaged: false, engagements: 0, clearTicks: 0 };
+      expect(lavaReflexTick(bot, state)).toBeNull();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(lavaReflexTick(bot, state)).toBeNull();           // the second dig is tried
+      await vi.advanceTimersByTimeAsync(50);
+      expect(lavaReflexTick(bot, state)).toBe('engaged');
+      expect(punch).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('lava is never punched at: a body in lava swims as before, with a puncher or without', () => {
+    const punch = vi.fn(async () => true);
+    const pool = body({ '0,71,0': lava, '0,72,0': air, '1,71,0': air, '1,72,0': air, '1,70,0': stone }, new Vec3(0.5, 71, 0.5), { health: 9, setControlState: () => undefined, look: () => undefined, punchOutFire: punch });
+    pool.entity.isInLava = true;
+    expect(lavaReflexTick(pool, { engaged: false, engagements: 0, clearTicks: 0 })).toBe('engaged');
+    expect(punch).not.toHaveBeenCalled();
+  });
+
   it('leaves a body beside the fire, or with nowhere clear in reach, to whoever holds the keys', () => {
     const controls: Record<string, boolean> = {};
     const beside = body(burningGround, new Vec3(3.5, 71, 0.5), { health: 9, setControlState: (c: string, v: boolean) => { controls[c] = v; } });

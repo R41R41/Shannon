@@ -173,8 +173,20 @@ interface ReflexBody extends LavaBody {
   look?(yaw: number, pitch: number, force?: boolean): unknown;
   on(event: 'physicsTick', listener: () => void): unknown;
   lavaReflex?: LavaReflexState;
+  /** Puts out the fire in the cells the body stands in (a quick dig); installed with the reflex. False: nothing was put out. */
+  punchOutFire?: () => Promise<boolean>;
 }
-export interface LavaReflexState { engaged: boolean; engagements: number; clearTicks: number; in?: 'lava' | 'fire' | 'magma' }
+export interface LavaReflexState {
+  engaged: boolean; engagements: number; clearTicks: number; in?: 'lava' | 'fire' | 'magma';
+  /** The putting out of fire: one at a time, and given up on after PUNCH_FAILURES_MAX failures or PUNCH_EPISODE_MS of the same fire. */
+  punch?: { running: boolean; startedAt: number; failures: number; episodeStart: number; lastFireAt: number };
+}
+/**
+ * S2 (2026-11-02, the c1 blaze camp): a blaze's fireball leaves fire in the cells round the body, the body stands in it, and the reflex took the body out of its place and the act
+ * out of its hands ('lava_escape' stops, one every few seconds). A body in fire that is not lava is first given a quick dig at the fire it stands in; only when that does not
+ * put it out (it failed twice, or the fire stood for PUNCH_EPISODE_MS) is it walked out as before. Lava is never punched at.
+ */
+export const PUNCH_GRACE_MS = 700, PUNCH_FAILURES_MAX = 2, PUNCH_EPISODE_MS = 2000;
 
 /** Ticks out of lava before the reflex lets go of the keys. */
 const RELEASE_TICKS = 6;
@@ -218,6 +230,20 @@ export function lavaReflexTick(bot: ReflexBody, state: LavaReflexState): 'engage
   }
   state.clearTicks = 0;
   state.in = inLava ? 'lava' : 'fire';
+  if (inFire && !state.engaged && bot.punchOutFire) {
+    const now = Date.now();
+    const punch = state.punch ??= { running: false, startedAt: 0, failures: 0, episodeStart: now, lastFireAt: now };
+    if (now - punch.lastFireAt > 1500) { punch.episodeStart = now; punch.failures = 0; }
+    punch.lastFireAt = now;
+    if (punch.failures < PUNCH_FAILURES_MAX && now - punch.episodeStart < PUNCH_EPISODE_MS) {
+      if (!punch.running) {
+        punch.running = true; punch.startedAt = now;
+        void bot.punchOutFire().then(ok => { punch.failures = ok ? 0 : punch.failures + 1; }, () => { punch.failures++; }).finally(() => { punch.running = false; });
+      }
+      // The body is left where it is while the dig has its moment.
+      if (now - punch.startedAt < PUNCH_GRACE_MS) return null;
+    }
+  }
   let route: Vec3[] | null = null;
   try { route = routeOutOfLava(bot, entity.position); } catch { route = null; }
   // In fire with nowhere clear in reach, the keys are left to whoever holds them.
@@ -244,6 +270,29 @@ export function installLavaReflex(bot: ReflexBody): void {
   if (bot.lavaReflex) return;
   const state: LavaReflexState = bot.lavaReflex = { engaged: false, engagements: 0, clearTicks: 0 };
   let release: (() => void) | null = null;
+  // The fire the body stands in, put out by a dig at it (looked at, instant: a fire has no hardness). The body's own dig is the guarded one.
+  const digger = bot as unknown as { dig?: (block: unknown, forceLook?: boolean) => Promise<unknown> };
+  if (!bot.punchOutFire && typeof digger.dig === 'function') {
+    bot.punchOutFire = async () => {
+      const at = bot.entity?.position;
+      if (!at) return false;
+      const y = Math.floor(at.y + 0.01), done = new Set<string>();
+      let dug = 0;
+      for (const dy of [0, 1]) for (const [dx, dz] of [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]) {
+        const cell = new Vec3(Math.floor(at.x + dx), y + dy, Math.floor(at.z + dz)), id = `${cell.x},${cell.y},${cell.z}`;
+        if (done.has(id)) continue;
+        done.add(id);
+        let block: any = null;
+        try { block = bot.blockAt(cell); } catch { block = null; }
+        if (!isFire(block)) continue;
+        let timer: NodeJS.Timeout | undefined;
+        try { await Promise.race([digger.dig!(block, true), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('punch timeout')), PUNCH_GRACE_MS); })]); }
+        finally { if (timer) clearTimeout(timer); }
+        dug++;
+      }
+      return dug > 0;
+    };
+  }
   bot.on('physicsTick', () => {
     let outcome: ReturnType<typeof lavaReflexTick> = null;
     try { outcome = lavaReflexTick(bot, state); } catch { return; }

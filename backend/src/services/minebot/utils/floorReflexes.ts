@@ -18,6 +18,7 @@ import { footingAt, footingWords, type Footing } from './voidFooting.js';
 import { isBurning, lavaReleasedBy } from './lavaSafety.js';
 import { engagedWithAny } from './engagement.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
+import { canHarvest } from './toolChoice.js';
 import { entityHealth } from './mapMarks.js';
 import { eyeOf, probeSight } from './probeTools.js';
 import { dragonHazards, hazardCentres } from './dragonDanger.js';
@@ -189,6 +190,8 @@ export interface FloorState {
   clock?: () => number;
   /** The kind of the last stand that failed: the next one tries another way. */
   lastStandFailed?: LastStand['kind'];
+  /** When the floor's own digs down (the cover's and the last stand's) were begun, for ESCAPE_DIGS_MAX in ESCAPE_DIG_WINDOW_MS. */
+  escapeDigs?: number[];
   /** When the retreat from a lit creeper found no way away: the creeper's last stand is wanted until CORNERED_WAIT_MS after. */
   creeperCornered?: number;
   /** Cooldowns, the allowance and the stuck latch of the arrow step-aside, the meal and the armour change (`floorBudget.ts`); absent when denied. */
@@ -853,6 +856,15 @@ export interface FleeThreat { from: Vec3; threats: Vec3[]; nearest: number }
  * The threats to run from at low health: every `isThreat` entity that can get at the body (not walled off) within the flee's range, which is
  * wider for a kind that shoots, and wider once an episode is running (`keeping`: so that the body is not let go at 8.1 m). Null above FLEE_HEALTH.
  */
+/**
+ * Shooters that hold their place and fire only at what they see (utils/huntBlaze: a blaze goes after a body it has lost sight of for a fifth of a second and no longer; a ghast does not
+ * go after one at all). S2 (2026-11-02, the c1 hideout): at eight hearts the body rested in a corridor no blaze of the spawner can see, a blaze twelve metres off "could reach" it, and the flee
+ * found no way and the last stand dug the floor out from under it seven times. Out of such a shooter's sight, farther than this, it is no threat that can get at the body.
+ */
+const SIGHT_ONLY_SHOOTERS = new Set(['blaze', 'ghast']);
+const SIGHT_ONLY_NEAR_M = 6;
+const outOfSightOfAShooter = (name: string, exposure: string, distance: number): boolean => SIGHT_ONLY_SHOOTERS.has(name) && exposure !== 'seen' && distance > SIGHT_ONLY_NEAR_M;
+
 export function fleeThreat(bot: FloorBody, keeping = false): FleeThreat | null {
   const health = bot.health ?? 20, at = bot.entity?.position;
   if (!at || !(health > 0 && health <= FLEE_HEALTH) || bot.entity?.isInLava) return null;
@@ -864,7 +876,10 @@ export function fleeThreat(bot: FloorBody, keeping = false): FleeThreat | null {
     const distance = entity.position.distanceTo(at);
     if (distance > range) continue;
     let sealed = false;
-    try { sealed = threatExposure(bot as any, entity as any) === 'sealed'; } catch { sealed = false; }
+    try {
+      const exposure = threatExposure(bot as any, entity as any);
+      sealed = exposure === 'sealed' || outOfSightOfAShooter(name, exposure, distance);
+    } catch { sealed = false; }
     if (!sealed) found.push({ distance, position: entity.position });
   }
   if (!found.length) return null;
@@ -1089,6 +1104,12 @@ const LAST_STAND_RANGE = 3.2;
 const LAST_STAND_HITS = 2;
 const LAST_STAND_HIT_GAP_MS = 600;
 const LAST_STAND_GAP_MS = 1500;
+/**
+ * S2 (2026-11-02, the c1 fortress): at low health the cover (three digs an episode) and the last stand (one a second and a half, no end) dug a shaft six deep under a bridge in ten seconds, and the
+ * body fell out of it to its death. The floor's own digs down are at most this many in this long, the two kinds together.
+ */
+const ESCAPE_DIGS_MAX = 3, ESCAPE_DIG_WINDOW_MS = 30_000;
+export const recentEscapeDigs = (state: { escapeDigs?: number[] }, at: number): number => (state.escapeDigs = (state.escapeDigs ?? []).filter(when => at - when <= ESCAPE_DIG_WINDOW_MS)).length;
 /** r10: `reflexHeld` holds this long past the gap (the next hand comes on the first tick after it). */
 const LAST_STAND_HOLD_MARGIN_MS = 150;
 /** A creeper's fuse is a second and a half: a cornered body that cannot make its stand by then has no stand to make. */
@@ -1150,7 +1171,7 @@ export function reachingThreats(bot: FloorBody): Array<{ entity: FloorEntity; di
     if (distance > (shooter ? FLEE_RANGE_SHOOTER : FLEE_RANGE)) continue;
     let exposure: ReturnType<typeof threatExposure>;
     try { exposure = threatExposure(bot as any, entity as any, Date.now(), { fresh: true }); } catch { exposure = 'reachable'; }
-    if (exposure !== 'sealed') out.push({ entity, distance, exposure });
+    if (exposure !== 'sealed' && !outOfSightOfAShooter(name, exposure, distance)) out.push({ entity, distance, exposure });
   }
   return out.sort((a, b) => a.distance - b.distance);
 }
@@ -1177,6 +1198,8 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
     if (!(under && below && under.boundingBox === 'block' && under.diggable !== false && !isFluid(under.name) && !isHazardousToStandOn(under.name)
       && !['bedrock', 'barrier', 'end_portal_frame', 'reinforced_deepslate'].includes(String(under.name)) && !PROTECTED_UTILITY_BLOCKS.has(String(under.name))
       && below.boundingBox === 'block' && !isHazardousToStandOn(below.name))) return null;
+    // S2 (2026-11-02, S4's c1 trial: the fortress's nether bricks and no pickaxe carried): the dig hand refuses a block that nothing carried can harvest at once, and the one stand in 1.5 s was spent on it.
+    if (!creeper && (under as { harvestTools?: unknown }).harvestTools && !items.some(item => canHarvest(under as never, item as never))) return null;
     if (creeper) {
       // Too slow to be a hole before the blast (stone by hand is seconds): not this way. Unknown (no digTime): taken.
       let ms: number | null = null;
@@ -1945,11 +1968,12 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     let stand: LastStand | null = null;
     try {
       stand = !hasActiveSafetyLease(bot) && !escapeRunning(bot) && (bot.health ?? 20) > 0 && now() - (state.lastStandAt ?? -Infinity) >= LAST_STAND_GAP_MS
-        ? lastStandChoice(bot, state.lastStandFailed, cause) : null;
+        ? lastStandChoice(bot, recentEscapeDigs(state, now()) >= ESCAPE_DIGS_MAX ? 'dig' : state.lastStandFailed, cause) : null;
     } catch { stand = null; }
     if (!stand) return false;
     const chosen = stand;
     state.lastStandAt = now(); state.busy = 'flee';
+    if (chosen.kind === 'dig') (state.escapeDigs ??= []).push(now());
     if (chosen.kind === 'hit' && typeof chosen.target?.id === 'number') state.handTarget = { capability: 'floor-last-stand', target: chosen.target.id, at: now() };
     log.warn(`🧱 ${cause === 'creeper' ? '点火したクリーパーから' : '低体力で'}逃げ道なし、最後の手: ${chosen.kind}`);
     void takeNoted(cause === 'creeper' ? 'retreat' : 'flee', chosen.detail, 'floor-last-stand', cause === 'creeper' ? FLOOR_RETREAT_PRIORITY : FLOOR_FLEE_PRIORITY,
@@ -1995,7 +2019,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     } catch { return false; }
     if (!seeing.length) return false;
     let choice: ReturnType<typeof coverChoice>;
-    try { choice = coverChoice(bot, shooters, episode?.digs ?? 0, shot ? { line: true, lines: episode?.lines ?? 0 } : {}); } catch { return false; }
+    try { choice = coverChoice(bot, shooters, Math.max(episode?.digs ?? 0, recentEscapeDigs(state, t)), shot ? { line: true, lines: episode?.lines ?? 0 } : {}); } catch { return false; }
     const lead = burning ? '燃えて射手から見えている:' : shot ? `${shooterWords(body.position, seeing)} に${SHOT_WINDOW_MS / 1000}秒で${shot.hits}回撃たれた:` : '体力が減り続け射手から見えている:';
     if (!choice.cover) {
       if (t - (state.coverNotedAt ?? -Infinity) >= COVER_NOTE_GAP_MS) {
@@ -2007,7 +2031,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     const cover = choice.cover;
     const shotShooters: CoverShooter[] = shot ? shot.shooters : [];
     const run = state.cover = episode ?? { since: t, digs: 0, lastEnd: t };
-    if (cover.kind === 'dig') run.digs++;
+    if (cover.kind === 'dig') { run.digs++; (state.escapeDigs ??= []).push(t); }
     if (cover.kind === 'line') run.lines = (run.lines ?? 0) + 1;
     state.busy = 'flee';
     log.warn(`🔥 ${lead} ${cover.kind}（${shooterWords(body.position, seeing)}）`);
