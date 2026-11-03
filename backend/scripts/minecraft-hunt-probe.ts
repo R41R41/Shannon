@@ -1247,7 +1247,7 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
   const start = Date.now(), endAt = start + 600_000, deathsBefore = deaths, pearlStart = packClient().ender_pearl ?? 0;
   let den: EndermanDenSpec | null = null, kills = 0, pearls = 0, setupMs = 0, noSiteMs = 0, decisionWaitMs = 0, pickupMs = 0, healthLost = 0, wallMs = 0;
   const seenIds = new Set<number>(), anyEnderman = new Set<number>(), killedIds = new Set<number>(), visited = new Set<string>();
-  let hopCount = 0;
+  let hopCount = 0, siteGiven = false;
   const rows: Array<Record<string, unknown>> = [];
   const remaining = () => Math.max(0, endAt - Date.now());
   const pause = async (ms: number): Promise<number> => { const at = Date.now(); await sleep(Math.min(ms, remaining())); return Date.now() - at; };
@@ -1286,6 +1286,12 @@ scene('ender_den', '自然湧き10分: 観測した横穴を再利用し、見�
         if (best) { den = { entrance: best.entrance, direction: best.direction }; note(`横穴を選択 ${JSON.stringify(den)}・見通し ${best.sightDistance}m`); }
         else {
           row.result = 'no_candidate'; row.reason = '候補なし';
+          // The wall search of this stand-in for the head is weak (a survey found walls 30 to 80 blocks east of c1's warpedStand, and the body's own search reached none in
+          // ten minutes). To measure the den itself, the first time no wall is in reach the body is put at a site the survey found, once; recorded as a fixture (siteGiven).
+          if (!siteGiven && Math.hypot(stand[0] - 304, stand[2] + 118) < 6) {
+            siteGiven = true; row.reason = '候補なし。測定のため一度だけ、調査で見つけた壁の前へ置く（fixture）'; row.siteGiven = [339, 51, -170];
+            await placeActor('the_nether', 339, 51, -170, 24); await sleep(1500); finishRow('no_site'); continue;
+          }
           // The head substitute looks for a wall the way a person would: it walks a 14-block hop in the next of eight headings (45 degrees apart, the first not yet
           // visited), within 90 blocks of warpedStand, and looks again from there (a survey of the stand's surroundings found walls only 30 to 80 blocks off it).
           // No digging or placing to get there; the hop is a plain go on known level ground.
