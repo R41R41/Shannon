@@ -864,6 +864,8 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     mark('torches done');
   }
   let json = await readLane();
+  // (right after the return the spawner's chunk may not be loaded yet: no report at all; read again every 8 s, up to four times)
+  for (let wait = 0; wait < 4 && !json?.found; wait++) { note(`no lane report yet (${String(json?.text ?? '').slice(0, 80)}); read again in 8 s`); await sleep(8000); json = await readLane(); }
   // (a probe read just after the move may see unloaded or empty blocks: read again, up to three times, until half of the cells have a standing cell)
   for (let again = 0; again < 3 && json?.found; again++) {
     const rows = (json.candidates?.[0]?.build ?? []) as any[];
