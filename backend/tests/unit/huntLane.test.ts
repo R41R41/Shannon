@@ -22,7 +22,8 @@ const eastOpening = () => {
   for (const y of [20, 21]) changes[`6,${y},0`] = 'air';
   return changes;
 };
-const east = (read: CampReader) => laneReport(read, SPAWNER, FROM).candidates.find(c => c.direction === 'east')!;
+const EAST_FROM = { x: 5, y: 20, z: 0 };
+const east = (read: CampReader, from = EAST_FROM) => laneReport(read, SPAWNER, from).candidates.find(c => c.direction === 'east')!;
 const at = (c: LaneCandidate, p: LaneCell) => c.build.find(b => key(b.at) === key(p))!;
 /** An unlimited, loaded stone floor and open air, with synthetic changes only. */
 const flat = (changes: Record<string, string | null> = {}): CampReader => (x, y, z) => {
@@ -136,7 +137,7 @@ describe('laneReport: read-only lane geometry and counts', () => {
   it('keeps coordinates, block names and place names out of the short Japanese sentence', () => {
     const report = laneReport(room(), SPAWNER, FROM), text = report.text, best = report.candidates[0];
     expect(text).toContain('必要数の順');
-    expect(text).toContain(`立ち位置つきの建築順（${new Set(best.build.filter(p => p.group !== null).map(p => p.group)).size}組）。立てる所が無いマス${best.build.filter(p => !p.standAt).length}個`);
+    expect(text.split('\n').at(-1)).toBe(`立ち位置は${new Set(best.build.filter(p => p.group !== null).map(p => p.group)).size}組、着けない${best.build.filter(p => p.noStand === 'unreachable').length}マス。`);
     expect(text).not.toMatch(/\(|\)|x=|y=|z=|netherrack|spawner|c1|run59/u);
   });
 
@@ -144,6 +145,7 @@ describe('laneReport: read-only lane geometry and counts', () => {
     const read = flat(), c = east(read), offered = c.build.filter(p => p.standAt);
     expect(offered.length).toBeGreaterThan(10);
     const projected = new Set<string>();
+    const planned = new Set(c.build.map(p => key(p.at)));
     for (const p of c.build) {
       if (!p.standAt) continue;
       const q = p.standAt;
@@ -152,6 +154,8 @@ describe('laneReport: read-only lane geometry and counts', () => {
       expect(read(q.x, q.y + 1, q.z)?.name).toBe('air');
       expect(projected.has(key(q))).toBe(false);
       expect(projected.has(key({ ...q, y: q.y + 1 }))).toBe(false);
+      expect(planned.has(key(q))).toBe(false);
+      expect(planned.has(key({ ...q, y: q.y + 1 }))).toBe(false);
       expect(Math.hypot(q.x - p.at.x, q.y + 1.62 - (p.at.y + 0.5), q.z - p.at.z)).toBeLessThanOrEqual(4.3);
       expect([key(q), key({ ...q, y: q.y + 1 })]).not.toContain(key(p.at));
       expect(p).toMatchObject({ noStand: null, fireNear: false });
@@ -184,10 +188,13 @@ describe('laneReport: read-only lane geometry and counts', () => {
     expect(c.build.filter(p => p.standAt).every(p => key(p.standAt!) !== '5,20,0')).toBe(true);
   });
 
-  it('prefers the nearest valid footing to this direction’s waiting cell', () => {
+  it('prefers fewer walking steps before the old waiting-cell rank', () => {
     const c = east(flat());
-    // The waiting cell is safe and in reach of the first enclosure block; no other cell is closer.
+    // The waiting cell is the origin here, so it wins with zero steps.
     expect(c.build[0].standAt).toEqual({ x: 5, y: 20, z: 0 });
+    expect(c.build[0].walk).toBe(0);
+    const from = { x: 7, y: 20, z: -1 }, nearby = east(flat(), from).build[0];
+    expect(nearby).toMatchObject({ standAt: from, walk: 0 });
     const c2 = east(flat({ '6,20,1': 'fire' }));
     expect(c2.build[0].standAt).not.toEqual({ x: 5, y: 20, z: 0 });
     expect(c2.build[0].standAt).not.toBeNull();
@@ -195,16 +202,14 @@ describe('laneReport: read-only lane geometry and counts', () => {
     expect(c2.build[0].standAt).toEqual({ x: 4, y: 20, z: 0 });
   });
 
-  it('breaks equal-distance ties by being outside the spawn columns or under a cap, then by a wall towards the spawner', () => {
-    // The waiting floor is not a full box, so several cells at distance one compete.
-    const base = { '5,19,0': 'stone_slab' };
-    const outside = east(flat(base)).build[0].standAt!;
-    expect(Math.hypot(outside.x - 5, outside.y - 20, outside.z)).toBe(1);
-    expect(Math.abs(outside.x) > 4 || Math.abs(outside.z) > 4).toBe(true);
-    // A cap already in the world puts the inside candidate on an equal footing with the outside ones.
-    expect(east(flat({ ...base, '4,22,0': 'stone' })).build[0].standAt).toEqual({ x: 4, y: 20, z: 0 });
-    // This wall shields the outside candidate to the east, while the equally near southern one is exposed.
-    expect(east(flat({ ...base, '4,21,0': 'stone' })).build[0].standAt).toEqual({ x: 6, y: 20, z: 0 });
+  it('uses the old distance and shelter rank when walking steps tie', () => {
+    // The origin's slab is traversable, but is not offered as a full-floor placement footing.
+    const from = { x: 7, y: 20, z: 0 }, base = { '7,19,0': 'stone_slab' };
+    const first = east(flat(base), from).build[0];
+    expect(first).toMatchObject({ standAt: { x: 7, y: 20, z: -1 }, walk: 1 });
+    // Both side footings are one step away and equally far from the waiting cell.
+    const sheltered = east(flat({ ...base, '4,21,1': 'stone' }), from).build[0];
+    expect(sheltered).toMatchObject({ standAt: { x: 7, y: 20, z: 1 }, walk: 1 });
   });
 
   it('treats half blocks as opaque even when the reader marks them non-solid', () => {
@@ -213,6 +218,56 @@ describe('laneReport: read-only lane geometry and counts', () => {
     const c = east(slab), p = at(c, { x: 5, y: 20, z: -1 });
     // This slab cuts the eye-to-centre line from the waiting cell to the lower enclosure block.
     expect(p.standAt).not.toEqual({ x: 5, y: 20, z: 0 });
+  });
+
+  it('skips a visible safe footing beyond a wall and selects a reachable alternative', () => {
+    const base = flat();
+    const read: CampReader = (x, y, z) => x === 4 && (y === 20 || y === 21) ? { name: 'stone', solid: true } : base(x, y, z);
+    const from = { x: 2, y: 20, z: 0 }, c = east(read, from), roof = at(c, { x: 4, y: 22, z: 0 });
+    // The old preferred waiting cell still has a floor, two empty cells and a clear placement line.
+    expect(read(5, 19, 0)?.solid).toBe(true);
+    expect([read(5, 20, 0)?.name, read(5, 21, 0)?.name]).toEqual(['air', 'air']);
+    expect(solidBetween(read, [5.5, 21.62, 0.5], [4.5, 22.5, 0.5])).toEqual([]);
+    expect(roof).toMatchObject({ standAt: from, walk: 0, noStand: null });
+    expect(c.build.filter(p => p.standAt).every(p => p.standAt!.x < 4)).toBe(true);
+  });
+
+  it.each(['up', 'down'] as const)('walks one step %s but never two', direction => {
+    for (const rise of [1, 2]) {
+      const from = { x: 11, y: direction === 'up' ? 20 : 20 + rise, z: 0 };
+      const read: CampReader = (x, y, z) => {
+        const height = (direction === 'up' ? x < 10 : x >= 10) ? 20 + rise : 20;
+        const name = key({ x, y, z }) === key(SPAWNER) ? 'spawner' : y < height ? 'stone' : 'air';
+        return { name, solid: name !== 'air' };
+      };
+      const c = east(read, from), p = at(c, direction === 'up' ? { x: 5, y: 22, z: 0 } : { x: 5, y: 20, z: -1 });
+      if (rise === 1) expect(p).toMatchObject({ standAt: { x: 9, y: direction === 'up' ? 21 : 20, z: 0 }, walk: 2, noStand: null });
+      else expect(p).toMatchObject({ standAt: null, walk: null, group: null, noStand: 'unreachable' });
+    }
+  });
+
+  it('does not use planned blocks as a passage, even while they are currently air', () => {
+    const read = flat(), c = east(read, FROM);
+    // All exits from this origin put the body's head in a planned lid or plug.
+    expect(c.build.some(p => key(p.at) === '2,21,1')).toBe(true);
+    expect(read(2, 20, 1)?.name).toBe('air');
+    expect(read(2, 21, 1)?.name).toBe('air');
+    expect(at(c, { x: 5, y: 20, z: -1 })).toMatchObject({ standAt: null, walk: null, group: null, noStand: 'unreachable' });
+    expect(c.build.every(p => p.standAt === null)).toBe(true);
+    expect(east(read).build.some(p => p.standAt)).toBe(true);
+  });
+
+  it('stops at 2000 visited feet cells and reports unreachable beyond the boundary', () => {
+    for (const startX of [2008, 2009]) {
+      const base = flat();
+      // A single-file corridor opens onto the placement area at x=9. There is no alternate route.
+      const read = vi.fn<Parameters<CampReader>, ReturnType<CampReader>>((x, y, z) =>
+        x >= 10 && (z !== 0 || x > startX) && y >= 20 ? { name: 'stone', solid: true } : base(x, y, z));
+      const p = at(east(read, { x: startX, y: 20, z: 0 }), { x: 5, y: 20, z: -1 });
+      if (startX === 2008) expect(p).toMatchObject({ standAt: { x: 9, y: 20, z: 0 }, walk: 1999, noStand: null });
+      else expect(p).toMatchObject({ standAt: null, walk: null, group: null, noStand: 'unreachable' });
+      expect(read.mock.calls.length).toBeLessThan(40_000);
+    }
   });
 
   it('returns null with out_of_reach, hazard or unloaded instead of inventing a footing', () => {
@@ -244,7 +299,7 @@ describe('laneReport: read-only lane geometry and counts', () => {
 
   it('defers creature-blocked placements to their group’s tail without moving a prerequisite behind its user', () => {
     const entities = [{ id: 90, name: 'blaze', position: { x: 5.5, y: 20, z: -0.5 }, width: 0.6, height: 1.8 }];
-    const c = laneReport(flat(), SPAWNER, FROM, { entities }).candidates.find(c => c.direction === 'east')!;
+    const c = laneReport(flat(), SPAWNER, EAST_FROM, { entities }).candidates.find(c => c.direction === 'east')!;
     const occupied = at(c, { x: 5, y: 20, z: -1 });
     expect(occupied).toMatchObject({ occupied: [90], blockedByCreature: true });
     expect(c.build.indexOf(occupied)).toBeGreaterThan(0);
@@ -262,22 +317,30 @@ describe('laneReport: read-only lane geometry and counts', () => {
   });
 
   it('appends the new wire columns while old readers can still decode all the original fields', () => {
-    const r = laneReport(room(eastOpening()), SPAWNER, FROM), wire = laneProbeFields(r);
-    expect(wire.rows.build).toEqual(['fact', 'partIndex', 'supportAfterCell', 'flags', 'standAtCell', 'group']);
+    const r = laneReport(flat(), SPAWNER, EAST_FROM), wire = laneProbeFields(r);
+    expect(wire.rows.build).toEqual(['fact', 'partIndex', 'supportAfterCell', 'flags', 'standAtCell', 'group', 'walk']);
     expect(wire.rows.facts).toEqual(['cell', 'supportNow', 'occupiedCount', 'belowDepth', 'belowEnd', 'needsClearing', 'standFact']);
     expect(wire.rows.cells).toEqual(['x', 'y', 'z', 'name', 'state']);
+    expect(wire.rows.standFacts).toEqual(['noStand', 'blockedByCreature', 'fireNear']);
+    expect(wire.rows.lane).toEqual(['feetCell', 'headCell']);
+    expect(wire.rows.waiting).toEqual(['feetCell', 'headCell']);
+    expect(wire.rows.hazards).toEqual(['cell', 'inside']);
+    expect(wire.rows.parts).toEqual(['enclosure', 'roof', 'plug', 'lid']);
+    expect(wire.candidates.some(c => c.build.some(row => typeof row[6] === 'number'))).toBe(true);
+    expect(wire.candidates.some(c => c.build.some(row => row[6] === null))).toBe(true);
     expect(wire.rows.flags).toEqual({ inReach: 1, visibleNow: 2, noSupport: 4 });
     for (const [i, c] of wire.candidates.entries()) for (const [j, row] of c.build.entries()) {
       const original = r.candidates[i].build[j], fact = wire.facts[row[0] as number];
-      expect(Object.keys(original).slice(0, 11)).toEqual(['at', 'part', 'supportNow', 'supportAfter', 'occupied', 'distance', 'inReach', 'visible', 'noSupport', 'below', 'needsClearing']);
+      expect(Object.keys(original)).toEqual(['at', 'part', 'supportNow', 'supportAfter', 'occupied', 'distance', 'inReach', 'visible', 'noSupport', 'below', 'needsClearing', 'standAt', 'noStand', 'group', 'blockedByCreature', 'fireNear', 'walk']);
       expect(wire.cells[fact[0]]).toEqual([original.at.x, original.at.y, original.at.z, original.at.name, original.at.state]);
       expect(fact.slice(1, 6)).toEqual([original.supportNow, original.occupied.length, original.below.depth, original.below.end, original.needsClearing]);
       expect(row.slice(0, 4)).toEqual([row[0], wire.rows.parts.indexOf(original.part), row[2], (original.inReach ? 1 : 0) | (original.visible ? 2 : 0) | (original.noSupport ? 4 : 0)]);
       expect(row[2] === null ? null : wire.cells[row[2] as number].slice(0, 3)).toEqual(original.supportAfter ? [original.supportAfter.x, original.supportAfter.y, original.supportAfter.z] : null);
-      expect(row).toHaveLength(6);
+      expect(row).toHaveLength(7);
       const standAtCell = row[4];
       expect(standAtCell === null ? null : wire.cells[standAtCell].slice(0, 3)).toEqual(original.standAt ? [original.standAt.x, original.standAt.y, original.standAt.z] : null);
       expect(row[5]).toBe(original.group);
+      expect(row[6]).toBe(original.walk);
       expect(wire.standFacts[fact[6]]).toEqual([original.noStand, original.blockedByCreature, original.fireNear]);
     }
   });
@@ -304,7 +367,7 @@ describe('laneReport: read-only lane geometry and counts', () => {
     expect(decoded.candidates.map((c: { build: unknown[][] }) => c.build.length)).toEqual(distant.candidates.map(c => c.build.length));
     // The receiver's 16k truncation lives outside this read-only change. Preserve all columns and all plans;
     // do not make an oversized receipt pass by silently dropping footings, directions or null cells.
-    expect(decoded.candidates.every((c: { build: unknown[][] }) => c.build.every(row => row.length === 6))).toBe(true);
+    expect(decoded.candidates.every((c: { build: unknown[][] }) => c.build.every(row => row.length === 7))).toBe(true);
     expect(distant.candidates.map(c => c.required)).toEqual(r.candidates.map(c => c.required));
   });
 });
