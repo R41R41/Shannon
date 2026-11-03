@@ -792,6 +792,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     await placeActor('the_nether', arrival[0], arrival[1], arrival[2], 24);
     await sleep((options.awaySeconds ?? 150) * 1000);
     await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+    await sleep(5000);   // (the blocks under the body arrive after the move: a fill read at once said there was no floor)
     note(`back at the stand after ${options.awaySeconds ?? 150} s away; blazes known now: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
   }
   let json = await readLane();
