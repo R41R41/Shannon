@@ -57,10 +57,14 @@ scene('s4_den_survey', 'den survey: the enderman den candidates (radius 12) from
     const x = stand[0] + dx, z = stand[2] + dz;
     await ask(`execute in minecraft:the_nether run forceload add ${x - 14} ${z - 14} ${x + 14} ${z + 14}`);
     await sleep(900);
-    await ask(`execute in minecraft:the_nether run tp ${ACTOR} ${x + 0.5} ${stand[1] + 2} ${z + 0.5}`);
-    await sleep(1400);
     points++;
-    const found = (endermanDenCandidates as any)(actor, { radius: 12, verticalRange: 2, limit: 64 }) as Array<any>;
+    const found: Array<any> = [];
+    for (const dy of [-16, -8, 0, 8, 16]) {      // the nether floor's height varies: five heights per point, a radius-12 read at each (vertical range 2)
+      await ask(`execute in minecraft:the_nether run tp ${ACTOR} ${x + 0.5} ${stand[1] + dy} ${z + 0.5}`);
+      await sleep(dy === -16 ? 1400 : 450);
+      for (const item of (endermanDenCandidates as any)(actor, { radius: 12, verticalRange: 2, limit: 64 }) as Array<any>) found.push(item);
+    }
+    found.sort((a, b) => a.score - b.score);
     total += found.length; if (found.length) withAny++;
     rows.push({ at: [x, z], count: found.length, best: found[0] ? { entrance: found[0].entrance, direction: found[0].direction, sight: found[0].sightDistance, penalties: found[0].penalties } : null });
   }
