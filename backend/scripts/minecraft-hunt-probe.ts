@@ -814,6 +814,20 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
       await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
       await sleep(4000);
     }
+    if (options.lidOnly) {
+      // (a fireball's push drops a body that stands beside an open hole: every open neighbour of the stand with no full floor one or two cells down is walled at feet height first)
+      const cellAt = (x: number, y: number, z: number) => actor.blockAt(new Vec3(x, y, z));
+      const sealed: Array<{ x: number; y: number; z: number }> = [];
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const x = stand[0] + dx, z = stand[2] + dz, feet = cellAt(x, stand[1], z);
+        if (!feet || feet.boundingBox === 'block') continue;
+        if (cellAt(x, stand[1] - 1, z)?.boundingBox !== 'block' && cellAt(x, stand[1] - 2, z)?.boundingBox !== 'block') sealed.push({ x, y: stand[1], z });
+      }
+      if (sealed.length) {
+        const run = await act('seal the holes beside the stand', [{ do: 'place', at: sealed, block: 'cobblestone', onFail: 'continue' }], 30, { accept: ['blaze'] });
+        note(`sealed ${sealed.length} open neighbours of the stand at feet height: ${run.lines.join(' ').slice(0, 200)}`);
+      } else note('no open neighbour of the stand without a floor');
+    }
     mark('back from away');
     note(`back at the stand after ${options.awaySeconds ?? 150} s away; blazes known now: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
   }
@@ -1054,7 +1068,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     while (Date.now() - holdStart < holdSeconds * 1000 && !disconnected && hp() > 0 && deaths === deaths0) {
       if (attackCell && hp() >= 16) {
         // out to the attack cell once the health is up; strike from there; back to the cover below 11 and wait for 18
-        const goOut = await act(`out#${n + 1}`, [{ do: 'go', to: attackCell, range: 0.6, seconds: 12, canPlace: ['cobblestone'], maxPlace: 4, onFail: 'continue' }], 25, { accept: ['blaze'] });
+        const goOut = await act(`out#${n + 1}`, [{ do: 'go', to: { x: attackCell.x, y: attackCell.y, z: attackCell.z }, range: 0.6, seconds: 12, canPlace: ['cobblestone'], maxPlace: 4, onFail: 'continue' }], 25, { accept: ['blaze'] });
         if (n < 3 || /止まった|失敗/u.test(goOut.lines.join(' '))) note(`out#${n + 1}: ${goOut.lines.join(' ').slice(0, 220)}`);
       }
       const run = await act(`hold#${++n}`, [{ do: 'attack', target: 'blaze', hold: true, seconds: attackCell ? 12 : 20 }], 40, { accept: ['blaze'] });
