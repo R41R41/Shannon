@@ -53,7 +53,7 @@ scene('s4_den_survey', 'den survey: the enderman den candidates (radius 12) from
   await ask('difficulty peaceful'); await ask('gamemode spectator ' + ACTOR);
   const rows: Array<Record<string, unknown>> = [];
   let total = 0, points = 0, withAny = 0;
-  for (let dx = -72; dx <= 72; dx += 12) for (let dz = -72; dz <= 72; dz += 12) {
+  for (let dx = -64; dx <= 64; dx += 16) for (let dz = -64; dz <= 64; dz += 16) {
     const x = stand[0] + dx, z = stand[2] + dz;
     await ask(`execute in minecraft:the_nether run forceload add ${x - 14} ${z - 14} ${x + 14} ${z + 14}`);
     await sleep(900);
