@@ -722,33 +722,25 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const spawnerCell = json.spawner as { x: number; y: number; z: number };
   const wait = cells[c.waiting[0]];
   note(`lane candidate ${c.direction}: required ${JSON.stringify(c.required)}; waiting cell ${wait.slice(0, 3)}; ${c.build.length} placements; spawn spaces ${json.spawn?.spaces}; blazes in the count box ${json.blaze?.count}`);
-  const placementsOf = (cand: any, table: any[], factTable: any[]) => (cand.build as Array<[number, number, number | null, number]>)
+  // the probe's own order and groups (each placement: the cell, its part, the cell to stand in and the number of its group)
+  const placementsOf = (cand: any, table: any[], factTable: any[]) => (cand.build as Array<[number, number, number | null, number, number | null, number | null]>)
     .filter(([f]) => table[factTable[f][0]][4] === 'air')
-    .map(([f, part]) => ({ at: { x: table[factTable[f][0]][0], y: table[factTable[f][0]][1], z: table[factTable[f][0]][2] }, part: ['enclosure', 'roof', 'plug', 'lid'][part] ?? String(part) }))
-    // the scripted head's order: the waiting cell's enclosure first (a cover), then the plug and the roof of the lane, then the lid from the waiting cell outwards
-    .sort((a, b) => (['enclosure', 'plug', 'roof', 'lid'].indexOf(a.part) - ['enclosure', 'plug', 'roof', 'lid'].indexOf(b.part))
-      || (Math.hypot(a.at.x - wait[0], a.at.z - wait[2]) - Math.hypot(b.at.x - wait[0], b.at.z - wait[2])));
+    .map(([f, part, , , stand, group]) => ({ at: { x: table[factTable[f][0]][0], y: table[factTable[f][0]][1], z: table[factTable[f][0]][2] }, part: ['enclosure', 'roof', 'plug', 'lid'][part] ?? String(part),
+      stand: stand === null || stand === undefined ? null : { x: table[stand][0], y: table[stand][1], z: table[stand][2] }, group: group ?? -1 }));
   let placements = placementsOf(c, cells, facts);
   const canPlace = ['cobblestone'];
   let built = 0, failedCells = 0, acts = 0, aborted = '', passes = 0, lastLeft = Infinity;
   // passes: each pass builds what the probe lists as still to be set (a cell a blaze stood in is tried again in the next pass), at most 8 passes
   for (let pass = 0; pass < 8 && placements.length && !disconnected && hp() > 0 && deaths === deaths0 && !aborted; pass++) {
     passes++;
-    for (let i = 0; i < placements.length && !disconnected && hp() > 0 && deaths === deaths0; i += groupSize) {
-      if (hp() < 6) { aborted = `hp ${r1(hp())} at pass ${pass} ${i}/${placements.length}`; break; }
-      const group = placements.slice(i, i + groupSize);
+    // the groups in the order of their first cell; a group is the cells that go on being set from one standing cell
+    const groups: Array<typeof placements> = [];
+    for (const p of placements) { const last = groups[groups.length - 1]; if (last && p.group !== -1 && last[0].group === p.group) last.push(p); else groups.push([p]); }
+    for (let gi = 0; gi < groups.length && !disconnected && hp() > 0 && deaths === deaths0; gi++) {
+      if (hp() < 6) { aborted = `hp ${r1(hp())} at pass ${pass} group ${gi}/${groups.length}`; break; }
+      const group = groups[gi];
       const head = group[0];
-      // a floor cell within reach of the group: for the lid and the roof, the feet cell of the spawner's layer under the cell; for the rest, the waiting cell
-      // (the scripted head's own reading of the map: the nearest cell a body can stand in within two cells of the target, the waiting cell when none is known)
-      const airLike = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y, z)); return !!b && b.boundingBox !== 'block' && !['lava', 'fire', 'water'].includes(b.name); };
-      const standable = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y - 1, z)); return airLike(x, y, z) && airLike(x, y + 1, z) && !!b && b.boundingBox === 'block' && !['magma_block'].includes(b.name); };
-      let floor: { x: number; y: number; z: number } = { x: wait[0], y: wait[1], z: wait[2] }, bestD = Infinity;
-      for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) for (let dy = -3; dy <= 0; dy++) {
-        const x = head.at.x + dx, y = head.at.y + dy, z = head.at.z + dz;
-        if (!standable(x, y, z) || (x === head.at.x && z === head.at.z && y >= head.at.y - 1 && y <= head.at.y)) continue;
-        const d = Math.hypot(dx, dy + 1, dz);
-        if (d < bestD) { bestD = d; floor = { x, y, z }; }
-      }
+      const floor = head.stand ?? { x: wait[0], y: wait[1], z: wait[2] };
       await sleep(thinkMs);
       const run = await act(`build#${++acts}`, [{ do: 'go', to: floor, range: 0.8, seconds: 12, onFail: 'continue' },
         ...group.map(p => ({ do: 'place', at: [p.at], block: 'cobblestone', onFail: 'continue' }))], 45, { accept: ['blaze'] });
