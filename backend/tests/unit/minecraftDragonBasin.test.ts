@@ -115,13 +115,13 @@ describe('observed basin footing and go entry', () => {
     expect(time).toBeLessThanOrEqual(130);
   });
 
-  it.each([5, 6, 7])('allows the wing-only walking step at phase %s while the unchanged reflex still sees wing push', phase => {
+  it.each([5, 6, 7])('allows the wing-only walking step at phase %s, and the reflex no longer counts sitting wings as a danger', phase => {
     const s = fixture(); s.d.metadata[16] = phase;
     const p = { x: 9.5, y: 65, z: 0.5 };
     expect(approachClear(s.bot, s.d, p)).toBe(false);
     expect(goWalkRouteChecker(s.bot)([{ x: 10, y: 65, z: 0 }, { x: 9, y: 65, z: 0 }])).toBe(true);
     s.bot.entity.position = new Vec3(p.x, p.y, p.z);
-    expect(dragonHazards(s.bot).map(h => h.kind)).toContain('wing');
+    expect(dragonHazards(s.bot).map(h => h.kind)).not.toContain('wing');
   });
 
   it.each([3, 4])('preserves go\'s existing non-perched phase gate at phase %s', phase => {
