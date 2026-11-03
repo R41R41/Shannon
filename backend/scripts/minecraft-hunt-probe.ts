@@ -713,7 +713,7 @@ async function blazeLight(note: (text: string) => void, options: { lit: boolean;
   const [sx, sy, sz] = spawner;
   await ask('gamerule doMobSpawning false');
   await ask(`${nether} kill @e[type=minecraft:blaze]`);
-  let torches = 0;
+  let torches = 0, tried = 0;
   if (options.torchSpacing) {
     // torches (light 14) on the floor in a grid of the given spacing over the box; a cell within two blocks of one has light 12 or more
     const solidBelow = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y - 1, z)); return !!b && b.boundingBox === 'block'; };
@@ -724,6 +724,7 @@ async function blazeLight(note: (text: string) => void, options: { lit: boolean;
       // (the server decides: air at the feet cell and something that is not air under it)
       const said = await ask(`${nether} execute if block ${x} ${sy} ${z} minecraft:air unless block ${x} ${sy - 1} ${z} minecraft:air unless block ${x} ${sy - 1} ${z} minecraft:lava run setblock ${x} ${sy} ${z} minecraft:torch`);
       if (/Changed the block/u.test(said)) torches++;
+      if (tried++ < 4) note(`first torch try at ${x},${sy},${z}: ${said.replace(/s+/gu, ' ').slice(0, 160)}; floor ${actor.blockAt(new Vec3(x, sy - 1, z))?.name}, here ${actor.blockAt(new Vec3(x, sy, z))?.name}`);
     }
     note(`torches placed: ${torches} (spacing ${options.torchSpacing})`);
   }
