@@ -1103,9 +1103,9 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
             if (!atCover()) continue;
           }
           if (hp() < 18) {
-            for (let w = 0; w < 6 && hp() < 18 && !disconnected && hp() > 0; w++) { if (Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15); await act('rest', [{ do: 'wait', seconds: 5 }], 15, { accept: ['blaze'] }); }
+            for (let w = 0; w < 6 && hp() < 18 && !disconnected && hp() > 0; w++) { if (Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15); { const rest = await act('rest', [{ do: 'attack', target: 'blaze', hold: true, seconds: 5 }], 15, { accept: ['blaze'] }); if (/倒した [1-9]/u.test(rest.lines.join(' '))) note(`struck in the cover: ${rest.lines.join(' ').slice(0, 160)}`); } }
             note(`rested in the cover: hp ${r1(hp())}`);
-          } else await act('wait in the cover', [{ do: 'wait', seconds: 1 }], 10, { accept: ['blaze'] });
+          } else await act('hold in the cover', [{ do: 'attack', target: 'blaze', hold: true, seconds: 2 }], 10, { accept: ['blaze'] });
           continue;
         }
         if (!atAttack()) {
