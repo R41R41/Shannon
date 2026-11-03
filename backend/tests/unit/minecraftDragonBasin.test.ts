@@ -46,6 +46,20 @@ describe('observed basin footing and go entry', () => {
     expect(endObservation(s.bot)?.dragon?.approach?.basin).toEqual(basin);
   });
 
+  it.each([3, 4, 5, 6, 7])('offers waiting footing 10 to 14 m sideways of the facing at phase %s', phase => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const s = fixture(island, 0); s.d.metadata[16] = phase;
+    const wait = dragonApproach(s.bot, s.d, phase)?.wait!;
+    expect(wait.length).toBeGreaterThan(0);
+    for (const p of wait) {
+      const r = Math.hypot(p.x - 0.5, p.z - 0.5);
+      expect(r).toBeGreaterThanOrEqual(10); expect(r).toBeLessThanOrEqual(14);
+      expect(Math.abs(p.side)).toBeLessThanOrEqual(0.25);
+      expect(p.walkSeconds).toBeCloseTo(p.walkMeters / 4.317);
+    }
+    if (phase === 3 || phase === 4) expect(dragonApproach(s.bot, s.d, phase)?.basin).toBeUndefined();
+  });
+
   it('excludes the front in the forecast breath disc and reports the rear with a negative side', () => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
     const s = fixture((x, y, z) => Math.abs(x) <= 1 && z >= -15 && z <= 12 ? island(x, y, z) : 'air');
@@ -102,8 +116,8 @@ describe('observed basin footing and go entry', () => {
     s.bot.entity.position.y += 1;
     expect(hints(s)?.basin).toBeUndefined();
     s.bot.entity.position.y -= 1;
-    expect(dragonApproach(s.bot, s.d, 3)).toBeUndefined();
-    expect(dragonApproach(s.bot, s.d, 4)).toBeUndefined();
+    // landing and take-off offer the waiting footing only: no strike, no stage, no basin
+    for (const phase of [3, 4]) { const a = dragonApproach(s.bot, s.d, phase); expect(a?.basin).toBeUndefined(); expect(a?.strike ?? []).toEqual([]); expect(a?.stage ?? []).toEqual([]); }
     s.world.set(0, 67, 0, 'air');
     expect(hints(s)?.basin).toBeUndefined();
   });

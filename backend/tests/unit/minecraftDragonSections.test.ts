@@ -149,7 +149,7 @@ describe('measured perch windows and safe positions', () => {
       }
     }
     s.bot.entity.position = original; d.metadata[16] = 6;
-    expect(dragonApproach(s.bot, d, 4)).toBeUndefined();
+    const takeoff = dragonApproach(s.bot, d, 4); expect(takeoff?.strike ?? []).toEqual([]); expect(takeoff?.stage ?? []).toEqual([]); expect(takeoff?.basin).toBeUndefined();
     expect(goWalkRouteChecker(s.bot)([{ x: -20, y: 64, z: -20 }, { x: -19, y: 64, z: -20 }])).toBe(true);
   });
 

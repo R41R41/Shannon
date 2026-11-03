@@ -31,6 +31,8 @@ import { approachClear } from '../src/services/minebot/utils/dragonApproach.js';
 import { dragonNook, insideDragonNook, nookCellSupported, type DragonNook } from '../src/services/minebot/utils/dragonNook.js';
 import { BLOCK_REACH } from '../src/services/minebot/utils/blockReach.js';
 import { isPerched, type P3 } from '../src/services/minebot/utils/dragonParts.js';
+import { cageRoots, cageWall, cageGuardCells, islandFootings } from '../src/services/minebot/utils/endFightGeometry.js';
+import { CHAIN_LIMIT_MS, CRYSTAL_LIMIT_MS, chainBasin, chainClear, chainCrystal, chainDistance, chainHands, chainPause, chainShot, chainSitting, chainWait, type ChainCrystal } from '../src/services/minebot/utils/endFullChainPlan.js';
 
 const port = Number(process.env.MINECRAFT_END_PORT);
 const worldDirectory = process.env.MINECRAFT_END_WORLD_DIRECTORY ?? '';
@@ -112,8 +114,8 @@ async function act(hands: Array<Record<string, unknown>>, seconds = 30, extra: R
   log(`ACT ${hands.map(h => h.do).join('+')} ${parsed?.ok ? 'ok' : 'NOT-OK'} ${((Date.now() - started) / 1000).toFixed(1)}s ${lines.join(' | ').slice(0, 500)}`);
   return { ok: parsed?.ok === true, lines, parsed, ms: Date.now() - started };
 }
-async function evidence(): Promise<any> {
-  const receipt = await body.execute(commandOf('goal-evidence', {}, 10), new AbortController().signal);
+async function evidence(signal?: AbortSignal, seconds = 10): Promise<any> {
+  const receipt = await body.execute(commandOf('goal-evidence', {}, seconds), signal ?? new AbortController().signal);
   try { return JSON.parse(receipt.result ?? ''); } catch { return null; }
 }
 
@@ -209,9 +211,14 @@ const hold = async (item: string) => { await ask(`item replace entity ${ACTOR} w
 
 // ===== scenes =====
 const scenes: Record<string, () => Promise<Record<string, unknown>>> = {};
+let chainArrivalAt: number | null = null, chainArrivalMinHealth = Infinity;
+let chainArrivalCounts: Record<string, number> | null = null;
+const chainArrivalTimeline: Array<Record<string, unknown>> = [];
+actor.on('health', () => { if (chainArrivalAt !== null) chainArrivalMinHealth = Math.min(chainArrivalMinHealth, Number(actor.health)); });
 
 scenes.enter = async () => {
   const t0 = Date.now();
+  if (wanted.includes('end_full_chain')) { chainArrivalAt = t0; chainArrivalMinHealth = Number(actor.health); chainArrivalCounts = actor.reflexLedger.counts(); }
   await enterEnd();
   const out: Record<string, unknown> = {};
   await sleep(1500);
@@ -221,6 +228,9 @@ scenes.enter = async () => {
     const dragon = dragonEntity();
     if (dragon && dragonAt === null) dragonAt = Date.now() - t0;
     const view = endView();
+    if (chainArrivalAt !== null && (chainArrivalTimeline.length === 0 || Date.now() - t0 - Number(chainArrivalTimeline[chainArrivalTimeline.length - 1].ms) >= 5000))
+      chainArrivalTimeline.push({ stage: 'enter', ms: Date.now() - t0, seconds: (Date.now() - t0) / 1000, health: view?.dragon?.health ?? null,
+        actorHealth: Number(actor.health), remaining: view?.crystals?.remaining ?? null });
     if ((view?.crystals?.list?.length ?? 0) >= 1 && crystalsAt === null) crystalsAt = Date.now() - t0;
     if (dragonAt !== null && view?.perch && (crystalsAt !== null || Date.now() - t0 > dragonAt + 8000)) break;
     await sleep(500);
@@ -1612,42 +1622,20 @@ scenes.cage_section = async () => {
       if (!result.ok) throw new Error(`${stage}: stopped after ${retries} retries`);
     };
     try {
-      const ground = walkGround(actor, { deadline: performance.now() + 150, radius: 112, maxCells: 16000 });
-      // Near enough to the cage wall to dig from the pillar, outside the obsidian column. World geometry, no seed coordinates.
-      const roots = ground.cells.filter(n => {
-        const p = feetCentre(n.cell), horizontal = Math.hypot(p.x - crystal.x, p.z - crystal.z);
-        if (horizontal < 3 || horizontal > 4.5) return false;
-        for (let y = n.cell.y; y < Math.floor(crystal.y); y++) {
-          const b = ground.read(n.cell.x, y, n.cell.z);
-          if (!b || !/^(air|cave_air|void_air)$/u.test(b.name)) return false;
-        }
-        return true;
-      }).sort((a, b) => a.walkMeters - b.walkMeters);
-      const root = roots[0]?.cell;
+      const root = cageRoots(actor, crystal)[0];
       if (!root) throw new Error('no walkable root with a clear pillar column');
       section.root = root;
       await perform('go_root', { do: 'go', to: root, range: 0, maxDig: 0, maxPlace: 0, maxDrop: 1, seconds: 60 }, 65);
       await perform('pillar_up', { do: 'vertical', dir: 'up', shape: 'pillar', toY: Math.floor(crystal.y), canDig: ['none'], canPlace: ['cobblestone'], maxPlace: 64, maxDig: 0, liquid: 'stop', seconds: 60 }, 65);
-      const eyes = actor.entity.position.offset(0, 1.62, 0), bars: Array<{ x: number; y: number; z: number }> = [];
-      const cx = Math.floor(crystal.x), cy = Math.floor(crystal.y), cz = Math.floor(crystal.z);
-      for (let x = cx - 2; x <= cx + 2; x++) for (let z = cz - 2; z <= cz + 2; z++) for (let y = cy; y <= cy + 2; y++) {
-        const p = new Vec3(x, y, z);
-        if (actor.blockAt(p)?.name === 'iron_bars' && eyes.distanceTo(p.offset(0.5, 0.5, 0.5)) <= 4.2) bars.push({ x, y, z });
-      }
-      bars.sort((a, b) => Math.hypot(a.x + 0.5 - eyes.x, a.y + 0.5 - eyes.y, a.z + 0.5 - eyes.z) - Math.hypot(b.x + 0.5 - eyes.x, b.y + 0.5 - eyes.y, b.z + 0.5 - eyes.z));
-      if (!bars.length) throw new Error('no reachable cage bars; inspect displaced body');
       // Open one vertical column in the near wall. The crystal is left intact; this section measures cage access and return.
-      const wall = bars.filter(p => p.x === bars[0].x && p.z === bars[0].z);
+      const wall = cageWall(actor, crystal);
+      if (!wall.length) throw new Error('no reachable cage bars; inspect displaced body');
       section.bars = wall;
       let closeCells: Array<{ x: number; y: number; z: number }> = [];
       if (cageGuard) {
         // the ring: bottom up (a block needs a face to be laid against: the tower's own side first), three sides two high, the side toward the bars open until the bars are out
-        const pos = actor.entity.position, f = { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) };
-        const toward = Math.abs(wall[0].x - f.x) >= Math.abs(wall[0].z - f.z) ? [Math.sign(wall[0].x - f.x), 0] : [0, Math.sign(wall[0].z - f.z)];
-        const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-        const ring: Array<{ x: number; y: number; z: number }> = sides.map(([a, b]) => ({ x: f.x + a, y: f.y - 1, z: f.z + b }));
-        for (const dy of [0, 1]) for (const [a, b] of sides) if (!(a === toward[0] && b === toward[1])) ring.push({ x: f.x + a, y: f.y + dy, z: f.z + b });
-        closeCells = [0, 1].map(dy => ({ x: f.x + toward[0], y: f.y + dy, z: f.z + toward[1] }));
+        const { ring, close, feet: f, toward } = cageGuardCells(actor.entity.position, wall);
+        closeCells = close;
         section.guard = { feet: f, toward, cells: ring.length };
         await perform('guard_ring', { do: 'place', at: ring, block: 'cobblestone' }, 40);
       }
@@ -1772,16 +1760,285 @@ scenes.cage_section_walk = async () => {
 
 scenes.cage_guard_walk = async () => { cageGuard = true; try { return await scenes.cage_section_walk(); } finally { cageGuard = false; } };
 
+// ===== end_full_chain: stand-in HEAD, from arrival, without the comparison arena setup =====
+scenes.end_full_chain = async () => {
+  if (wanted.filter(n => n !== 'enter').join() !== 'end_full_chain') throw new Error('end_full_chain must run alone (optionally after enter)');
+  if (!report.scenes.enter && !chainArrivalAt) await scenes.enter();
+  const t0 = chainArrivalAt ?? Date.now(), deadline = t0 + CHAIN_LIMIT_MS, deaths0 = 0;
+  const elapsed = () => Math.round((Date.now() - t0) / 100) / 10;
+  const lowest = trackMinHealth(), counts0 = chainArrivalCounts ?? actor.reflexLedger?.counts?.() ?? {};
+  const out: Record<string, any> = { scene: 'end_full_chain', tp: false, tpScope: 'after enter arrival', commandCrystalRemoval: false, waterBucket: false,
+    reflex: 'on', limitSeconds: 2400, crystalLimitSeconds: 900, dragonTargetSeconds: 900, order: 'near',
+    stages: [], crystals: [], hands: [], interruptions: [], healthTimeline: [...chainArrivalTimeline], transitions: [], waitingChosen: [], boss: null, bossVerified: false };
+  out.stages.push({ stage: 'enter', seconds: (Date.now() - t0) / 1000, endedAt: elapsed() });
+  let stage = 'setup', stageAt = Date.now(), crystalDeadline = deadline, paused = false;
+  let dragonId: number | null = null, dragonDead = false, entered = false, mustLeave = false, lastPhase: number | null | undefined;
+  let observedWait: P3 | null = null;
+  let active: { controller: AbortController; mode: string } | null = null, lastSample = -Infinity;
+  const read = (): any => (body.observe().state as any).world;
+  const setStage = (next: string) => {
+    out.stages.push({ stage, seconds: (Date.now() - stageAt) / 1000, endedAt: elapsed() });
+    stage = next; stageAt = Date.now();
+    if (next === 'crystals') crystalDeadline = Math.min(deadline, Date.now() + CRYSTAL_LIMIT_MS);
+  };
+  const check = () => {
+    if (actorDeaths > deaths0 || Number(actor.health) <= 0) throw new Error('actor_dead');
+    if (disconnected) throw new Error('disconnected');
+    if (Date.now() >= deadline) throw new Error('time_limit');
+    if (stage === 'crystals' && Date.now() >= crystalDeadline) throw new Error('crystal_time_limit');
+  };
+  const sample = () => {
+    const v = read(), d = v?.dragon;
+    const waiting = chainWait(v); if (waiting) observedWait = { x: waiting.x, y: waiting.y, z: waiting.z };
+    for (const c of v?.crystals?.list ?? []) {
+      const row = out.crystals.find((r: any) => r.id === c.id);
+      if (!row) out.crystals.push({ id: c.id, position: c.position, caged: c.caged, firstSeenSeconds: elapsed(), destroyedSeconds: null, arrows: 0, shots: [], tried: [], cageOpened: false });
+      else if (row.caged === null && c.caged !== null) row.caged = c.caged;
+    }
+    if (dragonId === null && d) dragonId = d.id;
+    if (d?.id === dragonId && (d.health === 0 || d.phase === 9)) dragonDead = true;
+    if (d?.phase !== lastPhase) { lastPhase = d?.phase; out.transitions.push([elapsed(), lastPhase ?? null]); }
+    if (stage === 'crystals') {
+      const next = chainPause(v, paused);
+      if (next && !paused) out.interruptions.push({ seconds: elapsed(), reason: 'phase_6', phase: d?.phase, position: v.position });
+      paused = next;
+    }
+    if (Date.now() - lastSample >= 5000) {
+      lastSample = Date.now(); out.healthTimeline.push({ seconds: elapsed(), stage, health: d?.health ?? null, actorHealth: v.health, remaining: v?.crystals?.remaining ?? null });
+    }
+    if (active && (actorDeaths > deaths0 || disconnected || Date.now() >= deadline ||
+      (stage === 'crystals' && Date.now() >= crystalDeadline) || (active.mode === 'crystal' && paused) ||
+      (active.mode === 'basin' && !chainSitting(d?.phase)) ||
+      (active.mode === 'attack' && (!chainSitting(d?.phase) || !chainClear(v))) || (dragonDead && active.mode !== 'proof'))) active.controller.abort('chain_observation_changed');
+  };
+  const perform = async (name: string, hand: Record<string, unknown>, seconds = 30, mode = 'crystal') => {
+    check(); sample();
+    if (mode === 'crystal' && paused) throw new Error('crystal_paused');
+    const controller = new AbortController(); active = { controller, mode };
+    const position = read()?.position, at = elapsed();
+    try {
+      const result = await act([hand], seconds, {}, controller.signal);
+      out.hands.push({ stage, name, seconds: at, position, hand, ...result });
+      sample(); check();
+      if (mode === 'crystal' && paused) throw new Error('crystal_paused');
+      if (!result.ok && /invalid_input/u.test(result.lines.join(' '))) throw new Error(`invalid_hand:${name}`);
+      return result;
+    } finally { active = null; }
+  };
+  const must = async (name: string, hand: Record<string, unknown>, seconds = 30, mode = 'crystal') => {
+    for (let retry = 0; retry <= 2; retry++) {
+      const r = await perform(name, hand, seconds, mode);
+      if (r.ok) return;
+      if (!/反射|被弾|search_timeout/u.test(r.lines.join(' ')) || retry === 2) throw new Error(`hand_stopped:${name}`);
+      await sleep(500); // The stand-in HEAD reissues after the observed cut.
+    }
+  };
+  const go = (name: string, p: P3, seconds = 60, mode = 'crystal', range = 0.5) => perform(name, chainHands.go(p, seconds, range), seconds + 5, mode);
+  const onDead = (e: any) => {
+    if (dragonId !== null && e?.id === dragonId) dragonDead = true;
+    const c = out.crystals.find((r: any) => r.id === e?.id);
+    if (c) { c.destroyedSeconds = elapsed(); c.destroyedEvidence = 'entityDead'; }
+  };
+  actor.on('entityDead', onDead);
+  const timer = setInterval(sample, 100);
+  let lastGround: P3 | null = null;
+  const openCage = async (c: ChainCrystal, row: any) => {
+    // The root/up/ring/bars/close/shaft parts of cage_section; geometry offers cells, the HEAD chooses the first.
+    const opening = read().crystals.openings?.find((o: any) => o.id === c.id);
+    row.blockedBy = opening?.blockedBy ?? null;
+    row.afterCageRemoved = opening?.afterCageRemoved ?? row.afterCageRemoved ?? [];
+    const root = cageRoots(actor, c.position, opening?.blockedBy)[0];
+    if (!root) throw new Error('no_cage_root');
+    row.root = root;
+    await must('go_root', chainHands.go(root, 60, 0), 65);
+    lastGround = feetCentre(root);
+    try {
+      await must('pillar_up', chainHands.up(c.position.y), 65);
+      const wall = cageWall(actor, c.position, opening?.blockedBy);
+      if (!wall.length) throw new Error('no_reachable_bars');
+      const guard = cageGuardCells(read().position, wall);
+      row.bars = wall; row.guard = guard;
+      await must('guard_ring', chainHands.place(guard.ring), 40);
+      try { await must('dig_bars', chainHands.dig(wall)); }
+      finally { const r = out.hands.at(-1); if (r?.name === 'dig_bars' && r.ok) row.cageOpened = true; }
+      await must('guard_close', chainHands.place(guard.close));
+    } finally {
+      // A phase-6 cut also descends before a ground retreat. A displaced body cannot assume the shaft.
+      const at = read()?.position;
+      if (at && at.y > root.y + 0.5 && actorDeaths === deaths0) {
+        if (Math.floor(at.x) !== root.x || Math.floor(at.z) !== root.z) throw new Error('displaced_from_shaft');
+        await must('shaft_down', chainHands.down(root.y), 65, 'recovery');
+        if (Math.abs(read().position.y - root.y) > 0.5) throw new Error('shaft_not_grounded');
+      }
+    }
+  };
+  try {
+    // Inventory provision only. No arena edits, parked/reset dragon, heal, crystal/cloud cleanup or tp.
+    if (!actor.floorReflexes || !actor.reflexLedger?.counts) { out.reflex = 'unavailable'; throw new Error('floor_reflex_required'); }
+    releaseReflex();
+    await ask('difficulty normal'); await ask(`gamemode survival ${ACTOR}`);
+    await gear(['stone_sword', 'shield', 'iron_pickaxe', 'cobblestone 64', 'bow', 'arrow 64', 'cooked_beef 64']);
+    await wearIron(); await protect(false);
+    await must('equip_shield', { do: 'equip', item: 'shield', slot: 'offhand' }, 10, 'move');
+    const initial = read();
+    if (!initial?.crystals || String(actor.game?.dimension).replace(/^minecraft:/u, '') !== 'the_end') throw new Error('not_in_end');
+    if (initial.inventory.some((i: any) => /bucket/u.test(i.name))) throw new Error('bucket_refused');
+    out.initial = { position: initial.position, health: initial.health, inventory: initial.inventory, crystals: initial.crystals.remaining };
+    // crossing + walkWest of cage_section_walk: same go hands; natural footings replace fixed coordinates.
+    setStage('crossing');
+    let reached = false;
+    for (let call = 0; call < 4 && !reached; call++) {
+      // the island edge the arrival platform bridges to (the cage_section_walk crossing target: a footing at the platform's own side is not an island)
+      const landing = { x: 67, y: 59, z: 0 };
+      const r = await perform('crossing', chainHands.crossing(landing), 125, 'move');
+      reached = chainDistance(read().position, landing) < 3 && Number(actor.health) > 0;
+      out.crossing = { reached, to: landing };
+    }
+    if (!reached) throw new Error('crossing_failed');
+    setStage('walkWest');
+    for (let call = 0; call < 4; call++) {
+      const v = read(), c = v.crystals.list.find((c: ChainCrystal) => c.caged === true), target = c?.position ?? v.perch;
+      if (!target) throw new Error('no_observed_island_target');
+      const to = islandFootings(actor, target)[0];
+      if (!to) throw new Error('no_island_footing');
+      const r = await go('walkWest', to, 90, 'move', 1);
+      out.walkWest = { reached: r.ok, to };
+      if (r.ok) { lastGround = to; break; }
+      if (call === 3) throw new Error('island_walk_failed');
+    }
+    setStage('crystals');
+    while (!chainClear(read())) {
+      check(); sample();
+      if (paused) {
+        const away = chainWait(read()) ?? observedWait ?? lastGround;
+        const r = away && chainDistance(read().position, away) > 1.5 ? await go('crystal_retreat', away, 12, 'recovery', 1) : null;
+        if (r && !r.ok) out.interruptions.push({ seconds: elapsed(), reason: 'retreat_cut', lines: r.lines });
+        await sleep(250); continue;
+      }
+      if (read().food <= 18) { await perform('eat_crystals', { do: 'eat' }, 8, 'recovery'); }
+      const v = read(), c = chainCrystal(v, 'near');
+      if (!c) {
+        // remaining includes unknown spikes; an empty loaded list is not proof of zero crystals.
+        const unseen = v.crystals.unseen[0];
+        if (!unseen) { await sleep(500); continue; }
+        const to = islandFootings(actor, { ...unseen, y: v.position.y })[0];
+        if (!to) throw new Error('no_unseen_spike_approach');
+        try { await go('load_unseen_crystal', to); } catch (e) { if ((e as Error).message !== 'crystal_paused') throw e; }
+        continue;
+      }
+      let row = out.crystals.find((r: any) => r.id === c.id);
+      if (!row) { row = { id: c.id, position: c.position, caged: c.caged, firstSeenSeconds: elapsed(), destroyedSeconds: null, arrows: 0, shots: [], tried: [], cageOpened: false }; out.crystals.push(row); }
+      try {
+        if (c.caged === true && !row.cageOpened) await openCage(c, row);
+        // Cached hypothetical positions are only used after digging. shoot rechecks the real arrow path.
+        let to = chainShot(read(), c, row.cageOpened, row.tried);
+        if (!to && row.cageOpened) to = row.afterCageRemoved?.find((p: P3) => !row.tried.some((q: P3) => chainDistance(p, q) < 0.1));
+        if (!to) {
+          const approach = islandFootings(actor, c.position)[0];
+          if (!approach || chainDistance(read().position, approach) < 3) throw new Error('no_shooting_position');
+          await go('crystal_reposition', approach); continue;
+        }
+        const moved = await go('shoot_position', to, 60, 'crystal', 0);
+        if (!moved.ok) { await sleep(250); continue; }
+        const before = read(), arrows = (w: any) => w.inventory.filter((i: any) => i.name === 'arrow').reduce((n: number, i: any) => n + i.count, 0);
+        if (!before.crystals.list.some((live: any) => live.id === c.id)) { await sleep(500); continue; }
+        if (arrows(before) === 0) throw new Error('arrows_exhausted');
+        const firedAt = elapsed(), position = before.position;
+        let shot: Awaited<ReturnType<typeof act>> | null = null;
+        const handCount = out.hands.length;
+        try { shot = await perform('shoot_crystal', chainHands.shoot(c.id), 12); }
+        finally {
+          const delta = arrows(before) - arrows(read());
+          const used = actorDeaths === deaths0 && Number(actor.health) > 0 && delta >= 0 && delta <= 1 ? delta : null;
+          row.arrows += used ?? 0; if (used === null) row.arrowsUnknown = true;
+          const receipt = shot ?? (out.hands.length > handCount ? out.hands.at(-1) : null), lines = receipt?.lines ?? [];
+          const destroyed = lines.some((s: string) => /クリスタルを壊した/u.test(s));
+          row.shots.push({ seconds: firedAt, position, arrows: used, ok: receipt?.ok ?? false, lines,
+            outcome: destroyed ? 'destroyed' : lines.some((s: string) => /外れた/u.test(s)) ? 'miss' : lines.some((s: string) => /line_blocked/u.test(s)) ? 'line_blocked' : 'refused_or_cut' });
+          if (destroyed) { row.destroyedSeconds ??= elapsed(); row.destroyedEvidence ??= 'shoot_receipt'; }
+          if (lines.some((s: string) => /line_blocked/u.test(s)) || row.shots.filter((s: any) => chainDistance(s.position, position) < 1).length >= 3) row.tried.push(to);
+        }
+      } catch (error) { if ((error as Error).message !== 'crystal_paused') throw error; }
+      await sleep(250);
+    }
+    out.crystalsClearedSeconds = elapsed();
+    out.dragonStartedSeconds = elapsed();
+    setStage('dragon');
+    // Same basin walk sequence, with waiting/entry positions chosen exclusively from the observation.
+    while (!dragonDead) {
+      check(); sample();
+      const v = read(), d = v.dragon;
+      if (!chainClear(v)) throw new Error('crystals_reappeared');
+      if (entered && !chainSitting(d?.phase)) { entered = false; mustLeave = true; }
+      const waiting = chainWait(v);
+      if (mustLeave) {
+        const away = waiting ?? observedWait;
+        if (away) {
+          const r = await go('leave_basin', away, 12, 'move', 1);
+          out.waitingChosen.push({ seconds: elapsed(), reason: 'takeoff', to: away, retainedObservation: !waiting, ok: r.ok });
+          if (r.ok) mustLeave = false;
+        }
+        await sleep(100); continue;
+      }
+      if (!entered && v.food <= 18) { await perform('eat_waiting', { do: 'eat' }, 8, 'move'); await sleep(100); continue; }
+      if (entered && chainSitting(d?.phase)) {
+        await perform('equip_sword', { do: 'equip', item: 'stone_sword' }, 8, 'move');
+        if (chainSitting(read()?.dragon?.phase) && chainClear(read())) await perform('attack_basin', chainHands.attack(), 16, 'attack');
+      } else if (chainBasin(v)) {
+        const r = await go('enter_basin', chainBasin(v)!, 12, 'basin');
+        entered = r.ok; if (!r.ok) mustLeave = true;
+      } else if (waiting && chainDistance(v.position, waiting) > 1.5) {
+        const r = await go('wait_landing', waiting, 12, 'move', 1);
+        out.waitingChosen.push({ seconds: elapsed(), reason: 'landing', to: waiting, ok: r.ok });
+      } else if (!waiting && v.perch && chainDistance(v.position, v.perch) > 28) {
+        const to = islandFootings(actor, v.perch).find(p => Math.hypot(p.x - v.perch.x, p.z - v.perch.z) >= 12);
+        if (to) await go('approach_wait_range', to, 60, 'move');
+      }
+      await sleep(100);
+    }
+    out.killSeconds = elapsed();
+    setStage('verify');
+    const proofDeadline = Math.min(deadline, Date.now() + 15_000);
+    do {
+      check();
+      const controller = new AbortController(); active = { controller, mode: 'proof' };
+      try { const proof = await evidence(controller.signal, Math.min(10, (deadline - Date.now()) / 1000)); out.boss = proof?.boss ?? null; }
+      finally { active = null; }
+      out.bossVerified = out.boss?.verified === true && out.boss?.witness?.entityId === dragonId;
+      if (out.bossVerified) break;
+      await sleep(250);
+    } while (Date.now() < proofDeadline);
+    out.endReason = out.bossVerified ? 'dragon_dead' : 'boss_unverified';
+  } catch (error) { out.endReason = String((error as Error).message ?? error); }
+  finally {
+    clearInterval(timer); actor.removeListener('entityDead', onDead);
+    setStage('finished');
+    const counts = actor.reflexLedger?.counts?.() ?? {};
+    out.reflexKinds = Object.fromEntries(Object.entries(counts).map(([k, n]) => [k, Number(n) - Number(counts0[k] ?? 0)]).filter(([, n]) => Number(n) > 0));
+    out.seconds = elapsed(); out.deaths = actorDeaths - deaths0; out.minHealth = Math.min(lowest.stop(), chainArrivalMinHealth);
+    out.crystalSeconds = out.stages.find((s: any) => s.stage === 'crystals')?.seconds ?? null;
+    out.dragonSeconds = out.stages.find((s: any) => s.stage === 'dragon')?.seconds ?? null;
+    out.arrowsUsed = out.crystals.reduce((n: number, c: any) => n + c.arrows, 0);
+    out.dragonId = dragonId; out.dragonHealthEnd = read()?.dragon?.health ?? (dragonDead ? 0 : null);
+    out.crystalsRemaining = read()?.crystals?.remaining ?? null;
+    out.ok = out.endReason === 'dragon_dead' && out.bossVerified && out.deaths === 0 && chainClear(read()) && Date.now() <= deadline;
+  }
+  return out;
+};
+// ===== end end_full_chain =====
+
 // ===== dragon_kill_compare: the script below is the lab's stand-in HEAD, never a body policy =====
 type KillStyle = 'sword_stage' | 'bed' | 'bow';
 type KillNookBuilder = 'operator' | 'body';
 const KILL_LIMIT_MS = 25 * 60 * 1000;
-const killEntries = ['dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin'];
+const killEntries = ['dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain'];
 const killCell = (p: P3): P3 => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
 const packCount = (name: string): number => actor.inventory.items().filter((item: any) => item.name === name).reduce((n: number, item: any) => n + item.count, 0);
 let killArena: { ground: P3; perch: P3; yaw: number } | null = null;
 const killPlaced = new Map<string, P3>();
 const killBlasts: P3[] = [];
+/** The crystals the End showed just before the comparison's set-up removed them (the crystal-count experiments put some back). */
+let killCrystalSnapshot: Array<{ id: number; x: number; y: number; z: number; caged: boolean | null }> = [];
 
 /** Bootstrap only: choose real island support from the loaded terrain, relative to the observed fountain/head. */
 async function prepareKillRun(waitingSide = false): Promise<{ dragonId: number; ground: P3 }> {
@@ -1821,6 +2078,7 @@ async function prepareKillRun(waitingSide = false): Promise<{ dragonId: number; 
   killBlasts.length = 0;
   await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`);
   await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+  killCrystalSnapshot = ((endView() as any)?.crystals?.list ?? []).map((c: any) => ({ id: c.id, x: c.position.x, y: c.position.y, z: c.position.z, caged: c.caged }));
   await ask(`${END} kill @e[type=minecraft:end_crystal]`);
   await ask(`${END} kill @e[type=minecraft:arrow]`);
   await ask(`${END} kill @e[type=minecraft:item]`);
@@ -2424,8 +2682,14 @@ function basinWaitingCell(view: ReturnType<typeof endObservation>): P3 | null {
 }
 // The tp baseline and the walking scene use the same first observed basin candidate. Floor reflexes stay ON;
 // after entry, keep swinging throughout phases 6/7/5, independently of the short head-strike windows.
-const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false) => {
+const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 'all' | 'caged' = 'none') => {
   const initial = await prepareKillRun(true);
+  // Crystal-count experiment: the crystals the experiment keeps are put back where they stood (the dragon heals while one lives); the dragon's health is sampled every 5 s.
+  const keptCrystals = killCrystalSnapshot.filter(c => keep === 'all' || (keep === 'caged' && c.caged === true));
+  for (const c of keptCrystals) await ask(`${END} summon minecraft:end_crystal ${c.x} ${c.y} ${c.z} {ShowBottom:0b}`);
+  const dragonSamples: Array<[number, number | null]> = [];
+  const sampleT0 = Date.now();
+  const sampleTimerCrystals = setInterval(() => { dragonSamples.push([Math.round((Date.now() - sampleT0) / 100) / 10, endView()?.dragon?.health ?? null]); }, 5000);
   // Endermen (the End island has them) take offence at eye contact; a carved pumpkin on the head ends that (it stands in for the iron helmet: two armour points less).
   if (pumpkin) { await ask(`give ${ACTOR} minecraft:carved_pumpkin 1`); await sleep(500); await act([{ do: 'equip', item: 'carved_pumpkin', slot: 'head' }], 8); }
   const t0 = Date.now(), deadline = t0 + KILL_LIMIT_MS, deaths0 = actorDeaths, lowest = trackMinHealth(), counts0 = actor.reflexLedger.counts();
@@ -2503,16 +2767,18 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false) => {
       }
       sits.push(row);
     }
-  } finally { clearInterval(phaseTimer); actor.removeListener('entityDead', onDead); }
+  } finally { clearInterval(phaseTimer); clearInterval(sampleTimerCrystals); actor.removeListener('entityDead', onDead); }
   const counts = actor.reflexLedger.counts(), reflexKinds: Record<string, number> = {};
   for (const [kind, n] of Object.entries(counts) as Array<[string, number]>) { const used = n - (counts0[kind] ?? 0); if (used > 0) reflexKinds[kind] = used; }
   const health = await dragonHealthServer().catch(() => null);
   return { scene: 'dragon_kill_compare', style: 'basin_assist', endReason, seconds: elapsed(), killSeconds: endReason === 'dragon_dead' ? elapsed() : null, deaths: actorDeaths - deaths0,
-    minHealth: lowest.stop(), dragonHealthEnd: health, waiting: initial.ground, waitingChosen, windows: sits, transitions: transitions.slice(0, 400), reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
+    minHealth: lowest.stop(), dragonHealthEnd: health, waiting: initial.ground, waitingChosen, keptCrystals: keptCrystals.length, dragonSamples, windows: sits, transitions: transitions.slice(0, 400), reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
 };
 scenes.dragon_kill_basin_assist = () => basinAssist('tp');
 scenes.dragon_kill_basin_walk = () => basinAssist('walk');
 scenes.dragon_kill_basin_walk_pumpkin = () => basinAssist('walk', true);
+scenes.dragon_kill_basin_crystals_all = () => basinAssist('walk', false, 'all');
+scenes.dragon_kill_basin_crystals_caged = () => basinAssist('walk', false, 'caged');
 scenes.dragon_kill_sword_assist = () => swordAssist('strike');
 scenes.dragon_kill_sword_assist_walk = () => swordAssist('stage');
 scenes.dragon_kill_compare = async () => {
@@ -2561,8 +2827,8 @@ scenes.death = async () => {
 // ===== run =====
 let exitCode = 0;
 try {
-  const invalidKillSelection = wanted.some(name => name.startsWith('dragon_kill')) && (wanted.filter(name => name !== 'enter').length !== 1 || !killEntries.includes(wanted.find(name => name !== 'enter')!));
-  if (invalidKillSelection) { report.errors.push('choose exactly one dragon_kill_compare entry (with or without the enter scene before it), without other scenes'); exitCode = 1; }
+  const invalidKillSelection = wanted.some(name => name.startsWith('dragon_kill') || name === 'end_full_chain') && (wanted.filter(name => name !== 'enter').length !== 1 || !killEntries.includes(wanted.find(name => name !== 'enter')!));
+  if (invalidKillSelection) { report.errors.push('choose exactly one standalone entry (dragon_kill_compare or end_full_chain, optionally after enter), without other scenes'); exitCode = 1; }
   for (const name of invalidKillSelection ? [] : Object.keys(scenes)) {
     if (killEntries.includes(name) && wanted.filter(n => n !== 'enter').join() !== name) continue;
     if (name === 'cage_section' && !wanted.includes('cage_section')) continue;
@@ -2583,7 +2849,7 @@ try {
   }
 } finally {
   const reportPath = process.env.MINECRAFT_END_REPORT ?? (wanted.includes('cage_section') || wanted.some(name => killEntries.includes(name)) ? path.join(worldDirectory, 'report.json') : null);
-  if (reportPath) { try { fs.writeFileSync(reportPath, JSON.stringify(report, null, 2)); } catch { /* the line below has it */ } }
+  if (reportPath) { try { fs.writeFileSync(reportPath, JSON.stringify(report, null, 2)); } catch (error) { report.errors.push(`report write failed: ${String((error as Error).message ?? error)}`); exitCode = 1; } }
   console.log(`ENDFIGHT_RESULT ${JSON.stringify(report)}`);
   try { await body.dispose(); } catch { /* gone */ }
   try { actor.quit(); operator.quit(); } catch { /* gone */ }

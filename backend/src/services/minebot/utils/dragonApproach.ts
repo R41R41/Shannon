@@ -39,6 +39,8 @@ export interface DragonApproach {
   stage?: Array<P3 & { toStrikeMeters: number; walkMeters: number; strikeIndex: number }>;
   /** Retain these while perched, for the LLM to choose a go after phase 4. */
   retreat: Array<P3 & { walkMeters: number }>;
+  /** Waiting footing 10 to 14 m from the perch centre, sideways of the facing (|side| <= 0.25), clear of the whole perch and reachable by a go-checked walk: where to wait before the sit and to go back to after it. Landing, take-off and the sit. */
+  wait?: Array<P3 & { walkMeters: number; walkSeconds: number; side: number; /** Always false: footing in the wing push zone or the breath (now or forecast) is not offered. */ inWingPush: false; inBreathNow: false }>;
 }
 
 /** Same grown contact boxes as the reflex by default; walking can report wing push separately. Always exclude the future flame, even in the early safe window. */
@@ -68,17 +70,50 @@ const approachCache = new WeakMap<object, { key: string; at: number; value: Drag
 /** How long a computed approach stands (the perch lasts about 27 s and the head does not move on it) and the time one computation may take (lab r30-r32: 12 ms for the scan found no cell on a loaded machine). */
 const APPROACH_CACHE_MS = 900, APPROACH_SCAN_MS = 60, APPROACH_TOTAL_MS = 120;
 export function dragonApproach(bot: any, dragon: any, phase: number | null, perch = fountainOf(bot)): DragonApproach | undefined {
-  if (!isPerched(phase)) { approachCache.delete(bot); return undefined; }
+  const landingOrTakeoff = phase === 3 || phase === 4;
+  if (!isPerched(phase) && !landingOrTakeoff) { approachCache.delete(bot); return undefined; }
   const me = bot.entity?.position, watch = worldWatchOf(bot);
   // A moved/growing cloud, vertical move or edited floor must invalidate basin routes even inside the 900 ms cache.
-  const key = JSON.stringify([me && [Math.floor(me.x), Math.floor(me.y), Math.floor(me.z)], dragon.id, dragon.position, dragon.yaw,
+  const key = JSON.stringify([isPerched(phase) ? "sit" : phase, me && [Math.floor(me.x), Math.floor(me.y), Math.floor(me.z)], dragon.id, dragon.position, dragon.yaw,
     perch, lyingCloudZones(bot), watch.epoch, watch.tick]);
   const held = approachCache.get(bot), clock = Date.now();
   if (held && held.key === key && clock - held.at < APPROACH_CACHE_MS) return held.value;
-  const value = computeApproach(bot, dragon, perch);
+  const value = landingOrTakeoff ? computeWaitOnly(bot, dragon, perch) : computeApproach(bot, dragon, perch);
   if (value) approachCache.set(bot, { key, at: clock, value });
   return value;
 }
+/** Landing and take-off: the parts are moving, so only the waiting footing is offered (by the facing the dragon has now). */
+function computeWaitOnly(bot: any, dragon: any, perch: P3 | null): DragonApproach | undefined {
+  if (!perch || !bot.entity?.position) return undefined;
+  const start = performance.now(), deadline = start + APPROACH_TOTAL_MS, scanDeadline = start + APPROACH_SCAN_MS;
+  const ground = walkGround(bot, { deadline: scanDeadline, radius: 32, maxCells: 2500, safe: () => true });
+  const wait = waitPositions(bot, dragon, perch, ground, goWalkRouteChecker(bot, deadline), deadline);
+  return wait.length ? { strike: [], stage: [], retreat: [], wait } : undefined;
+}
+
+/** Footing 10 to 14 m from the perch centre, sideways of the facing, clear of the perch with the reflex margin; shortest verified walks first. */
+function waitPositions(bot: any, dragon: any, perch: P3, ground: WalkSearch, verify: (route: Cell[]) => boolean, deadline: number): NonNullable<DragonApproach['wait']> {
+  const clear = perchClearance(bot, dragon, 1.5), facing = { x: Math.sin(dragon.yaw ?? 0), z: Math.cos(dragon.yaw ?? 0) };
+  const candidates: Array<{ node: WalkCell; p: P3; side: number }> = [];
+  for (const node of ground.cells) {
+    const p = feetCentre(node.cell), dx = p.x - perch.x, dz = p.z - perch.z, r = Math.hypot(dx, dz);
+    if (r < 10 || r > 14) continue;
+    const side = (dx * facing.x + dz * facing.z) / r;
+    if (Math.abs(side) > 0.25 || !clear(p)) continue;
+    candidates.push({ node, p, side });
+  }
+  candidates.sort((a, b) => a.node.walkMeters - b.node.walkMeters);
+  const result: NonNullable<DragonApproach['wait']> = [];
+  for (const { node, p, side } of candidates) {
+    if (performance.now() >= deadline) break;
+    if (!verify(walkRoute(node))) continue;
+    if (result.some(w => Math.hypot(w.x - p.x, w.z - p.z) < 3)) continue;
+    result.push({ ...p, walkMeters: node.walkMeters, walkSeconds: node.walkMeters / 4.317, side, inWingPush: false, inBreathNow: false });
+    if (result.length === 3) break;
+  }
+  return result;
+}
+
 function computeApproach(bot: any, dragon: any, perch: P3 | null): DragonApproach {
   const start = performance.now(), deadline = start + APPROACH_TOTAL_MS, scanDeadline = start + APPROACH_SCAN_MS, head = partBox(dragon, 'head');
   // Two scans share 60 ms, all verification shares 120 ms. Basin work cannot add another unbounded observation pass.
@@ -109,7 +144,9 @@ function computeApproach(bot: any, dragon: any, perch: P3 | null): DragonApproac
     if (retreat.length === 2) break;
   }
   const stage = stagePositions(bot, dragon, ground, strike, verify, deadline);
-  return { strike, stage, retreat, ...extra };
+  let wait: DragonApproach['wait'];
+  try { if (perch) { const found = waitPositions(bot, dragon, perch, ground, verify, deadline); if (found.length) wait = found; } } catch { /* optional field */ }
+  return { strike, stage, retreat, ...(wait ? { wait } : {}), ...extra };
 }
 
 /** The body's own walk into the 2–3.2 m ring, with no digging/placing. A one-level rise is offered only if go can really step up it. */
