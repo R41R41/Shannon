@@ -747,7 +747,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   if (!cells.length) return stopped(bot, 'invalid_input', 'go には to か goals が要る');
   const limits = {
     range: args.range ?? GO_DEFAULTS.range, maxDrop: args.maxDrop ?? GO_DEFAULTS.maxDrop, waterOk: args.waterOk === true, maxDig: args.maxDig ?? GO_DEFAULTS.maxDig,
-    maxPlace: args.maxPlace ?? GO_DEFAULTS.maxPlace, sprint: args.sprint ?? bot.game?.dimension === 'overworld',
+    maxPlace: args.maxPlace ?? GO_DEFAULTS.maxPlace, sprint: args.sprint === true,
   };
   const startedAt = Date.now();
   const deadline = Math.min(ctx.deadline, startedAt + (args.seconds ?? GO_DEFAULTS.seconds) * 1000);
