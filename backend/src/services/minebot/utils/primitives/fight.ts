@@ -360,7 +360,10 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
    */
   const killed = async (): Promise<StepOutcome> => {
     const drops = dropsLine(bot, itemsBefore, lastAt);
-    if (endermanDen) { await endermanDen.collect(); sample(); }
+    if (endermanDen) {
+      const pickup = await endermanDen.collect(); sample();
+      if (!pickup.ok) return { ...fail(pickup.code, `倒した（死んだ）が、回収中に ${pickup.reason}${drops}`), code: pickup.code };
+    }
     return finish('死んだ', '', drops);
   };
   /** `at`: the creature's cell, only where the place is what the line is about (it cannot be reached). */

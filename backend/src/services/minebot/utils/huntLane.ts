@@ -55,6 +55,7 @@ export interface LaneReport {
 
 const AIR = new Set(['air', 'cave_air', 'void_air']);
 const HAZARDS = new Set(['lava', 'water', 'fire', 'soul_fire']);
+const PUSH_HAZARDS = new Set([...HAZARDS, 'magma_block', 'campfire', 'soul_campfire']);
 const HORIZONTAL = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 const STAND_REACH = 4.3;
 const WALK_LIMIT = 2000;
@@ -142,7 +143,18 @@ export function laneReport(reader: CampReader, spawner: LaneCell, from: LaneCell
       const state = standableAt(read, p);
       if (!state.ok) return state.why === 'unloaded' ? 'unloaded'
         : ['floor_hazard', 'fire_near', 'hazard_near'].includes(state.why) ? 'hazard' : 'out_of_reach';
-      return entities.some(e => overlaps(e, p) || overlaps(e, add(p, 0, 1, 0))) ? 'out_of_reach' : 'safe';
+      if (entities.some(e => overlaps(e, p) || overlaps(e, add(p, 0, 1, 0)))) return 'out_of_reach';
+      // As in camp, a push onto an open neighbouring cell must not drop the body into a hole: a neighbour that is not walled has a full floor one or two cells down, or it is a hazard.
+      let unknown = false;
+      for (const [dx, dz] of HORIZONTAL) {
+        if (fullFloor(read(p.x + dx, p.y, p.z + dz)) || fullFloor(read(p.x + dx, p.y + 1, p.z + dz))) continue;
+        const a = read(p.x + dx, p.y - 1, p.z + dz), b = read(p.x + dx, p.y - 2, p.z + dz);
+        if (!(fullFloor(a) && !PUSH_HAZARDS.has(a!.name)) && !(fullFloor(b) && !PUSH_HAZARDS.has(b!.name))) {
+          if (!a || !b) unknown = true;
+          else return 'hazard';
+        }
+      }
+      return unknown ? 'unloaded' : 'safe';
     };
     const result = check(); standing.set(k, result); return result;
   };

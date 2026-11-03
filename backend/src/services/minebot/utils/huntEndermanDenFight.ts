@@ -52,6 +52,7 @@ const readings = new WeakMap<object, EndermanDenObservation>();
 export function endermanDenObservation(bot: object): EndermanDenObservation | null { return readings.get(nativeActionHost(bot)) ?? null; }
 export function clearEndermanDenObservation(bot: object): void { readings.delete(nativeActionHost(bot)); }
 export type DenStep = { kind: 'fight' } | { kind: 'wait' } | { kind: 'stop'; outcome: StepOutcome };
+export type DenPickup = { ok: true; reason: string } | { ok: false; code: string; reason: string };
 class DenStop extends Error { constructor(readonly code: string, message: string) { super(message); } }
 
 /** Executes ONE specified den and ONE #id. No site/target search, placement, extra excavation, or pursuit. */
@@ -88,13 +89,13 @@ export class EndermanDenFight {
     this.observation.healthLost += Math.max(0, this.lastHealth - hp); this.lastHealth = hp;
   }
   /** The existing action/reflex lease always wins. Damage or low HP ends this hand; no new autonomous retreat plan. */
-  private safety(): void {
+  private safety(knownHealthLost = 0): void {
     this.sampleHealth();
     if (this.ctx.stop.aborted) throw new StepStopped(String(this.ctx.stop.reason ?? 'stopped'));
     if (reflexHeld(this.bot)) throw new DenStop('reflex', '反射が体を握った');
     if (Date.now() >= this.ctx.deadline) throw new DenStop('limit_time', '横穴の手の期限に達した');
     if (this.lastHealth < this.floorHp) throw new DenStop('retreat', `体力 ${this.lastHealth} < ${this.floorHp}。横穴の手を中止し、反射に従う`);
-    if (this.observation.healthLost > 0) throw new DenStop('den_hurt', `受けた体力 ${this.observation.healthLost}。安全な待機が成立していない`);
+    if (this.observation.healthLost > knownHealthLost) throw new DenStop('den_hurt', `受けた体力 ${this.observation.healthLost}。安全な待機が成立していない`);
     if (this.phase === 'pickup' && this.pickupThreat()) throw new DenStop('den_pickup_threat', '他の個体が近いので回収中止');
     if (!this.observation.setupComplete) {
       const check = inspectEndermanDen(this.bot, this.den);
@@ -176,23 +177,25 @@ export class EndermanDenFight {
     return true;
   }
   /** Short straight motion inside the verified corridor, with the eyes lowered and no pathfinder detour. */
-  private async move(to: Cell, sprint = false, until = this.ctx.deadline): Promise<void> {
+  private async move(to: Cell, sprint = false, until = this.ctx.deadline, knownHealthLost = 0): Promise<void> {
     this.gaze(true);
-    const point = denCenter(to), began = Date.now();
+    const point = denCenter(to), endAt = Math.min(until, this.ctx.deadline, Date.now() + MOVE_MS);
     try {
-      while (Date.now() < Math.min(until, this.ctx.deadline) && Date.now() - began < MOVE_MS) {
-        this.safety();
+      while (Date.now() < endAt) {
+        this.safety(knownHealthLost);
         const p = this.bot.entity.position;
         if (!this.sweptSafe(p, point)) throw new DenStop('den_path_unsafe', `${cellText(to)} への短い通路に壁・液体・空洞・段差がある`);
         const distance = Math.hypot(point.x - p.x, point.z - p.z);
         if (distance <= 0.14) return;
-        const turned = await guard(this.ctx, this.bot.look(Math.atan2(p.x - point.x, p.z - point.z), -0.25, true), 300);
+        const turned = await guard(this.ctx, this.bot.look(Math.atan2(p.x - point.x, p.z - point.z), -0.25, true), Math.min(300, endAt - Date.now()));
+        this.safety(knownHealthLost);
+        if (Date.now() >= endAt) break;
         if (!turned) throw new DenStop('den_turn_timeout', '通路の向きへ向き直れなかった');
-        this.safety();
         this.bot.setControlState('jump', false); this.bot.setControlState('sneak', false);
         this.bot.setControlState('sprint', sprint && distance > 1); this.bot.setControlState('forward', true);
-        await wait(this.ctx, TICK_MS);
+        await wait(this.ctx, Math.min(TICK_MS, endAt - Date.now()));
       }
+      this.safety(knownHealthLost);
       throw new DenStop('den_move_timeout', `${cellText(to)} に短い移動で着けなかった`);
     } finally { this.keysOff(); }
   }
@@ -312,23 +315,27 @@ export class EndermanDenFight {
       && Math.min(e.position.distanceTo(outside), e.position.distanceTo(this.bot.entity.position)) <= 6);
   }
   /** Only fresh drops within 3m of the entrance exterior; a five-second trip including return, cancelled on any nearby other enderman. */
-  async collect(): Promise<string> {
+  async collect(): Promise<DenPickup> {
     const began = Date.now(), pearls = inventoryCount(this.bot, 'ender_pearl'), outside = denCenter(denOffset(this.den, -1));
     this.setPhase('pickup');
     let why = '落とし物なし';
+    let leftForDrops = false;
     const until = Math.min(this.ctx.deadline, began + PICKUP_MS);
     try {
       this.safety();
-      if (this.pickupThreat()) { why = '他の個体が近いので拾わない'; return why; }
+      if (this.pickupThreat()) { why = '他の個体が近いので拾わない'; return { ok: true, reason: why }; }
       // Allow the death's item packets a short bounded window. It is counted as collection, not hidden from the probe's clock.
       await wait(this.ctx, Math.min(200, Math.max(0, until - Date.now())));
+      this.safety();
       const drops = Object.values(this.bot.entities).filter(e => e.name === 'item' && !this.dropsBefore.has(e.id) && e.position.distanceTo(outside) <= 3)
         .sort((a, b) => a.position.distanceTo(outside) - b.position.distanceTo(outside)).slice(0, 3);
       for (const drop of drops) {
+        this.safety();
         if (Date.now() + 2_000 >= until) { why = '短い回収の期限'; break; }
         if (this.pickupThreat()) { why = '他の個体が近づいたので回収中止'; break; }
         const cell = { x: Math.floor(drop.position.x), y: Math.floor(drop.position.y + 0.001), z: Math.floor(drop.position.z) };
         // Go via the mouth, never diagonally through the side wall. Both legs must be level, dry and unobstructed.
+        leftForDrops = true;
         await this.move(denOffset(this.den, -1), false, until - 2_000);
         if (denCenter(cell).distanceTo(outside) > 3 || !this.sweptSafe(this.bot.entity.position, denCenter(cell))) { why = '入口外3m以内で落とし物へ歩ける安全な床がない'; continue; }
         await this.move(cell, false, until - 2_000);
@@ -339,14 +346,28 @@ export class EndermanDenFight {
         why = '入口外3m以内だけ回収';
       }
       if (drops.length) { await this.move(denOffset(this.den, -1), false, until); await this.move(denOffset(this.den, 1), true, until); }
+      this.safety();
     } catch (error) {
-      if (error instanceof DenStop) { why = error.message; this.observation.stopReason = error.code; }
-      else throw error;
+      if (!(error instanceof DenStop)) throw error;
+      why = error.message; this.observation.stopReason = error.code;
+      if (error.code === 'den_hurt' && leftForDrops && !reflexHeld(this.bot)
+        && this.bot.entity.position.distanceTo(denCenter(denOffset(this.den, 1))) > 0.2) {
+        // Only the short return may tolerate the damage already reported. Fresh damage, low HP, a reflex or the deadline still stops it.
+        const knownHealthLost = this.observation.healthLost;
+        try {
+          await this.move(denOffset(this.den, -1), false, until, knownHealthLost);
+          await this.move(denOffset(this.den, 1), true, until, knownHealthLost);
+        } catch (returnError) {
+          if (!(returnError instanceof DenStop)) throw returnError;
+          // A failed return never replaces the original pickup stop or starts another plan.
+        }
+      }
+      if (error.code !== 'den_pickup_threat') return { ok: false, code: error.code, reason: why };
     } finally {
       this.gaze(true); this.keysOff(); this.sampleHealth();
       this.observation.pearls = Math.max(0, inventoryCount(this.bot, 'ender_pearl') - pearls);
       this.observation.pickupMs += Date.now() - began; this.observation.pickupReason = why;
     }
-    return why;
+    return { ok: true, reason: why };
   }
 }
