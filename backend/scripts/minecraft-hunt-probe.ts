@@ -777,7 +777,8 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
   await equip({ stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173, ...(options.torches ? { torch: 24 } : {}) }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
-  const readLane = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'lane' }, 25); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
+  let laneRaw = '';
+  const readLane = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'lane' }, 25); laneRaw = String(found.receipt?.result ?? found.lines?.join(' ') ?? '').slice(0, 240); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
   const hp = () => Number(actor.health);
   const track: number[] = [];
   const sampler = setInterval(() => { const value = hp(); if (Number.isFinite(value)) track.push(r1(value)); }, 1000);
@@ -865,7 +866,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   }
   let json = await readLane();
   // (right after the return the spawner's chunk may not be loaded yet: no report at all; read again every 8 s, up to four times)
-  for (let wait = 0; wait < 4 && !json?.found; wait++) { note(`no lane report yet (${String(json?.text ?? '').slice(0, 80)}); read again in 8 s`); await sleep(8000); json = await readLane(); }
+  for (let wait = 0; wait < 4 && !json?.found; wait++) { note(`no lane report yet (${String(json?.text ?? laneRaw).slice(0, 240)}); read again in 8 s`); await sleep(8000); json = await readLane(); }
   // (a probe read just after the move may see unloaded or empty blocks: read again, up to three times, until half of the cells have a standing cell)
   for (let again = 0; again < 3 && json?.found; again++) {
     const rows = (json.candidates?.[0]?.build ?? []) as any[];
