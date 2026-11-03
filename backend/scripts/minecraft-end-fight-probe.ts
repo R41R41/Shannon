@@ -2448,8 +2448,9 @@ const basinAssist = async (mode: 'tp' | 'walk') => {
       if (mode === 'walk' && d && view?.perch && d.phase === 3 && d.phaseFor >= 3 && waitedLanding !== landingId) {
         waitedLanding = landingId;
         const waiting = basinWaitingCell(view);
-        if (waiting) await standAt(waiting.x, waiting.y, waiting.z);
-        waitingChosen.push({ landing: landingId, seconds: elapsed(), waiting, yaw: d.yaw });
+        // no tp: the body walks to the waiting cell itself (a hand cut by a reflex is simply not completed; the next look decides)
+        const wait = waiting ? await act([{ do: 'go', to: killCell(waiting), range: 1, seconds: 12 }], 16) : null;
+        waitingChosen.push({ landing: landingId, seconds: elapsed(), waiting, yaw: d.yaw, walk: wait ? { ok: wait.ok, ms: wait.ms, line: wait.lines.join(' | ').slice(0, 160) } : null });
         continue;
       }
       if (d && d.phase === 3 && lastLandingPhase !== 3) landingId++;
@@ -2490,7 +2491,8 @@ const basinAssist = async (mode: 'tp' | 'walk') => {
       row.dragonAfter = endView()?.dragon?.health ?? null; row.hpAfter = Number(actor.health); row.minHp = minHp;
       row.ledger = (actor.reflexLedger.entriesSince(mark) ?? []).map((e: any) => `${e.kind}:${e.outcome}:${String(e.detail).slice(0, 80)}`).slice(0, 8);
       row.died = actorDeaths > deaths0;
-      if (actorDeaths === deaths0 && !dragonDead) await standAt(initial.ground.x, initial.ground.y, initial.ground.z);
+      // walking mode leaves the body where the sit ended (the next landing sends it to its next waiting cell by go); the tp baseline still goes back by tp
+      if (mode === 'tp' && actorDeaths === deaths0 && !dragonDead) await standAt(initial.ground.x, initial.ground.y, initial.ground.z);
       sits.push(row);
     }
   } finally { clearInterval(phaseTimer); actor.removeListener('entityDead', onDead); }
