@@ -814,17 +814,24 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     // the groups in the order of their first cell; a group is the cells that go on being set from one standing cell
     const groups: Array<typeof placements> = [];
     for (const p of placements) { const last = groups[groups.length - 1]; if (last && p.group !== -1 && last[0].group === p.group) last.push(p); else groups.push([p]); }
-    for (let gi = 0; gi < groups.length && !disconnected && hp() > 0 && deaths === deaths0; gi++) {
+    // the cover first (the waiting cell's enclosure, the plug and the roof of the lane), then the lid; two groups to one act (12 hands: a go and up to five places each)
+    const rank = (g: typeof placements) => ['enclosure', 'plug', 'roof', 'lid'].indexOf(g[0].part);
+    groups.sort((a, b) => rank(a) - rank(b));
+    for (let gi = 0; gi < groups.length && !disconnected && hp() > 0 && deaths === deaths0; gi += 2) {
       if (hp() < 6) { aborted = `hp ${r1(hp())} at pass ${pass} group ${gi}/${groups.length}`; break; }
-      const group = groups[gi];
-      const head = group[0];
-      const floor = head.stand ?? { x: wait[0], y: wait[1], z: wait[2] };
+      const pair = groups.slice(gi, gi + 2);
+      const head = pair[0][0];
       await sleep(thinkMs);
-      const run = await act(`build#${++acts}`, [{ do: 'go', to: floor, range: 0.8, seconds: 12, onFail: 'continue' },
-        ...group.map(p => ({ do: 'place', at: [p.at], block: 'cobblestone', onFail: 'continue' }))], 45, { accept: ['blaze'] });
+      const hands: unknown[] = [];
+      for (const group of pair) {
+        const floor = group[0].stand ?? { x: wait[0], y: wait[1], z: wait[2] };
+        hands.push({ do: 'go', to: floor, range: 0.8, seconds: 12, onFail: 'continue' });
+        for (const p of group.slice(0, 5)) hands.push({ do: 'place', at: [p.at], block: 'cobblestone', onFail: 'continue' });
+      }
+      const run = await act(`build#${++acts}`, hands.slice(0, 12), 60, { accept: ['blaze'] });
       const text = run.lines.join(' ');
-      built += group.length; failedCells += (text.match(/置けない|止まった/gu) ?? []).length;
-      if (acts % 6 === 1 || /反射/u.test(text)) note(`build#${acts} pass ${pass} (${head.part}) hp ${r1(hp())}: ${text.slice(0, 200)}`);
+      built += hands.length; failedCells += (text.match(/置けない|止まった/gu) ?? []).length;
+      if (acts % 4 === 1 || /反射/u.test(text)) note(`build#${acts} pass ${pass} (${head.part}) hp ${r1(hp())}: ${text.slice(0, 200)}`);
     }
     json = await readLane();
     const again = json?.candidates?.find((x: any) => x.direction === c.direction);
