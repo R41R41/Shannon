@@ -292,6 +292,21 @@ describe('fight / act のden接続', () => {
     expect(endermanDenObservation(f.bot)!.pickupMs).toBeLessThanOrEqual(5_000);
     expect(f.bot.gazeGuard.enabled).toBe(true); expect(Object.values(f.bot.control).every(on => !on)).toBe(true);
   });
+  it('倒した後、まだ穴の中で被弾したら入口の外へ出ず、まっすぐ奥へ戻る', async () => {
+    const f = field(); let at: Vec3 | null = null; const positions: Vec3[] = [];
+    f.bot.on('physicsTick', () => {
+      if (!at && endermanDenObservation(f.bot)?.phase === 'pickup' && f.bot.entity.position.x >= 0.9) {
+        at = f.bot.entity.position.clone(); f.bot.health = 13; f.bot.emit('health');
+      }
+      if (at) positions.push(f.bot.entity.position.clone());
+    });
+    const result = await settle(fight(f.ctx, { target: '#200', den: f.bot.field.den, seconds: 50 }));
+    expect(at).not.toBeNull();
+    expect(result).toMatchObject({ ok: false, code: 'den_hurt' });
+    const outside = denCenter(denOffset(f.bot.field.den, -1)), rear = denCenter(denOffset(f.bot.field.den, 1));
+    expect(positions.some(p => p.distanceTo(outside) <= 0.5 || p.x < -0.3)).toBe(false);
+    expect(f.bot.entity.position.distanceTo(rear)).toBeLessThan(0.2);
+  });
   it('倒した後、回収の移動中に手の期限を迎えたら limit_time の失敗で返し、動かない', async () => {
     const f = field(), endAt = Date.now() + 50_000, keys = vi.spyOn(f.bot, 'setControlState'), look = vi.spyOn(f.bot, 'look');
     const trace = onPickupOutside(f, () => { vi.setSystemTime(endAt); keys.mockClear(); look.mockClear(); });
