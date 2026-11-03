@@ -770,7 +770,7 @@ scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wid
 // The lane built BY THE BODY's hands (S2, 2026-11-03): the scripted head reads probe kind=lane (no spawner given: the near one), takes the first candidate (fewest cobblestones), and builds what the probe lists in the order
 // it lists it, with go and place hands (up to 4 cells per group, a go to a floor cell within reach first), the blazes alive and shooting. Then it re-reads the plan (what still stands to be built outside the lane), goes to the
 // waiting cell and holds for the rest of the time, fetching what falls. Measures the time to build, the lowest health while building, the cobblestones used and the kills after.
-async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean; torches?: boolean; settle?: boolean; lidOnly?: boolean } = {}): Promise<Record<string, unknown>> {
+async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean; torches?: boolean; settle?: boolean; lidOnly?: boolean; window?: number } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const holdSeconds = options.holdSeconds ?? 300, groupSize = options.groupSize ?? 5, thinkMs = 5000;
@@ -866,11 +866,49 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     const ys = (c.build as any[]).map(row => cells[(json.facts as any[])[row[0]][0]][1]);
     note(`why no standing cell, per placement: ${JSON.stringify(reasons)}; placement heights ${Math.min(...ys)}..${Math.max(...ys)}; spawner y ${spawnerCell.y}; body at ${actor.entity.position.floored().toString()}`);
   }
+  if (options.lidOnly) {
+    // (a picture of the room, a layer per height: # block, . open, ~ lava/water/fire, ? unloaded, S spawner, B body, L a lid cell of the plan, s a cell the plan stands in)
+    const planned = new Map<string, string>();
+    for (const row of c.build as any[]) { const cell = cells[(json.facts as any[])[row[0]][0]]; planned.set(`${cell[0]},${cell[1]},${cell[2]}`, 'L'); if (row[4] !== null && row[4] !== undefined) { const sc = cells[row[4]]; planned.set(`${sc[0]},${sc[1]},${sc[2]}`, 's'); } }
+    const bp = actor.entity.position.floored();
+    for (let y = spawnerCell.y - 2; y <= spawnerCell.y + 3; y++) {
+      const lines: string[] = [];
+      for (let z = spawnerCell.z - 7; z <= spawnerCell.z + 7; z++) {
+        let line = '';
+        for (let x = spawnerCell.x - 9; x <= spawnerCell.x + 5; x++) {
+          const b = actor.blockAt(new Vec3(x, y, z));
+          let ch = !b ? '?' : /lava|water|fire/u.test(b.name) ? '~' : b.boundingBox === 'block' ? '#' : '.';
+          if (x === spawnerCell.x && y === spawnerCell.y && z === spawnerCell.z) ch = 'S';
+          else if (x === bp.x && y === bp.y && z === bp.z) ch = 'B';
+          else planned.has(`${x},${y},${z}`) && (ch = planned.get(`${x},${y},${z}`)!);
+          line += ch;
+        }
+        lines.push(line);
+      }
+      note(`map y=${y} (x ${spawnerCell.x - 9}..${spawnerCell.x + 5}, z ${spawnerCell.z - 7} down to ${spawnerCell.z + 7}): ${lines.join('/')}`);
+    }
+  }
   note(`lane candidate ${c.direction}: required ${JSON.stringify(c.required)}; waiting cell ${wait.slice(0, 3)}; ${c.build.length} placements; spawn spaces ${json.spawn?.spaces}; blazes in the count box ${json.blaze?.count}`);
   // the probe's own order and groups (each placement: the cell, its part, the cell to stand in and the number of its group)
+  // the window: the head-height cells next to the body's cell on the side of the spawner (the ones nearest the line to the spawner) stay open, so a blaze near it can be seen and struck, and its fireballs come in there
+  const windowKeys = new Set<string>();
+  if (options.window && stand) {
+    const ux = Math.sign(spawnerCell.x - stand[0]), uz = Math.sign(spawnerCell.z - stand[2]);
+    const dirLen = Math.hypot(spawnerCell.x - stand[0], spawnerCell.z - stand[2]) || 1;
+    const cand: Array<{ key: string; off: number }> = [];
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      if ((dx === 0 && dz === 0) || dx * ux < 0 || dz * uz < 0) continue;
+      const off = Math.abs(dx * (spawnerCell.z - stand[2]) - dz * (spawnerCell.x - stand[0])) / dirLen;
+      cand.push({ key: `${stand[0] + dx},${stand[1] + 1},${stand[2] + dz}`, off: off + (dx !== 0 && dz !== 0 ? 0.3 : 0) });
+    }
+    cand.sort((a, b) => a.off - b.off);
+    for (const k of cand.slice(0, options.window)) windowKeys.add(k.key);
+    note(`window cells left open: ${[...windowKeys].join(' ')}`);
+  }
   const placementsOf = (cand: any, table: any[], factTable: any[]) => (cand.build as Array<[number, number, number | null, number, number | null, number | null]>)
     .filter(([f]) => table[factTable[f][0]][4] === 'air')
     .filter(([, part]) => !options.lidOnly || part === 3)
+    .filter(([f]) => !windowKeys.has(`${table[factTable[f][0]][0]},${table[factTable[f][0]][1]},${table[factTable[f][0]][2]}`))
     .map(([f, part, , , stand, group]) => ({ at: { x: table[factTable[f][0]][0], y: table[factTable[f][0]][1], z: table[factTable[f][0]][2] }, part: ['enclosure', 'roof', 'plug', 'lid'][part] ?? String(part),
       stand: stand === null || stand === undefined ? null : { x: table[stand][0], y: table[stand][1], z: table[stand][2] }, group: group ?? -1 }));
   let placements = placementsOf(c, cells, facts);
@@ -946,24 +984,28 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   note(`after the build: required ${JSON.stringify(after?.required)}, remainingOutsideLane ${after?.remainingOutsideLane}, unknown ${after?.unknownOutsideLane}, blazes in the count box ${json?.blaze?.count}`);
   // the hold
   // the cover to hold in: the waiting cell when it can be stood in, else the stand the body came to (a lid-only build has no waiting cell)
-  { const below = actor.blockAt(new Vec3(wait[0], wait[1] - 1, wait[2])); const here = below && below.boundingBox === 'block' ? { x: wait[0], y: wait[1], z: wait[2] } : { x: stand[0], y: stand[1], z: stand[2] };
+  const holdOpen = (dy: number) => { const b = actor.blockAt(new Vec3(wait[0], wait[1] + dy, wait[2])); return !!b && (dy < 0 ? b.boundingBox === 'block' : b.boundingBox !== 'block'); };
+  const holdCell = holdOpen(-1) && holdOpen(0) && holdOpen(1) ? { x: wait[0], y: wait[1], z: wait[2] } : { x: stand[0], y: stand[1], z: stand[2] };
+  { const here = holdCell;
     mark('hold begins'); await act('to the hold cell', [{ do: 'go', to: here, range: 0.5, seconds: 15, onFail: 'continue' }], 30, { accept: ['blaze'] }); }
   const rods0 = packClient().blaze_rod ?? 0, holdStart = Date.now();
-  let killed = 0;
+  let killed = 0, shieldHits = 0, woundsTaken = 0, unseenActs = 0;
   const onDead = (entity: any) => { if (String(entity?.name ?? '') === 'blaze') killed++; };
   actor.on('entityDead', onDead);
   let n = 0;
   try {
     while (Date.now() - holdStart < holdSeconds * 1000 && !disconnected && hp() > 0 && deaths === deaths0) {
       const run = await act(`hold#${++n}`, [{ do: 'attack', target: 'blaze', hold: true, seconds: 20 }], 40, { accept: ['blaze'] });
+      { const text = run.lines.join(' '); shieldHits += Number(/被弾 (\d+)回/u.exec(text)?.[1] ?? 0); woundsTaken += Number(/受けた傷 ([\d.]+)/u.exec(text)?.[1] ?? 0); if (/見えない/u.test(text)) unseenActs++; }
       if (hp() < 14 && Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15);
-      if (/落とし物 blaze_rod/u.test(run.lines.join(' '))) await act('fetch', [{ do: 'pickup', range: 4, onFail: 'continue' }, { do: 'go', to: { x: wait[0], y: wait[1], z: wait[2] }, range: 0.4, seconds: 8, onFail: 'continue' }], 30, { accept: ['blaze'] });
+      if (/落とし物 blaze_rod/u.test(run.lines.join(' '))) await act('fetch', [{ do: 'pickup', range: 4, onFail: 'continue' }, { do: 'go', to: holdCell, range: 0.4, seconds: 8, onFail: 'continue' }], 30, { accept: ['blaze'] });
       if (n % 3 === 1) note(`hold#${n}: hp ${r1(hp())} kills ${killed} rods +${(packClient().blaze_rod ?? 0) - rods0}`);
     }
   } finally { clearInterval(sampler); actor.removeListener('entityDead', onDead); }
   return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
-    killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null };
+    killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null, shieldHits, woundsTaken: r1(woundsTaken), actsWithBlazeUnseen: unseenActs, holdActs: n };
 }
+scene('blaze_lid_window', 'the lid only with a window: two head-height cells next to the body towards the spawner stay open; fill, then attack hold 400 s; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, window: 2, holdSeconds: 400 }));
 scene('blaze_lid_fill', 'the lid only (the lid cells of the lane probe) set with the fill hand right after clearing away, no torches, then attack hold from the cover for 300 s; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, holdSeconds: 300 }));
 scene('blaze_lane_fill_settle', 'the lane set with the fill hand after clearing away: fight from the cover what came back, torches first, fill, settle between steps; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, torches: true, settle: true }));
 scene('blaze_lane_fill_torch', 'the lane set with the fill hand after clearing away, torches first (a greedy cover of the box), timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, torches: true }));
