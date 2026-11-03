@@ -355,7 +355,11 @@ export class EndermanDenFight {
         // Only the short return may tolerate the damage already reported. Fresh damage, low HP, a reflex or the deadline still stops it.
         const knownHealthLost = this.observation.healthLost;
         try {
-          await this.move(denOffset(this.den, -1), false, until, knownHealthLost);
+          // Still inside the tunnel (past the mouth's outer face along its direction, within the width): go straight to the back, never out through the mouth first.
+          const v = denVector(this.den.direction), mouth = denCenter(this.den.entrance), body = this.bot.entity.position;
+          const along = (body.x - mouth.x) * v.x + (body.z - mouth.z) * v.z, across = Math.abs((body.x - mouth.x) * v.z - (body.z - mouth.z) * v.x);
+          const inside = along >= -0.5 && across <= 0.7;
+          if (!inside) await this.move(denOffset(this.den, -1), false, until, knownHealthLost);
           await this.move(denOffset(this.den, 1), true, until, knownHealthLost);
         } catch (returnError) {
           if (!(returnError instanceof DenStop)) throw returnError;
