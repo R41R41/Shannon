@@ -162,8 +162,6 @@ function basinPositions(bot: any, dragon: any, perch: P3, scanDeadline: number, 
     if (performance.now() >= deadline) return undefined;
     const p = feetCentre(node.cell), dx = p.x - perch.x, dz = p.z - perch.z, r = Math.hypot(dx, dz);
     if (r < 2 || r > 3.2 || !safe(p)) continue;
-    // Footing inside a wing's push zone is not offered (the push is 4/distance from the body centre every tick it overlaps: lab r145 was thrown 30 blocks up from such a cell mid-sit); the low ring at the fountain's foot lies under the zone.
-    if (wings.some(box => boxesOverlap(bodyBoxAt(p), box))) continue;
     candidates.push({ node, p, side: (dx * facing.x + dz * facing.z) / r });
   }
   candidates.sort((a, b) => Math.abs(a.side) - Math.abs(b.side) || a.node.walkMeters - b.node.walkMeters);
