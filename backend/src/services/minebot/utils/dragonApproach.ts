@@ -40,7 +40,7 @@ export interface DragonApproach {
   /** Retain these while perched, for the LLM to choose a go after phase 4. */
   retreat: Array<P3 & { walkMeters: number }>;
   /** Waiting footing 10 to 14 m from the perch centre, sideways of the facing (|side| <= 0.25), clear of the whole perch and reachable by a go-checked walk: where to wait before the sit and to go back to after it. Landing, take-off and the sit. */
-  wait?: Array<P3 & { walkMeters: number; walkSeconds: number; side: number }>;
+  wait?: Array<P3 & { walkMeters: number; walkSeconds: number; side: number; /** Always false: footing in the wing push zone or the breath (now or forecast) is not offered. */ inWingPush: false; inBreathNow: false }>;
 }
 
 /** Same grown contact boxes as the reflex by default; walking can report wing push separately. Always exclude the future flame, even in the early safe window. */
@@ -108,7 +108,7 @@ function waitPositions(bot: any, dragon: any, perch: P3, ground: WalkSearch, ver
     if (performance.now() >= deadline) break;
     if (!verify(walkRoute(node))) continue;
     if (result.some(w => Math.hypot(w.x - p.x, w.z - p.z) < 3)) continue;
-    result.push({ ...p, walkMeters: node.walkMeters, walkSeconds: node.walkMeters / 4.317, side });
+    result.push({ ...p, walkMeters: node.walkMeters, walkSeconds: node.walkMeters / 4.317, side, inWingPush: false, inBreathNow: false });
     if (result.length === 3) break;
   }
   return result;
