@@ -718,25 +718,28 @@ async function blazeLight(note: (text: string) => void, options: { lit: boolean;
     // torches (light 14) set by the scripted head's own cover of the box: the cells a blaze could be put on are the air cells at the spawner's layer with something solid under them; a torch lights every cell
     // within two blocks of it to 12 or more, so torches are chosen greedily until each such cell has one within two (the spacing option only names the run)
     const free = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y, z)); return !!b && b.boundingBox !== 'block' && !['lava', 'fire', 'water'].includes(b.name); };
-    const cellsToLight: Array<[number, number]> = [];
+    // targets: every feet cell a blaze's box fits in (the cell and the one over it free) in the three layers the spawner uses (feet one under to one over the spawner's); candidates: the floor cells of the spawner's layer
+    const cellsToLight: Array<[number, number, number]> = [], candidates: Array<[number, number]> = [];
     for (let dx = -4; dx <= 4; dx++) for (let dz = -4; dz <= 4; dz++) {
       const x = sx + dx, z = sz + dz, below = actor.blockAt(new Vec3(x, sy - 1, z));
-      if (!(dx === 0 && dz === 0) && free(x, sy, z) && below && below.boundingBox === 'block') cellsToLight.push([x, z]);
+      if (!(dx === 0 && dz === 0) && free(x, sy, z) && below && below.boundingBox === 'block') candidates.push([x, z]);
+      for (const y of [sy - 1, sy, sy + 1]) if (!(dx === 0 && dz === 0 && y === sy) && free(x, y, z) && free(x, y + 1, z)) cellsToLight.push([x, y, z]);
     }
-    const uncovered = new Set(cellsToLight.map(([x, z]) => `${x},${z}`));
+    const dist = (a: [number, number, number], t: [number, number]) => Math.abs(a[0] - t[0]) + Math.abs(a[2] - t[1]) + Math.abs(a[1] - sy);
+    const uncovered = new Set(cellsToLight.map(c => c.join(',')));
     const chosen: Array<[number, number]> = [];
     while (uncovered.size) {
       let best: [number, number] | null = null, bestN = 0;
-      for (const [x, z] of cellsToLight) {
-        let n = 0; for (const key of uncovered) { const [ux, uz] = key.split(',').map(Number); if (Math.abs(ux - x) + Math.abs(uz - z) <= 2) n++; }
-        if (n > bestN) { bestN = n; best = [x, z]; }
+      for (const t of candidates) {
+        let n = 0; for (const key of uncovered) { const c = key.split(',').map(Number) as [number, number, number]; if (dist(c, t) <= 2) n++; }
+        if (n > bestN) { bestN = n; best = t; }
       }
       if (!best) break;
       chosen.push(best);
-      for (const key of [...uncovered]) { const [ux, uz] = key.split(',').map(Number); if (Math.abs(ux - best[0]) + Math.abs(uz - best[1]) <= 2) uncovered.delete(key); }
+      for (const key of [...uncovered]) { const c = key.split(',').map(Number) as [number, number, number]; if (dist(c, best) <= 2) uncovered.delete(key); }
     }
     for (const [x, z] of chosen) { await ask(`${nether} setblock ${x} ${sy} ${z} minecraft:torch`); torches++; }
-    note(`torches placed: ${torches} for ${cellsToLight.length} cells to light`);
+    note(`torches placed: ${torches} for ${cellsToLight.length} feet cells to light, ${uncovered.size} left uncovered`);
   }
   if (options.lit) await ask(`${nether} fill ${sx - 4} ${sy - 1} ${sz - 4} ${sx + 4} ${sy + 2} ${sz + 4} minecraft:light[level=15] replace minecraft:air`);
   // a sealed cell for the body, east of the box at distance 6 on the side with the most solid cells; just a shell, no opening toward the spawner but a window one cell high
