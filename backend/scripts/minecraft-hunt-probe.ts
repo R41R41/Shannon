@@ -818,12 +818,15 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     const rank = (g: typeof placements) => ['enclosure', 'plug', 'roof', 'lid'].indexOf(g[0].part);
     groups.sort((a, b) => rank(a) - rank(b));
     if (options.fill) {
+      // the cover to go back to: the waiting cell once it can be stood in (its enclosure is a part of the plan), else the stand the body came to
+      const openCell = (x: number, y: number, z: number) => { const c = actor.blockAt(new Vec3(x, y, z)); return !!c && c.boundingBox !== 'block'; };
+      const retreatNow = () => { const below = actor.blockAt(new Vec3(wait[0], wait[1] - 1, wait[2])); return below && below.boundingBox === 'block' && openCell(wait[0], wait[1], wait[2]) && openCell(wait[0], wait[1] + 1, wait[2]) ? { x: wait[0], y: wait[1], z: wait[2] } : { x: stand[0], y: stand[1], z: stand[2] }; };
       // the fill hand: the groups of this pass as they are (a stand cell and up to eight cells each), twelve groups to an act, health floor 10, back to the waiting cell
       const arg = groups.filter(g => g[0].stand).map(g => ({ stand: g[0].stand!, at: g.slice(0, 8).map(p => p.at) }));
       for (let gi = 0; gi < arg.length && !disconnected && hp() > 0 && deaths === deaths0; gi += 12) {
         if (hp() < 6) { aborted = `hp ${r1(hp())} at pass ${pass} group ${gi}/${arg.length}`; break; }
         await sleep(thinkMs);
-        const run = await act(`fill#${++acts}`, [{ do: 'fill', block: 'cobblestone', groups: arg.slice(gi, gi + 12), retreatHp: 10, retreatTo: { x: wait[0], y: wait[1], z: wait[2] }, seconds: 60 }], 90, { accept: ['blaze'] });
+        const run = await act(`fill#${++acts}`, [{ do: 'fill', block: 'cobblestone', groups: arg.slice(gi, gi + 12), retreatHp: 10, retreatTo: retreatNow(), seconds: 60 }], 90, { accept: ['blaze'] });
         const f = ((run.json?.lines ?? []) as any[]).map(line => line.fill).find(Boolean);
         built += Number(f?.placed ?? 0); failedCells += Array.isArray(f?.remaining) ? f.remaining.length : 0;
         note(`fill#${acts} pass ${pass} hp ${r1(hp())}: ${f ? `${f.status} ${f.code ?? ''} placed ${f.placed} remaining ${f.remaining?.length} skipped ${JSON.stringify(f.skippedBy)} hp ${r1(f.hpMin)}→${r1(f.hpEnd)} ${f.elapsedMs} ms safe ${f.safe}` : run.lines.join(' ').slice(0, 200)}`);
