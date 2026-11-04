@@ -151,7 +151,7 @@ export class EndermanCamp {
     this.standing = this.cell;
     this.targetId = target.id;
     this.plan = this.planFrom(this.cell);
-    this.block = roofBlockFor(bot, this.plan.placements.length, true);
+    this.block = roofBlockFor(bot, this.plan.placements.length);
     if (!this.plan.placements.length) this.phase = 'provoke';
     this.observation = { targetId: this.targetId, roofCell: { ...this.cell }, afterBuild: null, latest: null, recovery: [], exits: [],
       stareAt: null, stareEndedAt: null, angryAt: null, legsAt: null, verifiedCaps: 0, capsPlaced: 0, supportsRemoved: 0 };
@@ -173,7 +173,7 @@ export class EndermanCamp {
     }
     const need = this.plan.placements.length;
     if (need > 0 && (!this.block || this.block.count < need)) {
-      return { code: 'missing_item', text: `屋根に建築用ブロックが ${need} 個要る（丸石。持っているのは ${this.block ? `${this.block.name}×${this.block.count}` : 'なし'}）` };
+      return { code: 'missing_item', text: `屋根に建築用ブロックが ${need} 個要る（丸石・土・ネザーラックなど 1 種類で。黒曜石は使わない。持っているのは ${this.block ? `${this.block.name}×${this.block.count}` : 'なし'}）` };
     }
     if (String(bot.inventory?.slots?.[5]?.name ?? '') === 'carved_pumpkin') {
       return { code: 'pumpkin', text: 'くり抜きかぼちゃを被っているとエンダーマンは怒らない（外してから）' };

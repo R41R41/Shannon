@@ -327,10 +327,15 @@ export function roofSites(world: RoofWorld, around: Cell3, radius = 7, toward?: 
  * The block to build with: the first kind in the order the body spends them that it carries enough of, else the kind it carries most of (told short).
  * Gravity blocks and the like are not in the list. The live roof camp requests cobblestone only; other callers retain their material order.
  */
-export function roofBlockFor(bot: { inventory?: { items?: () => Array<{ name: string; count: number }> } }, need: number, cobblestoneOnly = false): { name: string; count: number } | null {
+/**
+ * The roof's blocks: any building block but obsidian (kept for the gate and the dragon), the first kind with enough, else the kind there is most of. The head says
+ * "丸石・土・ネザーラック等 11 個"; the site walk (moveToRoofSite) and the camp ask this one rule (Codex's pre-deploy review 6, 11/5: the camp took cobblestone only).
+ */
+const ROOF_BLOCKS = BUILDING_BLOCKS.filter(name => name !== 'obsidian');
+export function roofBlockFor(bot: { inventory?: { items?: () => Array<{ name: string; count: number }> } }, need: number): { name: string; count: number } | null {
   const have = new Map<string, number>();
-  for (const item of bot.inventory?.items?.() ?? []) if (cobblestoneOnly ? item.name === 'cobblestone' : BUILDING_BLOCKS.includes(item.name)) have.set(item.name, (have.get(item.name) ?? 0) + item.count);
-  for (const name of BUILDING_BLOCKS) if ((have.get(name) ?? 0) >= need) return { name, count: have.get(name)! };
+  for (const item of bot.inventory?.items?.() ?? []) if (ROOF_BLOCKS.includes(item.name)) have.set(item.name, (have.get(item.name) ?? 0) + item.count);
+  for (const name of ROOF_BLOCKS) if ((have.get(name) ?? 0) >= need) return { name, count: have.get(name)! };
   const most = [...have].sort((a, b) => b[1] - a[1])[0];
   return most ? { name: most[0], count: most[1] } : null;
 }
