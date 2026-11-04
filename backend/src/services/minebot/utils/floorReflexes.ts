@@ -430,8 +430,8 @@ function mendingMeal(bot: FloorBody, health: number, food: number): boolean {
 /**
  * Food to eat now, or null; never with an enemy at arm's length (standing to eat there killed the body, L18).
  *
- * The body eats by itself only starving (food 3 or less) or nearly dead (health 6 or less, with hunger to fill: `eatIsCritical`); every
- * other meal is the planner's (design mb-llm-centric 2.4). `wide` is the default mode (`FloorConfig.wideThreats`): cooked before raw, raw
+ * The body eats by itself starving (food 3 or less), nearly dead (health 6 or less, with hunger to fill: `eatIsCritical`), or, cooked food
+ * with no enemy near, hurt and not full or down to food 14 (`mendingMeal`); every other meal is the planner's (design mb-llm-centric 2.4). `wide` is the default mode (`FloorConfig.wideThreats`): cooked before raw, raw
  * meat and rotten flesh only when nothing else is carried; "an enemy within 5 m" does not count one that is walled off (`threatExposure`,
  * as in the flee). `wide = false` is `floor` mode: the production floor's own test (food <= 6, or health <= 12 and food < 18) on top.
  */

@@ -55,10 +55,11 @@ describe('the LLM-centric body', () => {
     } finally { network.mockRestore(); }
   });
 
-  it('the floor eats only starving or nearly dead', () => {
+  it('the floor eats starving, nearly dead, or (no enemy near) hurt or down to food 14', () => {
     const fed = (food: number, health: number): any => ({ food, health, entity: { position: new Vec3(0, 64, 0) }, entities: {},
       inventory: { items: () => [{ name: 'bread', count: 3 }] }, setControlState: () => undefined, on: () => undefined });
-    expect(floorEatChoice(fed(12, 20))).toBeNull();
+    expect(floorEatChoice(fed(15, 20))).toBeNull();
+    expect(floorEatChoice(fed(14, 20))?.name).toBe('bread');
     expect(floorEatChoice(fed(3, 20))?.name).toBe('bread');
     expect(floorEatChoice(fed(10, 6))?.name).toBe('bread');
   });
