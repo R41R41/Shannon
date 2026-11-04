@@ -70,6 +70,8 @@ export interface WorldScanSummary {
   reach: number;
   ms: number;
   partial?: boolean;
+  /** S8: the share of the view distance's chunks loaded, when under FULL_SHARE (what is not seen may be beyond). */
+  coverage?: number;
   /** The longest the loop was held and the slices (for the measure; not for the head). */
   longestSliceMs: number;
   /** r7: what the longest hold was doing, the main thread's CPU and the collections in it (for the log; not for the head). */
@@ -82,7 +84,18 @@ const at =(hit: { x: number; y: number; z: number }) => `(${hit.x},${hit.y},${hi
  * The rows and the sentence for one scan's counts. The block reads (a lava pool's size and cover, the frames' eyes, a chest's hull, a
  * spawner) are `reads`, made beforehand in steps (`readScanSliced`); without them they are made here at once (`readScanNow`).
  */
-export function summarizeScan(bot: ScanBody, scan: SlicedScanResult, centre: { x: number; y: number; z: number }, read: BlockReader, reads: ScanReads = readScanNow(bot, scan, read)): WorldScanSummary {
+/** S8 (2026-11-05): below this share of the view distance's chunks loaded, nothing is said to be "not in this area": only not in what was read. */
+export const FULL_SHARE = 0.9;
+/** The Nether's structure regions (1.16 and on, the set nether_complexes): 27 chunks square, one fortress or one bastion each (weights 2 and 3). */
+export const NETHER_REGION_BLOCKS = 27 * 16;
+const regionOf = (v: number) => Math.floor(v / NETHER_REGION_BLOCKS);
+/** The Nether region round (x, z) in words: its corners' x and z. */
+export function netherRegionWords(x: number, z: number): string {
+  const rx = regionOf(x), rz = regionOf(z);
+  return `x ${rx * NETHER_REGION_BLOCKS}〜${rx * NETHER_REGION_BLOCKS + NETHER_REGION_BLOCKS - 1}・z ${rz * NETHER_REGION_BLOCKS}〜${rz * NETHER_REGION_BLOCKS + NETHER_REGION_BLOCKS - 1}`;
+}
+
+export function summarizeScan(bot: ScanBody, scan: SlicedScanResult & { coverage?: number }, centre: { x: number; y: number; z: number }, read: BlockReader, reads: ScanReads = readScanNow(bot, scan, read)): WorldScanSummary {
   const dimension = String(bot.game?.dimension ?? 'overworld');
   const nether = dimension.includes('nether'), end = dimension.includes('end');
   const get = (key: string) => scan.found.get(key) ?? { count: 0, hits: [] as ScanCellHit[] };
@@ -141,10 +154,24 @@ export function summarizeScan(bot: ScanBody, scan: SlicedScanResult, centre: { x
   if (endPortal.count) { row(5, 'エンドポータル', endPortal.count, endPortal.hits[0]); facts.push(`エンドポータルが ${wayWords(centre, endPortal.hits[0])}`); }
   const obsidian = get('obsidian');
   if (obsidian.count) row(6, '黒曜石', obsidian.count, obsidian.hits[0]);
+  // S8: the Nether's regions (one fortress or one bastion each): what was seen in the body's region and in the others the scan reached. A bastion's region has no
+  // fortress (at a region's edge a structure may be the next region's).
+  if (nether) {
+    const here = `${regionOf(centre.x)},${regionOf(centre.z)}`;
+    const seen = new Map<string, string>();
+    for (const hit of fortress.count >= 4 ? fortress.hits : []) seen.set(`${regionOf(hit.x)},${regionOf(hit.z)}`, '要塞');
+    for (const hit of bastion.count >= 8 ? bastion.hits : []) { const key = `${regionOf(hit.x)},${regionOf(hit.z)}`; if (!seen.has(key)) seen.set(key, '砦（この区画に要塞は無い）'); }
+    const others = [...seen.entries()].filter(([key]) => key !== here).map(([key, what]) => { const [rx, rz] = key.split(',').map(Number); return `${netherRegionWords(rx * NETHER_REGION_BLOCKS, rz * NETHER_REGION_BLOCKS)} は${what}`; });
+    rows.push({ order: 4, line: `ネザーの区画（432m 四方に要塞か砦のどちらか 1 つ）: 今の区画 ${netherRegionWords(centre.x, centre.z)} は${seen.get(here) ?? '未確認'}${others.length ? `。${others.join('。')}` : ''}` });
+  }
   const lines = rows.sort((a, b) => a.order - b.order).slice(0, MAX_ROWS).map(entry => entry.line);
-  const area = `読み込み済みの ${scan.chunks} チャンク（約 ${scan.reachMetres}m 先まで）${scan.partial ? 'の途中まで' : ''}`;
-  const text = `${area}を調べた。${facts.length ? `${facts.join('。')}。` : ''}${absent.length ? `${absent.join('・')}は${scan.partial ? '調べた所に' : 'この範囲に'}無い。` : ''}`;
-  return { text, rows: lines, chunks: scan.chunks, reach: scan.reachMetres, ms: scan.ms, ...(scan.partial ? { partial: true } : {}), longestSliceMs: scan.longestSliceMs };
+  // S8 (2026-11-05): a scan of a view not yet loaded (the login's scan read 25-39% of it) says how much it read, and never that a thing is not in the area.
+  const thin = scan.coverage !== undefined && scan.coverage < FULL_SHARE;
+  const share = thin ? `・描画の距離の ${Math.round(scan.coverage! * 100)}%` : '';
+  const area = `読み込み済みの ${scan.chunks} チャンク（約 ${scan.reachMetres}m 先まで${share}）${scan.partial ? 'の途中まで' : ''}`;
+  const where = scan.partial ? '調べた所に' : thin ? `読み込めた約 ${scan.reachMetres}m までに` : 'この範囲に';
+  const text = `${area}を調べた。${facts.length ? `${facts.join('。')}。` : ''}${absent.length ? `${absent.join('・')}は${where}無い${thin ? '（この先はまだ読めていない）' : ''}。` : ''}`;
+  return { text, rows: lines, chunks: scan.chunks, reach: scan.reachMetres, ms: scan.ms, ...(scan.partial ? { partial: true } : {}), ...(thin ? { coverage: Math.round(scan.coverage! * 100) / 100 } : {}), longestSliceMs: scan.longestSliceMs };
 }
 
 /**
@@ -262,7 +289,8 @@ export async function scanWorld(bot: ScanBody, options: { radiusChunks?: number;
   if (!position || !bot.registry?.blocksByName || typeof bot.world?.getColumns !== 'function') return null;
   const centre = { x: position.x, y: position.y, z: position.z };
   const slicer = options.slicer ?? new LoopSlicer(options.sliceMs ?? SCAN_SLICE_MS);
-  const scan = await scanLoadedCategories(bot as never, categoriesFor(bot.registry), { ...options, slicer });
+  const scanned = await scanLoadedCategories(bot as never, categoriesFor(bot.registry), { ...options, slicer });
+  const scan = { ...scanned, ...coverageOf(bot, options.radiusChunks) };
   // The summary's block reads (lava pools, frames, a hull, spawners) in steps with the loop given back between them (r7: runs 30 and 31 held
   // the loop 19.4 and 27.6 ms once, and the reads were one hold); the rows and the sentence after them read nothing.
   await slicer.pause();
@@ -287,6 +315,21 @@ interface SpawnScanBody extends ScanBody {
   worldScan?: WorldScanState;
   /** The time of the last scan's slices, for the log and the measure. */
   worldScanCost?: { ms: number; longestSliceMs: number; longestSliceWords?: string };
+}
+
+/**
+ * The share of the chunks within the view distance (or `radiusChunks`, when smaller) round the body that are loaded, or {} when the view distance is not known.
+ */
+export function coverageOf(bot: { world?: any; game?: any; settings?: any; entity?: { position?: { x: number; z: number } } | null }, radiusChunks?: number): { coverage?: number } {
+  const view = viewDistanceOf(bot as never);
+  const position = bot.entity?.position;
+  if (view === null || !position) return {};
+  const radius = radiusChunks !== undefined && radiusChunks > 0 ? Math.min(view, Math.floor(radiusChunks)) : view;
+  let columns: any[] = [];
+  try { columns = bot.world?.getColumns?.() ?? []; } catch { columns = []; }
+  const cx = Math.floor(position.x / 16), cz = Math.floor(position.z / 16);
+  const inside = columns.filter(entry => Math.abs(Number(entry?.chunkX) - cx) <= radius && Math.abs(Number(entry?.chunkZ) - cz) <= radius).length;
+  return { coverage: Math.min(1, inside / (2 * radius + 1) ** 2) };
 }
 
 /** mineflayer's view distance words (settings.viewDistance) in chunks. */
@@ -316,8 +359,16 @@ export function loadedRing(bot: { world?: any; entity?: { position?: { x: number
   return { count: columns.length, radius };
 }
 
-/** The share of the view distance's chunks loaded before the scan at a spawn runs (run 28: it ran at 25 of 441, 2.6 s after the login). */
-export const SPAWN_SCAN_SHARE = 0.8;
+/**
+ * The share of the view distance's chunks loaded before the scan at a spawn runs (run 28: it ran at 25 of 441, 2.6 s after the login; S8 2026-11-05: 0.8 -> 0.9,
+ * the run 59 login's scan was cut at 15 s with 25-39% read, and a Nether arrival's scan that reads half the view may say "no fortress" of what it did not read).
+ */
+export const SPAWN_SCAN_SHARE = 0.9;
+/** S8: the longest the scan at a spawn waits for the chunks (15 s cut the run 59 login's scan at 25-39%). */
+export const SPAWN_SCAN_MAX_WAIT_MS = 30_000;
+/** S8: a scan made before SPAWN_SCAN_SHARE was loaded is made again each time this share more of the view has come, until the share is reached or RESCAN_UNTIL_MS. */
+export const RESCAN_STEP_SHARE = 0.2;
+export const RESCAN_UNTIL_MS = 120_000;
 
 /**
  * After every spawn (a login, a reconnect, a portal, a respawn after a death): wait until most of the
@@ -325,11 +376,14 @@ export const SPAWN_SCAN_SHARE = 0.8;
  * once and keep it as `bot.worldScan` for the observation. When the server's view distance is not known, until the count of loaded columns
  * has not changed for `settleMs`. Run 28: a count steady for one second came at 25 chunks of 441 (the server sends them in bursts). The
  * scan says how many chunks were loaded, out to which ring, and how long it waited. A newer spawn cancels the scan of the one before.
+ * S8 (2026-11-05): a scan cut by the wait before the share was loaded is made again as the chunks come (each RESCAN_STEP_SHARE more of the view, and once at the
+ * share), until RESCAN_UNTIL_MS after the spawn: what the first scan could not see is not left unsaid.
  */
 export function installSpawnScan(bot: SpawnScanBody, options: { minWaitMs?: number; settleMs?: number; maxWaitMs?: number; pollMs?: number; sliceMs?: number; now?: () => number;
-  share?: number; log?: (line: string) => void } = {}): () => void {
-  const minWait = options.minWaitMs ?? 2000, settle = options.settleMs ?? 3000, maxWait = options.maxWaitMs ?? 15_000, poll = options.pollMs ?? 250;
+  share?: number; rescanUntilMs?: number; rescanPollMs?: number; log?: (line: string) => void } = {}): () => void {
+  const minWait = options.minWaitMs ?? 2000, settle = options.settleMs ?? 3000, maxWait = options.maxWaitMs ?? SPAWN_SCAN_MAX_WAIT_MS, poll = options.pollMs ?? 250;
   const share = options.share ?? SPAWN_SCAN_SHARE;
+  const rescanUntil = options.rescanUntilMs ?? RESCAN_UNTIL_MS, rescanPoll = options.rescanPollMs ?? 1000;
   const now = options.now ?? Date.now;
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -337,7 +391,8 @@ export function installSpawnScan(bot: SpawnScanBody, options: { minWaitMs?: numb
     const mine = ++generation;
     if (timer) clearTimeout(timer);
     const began = now();
-    let lastCount = -1, steadySince = began;
+    let lastCount = -1, steadySince = began, scannedAt = -1;
+    const expectedOf = (view: number | null) => (view !== null ? (2 * view + 1) ** 2 : null);
     const tick = () => {
       timer = null;
       if (mine !== generation) return;
@@ -345,10 +400,31 @@ export function installSpawnScan(bot: SpawnScanBody, options: { minWaitMs?: numb
       const t = now();
       if (count !== lastCount) { lastCount = count; steadySince = t; }
       const view = viewDistanceOf(bot as never);
-      const enough = view !== null ? count >= Math.ceil(share * (2 * view + 1) ** 2) : count > 0 && t - steadySince >= settle;
+      const enough = view !== null ? count >= Math.ceil(share * expectedOf(view)!) : count > 0 && t - steadySince >= settle;
       const ready = t - began >= minWait && enough;
       if (!ready && t - began < maxWait) { timer = setTimeout(tick, poll); return; }
-      void run(mine, t - began, view);
+      scannedAt = count;
+      void run(mine, t - began, view).then(() => again(view));
+    };
+    /** After a scan: when it was made before the share was loaded, the next is made as the chunks come. */
+    const again = (view: number | null) => {
+      if (mine !== generation) return;
+      const expected = expectedOf(view);
+      if (expected === null || scannedAt >= Math.ceil(share * expected)) return;
+      const wait = () => {
+        timer = null;
+        if (mine !== generation) return;
+        const t = now();
+        if (t - began > rescanUntil) return;
+        const { count } = loadedRing(bot);
+        if (count >= Math.ceil(share * expected) || count - scannedAt >= RESCAN_STEP_SHARE * expected) {
+          scannedAt = count;
+          void run(mine, t - began, viewDistanceOf(bot as never)).then(() => again(view));
+          return;
+        }
+        timer = setTimeout(wait, rescanPoll);
+      };
+      timer = setTimeout(wait, rescanPoll);
     };
     timer = setTimeout(tick, poll);
   };
