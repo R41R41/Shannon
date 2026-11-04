@@ -241,7 +241,7 @@ describe('end_bed_kill scene with mocked I/O', () => {
       sleep: async () => {}, END: 'end', DRAGON: '@dragon', ACTOR: 'actor' };
     const prepare = new Function(...Object.keys(deps), `${prepareCode}\nreturn prepareKillRun;`)(...Object.values(deps));
     expect(await prepare(true, true)).toEqual({ dragonId: 77, ground });
-    expect(gear.mock.calls[0][0]).toEqual(['iron_sword', 'shield', 'cobblestone 64', ...Array(4).fill('white_bed'), 'obsidian 4', 'cooked_beef 64']);
+    expect(gear.mock.calls[0][0]).toEqual(['iron_sword', 'water_bucket', 'shield', 'cobblestone 64', ...Array(4).fill('white_bed'), 'obsidian 4', 'cooked_beef 64']);
     expect(commands.filter(c => c.includes('DragonPhase'))).toEqual(['end data modify entity @dragon DragonPhase set value 0']);
     expect(commands).toContain('end kill @e[type=minecraft:end_crystal]');
     expect(commands).toContain('end data modify entity @dragon Health set value 200.0f');

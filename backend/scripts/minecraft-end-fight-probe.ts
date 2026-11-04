@@ -2709,7 +2709,7 @@ async function prepareKillRun(waitingSide = false, descendingBeds = false): Prom
     if (exists !== null) throw new Error('previous dragon has not finished dying; cannot reset it into a new run');
   }
   if (exists === null) await ask(`${END} summon minecraft:ender_dragon ${arena.perch.x} ${arena.perch.y} ${arena.perch.z}`);
-  await gear(descendingBeds ? ['iron_sword', 'shield', 'cobblestone 64', ...Array(4).fill('white_bed'), 'obsidian 4', 'cooked_beef 64']
+  await gear(descendingBeds ? ['iron_sword', 'water_bucket', 'shield', 'cobblestone 64', ...Array(4).fill('white_bed'), 'obsidian 4', 'cooked_beef 64']
     : ['stone_sword', 'shield', 'cobblestone 64', 'bow', 'arrow 64', ...Array(12).fill('white_bed'), 'obsidian 12', 'cooked_beef 64']);
   await wearIron();
   await act([{ do: 'equip', item: 'shield', slot: 'offhand' }, { do: 'equip', item: descendingBeds ? 'iron_sword' : 'stone_sword' }], 10);
@@ -2731,7 +2731,7 @@ async function prepareKillRun(waitingSide = false, descendingBeds = false): Prom
       packCount('arrow') !== (descendingBeds ? 0 : 64) || packCount('white_bed') !== (descendingBeds ? 4 : 12) || packCount('obsidian') !== (descendingBeds ? 4 : 12) || packCount('cobblestone') !== 64 || packCount('cooked_beef') !== 64 || packCount('bow') !== (descendingBeds ? 0 : 1) ||
       actor.heldItem?.name !== (descendingBeds ? 'iron_sword' : 'stone_sword') || slots?.[45]?.name !== 'shield' ||
       ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'].some((name, i) => slots?.[5 + i]?.name !== name) ||
-      actor.inventory.items().some((i: any) => i.name.endsWith('bucket')));
+      (descendingBeds ? actor.inventory.items().some((i: any) => i.name.endsWith('bucket') && i.name !== 'water_bucket') || packCount('water_bucket') !== 1 : actor.inventory.items().some((i: any) => i.name.endsWith('bucket'))));
   };
   for (let i = 0; i < 30 && unconfirmed(); i++) await sleep(200);
   const d = endView()?.dragon;
