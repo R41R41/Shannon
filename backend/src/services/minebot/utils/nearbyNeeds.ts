@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3';
 import type { NearbyNeed } from '../cognition/types.js';
 import { nativeActionHost } from '../execution/ActionExecution.js';
 import { scanLoadedBlocks } from './loadedBlockScan.js';
-import { bedWool, descentKit, isPreparedFood, sheepWool } from './nightGate.js';
+import { bedStock, bedWool, descentKit, isPreparedFood, sheepWool } from './nightGate.js';
 import { wasUnreachable } from './unreachableTargets.js';
 
 /**
@@ -12,7 +12,9 @@ import { wasUnreachable } from './unreachableTargets.js';
  *
  * - bed: no bed (carried or set): a bed already standing (an igloo's, a village's), from the places seen, within BED_RANGE; dig it
  *   (dig-block-at) and it is carried. Run 19: an igloo's bed 13 m away at D10, never taken in 30 minutes, and no sheep at all.
- * - bed_wool: no bed (carried or set): sheep, of the colour most wool is carried of (any colour with none), not shorn.
+ * - bed_wool: no bed (carried or set): sheep, of the colour most wool is carried of (any colour with none), not shorn. With a bed carried
+ *   too, until the pack holds the wool for BED_TARGET beds (beds carried + wool / 3 of a colour; the dragon fight sets up to ten): the
+ *   sheep of the colour with wool over, and `tool: 'shears'` when shears are carried (a shorn sheep gives the wool again, a kill gives one).
  * - food: fewer than FOOD_ENOUGH portions of cooked food: the animals that are food.
  * - iron: less iron at hand than what is still to be made needs (`ironStillNeeded`): iron ore. Run 19 dug about 55 for about 33:
  *   the ore in a furnace and what was made of it were not counted, and each load into a furnace brought the ore back as a need.
@@ -110,23 +112,27 @@ function readNeeds(bot: NeedsBody, at: Vec3, now: number): NearbyNeed[] {
 
   // bed_wool and food: animals within reach of the eye.
   const kit = (() => { try { return descentKit(bot as any); } catch { return null; } })();
-  const woolColor = (() => { try { return bedWool(bot as any)?.color; } catch { return undefined; } })();
+  const stock = (() => { try { return bedStock(items); } catch { return null; } })();
   const wantBed = !!kit && !kit.bed;
+  // A bed carried already: wool goes on being wanted until BED_TARGET beds' worth, a spare colour first.
+  const wantMoreWool = !!kit && kit.bed && !!stock && stock.woolShort > 0;
+  const woolColor = (() => { try { return kit?.bed ? stock?.color : bedWool(bot as any)?.color; } catch { return undefined; } })();
+  const shears = items.some(item => item.name === 'shears');
   const wantFood = items.filter(item => isPreparedFood(item.name)).reduce((sum, item) => sum + item.count, 0) < FOOD_ENOUGH;
-  if (wantBed || wantFood) {
+  if (wantBed || wantMoreWool || wantFood) {
     const animals = Object.values(bot.entities ?? {})
       .filter((entity): entity is NonNullable<typeof entity> & { name: string; position: Vec3 } => !!entity?.position && !!entity.name && FOOD_ANIMALS.has(entity.name)
         && entity !== (bot.entity as unknown))
       .map(entity => ({ entity, distance: at.distanceTo(entity.position) }))
       .filter(entry => entry.distance <= RANGE)
       .sort((a, b) => a.distance - b.distance);
-    if (wantBed) {
+    if (wantBed || wantMoreWool) {
       const sheep = animals.filter(({ entity }) => {
         if (entity.name !== 'sheep') return false;
         const wool = sheepWool(bot, entity);
         return !wool || (!wool.sheared && (!woolColor || wool.color === woolColor));
       });
-      out.push(...sheep.slice(0, PER_NEED).map(({ entity, distance }) => animalNeed(bot, at, 'bed_wool', entity, distance, sheepWool(bot, entity)?.color)));
+      out.push(...sheep.slice(0, PER_NEED).map(({ entity, distance }) => animalNeed(bot, at, 'bed_wool', entity, distance, sheepWool(bot, entity)?.color, shears ? 'shears' : undefined)));
     }
     if (wantFood) out.push(...animals.slice(0, PER_NEED).map(({ entity, distance }) => animalNeed(bot, at, 'food', entity, distance)));
   }
@@ -180,10 +186,10 @@ function pick(needs: NearbyNeed[]): NearbyNeed[] {
 }
 
 /** An animal, with whether a straight line from the eyes reaches it (judged only for the ones said: a few rays, no flood fill). */
-function animalNeed(bot: NeedsBody, at: Vec3, need: NearbyNeed['need'], entity: { id?: number; name: string; position: Vec3; height?: number }, distance: number, color?: string): NearbyNeed {
+function animalNeed(bot: NeedsBody, at: Vec3, need: NearbyNeed['need'], entity: { id?: number; name: string; position: Vec3; height?: number }, distance: number, color?: string, tool?: string): NearbyNeed {
   const seen = inSight(bot, at.offset(0, 1.62, 0), entity.position.offset(0, (entity.height ?? 1) * 0.5, 0));
   const position = rounded(entity.position);
-  return { id: typeof entity.id === 'number' ? `${need}:e:${entity.id}` : `${need}:a:${entity.name}:${position.x},${position.y},${position.z}`, need, name: entity.name, ...(color ? { color } : {}), position, distance: Math.round(distance * 10) / 10,
+  return { id: typeof entity.id === 'number' ? `${need}:e:${entity.id}` : `${need}:a:${entity.name}:${position.x},${position.y},${position.z}`, need, name: entity.name, ...(color ? { color } : {}), ...(tool ? { tool } : {}), position, distance: Math.round(distance * 10) / 10,
     canReach: true, ...(seen === false ? { exposed: false } : {}) };
 }
 

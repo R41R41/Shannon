@@ -173,6 +173,32 @@ export function bedWool(bot: GateBody): { color: string; have: number; need: 3 }
   return best ? { color: best.color, have: best.have, need: 3 } : undefined;
 }
 
+/** Beds the dragon fight wants in the pack (the bed kill sets up to ten; the entry gate asks for eight). */
+export const BED_TARGET = 10;
+
+export interface BedStock {
+  /** Beds carried. */
+  beds: number;
+  /** Beds the wool carried makes now (three of one colour each). */
+  makeable: number;
+  /** Wool still to get for BED_TARGET beds (the best colour's spare wool counts); 0 when enough. */
+  woolShort: number;
+  /** The colour whose spare wool (not yet three) is the most: the sheep to look for first. */
+  color?: string;
+}
+
+/** How far the pack goes towards `target` beds: carried beds and the beds the wool makes, and the wool still wanted. */
+export function bedStock(items: Array<{ name: string; count?: number }>, target = BED_TARGET): BedStock {
+  const beds = items.filter(item => item.name.endsWith('_bed')).reduce((sum, item) => sum + (item.count ?? 1), 0);
+  let makeable = 0, spare = 0, color: string | undefined;
+  for (const [name, have] of [...woolByColor(items).entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    makeable += Math.floor(have / 3);
+    if (have % 3 > spare) { spare = have % 3; color = name; }
+  }
+  const missing = Math.max(0, target - beds - makeable);
+  return { beds, makeable, woolShort: missing > 0 ? Math.max(0, missing * 3 - spare) : 0, ...(color ? { color } : {}) };
+}
+
 /** A sheep's wool, from its metadata (the `wool` byte: colour in the low four bits, shorn at 0x10), or null when unknown. */
 export function sheepWool(bot: { registry?: any }, entity: { metadata?: unknown[] }): { color: string; sheared: boolean } | null {
   const keys: string[] | undefined = bot.registry?.entitiesByName?.sheep?.metadataKeys;
@@ -195,10 +221,16 @@ export function woolByColor(items: Array<{ name: string; count?: number }>): Map
 
 /**
  * The wool after a sheep hunt, as one sentence for the result: a bed can be made now (three of a colour, none carried), or the
- * colours do not make one and how many of which are still wanted. Empty when no wool is carried, or a bed is.
+ * colours do not make one and how many of which are still wanted. Empty when no wool is carried, or a bed is and BED_TARGET is met.
+ * With a bed carried: how many beds there are and will be, and the wool still short of BED_TARGET (the dragon wants ten).
  */
 export function woolStatusLine(items: Array<{ name: string; count?: number }>): string {
-  if (items.some(item => item.name.endsWith('_bed'))) return '';
+  if (items.some(item => item.name.endsWith('_bed'))) {
+    const stock = bedStock(items);
+    if (stock.woolShort <= 0) return '';
+    const spare = stock.color ? `（${stock.color}の羊毛はあと${3 - ((woolByColor(items).get(stock.color) ?? 0) % 3)}個で1個）` : '';
+    return `ベッド: 手持ち${stock.beds}個＋羊毛で${stock.makeable}個／目標${BED_TARGET}個 → 羊毛あと${stock.woolShort}個${spare}`;
+  }
   const wool = [...woolByColor(items).entries()].sort((a, b) => b[1] - a[1]);
   if (!wool.length) return '';
   const [color, have] = wool[0];

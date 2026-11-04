@@ -103,6 +103,8 @@ export interface NearbyNeed {
   need: 'bed' | 'bed_wool' | 'food' | 'iron' | 'fuel' | 'wood';
   name: string;
   color?: string;
+  /** The carried tool that gets it best (bed_wool: 'shears' for a sheep not shorn: the wool comes back, no kill). */
+  tool?: string;
   position: WorldVector;
   distance: number;
   canReach: boolean;

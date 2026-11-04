@@ -5,7 +5,7 @@ import minecraftData from 'minecraft-data';
 
 vi.mock('../../src/services/minebot/utils/gotoSafe.js', () => ({ gotoSafe: vi.fn(async () => ({ success: true })) }));
 
-const { bedWool, cookRawNotice, descentKit, descentKitNotice, isPreparedFood, woolStatusLine } = await import('../../src/services/minebot/utils/nightGate.js');
+const { BED_TARGET, bedStock, bedWool, cookRawNotice, descentKit, descentKitNotice, isPreparedFood, woolStatusLine } = await import('../../src/services/minebot/utils/nightGate.js');
 const { bedFromWool } = await import('../../src/services/minebot/instantSkills/craftOne.js');
 const { default: MoveTo } = await import('../../src/services/minebot/instantSkills/moveTo.js');
 const { default: StairMine } = await import('../../src/services/minebot/instantSkills/stairMine.js');
@@ -205,7 +205,17 @@ describe('the owner\'s second round (2026-10-20): wool to a bed, raw meat to a f
   it('after sheep the hunt says whether the wool makes a bed now', () => {
     expect(woolStatusLine([{ name: 'white_wool', count: 3 }])).toContain('craft-one white_bed でベッドを作れる');
     expect(woolStatusLine([{ name: 'white_wool', count: 2 }, { name: 'light_gray_wool', count: 1 }])).toContain('同じ色があと1個（white');
-    expect(woolStatusLine([{ name: 'white_wool', count: 3 }, { name: 'white_bed', count: 1 }])).toBe('');
+    // A bed carried: the line counts towards BED_TARGET beds (the dragon fight sets up to ten), and goes quiet once the wool is there.
+    expect(woolStatusLine([{ name: 'white_wool', count: 3 }, { name: 'white_bed', count: 1 }])).toContain('目標10個');
+    expect(woolStatusLine([{ name: 'white_bed', count: BED_TARGET }])).toBe('');
+  });
+
+  it('bedStock counts beds carried and the beds the wool makes, and the wool still short, with the colour that has wool over', () => {
+    expect(bedStock([])).toEqual({ beds: 0, makeable: 0, woolShort: 30 });
+    expect(bedStock([{ name: 'white_bed', count: 4 }, { name: 'white_wool', count: 7 }, { name: 'red_wool', count: 2 }]))
+      .toEqual({ beds: 4, makeable: 2, woolShort: 10, color: 'red' });
+    expect(bedStock([{ name: 'white_bed', count: 8 }, { name: 'white_wool', count: 6 }])).toMatchObject({ beds: 8, makeable: 2, woolShort: 0 });
+    expect(bedStock([{ name: 'white_bed', count: 8 }], 8).woolShort).toBe(0);
   });
 
   it('the observation says where three pieces of raw meat can be cooked, or what stands in the way', () => {
