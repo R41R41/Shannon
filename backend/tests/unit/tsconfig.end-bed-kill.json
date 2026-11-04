@@ -6,7 +6,6 @@
     "../../scripts/minecraft-end-fight-probe.ts",
     "../../src/services/minebot/utils/dragonBedGeometry.ts",
     "../../src/services/minebot/utils/dragonHeadModel.ts",
-    "minecraftEndBedKill.test.ts",
-    "minecraftDragonHeadModel.test.ts"
+    "minecraftEndBedKill.test.ts"
   ]
 }

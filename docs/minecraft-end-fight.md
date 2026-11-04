@@ -761,3 +761,52 @@ n先（0〜8 tick）は直近4 tickの平均移動量・wrapped yaw変化を使�
 
 型検査は `node tests/unit/checkEndBedKill.cjs`。probe本体・geometry・新モデル・関係試験2本の計5 TS rootのsemantic／構文／compiler option診断を確認する。依存先自身のsemantic診断と全backend型検査は対象外。実際の誤差・枕への到達予測精度・起爆回数／実被害はS1のラボで未計測。指定コピーだけを変更し、`.codex-material/`、反射、gazeGuard、dragonStrike、act一覧、FALL_CLUTCH_ENABLED、env設定は変更せず、commit／VM／ラボ実行も行っていない。
 最終検証：このWindowsコピーのNode v24.21.0で、新規モデル／計測22件＋ベッド37件＋既存比較65件＝**3ファイル124件成功**。`node tests/unit/checkEndBedKill.cjs` はprobe全体を含む5 rootの対象診断0件、`git diff --check` 成功。既存比較試験のimportに必要な既存オフライン用ダミー値だけを試験子プロセスに渡し、設定ファイルは変更していない。実クライアント／ゲーム／DB／LLMへの接続はしていない。HEADは `0e0a7ea` のまま、変更は未コミット。
+
+## end_bed_kill：向き直った着座頭の近くに枕を置く（2026-11-04、頼み18）
+
+本節で、頼み16/17の **降下中に柱上へ置いて頭を待つ** 台本を置き換える。`lab-evidence/dragon-bed-mechanics.md` を参照。このコピーにr187〜r203はまだ無く、12本の起爆0・`phase_changed_before_action`・枕から頭が9.6〜45mという失敗状況は依頼文の集計による。ラボをここで実行した結果ではない。
+
+### 枕・足場と時間枠
+
+phase 6の見回しが終わり、**phase 7へ入った最初の生の本体位置とyaw**を固定する。`seatedDragonHead` は既存 `partBox(dragon, 'head')` を使い、頭の足位置を本体＋`(6.5*sin(yaw), -1, 6.5*cos(yaw))`、中心をさらにY＋0.5として求める。クライアントに無い部位entity／`dragon.headPosition`や飛行中の履歴外挿を要求しない。phase 2/3/6ではベッドを置かない。
+
+`seatedBedLayouts` はその頭の周囲のロード済みセルから、枕・隣接する足側・自然の立ち足場・支持／遮蔽物の組を有限走査する。枕中心から頭の足位置まで最大2.2m、**頭の箱への実形状によるEを入れた予測被害50 HP以上**を要求し、被害の大きさ、必要資材の少なさ、移動距離の順に台本が選ぶ。2.2mの全候補を許す意味ではなく、例えばE=1でも50 HP条件で約2.17m以下に絞られる。枕を噴水の中心へ固定しない。全座標は観測の本体位置・yaw・地形から得る。
+
+足場は両ベッド半分と施工セルまで目から4.5m以内、2ブロックの身体空間と完全な床があり、頭／首の箱を1.1m広げた接触範囲の外。頭の前2.5mの将来の雲に対し、身体の水平箱全体が外になることをphase 7から要求する。雲の実半径5mに加え、**既存反射が要求する最小7mも計画時から守る**。反射を変更せず、施工途中に雲の予告で退避させられる配置を避ける。既存の雲も観測dangerRadius・最小7mで除外する。壁や高所を息の無効化とは扱わない。
+
+支持と自分側の最大2段の壁を合わせて手持ちの黒曜石4個以内で計画し、`place_obsidian_screen` の既存placeで下から1個ずつ施工・確認する。既存の完全なブロックは利用する。ベッドの足側は操作位置から枕へ向かう向きになり、`face: 'down'` で支持の上面に置く。設置後は両半分とfacingを読み直す。
+
+時刻はphase 7開始を0としたクライアントphysicsTick。1 tick=50msを前提に、次の**中断上限**を設ける。
+
+| 操作 | 上限tick | 秒相当 |
+|---|---:|---:|
+| 操作足場へ接近 | 100未満 | 5 |
+| 黒曜石施工・確認 | 160未満 | 8 |
+| ベッド設置・両半分確認 | 200未満 | 10 |
+| 起爆要求 | 240未満 | 12 |
+
+各handは観測から最低4 tick **かつ200ms** 待つ。施工済みの足場からでも、設置前4 tick＋両半分確認後から起爆前4 tickで、最短8 tick＋確認／hand内部の時間が必要。確認を含め240 tickへ収まる保証ではない。phase 7→5をまたいで操作できるが、他phase・12秒枠の終了は実行中handを中断して退避する。50 HP超で早く離陸した場合も次の窓を待つ。続けて使う場合は爆発確認から最低11 tick空け、毎回観測・設置・自己被害検査をやり直す。1窓で4床を使う前提ではない。
+
+### 起爆・剣・待機
+
+起爆直前の現在の身体AABBと現在のcollision shapesに、既存 `bedSelfEstimate`／`bedExposure`／`bedDamage` を適用する。両ベッド半分は爆発前に除去されるため遮蔽物に数えない。`q=(1-d/10)*E`、`D=35*(q*q+q)+1`、Normal・防具軽減前で **D<=6 かつ D<現在HP-4** のときだけ押す。未ロード／不明形状は遮蔽に数えず、自己遮蔽Eと頭へのEを分けて記録する。使用hand中も位置・射程・自己被害・雲・頭の変化を監視する。既存use自身の判定も通し、操作packetを台本から直接送らない。
+
+最初のphase 7の頭と遅延観測の頭から、現在の頭が0.5mを超えてずれた場合は起爆を見送る。置いた後に自己被害・足場・雲・向きが悪化した回は退避し、そのベッドの横で剣へ切り替えない。不明な使用結果を同じベッドへ再送しない。誤った向きは既存digで回収し、回収を確認できない場合も退避する。
+
+鉄剣は **4床の在庫を使い切った後、またはその窓で配置候補なし・足場へ到達不能・施工／設置不能が確認された時だけ**。以前の3床上限／4床目温存は外す。未起爆のベッドが残って設置結果が不明な場合は剣へ移らない。剣の操作位置にも将来／既存の雲と接触範囲を検査し、実行は既存go・equip・attack。次のphase 7では配置不能の状態をリセットし、新しい向きでベッドを再計画する。
+
+飛行中の `open_wait` を維持し、観測した待機地の周囲で、屋根の無い自然の完全な床へ約60 tick＝3秒ごとに移る。今いるセルを繰り返し選ばず、既存の雲を避ける。goの `seconds` は実スキーマに合わせて5、60 tick経過や着座を検出すれば進行中goを中断する。経路そのものの可否は既存go／反射に任せる。
+
+### report.jsonと検証
+
+- `detonations`：枕中心に対応するexplosion packetの確認数。ベッド消失やuse成功とは分ける。`explosionsHit` はさらにサーバーHP減少を確認した数。
+- `bedTrials[]`：窓番号、phase 7の頭、枕／足／足場／遮蔽、計画・設置要求・両半分確認・使用要求・爆発確認のtick、各phase、予測被害／Eと使用時の身体箱、未起爆理由。`dragonHealthServerBefore/After`・読取りtick・`dragonLoss`、観測HP前後、自己被害と区間最小HPも保持する。サーバー読取りは直列化し、取得不能はnull／errorのまま残す。
+- `perches[]`：phase 7＋5の各最大12秒窓の開始／終了tick・終了理由、本体姿勢／頭、`steps[]` に操作・観測tick・完了tick・phase・成否／中断。`phaseTimeline` は毎tick、`transitions`／`phaseDurations` は全phaseの推移。反射counter・死亡・討伐証拠の既存記録も保持する。
+
+`minecraftEndBedKill.test.ts` で、四方／斜めyaw・移動した地形、phase 6の後の向き直り、枕／足／支持／射程／予算、雲と身体箱、形状による遮蔽、4 tick／11 tick、4床後の剣、配置不能時だけの剣と次窓での再計画、設置後のyaw／雲／壁変更、早期離陸、240 tick期限、遅いHP返信、未確認爆発、3秒ごとのopen_waitをモック検証する。生成した全handを **実act.tsのACT_HANDS**、goを実goProblemへ通す。
+
+今回変更した4 TS root（probe全体・dragonBedGeometry・dragonHeadModel・ベッド試験）だけを `node tests/unit/checkEndBedKill.cjs` でemitせず型検査する。依存先自身のsemantic診断・全backend型検査は対象外。関連の既存head model／kill compare／nook／full chain試験も回帰検証する。既存試験のimportに必要なダミー値は試験子プロセスだけに渡し、共有envを読まない既存の隔離設定を使う。
+
+仮定は着座中の頭を既存partBoxで近似できること、20 tick/s、クライアント受信tickとサーバーtickのずれ、hand内部のequip／lookと通信遅延である。HP差と自己被害は計測区間内の全原因を含み、爆発だけの因果証明ではない。実地の起爆数／サーバー実被害／操作時間／ノックバック死亡の改善率、歩行と既存反射との両立、黒曜石を残して次窓のyawに再利用できる頻度は **S1のラボで確認する課題**。この作業ではラボ／ゲーム／本体／DB／VM／外部資料更新を実行せず、指定コピーだけを未コミットで変更する。反射・gazeGuard・dragonStrike・hand一覧・環境変数設定・fallClutch・`.codex-material/`は変更しない。
+
+最終検証：このコピーのNode v24.21.0でベッド55＋head model22＋kill compare65＋nook10＋full chain125＝**5ファイル277件成功**。`node tests/unit/checkEndBedKill.cjs` は変更4 TS root（probe全体を含む）の対象診断0件。`git diff --check` 成功。枝 `claude/dragon-end-sections`、HEAD `2499f36` のまま、指定6ファイルだけを未コミットで変更した。

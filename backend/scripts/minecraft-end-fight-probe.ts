@@ -26,12 +26,12 @@ import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
 import { feetCentre, standing, walkGround } from '../src/services/minebot/utils/dragonWalk.js';
 import { bodyReader } from '../src/services/minebot/utils/localMap.js';
 import { bedHalves } from '../src/services/minebot/utils/bedRules.js';
-import { perchBedFoot, bedWallCells, bedCellSupported, supportedBedCells, descentBedLayouts, bedSelfEstimate, bedExposure, bedDamage, bedCentre, bedEyeReach, type DescentBedLayout } from '../src/services/minebot/utils/dragonBedGeometry.js';
+import { perchBedFoot, bedWallCells, bedCellSupported, supportedBedCells, seatedBedLayouts, bedOperationClear, bedOpenWaitCells, bedSelfEstimate, bedExposure, bedDamage, bedCentre, bedEyeReach, type SeatedBedLayout } from '../src/services/minebot/utils/dragonBedGeometry.js';
 import { approachClear } from '../src/services/minebot/utils/dragonApproach.js';
 import { dragonNook, insideDragonNook, nookCellSupported, type DragonNook } from '../src/services/minebot/utils/dragonNook.js';
 import { BLOCK_REACH } from '../src/services/minebot/utils/blockReach.js';
 import { isPerched, type P3 } from '../src/services/minebot/utils/dragonParts.js';
-import { appendDragonBody, predictDragonHead, forecastDragonHead, dragonHeadCentre, observedDragonPart, type DragonBodySample } from '../src/services/minebot/utils/dragonHeadModel.js';
+import { appendDragonBody, predictDragonHead, forecastDragonHead, seatedDragonHead, dragonHeadCentre, observedDragonPart, type DragonBodySample } from '../src/services/minebot/utils/dragonHeadModel.js';
 import { cageRoots, cageWall, cageGuardCells, cageGuardWork, cageRecoveryFootings, cageWaterLandings, cageWaterSource, cageWaterExit, cageDryFooting, cagePoolExits, cageShadowFootings, crystalShelterState, crystalShelterExits, islandFootings } from '../src/services/minebot/utils/endFightGeometry.js';
 import { CHAIN_LIMIT_MS, CRYSTAL_LIMIT_MS, CRYSTAL_WAIT_MS, CAGE_TRAVEL_WAIT_MS, FAST_CAGE_POLICY, chainCell, chainWalkRetry, chainShootSet, chainDescent, chainDragonSample, chainDragonRush, chainBasin, chainClear, chainCloudClear, chainCompareTravel, chainCrystal, chainDistance, chainHands, chainOnShaft, chainPause, chainRetreat, chainShot, chainSitting, chainTravel, chainWait, type ChainCrystal, type CagePolicy, type DragonMotionSample } from '../src/services/minebot/utils/endFullChainPlan.js';
 
@@ -3428,19 +3428,21 @@ scenes.dragon_kill_compare = async () => {
 /** Lab's human-operation gate. The newest observation may veto, never accelerate, a delayed action. */
 function bedUseRefusal(input: { phase: number | null; now: number; observed: number; placed: number | null; lastBlast: number | null;
   used: number; reach: number; damage: number; health: number; headDamage: number; headDistance: number }): string | null {
-  if (input.phase !== 2 && input.phase !== 3) return 'not_descending';
+  if (input.phase !== 7 && input.phase !== 5) return 'not_turned_seated';
   if (![input.now, input.observed, input.reach, input.damage, input.health, input.headDamage, input.headDistance].every(Number.isFinite)) return 'estimate_unknown';
   if ((input.placed !== null && !Number.isFinite(input.placed)) || (input.lastBlast !== null && !Number.isFinite(input.lastBlast))
     || !Number.isInteger(input.used) || input.used < 0 || Math.min(input.reach, input.damage, input.headDamage, input.headDistance) < 0) return 'estimate_unknown';
-  if (input.used >= 3) return 'three_bed_limit';
+  if (input.used >= 4) return 'four_bed_limit';
   if (input.now - input.observed < 4) return 'observation_delay';
   if (input.placed === null || input.now - input.placed < 4) return 'placement_delay';
   if (input.lastBlast !== null && input.now - input.lastBlast < 11) return 'dragon_hurt_cooldown';
   if (input.reach > 4.5) return 'out_of_reach';
   if (input.damage > 6 || input.damage + 4 >= input.health) return 'self_damage';
-  if (input.headDistance > 1.5 || input.headDamage < 50) return 'head_not_at_pillow';
+  if (input.headDistance > 2.2 || input.headDamage < 50) return 'head_not_at_pillow';
   return null;
 }
+
+const bedSwordAllowed = (beds: number, placementUnavailable: boolean) => beds === 0 || placementUnavailable;
 
 async function endBedKill() {
   const initial = await prepareKillRun(true, true);
@@ -3449,18 +3451,19 @@ async function endBedKill() {
   const out: Record<string, any> = { scene: 'dragon_kill_compare', style: 'end_bed_kill', limitSeconds: KILL_LIMIT_MS / 1000,
     initial: { ...initial, dragonHealth: 200, actorHealth: Number(actor.health), food: Number(actor.food), beds: 4, obsidian: 4, cobblestone: 64, arrows: 0, sword: 'iron_sword', floorReflexes: true },
     tickBasis: 'actor physicsTick since timed start; confirmations are client receipt ticks, not server gameTime',
-    headModel: 'real head part entity first (dragonState.headPosition is a perched estimate); vanilla aiStep latency history, server yaw-delta rotation; short constant-motion forecast over >=4 operation ticks',
-    bedTrials: [], refusals: [], actions: [], healthTimeline: [], transitions: [], phaseTimeline: [], phaseDurations: [],
-    bedsUsed: 0, placementAttempts: 0, explosionsHit: 0, meleeHitWindows: 0, windows: [], reflexKinds: {}, boss: null, bossVerified: false, killSeconds: null, dragonHealthAt25Minutes: null };
+    headModel: 'phase-7 start: raw body position/yaw -> stationary partBox head; no client part or flight extrapolation required',
+    operationBudget: { windowTicks: 240, approachByTick: 100, screenByTick: 160, placeByTick: 200, useByTick: 240, observationDelayTicks: 4, placeToUseTicks: 4, blastGapTicks: 11 },
+    bedTrials: [], perches: [], refusals: [], actions: [], healthTimeline: [], transitions: [], phaseTimeline: [], phaseDurations: [],
+    bedsUsed: 0, detonations: 0, placementAttempts: 0, explosionsHit: 0, meleeHitWindows: 0, windows: [], reflexKinds: {}, boss: null, bossVerified: false, killSeconds: null, dragonHealthAt25Minutes: null };
   let tick = 0, terminal: string | null = null, active: { controller: AbortController; allowed: () => boolean } | null = null;
-  let layout: DescentBedLayout | null = null, pending: Record<string, any> | null = null, lastBlast: number | null = null;
+  let layout: SeatedBedLayout | null = null, pending: Record<string, any> | null = null, lastBlast: number | null = null;
   let phase: number | null = null, phaseStart = 0, phaseStartSeconds = 0, lastHp = Number(actor.health), lastBeds = 4;
   let view = endView(), sampleBusy = false, samplePending: Promise<void> = Promise.resolve(), nextSample = 0;
   let bedReadPending: Promise<void> = Promise.resolve(), afterReadBusy = false;
-  let leaveNeeded = false, enteredSit = false;
-  type HeadSample = { tick: number; head: P3; source: string; history: DragonBodySample[]; measuredFeet: P3 | null };
+  let leaveNeeded = false, enteredSit = false, bedBlocked = false, nextOpenMove = 0, layoutPerch = 0;
+  let perch = null as Record<string, any> | null;
+  type HeadSample = { tick: number; head: P3; pose: NonNullable<ReturnType<typeof seatedDragonHead>> };
   const heads: HeadSample[] = [];
-  let bodyHistory: DragonBodySample[] = [];
   // ask() uses chat markers. Serialise these reads so overlapping marker windows cannot mix replies.
   let serverQueue: Promise<unknown> = Promise.resolve();
   const serverHealth = () => {
@@ -3481,8 +3484,8 @@ async function endBedKill() {
     if (pending) pending.notDetonatedReason = reason;
     // Keep changes and their extent, without filling 25 minutes with the same idle refusal.
     const last = out.refusals.at(-1);
-    if (last?.reason === reason && last?.phase === phase) { last.lastTick = tick; last.count++; return; }
-    out.refusals.push({ tick, seconds: seconds(), phase, reason, count: 1, ...detail });
+    if (last?.reason === reason && last?.phase === phase && last?.perch === (perch?.n ?? null)) { last.lastTick = tick; last.count++; return; }
+    out.refusals.push({ tick, seconds: seconds(), phase, perch: perch?.n ?? null, reason, count: 1, ...detail });
   };
   const headOf = (d: any): P3 | null => {
     return d?.id === initial.dragonId && heads.at(-1)?.tick === tick ? heads.at(-1)!.head : null;
@@ -3498,7 +3501,10 @@ async function endBedKill() {
   const onBlock = (_old: any, block: any) => {
     if (!pending || pending.placedTick !== null || !block?.position || !String(block.name).endsWith('_bed')) return;
     const h = bedHalves(block, block.position);
-    if (h && JSON.stringify(killCell(h.foot)) === JSON.stringify(killCell(pending.foot))) pending.placedTick = tick;
+    const other = h && bedHalves(read(h.other), h.other);
+    if (h && other && JSON.stringify(killCell(h.foot)) === JSON.stringify(killCell(pending.foot))
+      && JSON.stringify(killCell(h.head)) === JSON.stringify(killCell(pending.head))
+      && JSON.stringify(other.foot) === JSON.stringify(h.foot) && JSON.stringify(other.head) === JSON.stringify(h.head)) pending.placedTick = tick;
   };
   const onExplosion = (packet: any) => {
     const p = packet?.center ?? packet;
@@ -3506,7 +3512,7 @@ async function endBedKill() {
     if (pending.detonationTick !== null) return;
     pending.detonationTick = tick; pending.explosion = { x: p.x, y: p.y, z: p.z };
     pending.headAtExplosion = headOf(view?.dragon); pending.phaseAtExplosion = view?.dragon?.phase ?? null;
-    lastBlast = tick; killBlasts.push(bedCentre(layout.head));
+    lastBlast = tick; out.detonations++; killBlasts.push(bedCentre(layout.head));
   };
   const sample = () => {
     if (terminal) return;
@@ -3521,23 +3527,34 @@ async function endBedKill() {
       if (out.transitions.length) out.phaseDurations.push({ phase, fromTick: phaseStart, toTick: tick, ticks: tick - phaseStart, seconds: seconds() - phaseStartSeconds });
       phase = p; phaseStart = tick; phaseStartSeconds = seconds();
       out.transitions.push({ tick, seconds: seconds(), phase });
+      if (perch && p !== 7 && p !== 5 && perch.endTick === null) {
+        perch.endTick = tick; perch.endReason = 'phase_changed'; leaveNeeded = true; bedBlocked = false;
+        if (pending && !pending.useRequested) pending.notDetonatedReason ??= 'phase_changed_before_action';
+      }
+      if (p === 7) {
+        bedBlocked = false; enteredSit = false;
+        const raw = dragonEntity();
+        perch = { n: out.perches.length + 1, startTick: tick, startSeconds: seconds(), endTick: null, endReason: null,
+          body: raw?.position ? { position: { ...raw.position }, yaw: raw.yaw, phase: 7 } : null, steps: [] };
+        perch.head = perch.body ? seatedDragonHead(perch.body) : null;
+        out.perches.push(perch);
+      }
       if (p === 4) { leaveNeeded = true; enteredSit = false; }
       if (!isPerched(p)) enteredSit = false;
     }
-    // Raw client precision, not endObservation's one-decimal position/yaw. No history across absence.
+    if (perch && perch.endTick === null && tick - perch.startTick >= 240) {
+      perch.endTick = tick; perch.endReason = 'twelve_second_limit'; leaveNeeded = true;
+    }
+    // Raw body pose AFTER the scan has turned it. The client supplies no independent head entity.
     const raw = dragonEntity();
-    bodyHistory = raw?.id === initial.dragonId && d ? appendDragonBody(bodyHistory,
-      { tick, position: raw.position, yaw: raw.yaw, phase: d.phase }) : [];
-    const measuredFeet = d ? observedDragonPart(actor.entities, d.id, 'head') : null;
-    const model = predictDragonHead(bodyHistory);
-    const head = measuredFeet ? dragonHeadCentre(measuredFeet) : model ? dragonHeadCentre(model.parts.head) : null;
+    const pose = raw?.id === initial.dragonId && d ? seatedDragonHead({ position: raw.position, yaw: raw.yaw, phase: p }) : null;
+    const head = pose?.centre ?? null;
     if (head) {
-      heads.push({ tick, head, history: bodyHistory, measuredFeet, source: measuredFeet ? 'observed_part_entity' : 'vanilla_history_model' });
+      heads.push({ tick, head, pose: pose! });
       if (heads.length > 32) heads.shift();
     }
     out.phaseTimeline.push({ tick, seconds: seconds(), phase, position: d?.position ?? null, yaw: d?.yaw ?? null, headPosition: head,
-      headSource: head ? heads.at(-1)?.source : null, rawPosition: raw?.position ? { ...raw.position } : null, rawYaw: raw?.yaw ?? null,
-      model: model ? { pitch: model.pitch, headYOffset: model.headYOffset, yRotA: model.yRotA, rotationSource: model.rotationSource } : null,
+      headSource: pose?.source ?? null, rawPosition: raw?.position ? { ...raw.position } : null, rawYaw: raw?.yaw ?? null,
       dragonHealth: d?.health ?? null, actorHealth: Number(actor.health) });
     if (active && !active.allowed()) active.controller.abort(phase === 4 ? 'takeoff_leave_now' : 'observation_changed');
     const beds = packCount('white_bed');
@@ -3556,8 +3573,13 @@ async function endBedKill() {
     if (Date.now() >= deadline) stop('time_limit');
     if (disconnected) stop('disconnected');
   }, 50);
-  const descending = () => !terminal && (view?.dragon?.phase === 2 || view?.dragon?.phase === 3);
   const sitting = () => !terminal && isPerched(view?.dragon?.phase);
+  const bedWindow = () => !terminal && !!perch && perch.endTick === null && (view?.dragon?.phase === 7 || view?.dragon?.phase === 5)
+    && tick - perch.startTick < 240;
+  const poseNow = () => { const raw = dragonEntity(); return raw && seatedDragonHead({ position: raw.position, yaw: raw.yaw, phase: view?.dragon?.phase ?? null }); };
+  const clearNow = (feet: P3) => !!perch?.body && bedOperationClear(perch.body, feet, view?.dragonBreath ?? []);
+  const swordWindow = () => sitting() && bedSwordAllowed(packCount('white_bed'), bedBlocked)
+    && (!perch || perch.endTick === null || view?.dragon?.phase === 6);
   const live = () => !terminal;
   const delay = async (from: number, started: number) => {
     while (!terminal && (tick - from < 4 || Date.now() - started < 200)) await sleep(25);
@@ -3568,24 +3590,26 @@ async function endBedKill() {
     if (!await delay(observedTick, observedAt) || !allowed()) { refuse('phase_changed_before_action', { label }); return false; }
     if (check && !check(intent)) return false;
     const controller = new AbortController(); active = { controller, allowed };
-    const row: Record<string, any> = { label, tick, seconds: seconds(), observedTick, observedSeconds: (observedAt - t0) / 1000, hands, phase: view?.dragon?.phase };
+    const actionPerch = perch;
+    const row: Record<string, any> = { label, tick, seconds: seconds(), observedTick, observedSeconds: (observedAt - t0) / 1000, hands, phase: view?.dragon?.phase, perch: perch?.n ?? null };
     try {
       const run = await act(hands, 16, {}, controller.signal);
       Object.assign(row, { ok: run.ok, ms: run.ms, lines: run.lines, cancelled: controller.signal.reason ?? null,
         actorHealth: Number(actor.health), position: { ...actor.entity.position } });
       return run.ok && !controller.signal.aborted;
-    } finally { out.actions.push(row); active = null; }
+    } finally { row.endTick = tick; out.actions.push(row); actionPerch?.steps.push(row); active = null; }
   };
   const go = (label: string, p: P3, allowed = live) => perform(label, [{ do: 'go', to: killCell(p), range: 0.5, maxDrop: 1, seconds: 5 }], allowed);
   const atStand = () => !!layout && chainDistance(actor.entity.position, layout.stand) <= 0.7;
   const plannedRead = (p: P3) => pending && [pending.foot, pending.head].some(c => JSON.stringify(c) === JSON.stringify(p))
     && String(read(p)?.name).endsWith('_bed') ? { name: 'air', boundingBox: 'empty', shapes: [] } : read(p);
   const chooseLayout = () => {
-    const v = view, d = v?.dragon;
-    if (!v?.perch || !d) return null;
-    return descentBedLayouts(v.perch, d.yaw, plannedRead, packCount('obsidian'))
+    if (!perch?.body || !bedWindow()) return null;
+    return seatedBedLayouts(perch.body, plannedRead, packCount('obsidian'), Number(actor.health))
+      .filter(l => clearNow(l.stand))
       .filter(l => !pending || (JSON.stringify(l.foot) === JSON.stringify(pending.foot) && JSON.stringify(l.head) === JSON.stringify(pending.head)))
-      .sort((a, b) => a.score - b.score || chainDistance(a.stand, actor.entity.position) - chainDistance(b.stand, actor.entity.position))[0] ?? null;
+      .sort((a, b) => b.headDamage - a.headDamage || a.screen.length - b.screen.length
+        || chainDistance(a.stand, actor.entity.position) - chainDistance(b.stand, actor.entity.position))[0] ?? null;
   };
   const useCheck = (intent: HeadSample | undefined) => {
     if (!layout || !pending || !intent) { refuse('head_observation_missing'); return false; }
@@ -3596,16 +3620,13 @@ async function endBedKill() {
     }
     const ahead = tick - intent.tick;
     if (ahead < 4 || ahead > 8) { refuse('head_motion_unknown'); return false; }
-    // Freeze the targeting history at the observation, then advance it by the ACTUAL human delay.
-    // Newer observations may veto a changed phase; they never bypass that delay.
-    const forecast = forecastDragonHead(intent.history, ahead, intent.measuredFeet);
-    if (!forecast) { refuse('head_motion_unknown'); return false; }
-    const predicted = forecast.centre;
-    if (chainDistance(predicted, intent.head) > 4) { refuse('head_prediction_unstable'); return false; }
-    const centre = bedCentre(halves.head), headBox = { minX: predicted.x - 0.5, minY: predicted.y - 0.5, minZ: predicted.z - 0.5,
-      maxX: predicted.x + 0.5, maxY: predicted.y + 0.5, maxZ: predicted.z + 0.5 };
+    // The delayed phase-7/5 observation assumes a stationary pose. Latest raw poses only veto it.
+    const current = poseNow(), predicted = intent.pose.centre;
+    if (!current || !perch?.head || chainDistance(current.centre, predicted) > 0.5
+      || chainDistance(current.centre, perch.head.centre) > 0.5) { refuse('seated_pose_changed'); return false; }
+    const centre = bedCentre(halves.head), headBox = intent.pose.box;
     const exposure = bedExposure(read, centre, headBox, [halves.foot, halves.head]);
-    const headDistance = chainDistance(centre, { ...predicted, y: predicted.y - 0.5 });
+    const headDistance = chainDistance(centre, intent.pose.feet);
     const headDamage = bedDamage(headDistance, exposure);
     // Re-evaluate SELF at the actual present position, after the human delay and immediately before use.
     const self = bedSelfEstimate(read, halves.head, halves.foot, actor.entity.position, actor.entity);
@@ -3613,10 +3634,11 @@ async function endBedKill() {
       used: out.bedTrials.filter((b: any) => b.useRequested).length, reach: Math.max(bedEyeReach(actor.entity.position, halves.foot), bedEyeReach(actor.entity.position, halves.head)),
       damage: self.expected, health: Number(actor.health), headDamage, headDistance };
     const reason = bedUseRefusal(input);
-    pending.latestEstimate = { tick, observedTick: intent.tick, aheadTicks: ahead, source: forecast.source, observedHead: intent.head,
-      model: forecast.model, predictedHead: predicted, headDistance, exposure, headDamage, self };
+    pending.latestEstimate = { tick, observedTick: intent.tick, aheadTicks: ahead, source: intent.pose.source, observedHead: intent.head,
+      predictedHead: predicted, latestHead: current.centre, headDistance, exposure, headDamage, self };
     if (reason) { refuse(reason, { estimate: pending.latestEstimate }); return false; }
     if (!atStand()) { refuse('operating_position_changed'); return false; }
+    if (!clearNow(actor.entity.position)) { refuse('breath_or_contact_at_operation'); return false; }
     pending.useRequested = true; pending.useTick = tick; pending.phaseAtUse = view?.dragon?.phase;
     pending.headAtUse = headOf(view?.dragon); pending.prediction = pending.latestEstimate; pending.healthBefore = Number(actor.health);
     pending.positionAtUse = { ...actor.entity.position };
@@ -3626,10 +3648,12 @@ async function endBedKill() {
     return true;
   };
   const useStillAllowed = () => {
-    if (!descending() || !layout || !pending) return false;
+    if (!bedWindow() || !layout || !pending) return false;
     if (pending.detonationTick !== null) return true;
     const self = bedSelfEstimate(read, layout.head, layout.foot, actor.entity.position, actor.entity);
-    const allowed = atStand() && Number.isFinite(self.expected) && self.expected <= 6 && self.expected + 4 < Number(actor.health)
+    const current = poseNow();
+    const allowed = atStand() && clearNow(actor.entity.position) && !!current && !!perch?.head && chainDistance(current.centre, perch.head.centre) <= 0.5
+      && Number.isFinite(self.expected) && self.expected <= 6 && self.expected + 4 < Number(actor.health)
       && [layout.head, layout.foot].every(p => bedEyeReach(actor.entity.position, p) <= 4.5);
     if (!allowed) refuse('self_or_reach_changed_during_use', { self });
     return allowed;
@@ -3637,6 +3661,11 @@ async function endBedKill() {
   try {
     sample();
     while (!terminal) {
+      if (pending && (!bedWindow() || pending.perch !== perch?.n)) {
+        pending.notDetonatedReason ??= 'seated_window_ended'; pending.healthAfter = Number(actor.health);
+        pending = null; layout = null;
+      }
+      if (!pending && layoutPerch !== perch?.n) layout = null;
       if (leaveNeeded) {
         const away = basinWaitingCell(view);
         if (away) { await go('leave_on_takeoff', away); leaveNeeded = false; }
@@ -3645,46 +3674,63 @@ async function endBedKill() {
       }
       // A telemetry reply must not delay takeoff evacuation. Finish it before another damage-producing hand.
       if (afterReadBusy) { await sleep(25); continue; }
-      if (descending() && (out.placementAttempts < 3 || pending)) {
+      if (bedWindow() && !bedBlocked && (packCount('white_bed') > 0 || pending)) {
+        const blockBeds = (reason: string) => { refuse(reason); bedBlocked = true; perch!.bedUnavailableReason = reason; };
         if (pending && !String(read(pending.foot)?.name).endsWith('_bed')) {
           pending.notDetonatedReason ??= 'bed_destroyed_before_use'; pending.healthAfter = Number(actor.health); pending = null; layout = null;
         }
-        if (!layout) layout = chooseLayout();
-        if (!layout) { refuse('no_reachable_screened_pillar_layout'); await sleep(250); continue; }
-        if (!atStand()) { if (!await go('approach_pillar_during_descent', layout.stand, descending)) layout = null; continue; }
+        if (!layout) { layout = chooseLayout(); layoutPerch = perch!.n; }
+        if (!layout) { blockBeds('no_reachable_screened_head_layout'); continue; }
+        const byTick = (offset: number) => bedWindow() && tick - perch!.startTick < offset;
+        if (!atStand()) {
+          if (!await go('approach_turned_head', layout.stand, () => byTick(100) && clearNow(layout!.stand))) {
+            layout = null; blockBeds('operating_footing_unreachable_in_time');
+          }
+          continue;
+        }
         let built = true;
         for (const cell of layout.screen) {
           if (read(cell)?.name === 'obsidian') continue;
-          if (!descending() || packCount('obsidian') < 1 || bedEyeReach(actor.entity.position, cell) > 4.5 || !bedCellSupported(read, cell)) { built = false; break; }
+          if (!byTick(160) || !clearNow(actor.entity.position) || packCount('obsidian') < 1 || bedEyeReach(actor.entity.position, cell) > 4.5 || !bedCellSupported(read, cell)) { built = false; break; }
           killPlaced.set(`${cell.x},${cell.y},${cell.z}`, cell);
-          if (!await perform('place_obsidian_screen', [{ do: 'place', block: 'obsidian', at: [cell] }], descending) || read(cell)?.name !== 'obsidian') { built = false; break; }
+          if (!await perform('place_obsidian_screen', [{ do: 'place', block: 'obsidian', at: [cell] }], () => byTick(160) && atStand() && clearNow(actor.entity.position)) || read(cell)?.name !== 'obsidian') { built = false; break; }
         }
-        if (!built) { refuse('screen_build_unconfirmed'); layout = null; await sleep(100); continue; }
+        if (!built) { blockBeds('screen_build_unconfirmed'); layout = null; continue; }
         if (!pending) {
-          if (out.placementAttempts >= 3 || packCount('white_bed') <= 1) { refuse('reserve_bed_untouched'); await sleep(100); continue; }
-          if ([layout.foot, layout.head].some(p => bedEyeReach(actor.entity.position, p) > 4.5)) { refuse('placement_out_of_reach'); layout = null; continue; }
-          pending = { n: ++out.placementAttempts, foot: layout.foot, head: layout.head, stand: layout.stand, screen: layout.screen,
+          if (!byTick(200)) { blockBeds('placement_time_budget'); continue; }
+          if ([layout.foot, layout.head].some(p => bedEyeReach(actor.entity.position, p) > 4.5)) { blockBeds('placement_out_of_reach'); layout = null; continue; }
+          pending = { n: ++out.placementAttempts, perch: perch!.n, plannedTick: tick, phase7Head: perch!.head, foot: layout.foot, head: layout.head, stand: layout.stand, screen: layout.screen,
             placeRequestTick: null, placedTick: null, useTick: null, detonationTick: null, useRequested: false, minHealth: Number(actor.health), healthBeforePlace: Number(actor.health),
             healthBefore: null, healthAfter: null, dragonBefore: null, dragonAfter: null, dragonHealthServerBefore: null, dragonHealthServerAfter: null, dragonLoss: null, selfDamage: null };
           out.bedTrials.push(pending);
           for (const p of [layout.foot, layout.head]) killPlaced.set(`${p.x},${p.y},${p.z}`, p);
-          const placed = await perform('place_descent_bed', [{ do: 'place', block: 'white_bed', at: [layout.foot] }], descending, () => {
+          const placed = await perform('place_seated_head_bed', [{ do: 'place', block: 'white_bed', face: 'down', at: [layout.foot] }], () => byTick(200) && atStand() && clearNow(actor.entity.position), () => {
             pending!.placeRequestTick = tick;
             pending!.headAtPlace = headOf(view?.dragon); pending!.phaseAtPlace = view?.dragon?.phase;
-            return [layout!.foot, layout!.head].every(p => bedEyeReach(actor.entity.position, p) <= 4.5);
+            const current = poseNow();
+            return !!current && chainDistance(current.centre, perch!.head.centre) <= 0.5
+              && [layout!.foot, layout!.head].every(p => bedEyeReach(actor.entity.position, p) <= 4.5);
           });
-          if (pending.placedTick === null && bedHalves(read(layout.foot), layout.foot)) pending.placedTick = tick; // conservative late confirmation
-          if (!placed || pending.placedTick === null) { refuse('placement_failed_or_interrupted'); if (pending.placedTick === null) { pending = null; layout = null; } continue; }
+          const confirmed = bedHalves(read(layout.foot), layout.foot), other = bedHalves(read(layout.head), layout.head);
+          if (pending.placedTick === null && confirmed && other && JSON.stringify(confirmed.head) === JSON.stringify(layout.head)
+            && JSON.stringify(other.foot) === JSON.stringify(layout.foot)) pending.placedTick = tick; // conservative BOTH-half confirmation
+          if (!placed || pending.placedTick === null) {
+            blockBeds('placement_failed_or_interrupted');
+            if ([layout.foot, layout.head].some(p => String(read(p)?.name).endsWith('_bed'))) {
+              leaveNeeded = true; perch!.endTick ??= tick; perch!.endReason = 'unconfirmed_placement';
+            } else { pending = null; layout = null; }
+            continue;
+          }
         }
         // Commands are measurement only. Read before the delayed targeting observation, never use their result to choose the shot.
         const beforeTrial = pending;
         let beforeReady = false;
         bedReadPending = serverHealth().then(health => { beforeTrial.dragonHealthServerBefore = health; beforeTrial.serverBeforeTick = tick; })
           .catch(error => { beforeTrial.serverBeforeError = String(error); }).finally(() => { beforeReady = true; });
-        while (!terminal && descending() && !beforeReady) await sleep(25);
-        if (!descending()) { refuse('phase_changed_during_health_read'); continue; }
+        while (!terminal && bedWindow() && !beforeReady) await sleep(25);
+        if (!bedWindow()) { refuse('phase_changed_during_health_read'); continue; }
         pending.dragonBefore = view?.dragon?.health ?? null;
-        const used = await perform('use_descent_bed', [{ do: 'use', at: [layout.foot] }], () => descending() && (!pending?.useRequested || useStillAllowed()), useCheck);
+        const used = await perform('use_seated_head_bed', [{ do: 'use', at: [layout.foot] }], () => bedWindow() && (!pending?.useRequested || useStillAllowed()), useCheck);
         if (pending.useRequested) {
           const trial = pending;
           trial.useHandOk = used; trial.healthAfter = Number(actor.health); trial.dragonAfter = view?.dragon?.health ?? null;
@@ -3697,34 +3743,48 @@ async function endBedKill() {
             trial.dragonLoss = trial.dragonHealthServerBefore !== null && health !== null ? trial.dragonHealthServerBefore - health : null;
             if (trial.detonationTick !== null && trial.dragonLoss > 0) out.explosionsHit++;
           }).catch(error => { trial.serverAfterError = String(error); }).finally(() => { afterReadBusy = false; });
-          pending = null; layout = null;
-        } else if (pending.notDetonatedReason === 'self_damage' || pending.notDetonatedReason === 'out_of_reach' || pending.notDetonatedReason === 'operating_position_changed') {
-          layout = chooseLayout(); // keep the placed bed; move to a newly proven screened operation point
-          if (!layout) leaveNeeded = true;
+          pending = null; // reuse the verified supports/screen after a CONFIRMED blast
+          if (trial.detonationTick === null) { layout = null; leaveNeeded = true; perch!.endTick ??= tick; perch!.endReason = 'unconfirmed_use'; }
+        } else if (['self_damage', 'out_of_reach', 'operating_position_changed', 'breath_or_contact_at_operation', 'seated_pose_changed'].includes(pending.notDetonatedReason)) {
+          // A placed but unsafe bed is not a reason to switch to sword beside it. Leave this window.
+          leaveNeeded = true; perch!.endTick ??= tick; perch!.endReason = pending.notDetonatedReason;
         } else if (pending.notDetonatedReason === 'bed_halves_missing_or_wrong_facing') {
           // Recover a wrongly oriented bed with the existing dig hand; an unknown use result is never retried here.
           const foot = pending.foot;
-          if (String(read(foot)?.name).endsWith('_bed')) await perform('recover_misaligned_bed', [{ do: 'dig', at: [foot] }], descending);
+          if (String(read(foot)?.name).endsWith('_bed')) await perform('recover_misaligned_bed', [{ do: 'dig', at: [foot] }], bedWindow);
           if (!String(read(foot)?.name).endsWith('_bed')) { pending = null; layout = null; }
+          else { leaveNeeded = true; perch!.endTick ??= tick; perch!.endReason = 'misaligned_bed_recovery_failed'; }
+          blockBeds('bed_halves_missing_or_wrong_facing');
         }
         await sleep(50); continue;
       }
-      if (sitting()) {
-        const basin = view?.dragon?.approach?.basin?.[0];
+      if (swordWindow()) {
+        const swordClear = (feet: P3) => {
+          const raw = dragonEntity();
+          return !!raw && bedOperationClear({ position: raw.position, yaw: raw.yaw, phase: 7 }, feet, view?.dragonBreath ?? []);
+        };
+        const basin = view?.dragon?.approach?.basin?.find((p: P3) => swordClear(p));
         if (!enteredSit) {
-          if (!basin) { refuse('no_observed_basin'); await sleep(200); continue; }
-          enteredSit = await go('enter_basin_for_iron_sword', basin, sitting);
+          if (!basin) { refuse('no_observed_basin'); leaveNeeded = true; if (perch) { perch.endTick ??= tick; perch.endReason = 'no_observed_basin'; } continue; }
+          enteredSit = await go('enter_basin_for_iron_sword', basin, () => swordWindow() && swordClear(basin));
           if (!enteredSit) { await sleep(100); continue; }
         }
-        const row: Record<string, any> = { tick, seconds: seconds(), dragonBefore: view?.dragon?.health, healthBefore: Number(actor.health) };
-        await perform('iron_sword_head', [{ do: 'equip', item: 'iron_sword', onFail: 'stop' }, { do: 'attack', target: 'ender_dragon', untilDead: false, seconds: 5 }], sitting);
+        const row: Record<string, any> = { tick, seconds: seconds(), perch: perch?.n ?? null,
+          reason: packCount('white_bed') === 0 ? 'beds_exhausted' : perch?.bedUnavailableReason, dragonBefore: view?.dragon?.health, healthBefore: Number(actor.health) };
+        await perform('iron_sword_head', [{ do: 'equip', item: 'iron_sword', onFail: 'stop' }, { do: 'attack', target: 'ender_dragon', untilDead: false, seconds: 5 }], () => swordWindow() && swordClear(actor.entity.position));
         row.dragonAfter = view?.dragon?.health ?? null; row.healthAfter = Number(actor.health); out.windows.push(row);
         if (row.dragonAfter !== null && row.dragonAfter < row.dragonBefore) out.meleeHitWindows++;
         continue;
       }
+      if (sitting()) { await sleep(50); continue; } // phase 6 turns first; never place at its old yaw
       // Stay in the open while flying, rather than in a roofed hole that can hold phase 1 indefinitely.
-      const away = basinWaitingCell(view);
-      if (away && chainDistance(actor.entity.position, away) > 2) await go('open_wait', away, () => live() && !descending() && !sitting());
+      const anchor = basinWaitingCell(view);
+      const away = anchor && bedOpenWaitCells(anchor, actor.entity.position, read)
+        .find(p => !(view?.dragonBreath ?? []).some((c: any) => Math.hypot(c.x - p.x, c.z - p.z) <= Math.max(7, c.dangerRadius ?? c.radius) + 0.5));
+      if (away && tick >= nextOpenMove) {
+        nextOpenMove = tick + 60;
+        await go('open_wait', away, () => live() && !sitting() && tick < nextOpenMove);
+      }
       else await sleep(100);
     }
   } catch (error) { out.error = String((error as Error)?.stack ?? error).slice(0, 1600); stop('script_error'); }
@@ -3738,6 +3798,7 @@ async function endBedKill() {
     out.deaths = actorDeaths - deaths0; out.minHealth = lowest.stop(); out.dragonHealthEnd = view?.dragon?.health ?? null;
     if (terminal === 'time_limit') out.dragonHealthAt25Minutes = out.dragonHealthEnd;
     if (pending) pending.notDetonatedReason ??= terminal;
+    if (perch && perch.endTick === null) { perch.endTick = out.endTick; perch.endReason = terminal; }
     for (const [kind, n] of Object.entries(actor.reflexLedger.counts()) as Array<[string, number]>) {
       const used = n - (counts0[kind] ?? 0); if (used > 0) out.reflexKinds[kind] = used;
     }

@@ -1,4 +1,4 @@
-import { isPerched, PART_ID_OFFSET, type DragonPart, type P3 } from './dragonParts.js';
+import { boxCentre, partBox, isPerched, PART_ID_OFFSET, type DragonPart, type P3 } from './dragonParts.js';
 
 /** Post-movement samples, oldest first, one per client physicsTick. Mineflayer yaw is radians:
  * Notchian yRot (degrees) = 180 - yaw * 180 / PI. Never feed the rounded observation yaw here. */
@@ -21,6 +21,17 @@ export interface DragonHeadPrediction {
 const finitePoint = (p: P3 | undefined): p is P3 => !!p && [p.x, p.y, p.z].every(Number.isFinite);
 export const wrapDragonYaw = (yaw: number): number => ((yaw + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
 export const dragonHeadCentre = (feet: P3): P3 => ({ ...feet, y: feet.y + 0.5 });
+
+/** Stationary perch pose AFTER scanning has turned the dragon. No flight-history extrapolation,
+ * rounded observation headPosition, or unavailable part entity is required. Mineflayer yaw is radians.
+ * Callers capture the first phase-7 pose and veto subsequent changes; phase 6 is never a targeting pose. */
+export function seatedDragonHead(dragon: { position: P3; yaw: number; phase: number | null }) {
+  if ((dragon.phase !== 7 && dragon.phase !== 5) || !finitePoint(dragon.position) || !Number.isFinite(dragon.yaw)) return null;
+  const box = partBox(dragon, 'head'), centre = boxCentre(box);
+  return { box, centre, feet: { ...centre, y: box.minY },
+    cloud: { x: centre.x + Math.sin(dragon.yaw) * 2.5, y: centre.y, z: centre.z + Math.cos(dragon.yaw) * 2.5 },
+    source: 'seated_body_position_yaw' as const };
+}
 
 /** A bounded, contiguous history. A missing/invalid tick or identity change must clear the caller's
  * history; gaps are deliberately not filled with fictional samples. Inputs are never mutated. */
