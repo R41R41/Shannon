@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
-import { endermenWithoutSight, pickEnderman } from '../../src/services/minebot/utils/primitives/fight.js';
+import { endermenFarther, endermenWithoutSight, pickEnderman } from '../../src/services/minebot/utils/primitives/fight.js';
 
 /**
  * `fight target=enderman` (the kind): the one picked is the one the roof hunts of 11/4 won with (S6): an angry one first, else the nearest whose
@@ -57,5 +57,13 @@ describe('fight picks the enderman of a roof hunt', () => {
     expect(endermenWithoutSight(body({}, []))).toBeNull();
     // A near one in sight (under the 8 m band) is not "none in sight": the old pick takes it.
     expect(endermenWithoutSight(body({}, [enderman(6, 4.5)]))).toBeNull();
+  });
+
+  it('names the endermen seen beyond 48 m, nearest first, with the way to them', () => {
+    const words = endermenFarther(body({}, [enderman(9, 70.5), enderman(10, 0.5, -90.5), enderman(11, 20.5)]));
+    expect(words).toContain('#9 70m 東');
+    expect(words).toContain('#10 91m 北');
+    expect(words).not.toContain('#11');
+    expect(endermenFarther(body({}, [enderman(11, 20.5)]))).toBe('');
   });
 });

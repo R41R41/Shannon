@@ -63,7 +63,11 @@ scene('s6_pearls_kind', '自然湧き: fight target=enderman（体が選ぶ）�
         if (emptyInRow < 2 && /enderman_not_visible|enderman_not_angry/u.test(String(code))) continue;   // another one may be in sight now
         emptyInRow = 0;
         const e0 = Date.now(); explore++;
-        const p0 = actor.entity.position, angle = (explore % 8) * Math.PI / 4, read = bodyReader(actor);
+        const p0 = actor.entity.position, read = bodyReader(actor);
+        // Toward the nearest enderman seen more than 20 m off (what the fight's line names: a head would go there), else the next compass direction.
+        const seenFar = (Object.values(actor.entities ?? {}) as any[]).filter(e => e?.name === 'enderman' && e.position && e.position.distanceTo(p0) > 20)
+          .sort((x, y) => x.position.distanceTo(p0) - y.position.distanceTo(p0))[0];
+        const angle = seenFar ? Math.atan2(seenFar.position.z - p0.z, seenFar.position.x - p0.x) : (explore % 8) * Math.PI / 4;
         let goal3: { x: number; y: number; z: number } | null = null;
         for (const len of [10, 8, 12, 6]) for (const dy of [0, -1, 1, -2, 2, -3, 3]) {
           const c = { x: Math.floor(p0.x + len * Math.cos(angle)), y: Math.floor(p0.y + 0.001) + dy, z: Math.floor(p0.z + len * Math.sin(angle)) };

@@ -134,6 +134,16 @@ export function endermenWithoutSight(bot: any): string | null {
   try { const line = endermanLine(bodyReader(bot), at, first.position, ENDERMAN_EYE); const b = line.between[0]; if (b) hide = `、間に (${b.at.x},${b.at.y},${b.at.z}) ${b.name}`; } catch { hide = ''; }
   return `${ENDERMAN_PICK_RANGE}m 内のエンダーマン ${near.length} 体はどれも目が見えない（最寄り #${first.id} ${first.position.distanceTo(at).toFixed(1)}m${hide}）`;
 }
+/** The nearest endermen beyond ENDERMAN_PICK_RANGE the body is told of (up to three): id, distance, cell and the way from here. Empty when none. */
+export function endermenFarther(bot: any): string {
+  const at = bot.entity?.position;
+  if (!at) return '';
+  const far = (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity && entity.position && entity.isValid !== false && String(entity.name ?? '').toLowerCase() === 'enderman'
+    && entity.position.distanceTo(at) > ENDERMAN_PICK_RANGE && !isDying(bot, entity)).sort((a, b) => a.position.distanceTo(at) - b.position.distanceTo(at)).slice(0, 3);
+  if (!far.length) return '';
+  const way = (dx: number, dz: number) => { const deg = (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360; return ['北', '北東', '東', '南東', '南', '南西', '西', '北西'][Math.round(deg / 45) % 8]; };
+  return `見えている遠いエンダーマン: ${far.map(e => `#${e.id} ${e.position.distanceTo(at).toFixed(0)}m ${way(e.position.x - at.x, e.position.z - at.z)} (${Math.floor(e.position.x)},${Math.floor(e.position.y)},${Math.floor(e.position.z)})`).join('、')}。`;
+}
 /** How far an enderman named by its kind is looked for (its gaze reaches 64 m; the roof hunts of 11/4 killed 7 of 34 that began 33-48 m off). */
 const ENDERMAN_PICK_RANGE = 48;
 /**
@@ -239,7 +249,9 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     const next = /blaze/u.test(name) ? '湧き場の部屋が見える足場（probe kind=camp）へ go で寄り、blaze が見えてから呼ぶ。居ない時は少し待つ'
       : /enderman/u.test(name) ? '開けた所へ動いて probe kind=around で居る所を確かめ、見える所で呼ぶ'
         : '近づいて probe kind=around で居る所を確かめてから呼ぶ';
-    return { ...none('lost', `${args.target} が 32m 内に見えない（死ぬのを見た記録も無い）。${next}`), code: 'target_not_found' };
+    // Endermen farther off that the body does see (it is told of them out to about 128 m): where they are, so the planner goes toward them (S6, 11/5, c1 lab: 33 calls in a row said only "not in 32 m").
+    const farther = /enderman/u.test(name) ? endermenFarther(bot) : '';
+    return { ...none('lost', `${args.target} が ${/enderman/u.test(name) ? ENDERMAN_PICK_RANGE : 32}m 内に見えない（死ぬのを見た記録も無い）。${farther}${next}`), code: 'target_not_found' };
   }
   if (target.type === 'player' || target.username) return none('invalid_input', `${labelOf(target)} は人。fight は生き物（敵）にだけ使う`);
   const label = labelOf(target);
