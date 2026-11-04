@@ -32,6 +32,9 @@ function terrain(perch = p(103.5, 74, -39.5)) {
     : v.x === Math.floor(perch.x) && v.z === Math.floor(perch.z) && v.y < perch.y ? solid('bedrock') : air());
   return { read, blocks, perch };
 }
+const waitPlan: (anchor: P3 | null, here: P3, centre: P3 | null, fallback: P3[], read: geometry.BedBlockReader, clouds: geometry.BedCloud[]) =>
+  { kind: 'recover' | 'return' | 'move'; to: P3 } | null = new Function('scenes', 'bedOpenWaitCells', 'chainDistance',
+    compiled + '\nreturn bedWaitPlan;')({}, geometry.bedOpenWaitCells, (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z));
 
 afterEach(() => { vi.useRealTimers(); });
 
@@ -100,6 +103,41 @@ describe('human operation and self-harm veto', () => {
 });
 
 describe('turned seated head and bed operation geometry', () => {
+  it.each([p(103.5, 74, -39.5), p(-42.5, 69, 123.5)])('finds a screened bed on a level shelf previously omitted at %j', position => {
+    const d = { position, yaw: 0, phase: 7 }, floor = position.y - 2;
+    const read = (v: P3) => v.y <= floor ? solid('end_stone') : air();
+    const layouts = geometry.seatedBedLayouts(d, read, 4);
+    expect(layouts.length).toBeGreaterThan(0);
+    // The old sy <= pillow.y - 1 search had no standing cell on this natural shelf.
+    for (const l of layouts) {
+      expect(l.stand.y).toBe(l.head.y);
+      expect(l.screen.length).toBeLessThanOrEqual(4);
+      expect(l.selfDamage).toBeLessThanOrEqual(6); expect(l.selfDamage + 4).toBeLessThan(20);
+      expect(l.headDamage).toBeGreaterThanOrEqual(50);
+      expect(geometry.bedOperationClear(d, l.stand)).toBe(true);
+      for (const v of [l.head, l.foot, ...l.screen]) expect(geometry.bedEyeReach(l.stand, v)).toBeLessThanOrEqual(4.5);
+    }
+  });
+  it.each(['normal', 'unloaded', 'solid', 'budget', 'health'] as const)('accounts for every visited node and stage (%s)', mode => {
+    const d = { position: p(103.5, 74, -39.5), yaw: 0, phase: 7 }, t = terrain(), diag: Record<string, number> = {};
+    const read = mode === 'unloaded' ? () => null : mode === 'solid' ? () => solid() : t.read;
+    const budget = mode === 'budget' ? 0 : 4, health = mode === 'health' ? 5 : 20;
+    const result = geometry.seatedBedLayouts(d, read, budget, health, diag);
+    expect(result).toEqual(geometry.seatedBedLayouts(d, read, budget, health));
+    expect(diag.head_candidates).toBe(125);
+    expect(diag.candidates).toBe(diag.rejected + diag.expanded + diag.accepted);
+    expect(diag.accepted).toBe(result.length);
+    expect(diag.head_candidates).toBe(diag.head_not_air + diag.head_far_or_weak + diag.head_passed);
+    expect(diag.foot_candidates).toBe(diag.foot_not_air + diag.foot_passed);
+    expect(diag.stand_candidates).toBe(diag.stand_not_open + diag.stand_no_floor + diag.stand_not_clear + diag.stand_out_of_reach + diag.stand_passed);
+    expect(diag.screen_candidates).toBe(diag.screen_unsupported + diag.screen_over_budget + diag.screen_conflict + diag.screen_out_of_reach
+      + diag.self_damage_too_high + diag.head_damage_low + diag.accepted);
+    if (mode === 'budget') {
+      expect(diag.screen_over_budget).toBeGreaterThan(0);
+      expect(diag.screen_over_budget_required_min).toBeGreaterThan(0);
+      expect(Object.entries(diag).filter(([k]) => /^screen_over_budget_required_\d+$/u.test(k)).reduce((n, [, count]) => n + count, 0)).toBe(diag.screen_over_budget);
+    }
+  });
   it.each([0, Math.PI / 2, Math.PI, -Math.PI / 2, 0.72])('uses the head, independent of the fountain, at yaw %s', yaw => {
     const dragon = { position: p(103.5, 74, -39.5), yaw, phase: 7 };
     const t = terrain(), pose = headModel.seatedDragonHead(dragon)!;
@@ -146,6 +184,21 @@ describe('turned seated head and bed operation geometry', () => {
     expect(geometry.bedOpenWaitCells(anchor, anchor, () => null)).toEqual([]);
     expect(geometry.bedOpenWaitCells(anchor, anchor, v => v.y === 73 ? solid() : t.read(v))).toEqual([]);
   });
+  it('returns from eight metres, preserves the nearby shuffle, and chooses recovery before a sit from the outer island', () => {
+    const t = terrain(), centre = t.perch, anchor = p(115.5, 70, -39.5);
+    for (const here of [anchor, p(anchor.x + 3, 70, anchor.z), p(anchor.x + 7.99, 70, anchor.z)]) {
+      expect(waitPlan(anchor, here, centre, [], t.read, [])).toEqual({ kind: 'move', to: geometry.bedOpenWaitCells(anchor, here, t.read)[0] });
+    }
+    const displaced = p(anchor.x + 8, 70, anchor.z);
+    expect(geometry.bedOpenWaitCells(anchor, { ...displaced, x: displaced.x + 0.1 }, t.read)).toEqual([]);
+    expect(waitPlan(anchor, displaced, centre, [], t.read, [])).toEqual({ kind: 'return', to: anchor });
+    const far = p(centre.x + 25, 53, centre.z);
+    expect(waitPlan(anchor, far, centre, [centre, anchor], t.read, [])).toEqual({ kind: 'recover', to: anchor });
+    expect(waitPlan(null, displaced, centre, [centre, anchor], t.read, [])).toEqual({ kind: 'recover', to: anchor });
+    expect(waitPlan(null, displaced, centre, [centre], t.read, [])).toBeNull(); // no portal destination
+    expect(waitPlan(anchor, displaced, centre, [], () => null, [])).toBeNull();
+    expect(waitPlan(anchor, displaced, centre, [], t.read, [{ ...anchor, radius: 50 }])).toBeNull();
+  });
 });
 
 function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; limit?: number; damage?: number; headDelayMs?: number } = {}) {
@@ -173,7 +226,8 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
     sleep: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
     dragonHealthServer: vi.fn(async () => d.health),
     evidence: vi.fn(async () => ({ boss: { verified: true, witness: { entityId: options.proofId ?? 77 } } })),
-    basinWaitingCell: () => p(115.5, 70, -39.5),
+    basinWaitingCell: vi.fn((): P3 | null => p(115.5, 70, -39.5)),
+    islandFootings: vi.fn(() => [p(115.5, 70, -39.5)]),
     ask: vi.fn(async (command: string) => { commands.push(command); return ''; }),
     act: async (hands: any[], _seconds: number, _extra: any, signal: AbortSignal) => {
       expect(ACT_HANDS.safeParse(hands).success).toBe(true);
@@ -222,6 +276,40 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
 }
 
 describe('end_bed_kill scene with mocked I/O', () => {
+  it('records stage counts, raw pose, material and 25 observed ground columns when geometry is empty', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 1000 });
+    const head = headModel.seatedDragonHead(r.d)!.feet;
+    for (let x = Math.floor(head.x) - 2; x <= Math.floor(head.x) + 2; x++)
+      for (let z = Math.floor(head.z) - 2; z <= Math.floor(head.z) + 2; z++)
+        for (let y = Math.floor(head.y) - 2; y <= Math.floor(head.y) + 2; y++) r.blocks.set(key(p(x, y, z)), solid('bedrock'));
+    const running = r.run(); await vi.advanceTimersByTimeAsync(1100); const out = await running;
+    const info = out.perches[0].layoutDiag;
+    expect(info.diag.head_not_air).toBe(125); expect(info.diag.accepted).toBe(0);
+    expect(info.diag.candidates).toBe(info.diag.rejected + info.diag.expanded + info.diag.accepted);
+    expect(info.body.position).toEqual(r.d.position); expect(info.body.yaw).toBe(r.d.yaw);
+    expect(info.seatedDragonHead).toEqual(headModel.seatedDragonHead(r.d));
+    expect(info.obsidian).toBe(4); expect(info.clearNowRejected).toBe(0);
+    expect(info.groundScan.columns).toHaveLength(25);
+    expect(info.groundScan.columns.every((c: any) => c.y === Math.floor(head.y) + 2 && c.name === 'bedrock' && !c.unknownAbove)).toBe(true);
+    expect(out.refusals.some((row: any) => row.reason === 'no_reachable_screened_head_layout')).toBe(true);
+  });
+  it('separates current-cloud rejections from geometry and caps diagnostics at the first twelve perches', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 16_000 });
+    r.clouds.push({ x: r.perch.x, y: 70, z: r.perch.z, radius: 50 });
+    const running = r.run();
+    for (let n = 0; n < 14; n++) {
+      r.d.phase = 7; await vi.advanceTimersByTimeAsync(600);
+      r.d.phase = 6; await vi.advanceTimersByTimeAsync(400);
+    }
+    r.disconnect(); await vi.advanceTimersByTimeAsync(300); const out = await running;
+    expect(out.perches).toHaveLength(14);
+    expect(out.perches.filter((row: any) => row.layoutDiag)).toHaveLength(12);
+    for (const row of out.perches.slice(0, 12)) {
+      expect(row.layoutDiag.diag.accepted).toBeGreaterThan(0);
+      expect(row.layoutDiag.clearNowRejected).toBe(row.layoutDiag.geometryCandidates);
+    }
+    expect(out.perches.slice(12).every((row: any) => !row.layoutDiag)).toBe(true);
+  });
   it('includes the shared knock record on death and removes packet listeners', async () => {
     vi.useFakeTimers(); const r = rig({ limit: 4000 }); r.actor.entity.id = 42;
     const promise = r.run(); await vi.advanceTimersByTimeAsync(100);
@@ -437,6 +525,67 @@ describe('end_bed_kill scene with mocked I/O', () => {
       expect(moves[i].hands[0].to).not.toEqual(moves[i - 1].hands[0].to);
     }
     for (const row of moves) { expect(ACT_HANDS.safeParse(row.hands).success).toBe(true); expect(goProblem(row.hands[0])).toBeNull(); }
+    expect(out.anchorReturnAttempts).toBe(0);
+  });
+  it('walks back after displacement for longer than the shuffle deadline and samples distance during the hand', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 6500 }); r.d.phase = 1;
+    r.actor.entity.position.x += 10;
+    let returning = false;
+    r.setHandler(async (hands, signal) => {
+      if (hands[0]?.do === 'go' && hands[0].seconds === 60) {
+        returning = true;
+        await new Promise(resolve => setTimeout(resolve, 4500));
+        expect(signal.aborted).toBe(false); // three seconds must not cut the return
+      }
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(6600); const out = await running;
+    expect(returning).toBe(true);
+    const row = out.actions.find((a: any) => a.label === 'open_wait_return');
+    expect(row.ok).toBe(true); expect(row.hands[0].to).toEqual(p(115, 70, -40));
+    expect(row.hands[0].seconds).toBe(60); expect(goProblem(row.hands[0])).toBeNull();
+    expect(out.anchorReturnAttempts).toBe(1); expect(out.anchorReturnFailures).toBe(0);
+    expect(out.maxAnchorDistance).toBe(10); expect(out.anchorOver8Seconds).toBeCloseTo(5, 1);
+    const during = out.anchorTimeline.filter((point: any) => point.seconds >= 1 && point.seconds < 4);
+    expect(during).toHaveLength(3); expect(during.every((point: any) => point.distance === 10 && point.position.x === 125.5)).toBe(true);
+    expect(out.anchorTimeline.at(-1).distance).toBeLessThan(8);
+  });
+  it.each(['return', 'recover', 'missing_anchor'] as const)('counts an interrupted %s and retains phase/reflex vetoes', async mode => {
+    vi.useFakeTimers(); const r = rig({ limit: 1500 }); r.d.phase = 1;
+    r.actor.entity.position.x += mode === 'recover' ? 30 : 10;
+    r.d.approach.wait = [p(115.5, 70, -39.5)];
+    if (mode === 'missing_anchor') r.deps.basinWaitingCell.mockReturnValue(null);
+    r.setHandler(async (hands, signal) => {
+      if (hands[0]?.do === 'go') {
+        r.d.phase = 6; // next observation cancels it even though the return has a longer budget
+        await new Promise(resolve => setTimeout(resolve, 200)); expect(signal.aborted).toBe(true);
+        return false;
+      }
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(1600); const out = await running;
+    const label = mode === 'return' ? 'open_wait_return' : 'open_wait_recover';
+    expect(out.actions[0].label).toBe(label);
+    expect(out.actions[0].cancelled).toBe('observation_changed');
+    expect(out.actions[0].hands[0].to).toEqual(p(115, 70, -40));
+    expect(out.anchorReturnAttempts).toBe(1); expect(out.anchorReturnFailures).toBe(1);
+    if (mode === 'missing_anchor') { expect(out.anchorMissingSeconds).toBeCloseTo(1.5, 1); expect(out.maxAnchorDistance).toBeNull(); }
+    expect(r.commands).toEqual([]);
+  });
+  it('records a failed go that leaves the body outside the waiting area', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 1200 }); r.d.phase = 1; r.actor.entity.position.x += 10;
+    r.setHandler(async () => false);
+    const running = r.run(); await vi.advanceTimersByTimeAsync(1300); const out = await running;
+    expect(out.anchorReturnAttempts).toBeGreaterThan(0); expect(out.anchorReturnFailures).toBe(out.anchorReturnAttempts);
+    expect(out.anchorOver8Seconds).toBeCloseTo(1.2, 1); expect(out.maxAnchorDistance).toBe(10);
+  });
+  it('thins a long anchor timeline to at most 200 points while retaining all sampled distance statistics', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 405_000 }); r.d.phase = 1; r.actor.entity.position.x += 10;
+    r.setHandler(async () => false);
+    const running = r.run(); await vi.advanceTimersByTimeAsync(405_100); const out = await running;
+    expect(out.anchorSamples).toBe(406); expect(out.anchorTimeline.length).toBeLessThanOrEqual(200);
+    expect(out.anchorTimelineStrideSeconds).toBe(4);
+    expect(out.anchorTimeline[0].seconds).toBe(0); expect(out.anchorTimeline.at(-1).seconds).toBeGreaterThanOrEqual(400);
+    expect(out.maxAnchorDistance).toBe(10); expect(out.anchorOver8Seconds).toBeCloseTo(405, 1);
+    expect(vi.getTimerCount()).toBe(0);
   });
   it('cancels on early takeoff after one strong blast and replans the next seated window instead of continuing the old bed', async () => {
     vi.useFakeTimers(); const r = rig({ damage: 55, limit: 7000 });

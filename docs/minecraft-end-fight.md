@@ -859,3 +859,42 @@ phase 6の見回しが終わり、**phase 7へ入った最初の生の本体位�
 本作業は指定コピーだけ。commit、VM、本体／DB／ラボ／LLM、外部資料更新を行わず、`.codex-material/` は読まず変更しない。反射・fallClutch・FALL_CLUTCH_ENABLED・gazeGuard・dragonStrike・act一覧・環境変数設定は変更しない。S1に残るのはr208〜r211以降のラボ測定、新記録での原因候補／クラッチ開始・送信・着地・死亡率の確認、飛行中の箱の独立検証、実落下被害の取得である。
 
 最終検証：Node v24.21.0で補助39＋ベッド56＋比較66＝**3ファイル161件成功**。試験子プロセスだけに既存の隔離フラグとOPENAI／Mongoのオフライン用ダミーを渡し、共有.envの読込み・設定ファイル更新・実接続はしない。`node tests/unit/checkEndKnock.cjs` は変更5 TS root（probe全体を含む）の対象診断0件。`git diff --check` 成功。枝 `claude/dragon-end-sections`、HEAD `ba6bf2a`、許可範囲の8ファイルを未コミットで変更。
+
+## end_bed_kill の配置診断と待機地への復帰（2026-11-04、頼み20）
+
+このコピーの `lab-evidence/r205-report.json`〜`r211-report.json` を再集計すると、phase 7開始の153窓中、`no_reachable_screened_head_layout` は134窓（87.6%）、到達不能9、施工未確認3、設置失敗／中断2、設置射程外1。確認済み起爆はr206・r207・r208の各1回で、サーバーHP差は51.33・51.84・51.85。既存reportには候補の棄却段や周囲の地形がなく、134窓がgeometryで空だったのか、現在の雲を加える `clearNow` で全滅したのか、その内訳は **診断待ち**。なお `placedTick != null` のtrialは計5件だが、うち2件は `placement_failed_or_interrupted` で使用要求なし。確認tickだけを設置操作成功として数えない。
+
+コードで確認できた欠落は、立ち位置を枕より1〜3段下に限り、同じ高さの自然の平地さえ調べていなかったこと。枕候補は頭の足位置のfloorから上下2段、立ち位置は枕から上2〜下5段を有限走査し、横幅もcardinal方向を曖昧にしない `|side| < along - 1` の全整数へ広げる。`along=2..4` と、頭まで2.2m／頭被害50以上、目から両半分・全施工セルまで4.5m、身体空間・床・将来／現在の雲・頭／首接触の検査は維持する。平地の架空fixtureでは従来の高さ範囲に有効候補がなく、拡張後は自己遮蔽つき候補が出る。これが134窓の実地原因だったとは断定しない。
+
+黒曜石は実在庫だけを使い、支持の探索深さ3、頭被害50、240 tickの窓を維持する。爆発の式・collision shapeによる遮蔽計算、および **`selfDamage <= 6` かつ `selfDamage + 4 < health`** は維持する。予算不足、地形の段差、頭の窓、雲や反射との関係を追加で変更すべきかは新診断を待つ。
+
+### 配置の記録
+
+`seatedBedLayouts(dragon, read, budget, health, diag?)` は配列を返す契約を保ち、任意の `Record<string, number>` に検索木の訪問数を加算する。
+
+- `head/foot/stand/screen_candidates`：各段へ入った候補数。中間段の通過は `head/foot/stand_passed`、最終採用は `accepted`。
+- 棄却は先に当たった1理由だけ。`head_not_air`、`head_far_or_weak`、`foot_not_air`、`stand_not_open`、`stand_no_floor`、`stand_not_clear`（雲を追加する前の `bedOperationClear`）、`stand_out_of_reach`、`screen_unsupported`、`screen_over_budget`、`screen_conflict`（ベッド／身体と施工セルの衝突）、`screen_out_of_reach`、`self_damage_too_high`、`head_damage_low`。
+- `screen_over_budget_required_N` は必要黒曜石N個の予算超過件数。`screen_over_budget_required_min/max` はその最小／最大。既存ブロックは必要個数に含まれない。
+- 全段の `candidates = rejected + expanded + accepted`。`expanded` は次の段へ展開した中間候補で、1つの枕から複数の足・立ち位置・壁候補が生まれる。無効な姿勢／引数は `invalid_input` とし、候補は生成しない。必要個数の補助値を棄却件数へ足さない。
+
+`chooseLayout` が空を返した時、最初の12窓（`perches[].n <= 12`）に各1回だけ `perches[].layoutDiag` を保存する。`diag`、`body`（生position・yaw rad・phase）、`seatedDragonHead`、`obsidian`、`geometryCandidates`、`clearNowRejected`、`pendingRejected`、診断時tick／秒を含む。`groundScan` はdimensionのminY〜maxYを上から走査し、頭の足位置を中心とした5×5列の最初の固体のx/z/y/nameを保存する。固体なしはy/name=null、途中の未ロードは `unknownAbove` で区別し、完全に観測できた地面とは扱わない。通常はEndのdimension情報を使い、情報欠落時の走査範囲は0〜255として範囲自体も記録する。
+
+### 待機地へ戻る台本
+
+アンカーは `basinWaitingCell(view)` から毎秒更新する。近くでは従来の `bedOpenWaitCells(anchor, here, read)` と約60 tickごとの移動を使う。アンカーとの3D距離が8m以上なら、アンカー自身またはアンカー周辺で列挙した、屋根なし／自然の床／既存の雲から離れたセルへ `open_wait_return` で戻る。遠い身体を基準に2〜5mを要求して候補を失うことを防ぐ。
+
+観測したperch中心から水平25m以上、またはアンカーが取れない時は、台本の判断で次の座りを待たず `open_wait_recover` を選ぶ。`approach.wait`、観測済み待機地、`islandFootings` の候補を順に調べ、中心から水平10m以上25m未満の開けた自然地形へ戻す。中心が見えなければ既知の初期待機地／観測された島の足場を使う。床・上7セルの空気・現在の雲を再検査する。候補が見つからない場合は `no_open_wait_return_target` に理由を残し、架空の座標や未確認の地面を使わない。離陸時にもアンカーがなければ同じ観測候補へ退避する。
+
+復帰のgoは60秒、外側のactは65秒の予算。経路と長さはgoが決め、`maxDrop:1` を維持する。近距離の通常移動はgo 5秒・60 tick上限のまま。復帰は通常移動の3秒上限で切らず、`live() && !sitting() && tick < nextOpenMove` という同じ継続条件の期限を60秒にする。着座検出・死亡・切断・場面期限と既存反射は引き続き中断できる。戻れたという判定はhandの成功と目的地まで1m以内の両方が必要。
+
+- `anchorTimeline`：1秒ごとのtick／seconds／phase／身体position／anchor／3Dの `distance`／水平の `centreDistance`。最大200点を超えると2秒、4秒、8秒…の間隔へ間引き、全区間を残す。`anchorTimelineStrideSeconds` に現間隔、`anchorSamples` に間引く前のサンプル数を保存する。hand実行中や反射による移動中も取得する。
+- `anchorOver8Seconds`：直前の1秒サンプルが8mを超えていた区間の累積秒。終了時の端数秒も含める。`maxAnchorDistance` は間引く前のサンプルの最大（未観測ならnull）。`anchorMissingSeconds` はアンカーなしの秒数で、距離超過へ混ぜない。これらは毎tickの最大／厳密な閾値通過時刻ではなく1秒観測による値。
+- `anchorReturnAttempts`／`anchorReturnFailures`：returnとrecoverの試行数／未到達数。中断、go失敗、成功応答でも目的地から1m超を未到達とする。宛先候補の欠落は試行数へ入れず、上記refusalに記録する。通常移動の失敗とは分ける。
+
+### 検証と残課題
+
+単体試験は診断の全体／各段の収支、予算超過の必要数、平地の探索欠落、geometryと現在の雲の分離、最初の12窓だけの診断、近距離移動／8m復帰／25m・アンカー欠落時の復旧、3秒超の復帰、着座での中断、未到達数、毎秒記録／200点への間引きをモックで検査する。生成したhandは実 `ACT_HANDS`、goは実 `goProblem` に通す。変更したTSはprobe全体・geometry・ベッド試験の3 rootだけを `node tests/unit/checkEndBedKill.cjs` で構文／semantic検査し、依存先自身の型検査や全backend型検査は行わない。
+
+頭は既存の着座partBoxモデル、20 tick/s、クライアント受信tickを前提とする。歩行できること、反射の後に戻り切れること、実地で置ける／起爆できる窓が増えることは単体試験では保証しない。S1で新しい `layoutDiag` と距離記録を取り、134窓の内訳・実資材不足・雲による全滅・復帰の成否と死亡率を確認する。この作業は指定コピーだけ、HEAD `770264e` のまま未コミット。ラボ／VM／本体／DB／LLM／外部資料更新は行わず、`.codex-material/`、反射、FALL_CLUTCH_ENABLED、fallClutch、floorReflexes、dragonDanger、gazeGuard、dragonStrike、hand一覧、環境変数設定は変更しない。
+
+最終検証：Node v24.21.0でベッド72＋head model22＋比較66＋nook10＋full chain125＋knock39＝**6ファイル334件成功**。試験子プロセスに既存の隔離フラグとオフライン用ダミーを渡して実行。`node tests/unit/checkEndBedKill.cjs` は変更3 TS root（probe全体を含む）の対象診断0件。`git diff --check` 成功。許可範囲の6ファイルだけを未コミットで変更した。

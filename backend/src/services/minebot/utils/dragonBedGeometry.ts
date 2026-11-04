@@ -175,38 +175,69 @@ export interface SeatedBedLayout extends DescentBedLayout { headDistance: number
  * The foot faces FROM the operating point TOWARD the pillow, matching placeBlock's look at its
  * bottom support. Supports and an optional two-high screen share the actual obsidian budget.
  * This offers destinations; go and the unchanged reflexes still decide whether a walk is possible. */
-export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, budget: number, health = 20): SeatedBedLayout[] {
+export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, budget: number, health = 20, diag?: Record<string, number>): SeatedBedLayout[] {
+  // Counts are a search tree, not a Cartesian product: every visited node is rejected,
+  // expanded into the next stage, or accepted. Thus candidates = rejected + expanded + accepted.
+  const add = (name: string) => { if (diag) diag[name] = (diag[name] ?? 0) + 1; };
+  const visit = (stage: string) => { add('candidates'); add(`${stage}_candidates`); };
+  const pass = (stage: string) => { add('expanded'); add(`${stage}_passed`); };
+  const reject = (reason: string) => { add('rejected'); add(reason); };
+  if (diag) for (const name of ['candidates', 'rejected', 'expanded', 'accepted', 'head_candidates', 'head_passed',
+    'foot_candidates', 'foot_passed', 'stand_candidates', 'stand_passed', 'screen_candidates', 'head_not_air', 'head_far_or_weak',
+    'foot_not_air', 'stand_not_open', 'stand_no_floor', 'stand_not_clear', 'stand_out_of_reach', 'screen_unsupported',
+    'screen_over_budget', 'screen_conflict', 'screen_out_of_reach', 'self_damage_too_high', 'head_damage_low']) diag[name] ??= 0;
   const pose = seatedDragonHead(dragon);
-  if (!pose || !Number.isInteger(budget) || budget < 0 || !Number.isFinite(health)) return [];
+  if (!pose || !Number.isInteger(budget) || budget < 0 || !Number.isFinite(health)) { add('invalid_input'); return []; }
   const found: SeatedBedLayout[] = [];
   const project = (cells: P3[]): BedBlockReader => p => cells.some(c => key(c) === key(p))
     ? { name: 'obsidian', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : read(p);
   for (let x = Math.floor(pose.feet.x) - 2; x <= Math.floor(pose.feet.x) + 2; x++)
     for (let z = Math.floor(pose.feet.z) - 2; z <= Math.floor(pose.feet.z) + 2; z++)
-      for (let y = Math.floor(pose.feet.y) - 2; y <= Math.floor(pose.feet.y); y++) {
+      for (let y = Math.floor(pose.feet.y) - 2; y <= Math.floor(pose.feet.y) + 2; y++) {
+        visit('head');
         const head = { x, y, z }, headDistance = distance(bedCentre(head), pose.feet);
-        if (!air(read(head)) || headDistance > 2.2 || bedDamage(headDistance, 1) < 50) continue;
+        if (!air(read(head))) { reject('head_not_air'); continue; }
+        if (headDistance > 2.2 || bedDamage(headDistance, 1) < 50) { reject('head_far_or_weak'); continue; }
+        pass('head');
         for (const [dx, dz] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
+          visit('foot');
           const foot = { x: x + dx, y, z: z + dz };
-          if (!air(read(foot))) continue;
+          if (!air(read(foot))) { reject('foot_not_air'); continue; }
+          pass('foot');
           const supports = [head, foot].map(p => ({ ...p, y: y - 1 }));
-          for (const along of [2, 3, 4]) for (const side of [0, -1, 1]) for (let sy = y - 1; sy >= y - 3; sy--) {
-            if (Math.abs(side) >= along - 1) continue; // unambiguous cardinal placement yaw
+          // Cover the integer cells within eye reach, including shelves level with/above the
+          // pillow and deeper footing. Exact reach below rejects the unused bounding cells.
+          for (const along of [2, 3, 4]) for (let side = 2 - along; side <= along - 2; side++) for (let sy = y + 2; sy >= y - 5; sy--) {
+            visit('stand'); // |side| < along - 1: unambiguous cardinal placement yaw
             const stand = { x: x + dx * along + dz * side + 0.5, y: sy, z: z + dz * along - dx * side + 0.5 };
             const cell = { x: Math.floor(stand.x), y: sy, z: Math.floor(stand.z) };
-            if (!air(read(cell)) || !air(read({ ...cell, y: sy + 1 })) || read({ ...cell, y: sy - 1 })?.boundingBox !== 'block'
-              || !bedOperationClear(dragon, stand) || [head, foot].some(p => bedEyeReach(stand, p) > 4.5)) continue;
+            if (!air(read(cell)) || !air(read({ ...cell, y: sy + 1 }))) { reject('stand_not_open'); continue; }
+            if (read({ ...cell, y: sy - 1 })?.boundingBox !== 'block') { reject('stand_no_floor'); continue; }
+            if (!bedOperationClear(dragon, stand)) { reject('stand_not_clear'); continue; }
+            if ([head, foot].some(p => bedEyeReach(stand, p) > 4.5)) { reject('stand_out_of_reach'); continue; }
+            pass('stand');
             const wall = [0, 1].map(h => ({ x: x + dx * 2 + dz * side, y: sy + h, z: z + dz * 2 - dx * side }));
             for (const targets of [supports, [...supports, ...wall]]) {
+              visit('screen');
               const screen = supportedBedCells(targets, read, 3);
-              if (!screen || screen.length > budget || screen.some(p => [head, foot].some(c => key(c) === key(p))
-                || boxesOverlap(bedBodyBox(stand), { minX: p.x, minY: p.y, minZ: p.z, maxX: p.x + 1, maxY: p.y + 1, maxZ: p.z + 1 })
-                || bedEyeReach(stand, p) > 4.5)) continue;
+              if (!screen) { reject('screen_unsupported'); continue; }
+              if (screen.length > budget) {
+                reject('screen_over_budget'); add(`screen_over_budget_required_${screen.length}`);
+                if (diag) {
+                  diag.screen_over_budget_required_min = Math.min(diag.screen_over_budget_required_min ?? Infinity, screen.length);
+                  diag.screen_over_budget_required_max = Math.max(diag.screen_over_budget_required_max ?? 0, screen.length);
+                }
+                continue;
+              }
+              if (screen.some(p => [head, foot].some(c => key(c) === key(p))
+                || boxesOverlap(bedBodyBox(stand), { minX: p.x, minY: p.y, minZ: p.z, maxX: p.x + 1, maxY: p.y + 1, maxZ: p.z + 1 }))) { reject('screen_conflict'); continue; }
+              if (screen.some(p => bedEyeReach(stand, p) > 4.5)) { reject('screen_out_of_reach'); continue; }
               const projected = project(screen);
               const selfDamage = bedSelfEstimate(projected, head, foot, stand).expected;
-              if (!Number.isFinite(selfDamage) || selfDamage > 6 || selfDamage + 4 >= health) continue;
+              if (!Number.isFinite(selfDamage) || selfDamage > 6 || selfDamage + 4 >= health) { reject('self_damage_too_high'); continue; }
               const headDamage = bedDamage(headDistance, bedExposure(projected, bedCentre(head), pose.box, [head, foot]));
-              if (headDamage < 50) continue;
+              if (!Number.isFinite(headDamage) || headDamage < 50) { reject('head_damage_low'); continue; }
+              add('accepted');
               found.push({ head, foot, stand, screen, headDistance, headDamage, selfDamage,
                 score: -headDamage + screen.length * 0.25 + Math.abs(side) * 0.1 });
             }
