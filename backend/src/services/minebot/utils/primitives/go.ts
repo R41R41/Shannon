@@ -3,6 +3,7 @@ import { Vec3 } from 'vec3';
 import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { buildMovements } from '../setMovements.js';
+import { installGroundSprint } from '../groundSprint.js';
 import { FAR_LEG_M, nextLeg } from '../farLegs.js';
 import { feetCell, type BlockReader, type Cell } from '../localMap.js';
 import { chooseTool, canHarvest, nearlyBroken } from '../toolChoice.js';
@@ -323,6 +324,7 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
   movements.maxDropDown = args.maxDrop + 1;
   movements.infiniteLiquidDropdownDistance = args.waterOk;
   installDoorRules(movements);
+  installGroundSprint(movements, state.avoid);
   const registry = bot.registry;
   // Hazards: never entered, never dug into, whatever else is allowed.
   // (The route search avoids lava and fire of itself; lifting the hazards, to find out whether they are what shuts the way, lifts that too.)
