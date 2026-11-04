@@ -95,6 +95,20 @@ describe('1.21.11 raw bed packet values', () => {
 });
 
 describe('actual probe move callback and receipt window', () => {
+  it('honours the landing minimum of eleven ticks and still sends on a later head return', async () => {
+    const r = rig(20); let headReturned = false;
+    Object.assign(r.options, { minimumGapTicks: burst.LANDING_BLAST_GAP_TICKS, ready: () => headReturned });
+    const promise = r.run(); await flush();
+    await r.advance(10, false); expect(r.evidence().sent).toEqual([]);
+    headReturned = true;
+    await r.advance(1, false); expect(r.evidence().sent.map(p => p.tick)).toEqual([31, 31, 31, 31]);
+    await r.advance(4, false); await promise; r.protocol.stop();
+    const later = rig(20); Object.assign(later.options, { minimumGapTicks: 11, ready: () => later.now() >= 44 });
+    const next = later.run(); await flush(); await later.advance(23, false);
+    expect(later.evidence().sent).toEqual([]);
+    await later.advance(1, false); expect(later.evidence().sent.every(p => p.tick === 44)).toBe(true);
+    await later.advance(4, false); await next; later.protocol.stop();
+  });
   it('synchronously writes unsneak, look, place, use inside one move and snapshots immediately before EACH write', async () => {
     const r = rig(), promise = r.run(); await flush(); r.move();
     const sent = r.evidence().sent;

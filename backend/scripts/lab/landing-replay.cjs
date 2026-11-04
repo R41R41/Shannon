@@ -7,17 +7,25 @@ const ts = require('typescript');
 // Share the actual pure geometry, without importing the probe or building dist.
 const modules = new Map();
 function pureModule(name) {
-  if (!['dragonLandingPath', 'dragonHeadVanilla', 'dragonParts'].includes(name)) throw new Error(`non-pure dependency: ${name}`);
+  if (!['dragonLandingPath', 'dragonHeadVanilla', 'dragonParts', 'bedBurst', 'dragonBedGeometry'].includes(name)) throw new Error(`non-pure dependency: ${name}`);
   if (modules.has(name)) return modules.get(name);
   const filename = path.resolve(__dirname, '../../src/services/minebot/utils', `${name}.ts`);
-  const output = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+  let source = fs.readFileSync(filename, 'utf8');
+  // Evaluate only the pure damage formula, never geometry's service-reader imports.
+  if (name === 'dragonBedGeometry') source = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true).statements
+    .find(s => ts.isFunctionDeclaration(s) && s.name?.text === 'bedDamage').getText();
+  const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
   const mod = { exports: {} }; modules.set(name, mod.exports);
   new Function('module', 'exports', 'require', output)(mod, mod.exports, dep => pureModule(path.basename(dep, '.js')));
   return mod.exports;
 }
-const { landingEndHead, landingEntryDirection, landingShotWindow, landingMiddleRing, landingEntryOrder } = pureModule('dragonLandingPath');
+const { landingEndHead, landingEntryDirection, landingShotWindow, landingMiddleRing, landingEntryOrder,
+  landingBurstDue, predictLandingPath, landingStandContacts } = pureModule('dragonLandingPath');
+const { bedDamage } = pureModule('dragonBedGeometry');
+const { bodyBoxAt } = pureModule('dragonParts');
+const { bedBurstDue, LANDING_BLAST_GAP_TICKS } = pureModule('bedBurst');
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const centre = cell => ({ x: cell.x + .5, y: cell.y + .5, z: cell.z + .5 });
 const cellOf = p => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
@@ -83,7 +91,7 @@ function replayLanding(landing, directionAt = 'entry') {
     const admitted = new Set();
     for (const sample of samples) {
       const h = obs.filter(p => p.tick <= sample.tick);
-      const window = landingShotWindow(h, landing.target, sample.tick);
+      const window = landingShotWindow(h, landing.target, sample.tick, 3);
       if (window.length === 4 && window.every(p => distance(p.head, centre(candidate.cell)) + .5 <= radius)) admitted.add(sample.tick);
     }
     return { landing: landing.n, directionAt, directionTick: end.observedTick, directionSource: end.source,
@@ -108,7 +116,7 @@ function replayMiddle(report, label = '') {
     const pillow = centre(candidate.head), samples = interpolateHeads(l.observations, l.startTick, l.endTick);
     const admitted = [], train = [];
     for (let tick = l.startTick; tick < l.endTick; tick++) {
-      const h = l.observations.filter(p => p.tick <= tick), window = landingShotWindow(h, l.target, tick);
+      const h = l.observations.filter(p => p.tick <= tick), window = landingShotWindow(h, l.target, tick, 3);
       if (window.length === 4 && window.every(p => distance(p.head, pillow) <= 3.22)) admitted.push(tick);
     }
     const set = new Set(admitted);
@@ -123,16 +131,120 @@ function middleMarkdown(rows) {
   return ['| report | landing (phase 3) | pillow cell | first-tick +10 shots | ticks | geometric maximum |',
     '|---|---|---|---:|---|---:|', ...rows.map(r => `| ${r.report} | ${r.landing} (${r.startTick}–${r.endTick}) | ${r.cell.x},${r.cell.y},${r.cell.z} | ${r.shots} | ${r.train.join(',') || '-'} | ${r.geometric.shots} |`)].join('\n');
 }
+
+/** Greedy causal returns, anchored to the REAL first use/explosion. After it, keep
+ * the recorded trajectory (including its lift) unchanged. Hypothetical explosions
+ * cannot manufacture extra landing ticks or a new trajectory. No later-start search.
+ * Terrain/exposure/ownership and environmental hazards were not recorded per tick;
+ * E=1 is conditional, while known stand contact boxes are still enforced. */
+function replayReturns(report, label = '') {
+  const scene = report.scenes?.end_bed_crystals_p3;
+  if (!scene?.landing?.length) throw new Error('missing scenes.end_bed_crystals_p3.landing');
+  return scene.landing.map(l => {
+    const first = l.shots?.find(s => s.detonationTick !== null && s.healthRecorded);
+    if (!first) return { report: label, landing: l.n, shots: 0, train: [], reason: 'no_confirmed_first_blast_to_anchor_recorded_lift' };
+    const pillow = centre(first.head), stand = first.positionAtUse ?? l.preparation.stand;
+    const delay = first.detonationTick - first.useTick;
+    const forecasts = new Map((l.predictions ?? []).map(p => [p.tick, p.points]));
+    const at = tick => {
+      const history = l.observations.filter(p => p.tick <= tick);
+      // Prefer forecasts actually logged at this tick: observations[].velocity is
+      // a derived value and cannot recover raw velocity-packet receipt ordering.
+      if (l.predictions) {
+        const observed = history.at(-1), path = forecasts.get(tick) ?? [];
+        const next = path.find(p => p.tick === tick + 1);
+        return { path: path.filter(p => p.tick <= tick + 3), hits: observed?.phase === 3 && tick - observed.tick <= 3 && next?.phase === 3 ? [observed, next] : [] };
+      }
+      return { path: predictLandingPath(history, l.target, tick, 3), hits: landingShotWindow(history, l.target, tick) };
+    };
+    const shot = (tick, hits, actual = false) => ({ tick, receiptTick: tick + delay, actual,
+      distances: hits.map(p => distance(p.head, pillow)), damagesE1: hits.map(p => bedDamage(distance(p.head, pillow), 1)),
+      damageE1: Math.min(...hits.map(p => bedDamage(distance(p.head, pillow), 1))) });
+    const initial = at(first.useTick).hits;
+    if (initial.length !== 2) throw new Error(`first-shot history missing: landing ${l.n}`);
+    const train = [shot(first.useTick, initial, true)], targetTrain = [...train], admitted = [], blockedContacts = [];
+    let previous = first.detonationTick, targetPrevious = previous, standStopTick = null;
+    for (let tick = first.detonationTick + 1; tick < l.endTick; tick++) {
+      const { path, hits } = at(tick);
+      const contacts = landingStandContacts(path, bodyBoxAt(stand), .5).filter(c => c.blocking);
+      if (contacts.length && standStopTick === null) standStopTick = tick;
+      if (hits.length !== 2 || !hits.every(p => landingBurstDue({ phase: 3, now: tick, lastBlast: null,
+        head: p.head, pillow, beds: 5, error: 0 }))) continue;
+      const candidate = shot(tick, hits);
+      if (candidate.damageE1 < 35) continue;
+      if (bedBurstDue(tick, targetPrevious, LANDING_BLAST_GAP_TICKS) && targetTrain.length < 5 && candidate.receiptTick < l.endTick) {
+        targetTrain.push(candidate); targetPrevious = candidate.receiptTick;
+      }
+      if (!bedBurstDue(tick, previous, LANDING_BLAST_GAP_TICKS)) continue;
+      admitted.push(tick);
+      if (!path.length || standStopTick !== null) { blockedContacts.push({ tick, standStopTick,
+        parts: [...new Set(contacts.map(c => c.part))] }); continue; }
+      if (train.length >= 5 || tick + delay >= l.endTick) continue;
+      train.push(candidate); previous = candidate.receiptTick;
+    }
+    const last = train.at(-1).receiptTick;
+    const heals = (l.healing ?? []).filter(h => h.tick > first.detonationTick && h.tick <= last).reduce((n, h) => n + h.amount, 0);
+    const damageE1 = train.reduce((n, s) => n + s.damageE1, 0);
+    const remainingHeals = (l.healing ?? []).filter(h => h.tick > first.detonationTick && h.tick < l.endTick).reduce((n, h) => n + h.amount, 0);
+    return { report: label, landing: l.n, startTick: l.startTick, endTick: l.endTick, cell: first.head,
+      shots: train.length, train, targetShots: targetTrain.length, targetTrain, standStopTick, admitted, blockedContacts, receiptDelayTicks: delay,
+      minimumGapTicks: LANDING_BLAST_GAP_TICKS, damageE1, recordedHealing: heals, netE1: damageE1 - heals,
+      netThroughLandingEndE1: damageE1 - remainingHeals, healingThroughLandingEnd: remainingHeals,
+      actualFirstNetThroughLandingEnd: first.serverDragonLoss - remainingHeals,
+      targetNetThroughLandingEndE1: targetTrain.reduce((n, s) => n + s.damageE1, 0) - remainingHeals,
+      forecastSource: l.predictions ? 'recorded_forecasts_at_receipt_tick' : 'reconstructed_from_observations',
+      firstActualLoss: first.serverDragonLoss,
+      conditional: 'real first blast anchored; later damage at E=1; observed trajectory fixed; same receipt delay; terrain/fire/cloud/fireball/reflex/HP ACK availability assumed' };
+  });
+}
+
+/** Reconstruct the OLD combined refusal without claiming unrecorded fire/cloud
+ * state was clear. First and last receipt ticks are exact; count is callback calls,
+ * not distinct ticks. Use only forecasts already available at that tick. */
+function replayStandRefusals(report) {
+  const scene = report.scenes.end_bed_crystals_p3;
+  return scene.landing.filter(l => l.shots?.length).map(l => {
+    const r = scene.refusals.find(r => r.reason === 'landing_not_prepared_or_stand_unsafe' && r.tick >= l.startTick && r.tick < l.endTick);
+    if (!r) return { landing: l.n, reason: 'no_combined_refusal' };
+    const stand = l.shots[0].positionAtUse ?? l.preparation.stand;
+    const ticks = [], parts = {};
+    for (let tick = r.tick; tick <= (r.lastTick ?? r.tick); tick++) {
+      const recorded = l.predictions.find(p => p.tick === tick)?.points?.filter(p => p.tick <= tick + 3);
+      const path = recorded ?? predictLandingPath(l.observations.filter(p => p.tick <= tick), l.target, tick, 3);
+      const contacts = landingStandContacts(path, bodyBoxAt(stand), .5);
+      const names = [...new Set(contacts.map(c => c.part))];
+      names.forEach(name => { parts[name] = (parts[name] ?? 0) + 1; });
+      ticks.push({ tick, predictionMissing: !path.length, parts: names });
+    }
+    return { landing: l.n, callbackRefusals: r.count, from: r.tick, to: r.lastTick, stand,
+      contactTicks: parts, ticksWithoutContact: ticks.filter(t => !t.parts.length).length,
+      missingPredictionTicks: ticks.filter(t => t.predictionMissing).length,
+      ticks, environment: 'unrecorded: fire/unloaded/cloud/fireball and per-tick actor position; contact reconstruction is not exclusive attribution' };
+  });
+}
+function returnsMarkdown(rows) {
+  return ['| landing | target / safety-admitted shots | target use ticks | target d observed / +1 (m), D E=1 (lower of both) | healing to last / end | safe net to last / end |',
+    '|---|---:|---|---|---:|---:|', ...rows.map(r => `| ${r.landing} | ${r.targetShots ?? '-'} / ${r.shots} | ${(r.targetTrain ?? []).map(s => s.tick).join(',') || '-'} | ${(r.targetTrain ?? []).map(s => `${s.distances.map(d => d.toFixed(2)).join('/')} → ${s.damageE1.toFixed(2)}`).join('; ') || r.reason} | ${r.recordedHealing ?? '-'} / ${r.healingThroughLandingEnd ?? '-'} | ${r.netE1?.toFixed(2) ?? '-'} / ${r.netThroughLandingEndE1?.toFixed(2) ?? '-'} |`)].join('\n');
+}
 function markdown(rows) {
   return ['| landing | direction | pillow cell | radius | ticks (packet) | +10 shots | train ticks | ranges | near gate ticks / shots |',
     '|---|---|---|---:|---:|---:|---|---|---|',
     ...rows.map(r => `| ${r.landing} | ${r.directionAt}:${r.kind} | ${r.cell.x},${r.cell.y},${r.cell.z} | ${r.radius} | ${r.ticks} (${r.packetTicks}) | ${r.shots} | ${r.train.join(',') || '-'} | ${r.ranges.map(([a,b]) => a === b ? a : `${a}-${b}`).join(',') || '-'} | ${r.shortGate.ticks} / ${r.shortGate.shots} |`)].join('\n');
 }
-module.exports = { interpolateHeads, countWindows, replayLanding, replay, markdown, replayMiddle, middleMarkdown };
+module.exports = { interpolateHeads, countWindows, replayLanding, replay, markdown, replayMiddle, middleMarkdown,
+  replayReturns, replayStandRefusals, returnsMarkdown };
 if (require.main === module) {
   const args = process.argv.slice(2), file = args.find(a => !a.startsWith('--'))
     ?? path.resolve(__dirname, '../../../lab-evidence/r245-report.json');
   const mode = args.includes('--prepared') ? 'prepared' : args.includes('--terminal-direction') ? 'terminal' : 'entry';
+  if (args.includes('--returns') || args.includes('--stand-refusals')) {
+    const report = JSON.parse(fs.readFileSync(args.find(a => !a.startsWith('--'))
+      ?? path.resolve(__dirname, '../../../lab-evidence/r253-report.json'), 'utf8'));
+    const rows = args.includes('--stand-refusals') ? replayStandRefusals(report) : replayReturns(report);
+    console.log(args.includes('--json') || args.includes('--stand-refusals') ? JSON.stringify(rows, null, 2)
+      : 'Conditional fixed recorded trajectory; damage assumes E=1; no hypothetical extra lift.\n' + returnsMarkdown(rows));
+    return;
+  }
   if (args.includes('--middle')) {
     const files = args.filter(a => !a.startsWith('--'));
     const rows = (files.length ? files : [file]).flatMap(f => replayMiddle(JSON.parse(fs.readFileSync(f, 'utf8')), path.basename(f)));

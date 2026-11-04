@@ -3,9 +3,9 @@ import { seatedDragonHead } from './dragonHeadModel.js';
 import { Vec3 } from 'vec3';
 import { dragonHazards } from './dragonDanger.js';
 import { knockGeometry } from './endKnockRecord.js';
-import { landingDragonBoxes, landingEntryOrder, landingMiddleRing, type LandingObservation, type LandingPoint } from './dragonLandingPath.js';
+import { landingDragonBoxes, landingStandContacts, landingEntryOrder, landingMiddleRing, type LandingObservation, type LandingPoint } from './dragonLandingPath.js';
 
-type BedBlock = { name: string; boundingBox?: string; shapes?: number[][] } | null;
+type BedBlock = { name: string; boundingBox?: string; shapes?: number[][]; getProperties?: () => Record<string, unknown> } | null;
 export type BedBlockReader = (p: P3) => BedBlock;
 export type BedSearch<T> = Generator<void, T, void>;
 /** One cooperative slice. Yield sites include every exposure ray, not just whole layouts.
@@ -34,6 +34,16 @@ function finishBedSearch<T>(search: BedSearch<T>): T {
   return result.value;
 }
 const air = (b: BedBlock) => !!b && /^(air|cave_air|void_air)$/u.test(b.name);
+// Vanilla 1.21.11 data/minecraft/tags/block/replaceable.json. Placement only:
+// empty collision shapes do NOT imply replaceability (torches/rails are not air).
+// SnowLayerBlock.canBeReplaced for a non-snow item admits only one layer.
+const replaceable = new Set(['air', 'water', 'lava', 'short_grass', 'fern', 'dead_bush', 'bush',
+  'short_dry_grass', 'tall_dry_grass', 'seagrass', 'tall_seagrass', 'fire', 'soul_fire',
+  'vine', 'glow_lichen', 'resin_clump', 'light', 'tall_grass', 'large_fern', 'structure_void',
+  'void_air', 'cave_air', 'bubble_column', 'warped_roots', 'nether_sprouts', 'crimson_roots',
+  'leaf_litter', 'hanging_roots']);
+export const bedCanReplace = (b: BedBlock): boolean => !!b && (replaceable.has(b.name)
+  || (b.name === 'snow' && Number(b.getProperties?.().layers) === 1));
 const key = (p: P3) => `${p.x},${p.y},${p.z}`;
 const faces = [[0, -1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0], [0, 1, 0]];
 
@@ -110,7 +120,7 @@ export function supportedBedCells(targets: P3[], read: BedBlockReader, maxDrop =
     for (let y = target.y; y >= target.y - maxDrop; y--) {
       const p = { ...target, y }, block = projected(p);
       if (block?.boundingBox === 'block') { anchored = true; break; }
-      if (!air(block)) return null;
+      if (!bedCanReplace(block)) return null;
       column.push(p);
       if (bedCellSupported(projected, p)) { anchored = true; break; }
     }
@@ -268,7 +278,7 @@ export function* landingFountainStandSearch(target: P3, here: P3, read: BedBlock
       || !air(read({ x: Math.floor(stand.x), y: stand.y + 1, z: Math.floor(stand.z) })) || !landingBedFireClear(read, stand)) continue;
     const below = { x: Math.floor(stand.x), y: stand.y - 1, z: Math.floor(stand.z) };
     const footing = durable(below) ? [] : supportedBedCells([below], read, 2);
-    if (!footing || footing.length > 2 || (!footing.length && !durable(below)) || footing.some(p => !air(read(p)))) continue;
+    if (!footing || footing.length > 2 || (!footing.length && !durable(below)) || footing.some(p => !bedCanReplace(read(p)))) continue;
     const roof: P3[] = [];
     for (let along = -1; along <= 2; along++) for (let side = -2; side <= 2; side++) {
       // A connected twelve-cell canopy: side arms cover low-body rays from the
@@ -276,7 +286,7 @@ export function* landingFountainStandSearch(target: P3, here: P3, read: BedBlock
       if (!(Math.abs(side) === 1 || (side === 0 && (along === -1 || along === 2)) || (Math.abs(side) === 2 && along === 0))) continue;
       roof.push({ x: column.x + along * dx - side * dz, y: target.y - 1, z: column.z + along * dz + side * dx });
     }
-    if (roof.some(p => !durable(p) && !air(read(p)))) continue;
+    if (roof.some(p => !durable(p) && !bedCanReplace(read(p)))) continue;
     // Anchor to the observed column, then expand one neighbour at a time.
     const remaining = roof.filter(p => !durable(p)), screen: P3[] = [];
     while (remaining.length) {
@@ -304,11 +314,11 @@ export function* landingFountainStandSearch(target: P3, here: P3, read: BedBlock
       if (self.exposure !== 0 || self.expected > 6 || self.expected + 4 >= health) continue;
       for (const [fx, fz] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
         const foot = { x: head.x + fx, y: head.y, z: head.z + fz };
-        if (distance(bedCentre(foot), target) >= distance(bedCentre(head), target) || !air(read(head)) || !air(read(foot))
+        if (distance(bedCentre(foot), target) >= distance(bedCentre(head), target) || !bedCanReplace(read(head)) || !bedCanReplace(read(foot))
           || [head, foot, { ...foot, y: foot.y - 1 }].some(p => bedEyeReach(stand, p) > 4.5)) continue;
         const supports = [head, foot].map(p => ({ ...p, y: p.y - 1 }));
         const pending = supports.filter(p => !['obsidian', 'bedrock'].includes(builtRead(p)?.name ?? ''));
-        if (pending.length > 2 || pending.some(p => !air(builtRead(p)))) continue;
+        if (pending.length > 2 || pending.some(p => !bedCanReplace(builtRead(p)))) continue;
         const ordered: P3[] = [];
         for (let i = 0; i < pending.length; i++) {
           const p = pending.find(p => !ordered.some(c => key(c) === key(p)) && bedCellSupported(landingProjectedRead(builtRead, ordered), p));
@@ -336,7 +346,7 @@ export function* landingEntryPillowSearch(plan: LandingFountainStand, history: r
   for (const c of landingEntryOrder(plan.options, history, target)) {
     yield;
     const pending = c.supports.filter(p => !['obsidian', 'bedrock'].includes(read(p)?.name ?? ''));
-    if (pending.length > materials || pending.some(p => !air(read(p)))) continue;
+    if (pending.length > materials || pending.some(p => !bedCanReplace(read(p)))) continue;
     if (pending.some((p, i) => !bedCellSupported(landingProjectedRead(read, pending.slice(0, i)), p))) continue;
     const projected = landingProjectedRead(read, c.supports);
     if (!(yield* landingBedRefusalSearch(c, feet, path, projected, health, .5, dimensions))) return c;
@@ -369,7 +379,7 @@ export function* landingBedRefusalSearch(layout: LandingBedLayout, feet: P3, pat
   health: number, error = 0.5, dimensions: { width?: number; height?: number } = {}): BedSearch<string | null> {
   if (!Number.isFinite(health) || !Object.values(feet).every(Number.isFinite)) return 'landing_estimate_unknown';
   if (!path.length || !Number.isFinite(error) || error < 0) return 'landing_prediction_missing';
-  if ([layout.head, layout.foot].some(p => !air(read(p)))) return 'landing_bed_cells_not_air';
+  if ([layout.head, layout.foot].some(p => !bedCanReplace(read(p)))) return 'landing_bed_cells_not_replaceable';
   if ([layout.head, layout.foot].some(p => bedEyeReach(feet, p) > 4.5)
     || bedEyeReach(feet, { ...layout.foot, y: layout.foot.y - 1 }) > 4.5) return 'landing_out_of_reach';
   const cell = { x: Math.floor(feet.x), y: Math.floor(feet.y), z: Math.floor(feet.z) };
@@ -378,7 +388,7 @@ export function* landingBedRefusalSearch(layout: LandingBedLayout, feet: P3, pat
   if (!landingBedFireClear(read, feet)) return 'landing_fire_or_unloaded_neighbour';
   if ([...layout.supports, ...layout.screen].some(p => !['obsidian', 'bedrock'].includes(read(p)?.name ?? ''))) return 'landing_shield_missing';
   const body = bedBodyBox(feet, Math.max(0.6, dimensions.width ?? 0.6), Math.max(1.8, dimensions.height ?? 1.8));
-  if (path.some(p => landingDragonBoxes(p, error).some(box => boxesOverlap(body, box)))) return 'landing_stand_in_dragon';
+  if (landingStandContacts(path, body, error).some(c => c.blocking)) return 'landing_stand_in_dragon';
   // Include new/existing supports: an arm intersecting a part is not an admissible layout.
   const occupied = [layout.head, layout.foot, ...layout.supports, ...layout.screen].map(p => cellBox(p));
   if (path.some(p => landingDragonBoxes(p).slice(0, 3).some((box, i) => occupied.some(cell => boxesOverlap(cell, i < 2 ? inflate(box, -1.1) : box))))) return 'landing_build_in_dragon';
@@ -405,7 +415,7 @@ export function* landingBedLayoutSearch(target: P3, corridor: readonly LandingPo
     yield;
     const head = { x: Math.floor(p.head.x) + dx, y: Math.floor(p.head.y) + dy, z: Math.floor(p.head.z) + dz };
     if (Math.hypot(head.x + 0.5 - target.x, head.z + 0.5 - target.z) <= (endHead ? 8 : 4)
-      && head.y >= target.y - (endHead ? 1 : 0) && head.y <= target.y + 3 && air(read(head))) pillows.set(key(head), head);
+      && head.y >= target.y - (endHead ? 1 : 0) && head.y <= target.y + 3 && bedCanReplace(read(head))) pillows.set(key(head), head);
   }
   const found: LandingBedLayout[] = [];
   const limit = endHead ? 16 : 48;
@@ -424,7 +434,7 @@ export function* landingBedLayoutSearch(target: P3, corridor: readonly LandingPo
     if (!near.length) continue;
     orientations: for (const [dx, dz] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
       const foot = { x: head.x + dx, y: head.y, z: head.z + dz };
-      if (!air(read(foot))) continue;
+      if (!bedCanReplace(read(foot))) continue;
       const supports = [head, foot].map(p => ({ ...p, y: p.y - 1 }));
       for (const along of [1, 2, 3]) for (const side of [-1, 0, 1]) for (let y = Math.floor(target.y) - 4; y < target.y; y++) {
         yield;
@@ -438,7 +448,7 @@ export function* landingBedLayoutSearch(target: P3, corridor: readonly LandingPo
         for (const wall of [[], bedWallCells(head, stand, y, y + 2, 1), bedWallCells(head, stand, y, y + 2, 3)]) {
           const targets = [...supports, ...wall];
           // No excavating end stone to replace it, no hypothetical shield from fragile solids.
-          if (targets.some(p => !air(read(p)) && !durable(p))) continue;
+          if (targets.some(p => !bedCanReplace(read(p)) && !durable(p))) continue;
           const screen = supportedBedCells(targets, read, 4);
           if (!screen || screen.length > budget || screen.some(p => p.x === Math.floor(target.x) && p.z === Math.floor(target.z))
             || screen.some(p => bedEyeReach(stand, p) > 4.5 || [head, foot].some(b => key(b) === key(p)) || boxesOverlap(bedBodyBox(stand), cellBox(p)))) continue;

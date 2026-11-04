@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 // edge so these tests never read .env, load a live skill catalog or need credentials.
 vi.mock('../../src/services/minebot/config/MinebotConfig.js', () => ({ CONFIG: {} }));
 import { appendLandingObservation, dragonLandingTarget, interpolateLanding, landingBurstDue, landingDamageDistance,
-  landingEndHead, landingHeadResidual, landingMode, landingPreparationCorridor, landingReadiness, landingShotWindow, predictLandingPath, type LandingObservation } from '../../src/services/minebot/utils/dragonLandingPath.js';
-import { bedCentre, bedDamage, bedEyeReach, bedSelfEstimate, landingBedLayouts, landingBedRefusal, landingBedSelf } from '../../src/services/minebot/utils/dragonBedGeometry.js';
+  landingStandContacts, landingEndHead, landingHeadResidual, landingMode, landingPreparationCorridor, landingReadiness, landingShotWindow, predictLandingPath, type LandingObservation } from '../../src/services/minebot/utils/dragonLandingPath.js';
+import { bedCanReplace, supportedBedCells, bedCentre, bedDamage, bedEyeReach, bedSelfEstimate, landingBedLayouts, landingBedRefusal, landingBedSelf } from '../../src/services/minebot/utils/dragonBedGeometry.js';
 import { dragonHeadVanilla } from '../../src/services/minebot/utils/dragonHeadVanilla.js';
 import type { P3 } from '../../src/services/minebot/utils/dragonParts.js';
 
@@ -66,6 +66,22 @@ describe('M2 packet history and landing target', () => {
 });
 
 describe('M2 preparation geometry', () => {
+  it.each(['fire', 'soul_fire', 'short_grass', 'tall_grass', 'fern', 'vine', 'leaf_litter'])('replaces %s in both bed halves and support cells without digging', name => {
+    const t = terrain(), corridor = landingPreparationCorridor(observations(2), target);
+    const l = landingBedLayouts(target, corridor, t.read, 16)[0];
+    l.screen.forEach(p => t.blocks.set(key(p), solid()));
+    const near = corridor.filter(p => Math.hypot(p.head.x - bedCentre(l.head).x, p.head.y - bedCentre(l.head).y, p.head.z - bedCentre(l.head).z) <= 2);
+    const read = (p: P3) => [l.head, l.foot].some(c => key(c) === key(p)) ? { ...air, name } : t.read(p);
+    expect(landingBedRefusal(l, l.stand, near, read, 20)).toBeNull();
+    const cell = { x: 140, y: 80, z: -40 };
+    expect(supportedBedCells([cell], p => p.y < cell.y ? solid() : { ...air, name }, 1)).toEqual([cell]);
+  });
+  it('does not mistake empty shapes, unknown cells or thick snow for replaceable blocks', () => {
+    for (const name of ['torch', 'rail', 'white_bed', 'dandelion', 'obsidian', 'unknown']) expect(bedCanReplace({ ...air, name })).toBe(false);
+    expect(bedCanReplace(null)).toBe(false);
+    expect(bedCanReplace({ ...air, name: 'snow' })).toBe(false);
+    for (const layers of [1, 2, 7, 8]) expect(bedCanReplace({ ...air, name: 'snow', getProperties: () => ({ layers }) })).toBe(layers === 1);
+  });
   it('finds pillows and a zero-exposure reachable durable stand from a translated fountain', () => {
     const t = terrain(), corridor = landingPreparationCorridor(observations(2), target);
     const candidates = landingBedLayouts(target, corridor, t.read, 16);
@@ -106,10 +122,12 @@ describe('M2 preparation geometry', () => {
 });
 
 describe('M2 cadence, radii and phase routing', () => {
-  const base = { phase: 3, now: 20, lastBlast: 10, head: { x: 2.07, y: 0, z: 0 }, pillow: { x: 0, y: 0, z: 0 }, beds: 4 as const, error: 0 };
-  it('admits only the +10 tick slot inside 2.07/3.22 m INCLUDING the prediction error', () => {
+  const base = { phase: 3, now: 21, lastBlast: 10, head: { x: 2.07, y: 0, z: 0 }, pillow: { x: 0, y: 0, z: 0 }, beds: 4 as const, error: 0 };
+  it('admits any tick after the minimum 11-tick receipt gap inside 2.07/3.22 m INCLUDING the prediction error', () => {
     expect(landingBurstDue(base)).toBe(true);
-    for (const now of [19, 21, 25]) expect(landingBurstDue({ ...base, now })).toBe(false);
+    for (const now of [19, 20]) expect(landingBurstDue({ ...base, now })).toBe(false);
+    for (const now of [21, 25, 34, 58]) expect(landingBurstDue({ ...base, now })).toBe(true);
+    for (const lastBlast of [NaN, Infinity, 10.5]) expect(landingBurstDue({ ...base, lastBlast })).toBe(false);
     expect(landingBurstDue({ ...base, error: 0.01 })).toBe(false);
     expect(landingBurstDue({ ...base, beds: 5, head: { x: 3.22, y: 0, z: 0 } })).toBe(true);
     expect(landingBurstDue({ ...base, beds: 5, head: { x: 3.23, y: 0, z: 0 } })).toBe(false);
@@ -136,11 +154,11 @@ describe('M2 r245 regression and near firing horizon', () => {
     expect(landingReadiness(plan, null, 691).targetObserved).toBe(false);
     expect(landingReadiness(plan, { ...target, y: target.y + 1 }, 691).sameTarget).toBe(false);
   });
-  it.each([4, 5] as const)('requires the observed head AND every +1..3 head, ignoring a +20 crossing (%s beds)', beds => {
+  it.each([4, 5] as const)('requires the observed head AND only the +1 head, ignoring a +20 crossing (%s beds)', beds => {
     const h = observations(), window = landingShotWindow(h, target, 15);
-    expect(window.map(p => p.tick)).toEqual([15, 16, 17, 18]);
+    expect(window.map(p => p.tick)).toEqual([15, 16]);
     expect(window[0].head).toEqual(predictLandingPath(h, target, 15, 0)[0].head);
-    const pillow = { ...window[3].head };
+    const pillow = { ...window[1].head };
     expect(window.every(p => landingBurstDue({ phase: 3, now: 15, lastBlast: null, head: p.head, pillow, beds, error: .5 }))).toBe(true);
     const distant = predictLandingPath(h, target, 15, 20).at(-1)!.head;
     expect(landingBurstDue({ phase: 3, now: 15, lastBlast: null, head: distant, pillow: distant, beds, error: 0 })).toBe(true);
@@ -148,7 +166,28 @@ describe('M2 r245 regression and near firing horizon', () => {
     expect(landingShotWindow(h, target, 19)).toEqual([]);
     expect(landingShotWindow(observations(2), target, 15)).toEqual([]);
     // The latest packet remains an observation, not an extrapolated 'now' pose.
-    expect(landingShotWindow(h, target, 16).map(p => p.tick)).toEqual([15, 17, 18, 19]);
+    expect(landingShotWindow(h, target, 16).map(p => p.tick)).toEqual([15, 17]);
+  });
+  it('accepts a fast crossing whose +2 and +3 heads are already outside, but never a predicted-only crossing', () => {
+    const h = observations(), hits = landingShotWindow(h, target, 15);
+    const pillow = { ...hits[0].head, z: hits[0].head.z - 3 };
+    const within = (p: typeof hits[number]) => landingBurstDue({ phase: 3, now: 15, lastBlast: null, head: p.head, pillow, beds: 5, error: 0 });
+    expect(hits.every(within)).toBe(true);
+    expect(landingShotWindow(h, target, 15, 3).every(within)).toBe(false);
+    expect(hits.every(p => within({ ...p, head: { ...p.head, z: p.head.z - 7 } }))).toBe(false);
+  });
+  it('labels body overlap as diagnostic while preserving head/neck/wing danger and the 0.5m margin', () => {
+    const point = predictLandingPath(observations(), target, 15, 0)[0];
+    const body = { minX: point.position.x - .1, maxX: point.position.x + .1,
+      minY: point.position.y + 1, maxY: point.position.y + 1.1, minZ: point.position.z - .1, maxZ: point.position.z + .1 };
+    const contacts = landingStandContacts([point], body);
+    expect(contacts.some(c => c.part === 'body' && !c.blocking)).toBe(true);
+    expect(contacts.some(c => c.blocking && c.part === 'wing1')).toBe(true);
+    expect(landingStandContacts([point], { ...body, minY: point.position.y + 5, maxY: point.position.y + 6 })).toEqual([]);
+    const neckBody = { ...point.headBox };
+    expect(landingStandContacts([point], neckBody).some(c => c.blocking && c.part === 'head')).toBe(true);
+    const wingBody = { ...body, minY: point.position.y, maxY: point.position.y + 1, minX: point.position.x - 4.6, maxX: point.position.x - 4.4 };
+    expect(landingStandContacts([point], wingBody).some(c => c.blocking && c.part === 'wing1')).toBe(true);
   });
   it.each([0, Math.PI / 2, Math.PI, -Math.PI / 2])('calculates the terminal head from inbound progress and seated height, translated (yaw %s)', yaw => {
     const dir = { x: Math.sin(yaw), z: Math.cos(yaw) };

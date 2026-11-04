@@ -1,5 +1,6 @@
 import { dragonHeadVanilla } from './dragonHeadVanilla.js';
-import { inflate, partBox, shift, type Box, type P3 } from './dragonParts.js';
+import { boxesOverlap, inflate, partBox, shift, type Box, type P3 } from './dragonParts.js';
+import { bedBurstDue, LANDING_BLAST_GAP_TICKS } from './bedBurst.js';
 
 /** Receipt ticks, not invented server timestamps. One entry per real position packet.
  * velocity is blocks/tick from a fresh packet, if available; sitting velocity is never used. */
@@ -200,14 +201,14 @@ export function landingReadiness(plan: { readyTick: number | null; phaseStart: n
   return { completedInPhase2, beforeEntry, targetObserved, sameTarget, ready: beforeEntry && sameTarget };
 }
 
-/** The packet-derived head plus ONLY now+1..3; never let a long forecast authorize
- * a click. Requiring both stops a predicted crossing from firing before observation. */
-export function landingShotWindow(history: readonly LandingObservation[], target: P3, now: number): LandingPoint[] {
+/** Packet-derived head AND now+1. Longer horizons are telemetry, not permission.
+ * The optional three-tick window is retained only for historical replay comparisons. */
+export function landingShotWindow(history: readonly LandingObservation[], target: P3, now: number, ahead: 1 | 3 = 1): LandingPoint[] {
   const last = history.at(-1);
   if (!last || last.phase !== 3 || now < last.tick || now - last.tick > 3) return [];
   const observed = predictLandingPath(history, target, last.tick, 0)[0];
-  const future = predictLandingPath(history, target, now, 3).filter(p => p.tick > now);
-  return observed && future.length === 3 ? [observed, ...future] : [];
+  const future = predictLandingPath(history, target, now, ahead).filter(p => p.tick > now);
+  return observed && future.length === ahead ? [observed, ...future] : [];
 }
 
 /** Flight head/neck use the same history slope/rotation as the targeting formula. Include
@@ -221,6 +222,16 @@ export function landingDragonBoxes(p: LandingPoint, margin = 0): Box[] {
     ...(['wing1', 'wing2'] as const).map(part => shift(inflate(partBox(p, part), 4, 2, 4), 0, -2, 0))].map(b => inflate(b, margin));
 }
 
+/** Keep placement geometry distinct from contact danger. The body part's AABB
+ * alone does not push/hurt a player; head/neck contact and wing push boxes do.
+ * Retain every existing contact expansion and the caller's uncertainty margin,
+ * even during hurtTime. No reflex or server-contact suppression is assumed. */
+export function landingStandContacts(path: readonly LandingPoint[], body: Box, margin = 0.5) {
+  const parts = ['head', 'neck', 'body', 'wing1', 'wing2'] as const;
+  return path.flatMap(p => landingDragonBoxes(p, margin).flatMap((box, i) =>
+    boxesOverlap(body, box) ? [{ tick: p.tick, part: parts[i], blocking: parts[i] !== 'body', box }] : []));
+}
+
 export function landingHeadResidual(predicted: LandingPoint, observed: LandingPoint) {
   if (predicted.tick !== observed.tick) return null;
   return { tick: observed.tick, ahead: predicted.tick - predicted.forecastTick, observationLead: predicted.tick - predicted.observedTick,
@@ -229,12 +240,12 @@ export function landingHeadResidual(predicted: LandingPoint, observed: LandingPo
     metres: distance(predicted.head, observed.head), source: 'head_from_packet_body_and_interpolated_history; not_independent_part_truth' };
 }
 
-/** Inclusive radii from the supplied mechanics table; the error budget is extra distance.
- * Missing a cadence slot ends that train; a later in-range tick can start a NEW train. */
+/** Inclusive radii; wait at least eleven receipt ticks after the acknowledged
+ * explosion. A missed crossing does not end the train. */
 export function landingBurstDue(input: { phase: number | null; now: number; lastBlast: number | null;
   head: P3; pillow: P3; beds: 4 | 5; error: number }): boolean {
   const { now, lastBlast, error } = input;
-  return input.phase === 3 && [4, 5].includes(input.beds) && Number.isInteger(now) && (lastBlast === null || now - lastBlast === 10)
+  return input.phase === 3 && [4, 5].includes(input.beds) && bedBurstDue(now, lastBlast, LANDING_BLAST_GAP_TICKS)
     && finite(input.head) && finite(input.pillow) && Number.isFinite(error) && error >= 0
     && distance(input.head, input.pillow) + error <= (input.beds === 4 ? 2.07 : 3.22);
 }

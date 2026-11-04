@@ -28,15 +28,15 @@ import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
 import { feetCentre, standing, walkGround } from '../src/services/minebot/utils/dragonWalk.js';
 import { bodyReader } from '../src/services/minebot/utils/localMap.js';
 import { bedHalves } from '../src/services/minebot/utils/bedRules.js';
-import { bedBurstPackets, bedBurstDue, bedBurstReach, classifyBedBurst, emptyBedBurst, type BedBurstEvidence, type BedBurstSend } from '../src/services/minebot/utils/bedBurst.js';
+import { bedBurstPackets, bedBurstDue, bedBurstReach, classifyBedBurst, emptyBedBurst, LANDING_BLAST_GAP_TICKS, type BedBurstEvidence, type BedBurstSend } from '../src/services/minebot/utils/bedBurst.js';
 import { perchBedFoot, bedWallCells, bedCellSupported, supportedBedCells, seatedBedLayouts, bedLayoutDragonRefusal, bedOperationClear, bedOperationHazards, bedApproachGate, bedApproachRetryTicks, bedNextLayout, bedIsFire, bedUnsafeFire, bedRecordFireFailure, bedFireStandExcluded, bedFireTargets, bedFireWorkCell, bedOpenWaitCells, BED_LEAVE_DISTANCE, bedLeaveState, bedLeaveCell, bedLeaveSeconds, bedSelfEstimate, bedExposure, bedDamage, bedCentre, bedEyeReach, type BedFireFailure, type SeatedBedLayout, type BedBlockReader, type BedCloud } from '../src/services/minebot/utils/dragonBedGeometry.js';
 import { approachClear } from '../src/services/minebot/utils/dragonApproach.js';
 import { dragonNook, insideDragonNook, nookCellSupported, type DragonNook } from '../src/services/minebot/utils/dragonNook.js';
 import { BLOCK_REACH } from '../src/services/minebot/utils/blockReach.js';
 import { isPerched, type P3 } from '../src/services/minebot/utils/dragonParts.js';
 import { appendDragonBody, predictDragonHead, forecastDragonHead, seatedDragonHead, dragonHeadCentre, observedDragonPart, type DragonBodySample } from '../src/services/minebot/utils/dragonHeadModel.js';
-import { appendLandingObservation, dragonLandingTarget, landingArrival, landingBurstDue, landingDamageDistance, landingDragonBoxes, landingEntryDirection, landingHeadResidual, landingMode, landingReadiness, landingShotWindow, predictLandingPath, type LandingObservation, type LandingPoint } from '../src/services/minebot/utils/dragonLandingPath.js';
-import { bedTickBudget, bedBodyBox, bedWaitGroundSafe, landingFountainStandSearch, landingEntryPillowSearch, landingBedFireClear, landingBedRefusalSearch, landingBedSelfSearch, type LandingBedLayout, type LandingFountainStand } from '../src/services/minebot/utils/dragonBedGeometry.js';
+import { appendLandingObservation, dragonLandingTarget, landingArrival, landingBurstDue, landingDamageDistance, landingDragonBoxes, landingStandContacts, landingEntryDirection, landingHeadResidual, landingMode, landingReadiness, landingShotWindow, predictLandingPath, type LandingObservation, type LandingPoint } from '../src/services/minebot/utils/dragonLandingPath.js';
+import { bedTickBudget, bedBodyBox, bedCanReplace, bedStandFires, bedExposureSearch, bedWaitGroundSafe, landingFountainStandSearch, landingEntryPillowSearch, landingBedFireClear, landingBedRefusalSearch, landingBedSelfSearch, type LandingBedLayout, type LandingFountainStand } from '../src/services/minebot/utils/dragonBedGeometry.js';
 import { cageRoots, cageWall, cageGuardCells, cageGuardWork, cageRecoveryFootings, cageWaterLandings, cageWaterSource, cageWaterExit, cageDryFooting, cagePoolExits, cageShadowFootings, crystalShelterState, crystalShelterExits, islandFootings } from '../src/services/minebot/utils/endFightGeometry.js';
 import { CHAIN_LIMIT_MS, CRYSTAL_LIMIT_MS, CRYSTAL_WAIT_MS, CAGE_TRAVEL_WAIT_MS, FAST_CAGE_POLICY, chainCell, chainWalkRetry, chainShootSet, chainDescent, chainDragonSample, chainDragonRush, chainBasin, chainClear, chainCloudClear, chainCompareTravel, chainCrystal, chainDistance, chainHands, chainOnShaft, chainPause, chainRetreat, chainShot, chainSitting, chainTravel, chainWait, type ChainCrystal, type CagePolicy, type DragonMotionSample } from '../src/services/minebot/utils/endFullChainPlan.js';
 
@@ -3481,7 +3481,7 @@ function observeBedBurstProtocol(bot: any, clock: () => number) {
 /** Probe-only operation. Every click is synchronous in ONE post-position move callback.
  * No block update, promise, timer, or physics event can split look/place/use. */
 async function bedBurstOnMove(bot: any, protocol: ReturnType<typeof observeBedBurstProtocol>, options: {
-  tick: () => number; previousDetonationTick: number | null; foot: P3; head: P3;
+  tick: () => number; previousDetonationTick: number | null; minimumGapTicks?: number; foot: P3; head: P3;
   check: () => string | null; ready?: () => boolean; before: (stage: BedBurstSend['stage']) => void;
   onEvidence: (evidence: BedBurstEvidence) => void; evidence?: BedBurstEvidence; signal?: AbortSignal;
 }): Promise<BedBurstEvidence> {
@@ -3534,7 +3534,7 @@ async function bedBurstOnMove(bot: any, protocol: ReturnType<typeof observeBedBu
       if ([head, ...observedHeads].some(h => Number.isFinite(p?.x) && Math.hypot(p.x - h.x - 0.5, p.y - h.y - 0.5, p.z - h.z - 0.5) <= 0.75)) e.detonationTick = options.tick();
     };
     const onMove = () => {
-      if (done || sending || sentTick !== null || !bedBurstDue(options.tick(), options.previousDetonationTick)) return;
+      if (done || sending || sentTick !== null || !bedBurstDue(options.tick(), options.previousDetonationTick, options.minimumGapTicks)) return;
       const reason = options.check();
       e.reach = bedBurstReach(bot.entity.position, foot);
       e.awaitingPosition ||= protocol.state.awaitingPosition;
@@ -3576,9 +3576,9 @@ async function bedBurstOnMove(bot: any, protocol: ReturnType<typeof observeBedBu
       const reason = options.check();
       if (reason) { e.dragonOverlap = reason.endsWith('_in_dragon') ? reason : null; finish(reason); return; }
       // physicsTick -> updatePosition -> microtask. At rest Mineflayer may emit NO move for 20 ticks.
-      // Supply a real position write followed by move, so a stationary body can meet detonation+10.
+      // Supply a real position write followed by move after the minimum blast gap.
       queueMicrotask(() => {
-        if (done || sentTick !== null || !bedBurstDue(options.tick(), options.previousDetonationTick)) return;
+        if (done || sentTick !== null || !bedBurstDue(options.tick(), options.previousDetonationTick, options.minimumGapTicks)) return;
         const refusal = options.check(); if (refusal) { finish(refusal); return; }
         if (options.ready && !options.ready()) return;
         if (protocol.state.awaitingPosition || options.tick() <= protocol.state.settledTick) { e.awaitingPosition ||= protocol.state.awaitingPosition; return; }
@@ -3757,12 +3757,13 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
     out.headModel = 'packet body history interpolated by tick; dragonHeadVanilla; target from central column heightmap';
     delete out.operationBudget.bedsPerPerch;
     Object.assign(out.operationBudget, { seatedDamageLimit: 50, maximumSeatedTotal: 121, landingRadii: { four: 2.07, five: 3.22 },
-      landingMode: 'first_hit_measurement', landingCollisionMargin: 0.5, landingShotRadius: 3.22 });
+      landingMode: 'repeat_on_head_return', landingCollisionMargin: 0.5, landingShotRadius: 3.22,
+      landingBlastGapTicks: LANDING_BLAST_GAP_TICKS, landingForecastTicks: 1, landingMinimumDamage: 35 });
     Object.assign(out, { landing: [], landingPreparation: [], seatedBudget: [], predictionTruth: 'head_from_observed_body; no_independent_head_packet',
       crystalStart,
       assumptions: ['phase2 stand/screen covers every middle-ring bearing; entry freezes one pillow',
-        '20-tick forecast is telemetry only; first-hit measurement uses packet head and 1..3 forecasts within 3.22m; collision margin remains 0.5m',
-        '10 client receipt ticks between bursts; server tick gaps require lab measurement',
+        'packet head AND now+1 within 3.22m; exposure-aware damage >=35 for both; safety horizon stays 3 ticks with 0.5m margin',
+        'at least 11 client receipt ticks after explosion ACK; one-tick allowance, server tick gaps still require lab measurement',
         'explosion lift is observed, not assumed; extended landing duration alone does not establish causation'] });
   }
   let layout: SeatedBedLayout | null = null, pending: Record<string, any> | null = null, lastBlast: number | null = null;
@@ -3855,8 +3856,18 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
     if (pending) pending.notDetonatedReason = reason;
     // Keep changes and their extent, without filling 25 minutes with the same idle refusal.
     const last = out.refusals.at(-1);
-    if (last?.reason === reason && last?.phase === phase && last?.perch === (perch?.n ?? null)) { last.lastTick = tick; last.count++; return; }
-    out.refusals.push({ tick, seconds: seconds(), phase, perch: perch?.n ?? null, reason, count: 1, ...detail });
+    const stand = detail.standSafety as { predictionMissing: boolean; fireClear: boolean;
+      contacts: Array<{ part: string; blocking: boolean }>; hazards: Array<{ kind: string }> } | undefined;
+    const standCauses = stand ? [...new Set([
+      ...(stand.predictionMissing ? ['prediction_missing'] : []), ...(!stand.fireClear ? ['fire_or_unloaded_neighbour'] : []),
+      ...stand.contacts.filter(c => c.blocking).map(c => `contact:${c.part}`), ...stand.hazards.map(h => `hazard:${h.kind}`),
+    ])].sort() : [];
+    if (last?.reason === reason && last?.phase === phase && last?.perch === (perch?.n ?? null)
+      && JSON.stringify(last.standCauses ?? []) === JSON.stringify(standCauses)) {
+      last.lastTick = tick; last.count++; if (stand) last.lastStandSafety = detail.standSafety; return;
+    }
+    out.refusals.push({ tick, seconds: seconds(), phase, perch: perch?.n ?? null, reason, count: 1, ...detail,
+      ...(stand ? { standCauses } : {}) });
   };
   const requestLeave = (reason: string) => {
     if (!perch) return;
@@ -4478,11 +4489,15 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
   const landingBodyOwned = () => hasActiveSafetyLease(actor) || activeActionCapabilities(actor).length > 0 || actor.floorReflexes?.busy
     || actor.floorReflexes?.retreat?.engaged || actor.shieldBlock?.up;
   const landingCompute = bedTickBudget(() => tick);
-  const landingClear = (feet: P3) => {
+  const landingStandStatus = (feet: P3) => {
     const path = landingPath(3);
-    return !!path.length && landingBedFireClear(read, feet) && dragonHazards(actor, { along: [feet] }).length === 0
-      && !path.some(p => landingDragonBoxes(p, 0.5).some(box => boxesOverlap(bedBodyBox(feet), box)));
+    const fireClear = landingBedFireClear(read, feet), fires = bedStandFires(read, feet);
+    const hazards = dragonHazards(actor, { along: [feet] });
+    const contacts = landingStandContacts(path, bedBodyBox(feet), 0.5);
+    return { clear: !!path.length && fireClear && hazards.length === 0 && !contacts.some(c => c.blocking),
+      position: { ...feet }, predictionMissing: !path.length, fireClear, fires, hazards, contacts };
   };
+  const landingClear = (feet: P3) => landingStandStatus(feet).clear;
   const prepareLanding = async () => {
     if (!phase3 || phase !== 2 || !landingTarget || Number(actor.health) <= 8 || landingBodyOwned()) return;
     const target = { ...landingTarget }, ownerPhase = phaseStart;
@@ -4531,7 +4546,7 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
             { minX: cell.x, minY: cell.y, minZ: cell.z, maxX: cell.x + 1, maxY: cell.y + 1, maxZ: cell.z + 1 })
           && !landingPath(3).some(p => landingDragonBoxes(p).some(box => boxesOverlap(
             { minX: cell.x, minY: cell.y, minZ: cell.z, maxX: cell.x + 1, maxY: cell.y + 1, maxZ: cell.z + 1 }, box)))
-          && /^(air|cave_air|void_air)$/u.test(read(cell)?.name ?? '') && packCount('obsidian') > 0;
+          && bedCanReplace(read(cell)) && packCount('obsidian') > 0;
         if (!safe()) { row.reason = 'landing_construction_veto'; return false; }
         killPlaced.set(pointKey(cell), cell);
         const ok = await perform('prepare_landing_obsidian', [{ do: 'place', block: 'obsidian', at: [cell] }], allowed, safe);
@@ -4561,7 +4576,7 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
     if (previous && (previous.detonationTick === null || !previous.healthRecorded)) {
       refuse('landing_previous_blast_or_health_unconfirmed'); requestLeave('landing_previous_blast_or_health_unconfirmed'); return false;
     }
-    if (previous && tick - previous.detonationTick > 10) { refuse('landing_ten_tick_slot_missed'); requestLeave('landing_ten_tick_slot_missed'); return false; }
+    if (!bedBurstDue(tick, lastBlast, LANDING_BLAST_GAP_TICKS)) return false;
     if (window.shots.length >= (window.trainBeds ?? 5)) { requestLeave('landing_train_finished'); return false; }
     const controller = new AbortController();
     const allowed = () => live() && !leaveNeeded && phase === 3 && dragonPhaseOf(actor, dragonEntity()) === 3 && perch === owner && landingRow === window;
@@ -4570,19 +4585,25 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
       const ms = Number(actor.player?.ping);
       return Number.isFinite(ms) && ms >= 0 ? 1 + Math.ceil(ms / 50) : Infinity;
     };
-    if (lead() + 1 > 3) { refuse('landing_latency_unknown_or_over_near_horizon'); return false; }
+    // The one-tick shot forecast cannot authorize a higher-latency click.
+    if (lead() > 1) { refuse('landing_latency_unknown_or_over_near_horizon'); return false; }
     const select = (at = tick, only?: LandingBedLayout) => {
       const search = (function* () {
-        const ahead = lead(); if (ahead + 1 > 3 || at !== tick || !landingTarget) return null;
+        const ahead = lead(); if (ahead > 1 || at !== tick || !landingTarget) return null;
         const hits = landingShotWindow(landingHistory, landingTarget, tick), path = landingPath(3);
-        if (hits.length !== 4 || hits.some(p => p.phase !== 3)) return null;
+        if (hits.length !== 2 || hits.some(p => p.phase !== 3)) return null;
         const error = Math.max(0.5, ...residuals.filter(e => tick - e.tick <= 60 && e.ahead >= 1 && e.ahead <= 3).map(e => e.metres + 0.35));
         if (packCount('white_bed') < 1) return null;
         for (const c of only ? [only] : plan.candidates) {
           if (hits.some(p => !landingBurstDue({ phase, now: at, lastBlast: previous?.detonationTick ?? null,
             head: p.head, pillow: bedCentre(c.head), beds: 5, error: 0 }))) continue;
           if (yield* landingBedRefusalSearch(c, actor.entity.position, path, read, Number(actor.health), .5, actor.entity)) continue;
+          const headDamage = [];
+          for (const hit of hits) headDamage.push(bedDamage(chainDistance(hit.head, bedCentre(c.head)),
+            yield* bedExposureSearch(read, bedCentre(c.head), hit.headBox, [c.head, c.foot])));
+          if (headDamage.some(d => !Number.isFinite(d) || d < 35)) continue;
           return { candidate: c, estimate: { tick, ahead, heads: hits, error, beds: 5,
+            headDamage, minimumHeadDamage: Math.min(...headDamage),
             geometricDamageE1: hits.map(p => bedDamage(chainDistance(p.head, bedCentre(c.head)), 1)),
             self: yield* landingBedSelfSearch(read, c.head, c.foot, actor.entity.position, actor.entity), safetyPath: path } };
         }
@@ -4592,10 +4613,9 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
       if (!result.done) { search.return(null); refuse('landing_computation_budget'); return null; }
       return result.value;
     };
-    // Choose the first pillow from the short horizon. The ready callback revalidates the
-    // SAME pillow at the exact move tick; a late match cannot move a cadence slot.
-    const first = previous ? select(previous.detonationTick + 10)?.candidate
-      ?? plan.candidates.find(c => pointKey(c.head) === pointKey(previous.head) && pointKey(c.foot) === pointKey(previous.foot)) : select()?.candidate;
+    // Entry froze the pillow. Re-evaluate at the current tick on every return;
+    // missing the first eligible tick never ends the landing train.
+    const first = select()?.candidate;
     if (!first) return false;
     chosen = first;
     layout = { ...first, supportBlocks: [], selfDamage: 1 };
@@ -4607,9 +4627,11 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
     const check = (): string | null => {
       if (!allowed()) return 'landing_phase_or_window_changed';
       if (landingBodyOwned()) return 'reflex_or_action_owns_body';
-      if (previous && tick - previous.detonationTick > 10) return 'landing_ten_tick_slot_missed';
       if (out.bedTrials.filter((b: any) => b.useRequested).length >= 8) return 'eight_bed_limit';
-      if (chainDistance(actor.entity.position, plan.stand) > 1 || !landingClear(actor.entity.position)) return 'landing_stand_or_hazard_changed';
+      if (chainDistance(actor.entity.position, plan.stand) > 1 || !landingClear(actor.entity.position)) {
+        refuse('landing_stand_or_hazard_changed', { standSafety: landingStandStatus(actor.entity.position) });
+        return 'landing_stand_or_hazard_changed';
+      }
       if (actor.heldItem?.name !== 'white_bed') return 'bed_not_in_hand';
       const path = landingPath(3);
       const search = landingBedRefusalSearch(chosen!, actor.entity.position, path, read, Number(actor.health), 0.5, actor.entity);
@@ -4626,6 +4648,7 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
       }
       const reason = check(); if (reason) { trial.notDetonatedReason = reason; refuse(reason); requestLeave(reason); return false; }
       const burst = await bedBurstOnMove(actor, rawProtocol!, { tick: () => tick, previousDetonationTick: lastBlast,
+        minimumGapTicks: LANDING_BLAST_GAP_TICKS,
         foot: first.foot, head: first.head, check, evidence: trial.burst, signal: controller.signal,
         ready: () => {
           const selected = select(tick, first);
@@ -4722,7 +4745,7 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
             for (const cell of selected.supports) {
               if (['obsidian', 'bedrock'].includes(read(cell)?.name ?? '')) continue;
               const safe = () => allowed() && !landingBodyOwned() && bedEyeReach(actor.entity.position, cell) <= 4.5
-                && bedCellSupported(read, cell) && /^(air|cave_air|void_air)$/u.test(read(cell)?.name ?? '')
+                && bedCellSupported(read, cell) && bedCanReplace(read(cell))
                 && packCount('obsidian') > 0 && !landingPath(3).some(p => landingDragonBoxes(p).some(box => boxesOverlap(
                   { minX: cell.x, minY: cell.y, minZ: cell.z, maxX: cell.x + 1, maxY: cell.y + 1, maxZ: cell.z + 1 }, box)));
               if (!safe()) { built = false; break; }
@@ -4741,7 +4764,11 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
             }
           }
           if (window.supportReadyTick) await landingBurst();
-        } else { refuse('landing_not_prepared_or_stand_unsafe'); requestLeave('landing_not_prepared_or_stand_unsafe'); }
+        } else {
+          refuse('landing_not_prepared_or_stand_unsafe', { readyBeforePhase3: !!window?.readyBeforePhase3,
+            planPresent: !!plan, pillowPresent: !!selected, standSafety: landingStandStatus(actor.entity.position) });
+          requestLeave('landing_not_prepared_or_stand_unsafe');
+        }
         await sleep(10); continue;
       }
       // A telemetry reply must not delay takeoff evacuation. Finish it before another damage-producing hand.

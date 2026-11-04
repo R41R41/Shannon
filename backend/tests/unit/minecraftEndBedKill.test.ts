@@ -370,7 +370,8 @@ describe('takeoff evacuation destinations and time reserve', () => {
   });
 });
 
-function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; limit?: number; damage?: number; headDelayMs?: number; beds?: number; obsidian?: number; cobblestone?: number; destroySupports?: boolean; cpuStepMs?: number } = {}) {
+function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; limit?: number; damage?: number; headDelayMs?: number; beds?: number; obsidian?: number; cobblestone?: number; destroySupports?: boolean; cpuStepMs?: number;
+  landingWindow?: typeof landingModel.landingShotWindow; headExposure?: number } = {}) {
   const t = terrain();
   const actor: any = new EventEmitter(); actor._client = new EventEmitter(); actor.health = 20; actor.food = 20;
   actor.game = { dimension: 'the_end' };
@@ -392,6 +393,10 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
     // These are fake-timer protocol/behaviour tests. A deterministic CPU clock makes
     // their cadence independent of host load; the separate budget suite uses real time.
     bedTickBudget: (clock: () => number) => { let cpu = 0; return geometry.bedTickBudget(clock, () => cpu += options.cpuStepMs ?? .0001); },
+    landingShotWindow: (...args: Parameters<typeof landingModel.landingShotWindow>) => (options.landingWindow ?? landingModel.landingShotWindow)(...args),
+    bedExposureSearch: function* (...args: Parameters<typeof geometry.bedExposureSearch>) {
+      return options.headExposure ?? (yield* geometry.bedExposureSearch(...args));
+    },
     END: 'execute in minecraft:the_end run', log: vi.fn(),
     trackEndKnocks: (tick: () => number, bedTrials: () => Array<{ detonationTick: number | null }>) => recordEndKnocks(actor, { enabled: false, tick, bedTrials, dragon: () => d, clouds: () => [] }),
     chainDistance: (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z),
@@ -1509,7 +1514,7 @@ describe('M2 through the real probe loop with packet observations', () => {
     expect(out.landing[0].shots.length).toBeGreaterThan(0);
     expect(vi.getTimerCount()).toBe(0);
   });
-  it('builds/equips in phase 2, lands four raw hits at detonation+10, records server HP and cleans up listeners', async () => {
+  it('builds/equips in phase 2, lands four raw hits after the minimum receipt gap, records server HP and cleans up listeners', async () => {
     vi.useFakeTimers(); const r = landingRig();
     const running = r.run(); await vi.advanceTimersByTimeAsync(19_000); const out = await running;
     expect(out.error).toBeUndefined();
@@ -1521,7 +1526,7 @@ describe('M2 through the real probe loop with packet observations', () => {
     expect(l.shots.map((s: any) => s.phaseAtUse)).toEqual([3, 3, 3, 3]);
     expect(l.shots.every((s: any) => s.burst.placeToUseTicks === 0)).toBe(true);
     expect(l.shots.map((s: any) => s.serverDragonLoss)).toEqual([55, 55, 55, 35]);
-    expect(l.shots.slice(1).map((s: any) => s.useTick - s.previousDetonationTick)).toEqual([10, 10, 10]);
+    expect(l.shots.slice(1).every((s: any) => s.useTick - s.previousDetonationTick >= 11)).toBe(true);
     expect(l.shots.every((s: any) => s.prediction.self.exposure === 0)).toBe(true);
     expect(l.entrySelection).toMatchObject({ reason: 'entry_pillow_frozen', attempts: 1 });
     expect(l.candidates).toHaveLength(1);
@@ -1550,13 +1555,49 @@ describe('M2 through the real probe loop with packet observations', () => {
     expect(out.actions.some((a: any) => a.label === 'leave_on_takeoff')).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
-  it('selects five instead of four when the forecast plus error exceeds 2.07 m and keeps every +10 slot', async () => {
+  it('selects five instead of four when the forecast plus error exceeds 2.07 m and waits at least eleven receipt ticks', async () => {
     vi.useFakeTimers(); const r = landingRig({ landingHeight: 2.5, damage: 42 });
     const running = r.run(); await vi.advanceTimersByTimeAsync(19_000); const out = await running;
     expect(out.error).toBeUndefined(); expect(out.landing[0].trainBeds).toBe(5);
     expect(out.landing[0].shots).toHaveLength(5);
-    expect(out.landing[0].shots.slice(1).map((s: any) => s.useTick - s.previousDetonationTick)).toEqual([10, 10, 10, 10]);
+    expect(out.landing[0].shots.slice(1).every((s: any) => s.useTick - s.previousDetonationTick >= 11)).toBe(true);
     expect(out.ok).toBe(true); expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(['fire', 'soul_fire'])('replaces blast residue %s and fires again after missing the first eligible crossing', async name => {
+    vi.useFakeTimers();
+    let firstBlastMs: number | null = null;
+    const r = landingRig({ landingWindow: (...args) => {
+      if (firstBlastMs !== null && Date.now() - firstBlastMs < 24 * 50) return [];
+      return landingModel.landingShotWindow(...args);
+    } });
+    const placedOn: string[] = [], write = r.actor._client.write;
+    r.actor._client.write = (packet: string, data: any) => {
+      if (packet === 'block_place' && data.cursorY === 1) placedOn.push(r.read({ ...data.location, y: data.location.y + 1 }).name);
+      return write(packet, data);
+    };
+    r.actor._client.on('explosion', () => {
+      firstBlastMs ??= Date.now();
+      const halves = [...r.blocks].filter(([, block]) => block.name === 'white_bed').map(([id]) => id);
+      // Server clears the halves synchronously after the explosion callback.
+      queueMicrotask(() => { for (const id of halves) r.blocks.set(id, { ...air(), name }); });
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(19_000); const out = await running;
+    const shots = out.landing[0].shots;
+    expect(out.error).toBeUndefined(); expect(shots.length).toBeGreaterThanOrEqual(2);
+    expect(shots[1].useTick - shots[0].detonationTick).toBeGreaterThanOrEqual(24);
+    expect(shots[1].head).toEqual(shots[0].head); expect(shots[1].foot).toEqual(shots[0].foot);
+    expect(placedOn[1]).toBe(name);
+    expect(out.refusals.some((r: any) => r.reason === 'landing_ten_tick_slot_missed')).toBe(false);
+    expect(out.actions.some((a: any) => a.label.includes('fire_dig'))).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('withholds in-radius shots when head exposure puts expected damage below 35', async () => {
+    vi.useFakeTimers(); const r = landingRig({ headExposure: .1 });
+    // Only the live targeting rays are occluded; durable self shielding is still real.
+    const running = r.run(); await vi.advanceTimersByTimeAsync(19_000); const out = await running;
+    expect(out.error).toBeUndefined(); expect(out.landing[0].readyBeforePhase3).toBe(true);
+    expect(out.landing[0].shots).toEqual([]); expect(out.detonations).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
   it.each(['fire', 'reflex', 'phase6'] as const)('stops the landing train after its first hit on %s', async change => {
     vi.useFakeTimers(); const r = landingRig({ limit: 12_000 });

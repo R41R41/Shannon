@@ -37,9 +37,12 @@ export function bedBurstPackets(foot: Cell, head: Cell, yaw: number, pitch: numb
   ];
 }
 
-export function bedBurstDue(now: number, previousDetonationTick: number | null): boolean {
-  return Number.isInteger(now) && (previousDetonationTick === null
-    || (Number.isInteger(previousDetonationTick) && now - previousDetonationTick >= 10));
+// A receipt tick is not a server tick: M2 reserves one tick beyond the server's
+// ten-tick hurt cooldown. This is a minimum, never a deadline or a cadence slot.
+export const LANDING_BLAST_GAP_TICKS = 11;
+export function bedBurstDue(now: number, previousDetonationTick: number | null, minimumGap = 10): boolean {
+  return Number.isInteger(now) && Number.isInteger(minimumGap) && minimumGap >= 10 && (previousDetonationTick === null
+    || (Number.isInteger(previousDetonationTick) && now - previousDetonationTick >= minimumGap));
 }
 
 /** Server reach is eye -> closest point in the clicked block AABB, 4.5+1.0 in survival.
