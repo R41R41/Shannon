@@ -3,7 +3,7 @@ import { seatedDragonHead } from './dragonHeadModel.js';
 import { Vec3 } from 'vec3';
 import { dragonHazards } from './dragonDanger.js';
 import { knockGeometry } from './endKnockRecord.js';
-import { landingDragonBoxes, type LandingPoint } from './dragonLandingPath.js';
+import { landingDragonBoxes, landingEntryOrder, landingMiddleRing, type LandingObservation, type LandingPoint } from './dragonLandingPath.js';
 
 type BedBlock = { name: string; boundingBox?: string; shapes?: number[][] } | null;
 export type BedBlockReader = (p: P3) => BedBlock;
@@ -241,6 +241,122 @@ export interface LandingBedLayout {
   head: P3; foot: P3; stand: P3; screen: P3[]; supports: P3[];
   headDistance: number; selfExposure: number; headDamage: number; score: number;
   region?: 'central' | 'midpoint' | 'terminal';
+}
+
+export interface LandingFountainStand {
+  stand: P3; staging: P3; footing: P3[]; screen: P3[]; options: LandingBedLayout[];
+}
+const obsidianBlock = { name: 'obsidian', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] };
+export const landingProjectedRead = (read: BedBlockReader, cells: readonly P3[]): BedBlockReader => {
+  const built = new Set(cells.map(key));
+  return p => built.has(key(p)) ? obsidianBlock : read(p);
+};
+
+/** Four column-relative stands, one metre from the column, at columnTop-3.
+ * A small roof/wall attached to the column shields all bearings, before the bearing
+ * is known. Only the footing and this screen are built in phase 2. */
+export function* landingFountainStandSearch(target: P3, here: P3, read: BedBlockReader, budget: number, health: number): BedSearch<LandingFountainStand | null> {
+  if (!Object.values(target).every(Number.isFinite) || !Number.isInteger(budget) || budget < 0 || !Number.isFinite(health) || health <= 5) return null;
+  const ring = landingMiddleRing(target), column = { x: Math.floor(target.x), z: Math.floor(target.z) };
+  const durable = (p: P3) => ['obsidian', 'bedrock'].includes(read(p)?.name ?? '');
+  const bearings = [[1, 0], [0, 1], [-1, 0], [0, -1]].sort(([ax, az], [bx, bz]) =>
+    Math.hypot(target.x + ax - here.x, target.z + az - here.z) - Math.hypot(target.x + bx - here.x, target.z + bz - here.z));
+  for (const [dx, dz] of bearings) {
+    yield;
+    const stand = { x: column.x + dx + .5, y: target.y - 3, z: column.z + dz + .5 };
+    if (ring.some(p => bedEyeReach(stand, p) > 4.5) || !air(read({ x: Math.floor(stand.x), y: stand.y, z: Math.floor(stand.z) }))
+      || !air(read({ x: Math.floor(stand.x), y: stand.y + 1, z: Math.floor(stand.z) })) || !landingBedFireClear(read, stand)) continue;
+    const below = { x: Math.floor(stand.x), y: stand.y - 1, z: Math.floor(stand.z) };
+    const footing = durable(below) ? [] : supportedBedCells([below], read, 2);
+    if (!footing || footing.length > 2 || (!footing.length && !durable(below)) || footing.some(p => !air(read(p)))) continue;
+    const roof: P3[] = [];
+    for (let along = -1; along <= 2; along++) for (let side = -2; side <= 2; side++) {
+      // A connected twelve-cell canopy: side arms cover low-body rays from the
+      // perpendicular bearings; the back cell anchors the later two-block arm.
+      if (!(Math.abs(side) === 1 || (side === 0 && (along === -1 || along === 2)) || (Math.abs(side) === 2 && along === 0))) continue;
+      roof.push({ x: column.x + along * dx - side * dz, y: target.y - 1, z: column.z + along * dz + side * dx });
+    }
+    if (roof.some(p => !durable(p) && !air(read(p)))) continue;
+    // Anchor to the observed column, then expand one neighbour at a time.
+    const remaining = roof.filter(p => !durable(p)), screen: P3[] = [];
+    while (remaining.length) {
+      const projected = landingProjectedRead(read, [...footing, ...screen]);
+      const i = remaining.findIndex(p => bedCellSupported(projected, p));
+      if (i < 0) break;
+      screen.push(remaining.splice(i, 1)[0]);
+    }
+    if (remaining.length || footing.length + screen.length + 2 > budget) continue;
+    const builtRead = landingProjectedRead(read, [...footing, ...screen]);
+    const stages: P3[] = [];
+    if (!footing.length) stages.push(stand);
+    for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) for (let y = stand.y; y >= stand.y - 2; y--) {
+      const p = { x: column.x + a + .5, y, z: column.z + b + .5 }, cell = { x: Math.floor(p.x), y, z: Math.floor(p.z) };
+      if (!durable({ ...cell, y: y - 1 }) || !air(read(cell)) || !air(read({ ...cell, y: y + 1 }))
+        || !landingBedFireClear(read, p) || footing.some(c => boxesOverlap(bedBodyBox(p), cellBox(c)) || bedEyeReach(p, c) > 4.5)) continue;
+      stages.push(p);
+    }
+    const staging = stages.sort((a, b) => distance(here, a) - distance(here, b))[0];
+    if (!staging || screen.some(p => bedEyeReach(stand, p) > 4.5)) continue;
+    const options: LandingBedLayout[] = [];
+    for (const head of ring) {
+      yield;
+      const self = yield* landingBedSelfSearch(builtRead, head, head, stand);
+      if (self.exposure !== 0 || self.expected > 6 || self.expected + 4 >= health) continue;
+      for (const [fx, fz] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+        const foot = { x: head.x + fx, y: head.y, z: head.z + fz };
+        if (distance(bedCentre(foot), target) >= distance(bedCentre(head), target) || !air(read(head)) || !air(read(foot))
+          || [head, foot, { ...foot, y: foot.y - 1 }].some(p => bedEyeReach(stand, p) > 4.5)) continue;
+        const supports = [head, foot].map(p => ({ ...p, y: p.y - 1 }));
+        const pending = supports.filter(p => !['obsidian', 'bedrock'].includes(builtRead(p)?.name ?? ''));
+        if (pending.length > 2 || pending.some(p => !air(builtRead(p)))) continue;
+        const ordered: P3[] = [];
+        for (let i = 0; i < pending.length; i++) {
+          const p = pending.find(p => !ordered.some(c => key(c) === key(p)) && bedCellSupported(landingProjectedRead(builtRead, ordered), p));
+          if (p) ordered.push(p);
+        }
+        if (ordered.length !== pending.length) continue;
+        options.push({ head, foot, stand, supports: ordered, screen: [...roof, ...footing], region: 'midpoint',
+          headDistance: 0, headDamage: 0, selfExposure: 0, score: 0 });
+        break;
+      }
+    }
+    // Coverage, rather than one lucky approach direction, is a phase-2 requirement.
+    if (options.length === ring.length) return { stand, staging, footing, screen, options };
+  }
+  return null;
+}
+
+/** One bounded search at entry, checking at most twenty ring cells. Unfinished work
+ * is a veto, never resumed with a later direction. Use projected 1..2 supports only. */
+export function* landingEntryPillowSearch(plan: LandingFountainStand, history: readonly LandingObservation[], target: P3,
+  path: readonly LandingPoint[], read: BedBlockReader, health: number,
+  dimensions: { width?: number; height?: number; position?: P3 } = {}, materials = 2): BedSearch<LandingBedLayout | null> {
+  const feet = dimensions.position ?? plan.stand;
+  if (distance(feet, plan.stand) > 1) return null;
+  for (const c of landingEntryOrder(plan.options, history, target)) {
+    yield;
+    const pending = c.supports.filter(p => !['obsidian', 'bedrock'].includes(read(p)?.name ?? ''));
+    if (pending.length > materials || pending.some(p => !air(read(p)))) continue;
+    if (pending.some((p, i) => !bedCellSupported(landingProjectedRead(read, pending.slice(0, i)), p))) continue;
+    const projected = landingProjectedRead(read, c.supports);
+    if (!(yield* landingBedRefusalSearch(c, feet, path, projected, health, .5, dimensions))) return c;
+  }
+  return null;
+}
+
+/** Scene-only destination guard. A durable reflex can still enter a crater on its
+ * own; rejecting the destination cannot change that reflex's controls. */
+export function bedWaitGroundSafe(read: BedBlockReader, feet: P3, blasts: readonly P3[] = []): boolean {
+  if (!Object.values(feet).every(Number.isFinite) || blasts.some(p => Math.hypot(p.x - feet.x, p.z - feet.z) <= 3)) return false;
+  const y = Math.floor(feet.y);
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    const x = Math.floor(feet.x) + dx, z = Math.floor(feet.z) + dz;
+    // Same-level full floor, open above: rejects both a pit bottom and a ledge.
+    const floor = read({ x, y: y - 1, z });
+    if (floor?.boundingBox !== 'block' || !floor.shapes?.some(s => s.length === 6 && s.every((v, i) => v === (i < 3 ? 0 : 1)))
+      || !air(read({ x, y, z }))) return false;
+  }
+  return true;
 }
 
 /** The full 45-ray, reach, fire, durable footing and flight-box checks are also run at dispatch,

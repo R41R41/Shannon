@@ -17,7 +17,7 @@ function pureModule(name) {
   new Function('module', 'exports', 'require', output)(mod, mod.exports, dep => pureModule(path.basename(dep, '.js')));
   return mod.exports;
 }
-const { landingEndHead, landingShotWindow } = pureModule('dragonLandingPath');
+const { landingEndHead, landingEntryDirection, landingShotWindow, landingMiddleRing, landingEntryOrder } = pureModule('dragonLandingPath');
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const centre = cell => ({ x: cell.x + .5, y: cell.y + .5, z: cell.z + .5 });
 const cellOf = p => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
@@ -96,16 +96,50 @@ function replay(report, directionAt = 'entry') {
   if (!scene?.landing?.length) throw new Error('missing scenes.end_bed_crystals_p3.landing');
   return scene.landing.flatMap(l => replayLanding(l, directionAt));
 }
+/** New policy, causal: entry fixes the pillow without reading future hits. Fire at
+ * the FIRST admitted tick, then exactly +10; no retrospective choice of train. */
+function replayMiddle(report, label = '') {
+  const scene = report.scenes?.end_bed_crystals_p3;
+  if (!scene?.landing?.length) throw new Error('missing scenes.end_bed_crystals_p3.landing');
+  return scene.landing.map(l => {
+    const history = l.observations.filter(p => p.tick <= l.startTick);
+    const candidate = landingEntryOrder(landingMiddleRing(l.target).map(head => ({ head })), history, l.target)[0];
+    if (!candidate) throw new Error(`no entry pillow for landing ${l.n}`);
+    const pillow = centre(candidate.head), samples = interpolateHeads(l.observations, l.startTick, l.endTick);
+    const admitted = [], train = [];
+    for (let tick = l.startTick; tick < l.endTick; tick++) {
+      const h = l.observations.filter(p => p.tick <= tick), window = landingShotWindow(h, l.target, tick);
+      if (window.length === 4 && window.every(p => distance(p.head, pillow) <= 3.22)) admitted.push(tick);
+    }
+    const set = new Set(admitted);
+    if (admitted.length) for (let t = admitted[0]; set.has(t) && train.length < 5; t += 10) train.push(t);
+    const geometric = countWindows(samples, pillow, 3.22);
+    return { report: label, landing: l.n, startTick: l.startTick, endTick: l.endTick, cell: candidate.head,
+      direction: landingEntryDirection(history, l.target), shots: train.length, train, admitted,
+      geometric, conditional: 'phase2 ready; reach/exposure/supports/reflex/health/HP ACK assumed; no explosion impulse simulated' };
+  });
+}
+function middleMarkdown(rows) {
+  return ['| report | landing (phase 3) | pillow cell | first-tick +10 shots | ticks | geometric maximum |',
+    '|---|---|---|---:|---|---:|', ...rows.map(r => `| ${r.report} | ${r.landing} (${r.startTick}–${r.endTick}) | ${r.cell.x},${r.cell.y},${r.cell.z} | ${r.shots} | ${r.train.join(',') || '-'} | ${r.geometric.shots} |`)].join('\n');
+}
 function markdown(rows) {
   return ['| landing | direction | pillow cell | radius | ticks (packet) | +10 shots | train ticks | ranges | near gate ticks / shots |',
     '|---|---|---|---:|---:|---:|---|---|---|',
     ...rows.map(r => `| ${r.landing} | ${r.directionAt}:${r.kind} | ${r.cell.x},${r.cell.y},${r.cell.z} | ${r.radius} | ${r.ticks} (${r.packetTicks}) | ${r.shots} | ${r.train.join(',') || '-'} | ${r.ranges.map(([a,b]) => a === b ? a : `${a}-${b}`).join(',') || '-'} | ${r.shortGate.ticks} / ${r.shortGate.shots} |`)].join('\n');
 }
-module.exports = { interpolateHeads, countWindows, replayLanding, replay, markdown };
+module.exports = { interpolateHeads, countWindows, replayLanding, replay, markdown, replayMiddle, middleMarkdown };
 if (require.main === module) {
   const args = process.argv.slice(2), file = args.find(a => !a.startsWith('--'))
     ?? path.resolve(__dirname, '../../../lab-evidence/r245-report.json');
   const mode = args.includes('--prepared') ? 'prepared' : args.includes('--terminal-direction') ? 'terminal' : 'entry';
+  if (args.includes('--middle')) {
+    const files = args.filter(a => !a.startsWith('--'));
+    const rows = (files.length ? files : [file]).flatMap(f => replayMiddle(JSON.parse(fs.readFileSync(f, 'utf8')), path.basename(f)));
+    console.log(args.includes('--json') ? JSON.stringify(rows, null, 2)
+      : 'Conditional observation/forecast opportunities; terrain, body ownership and explosion effects are unavailable.\n' + middleMarkdown(rows));
+    return;
+  }
   const rows = replay(JSON.parse(fs.readFileSync(file, 'utf8')), mode);
   if (args.includes('--json')) console.log(JSON.stringify({ directionAt: mode, rows }, null, 2));
   else {

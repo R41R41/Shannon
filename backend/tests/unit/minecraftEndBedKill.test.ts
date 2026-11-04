@@ -39,8 +39,8 @@ function terrain(perch = p(103.5, 74, -39.5)) {
   return { read, blocks, perch };
 }
 const waitPlan: (anchor: P3 | null, here: P3, centre: P3 | null, fallback: P3[], read: geometry.BedBlockReader, clouds: geometry.BedCloud[]) =>
-  { kind: 'recover' | 'return' | 'move'; to: P3 } | null = new Function('scenes', 'bedOpenWaitCells', 'chainDistance',
-    compiled + '\nreturn bedWaitPlan;')({}, geometry.bedOpenWaitCells, (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z));
+  { kind: 'recover' | 'return' | 'move'; to: P3 } | null = new Function('scenes', 'bedOpenWaitCells', 'chainDistance', 'bedWaitGroundSafe',
+    compiled + '\nreturn bedWaitPlan;')({}, geometry.bedOpenWaitCells, (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z), geometry.bedWaitGroundSafe);
 
 afterEach(() => { vi.useRealTimers(); });
 
@@ -1360,14 +1360,15 @@ describe('end_bed_kill scene with mocked I/O', () => {
   });
 });
 
-function landingRig(options: Parameters<typeof rig>[0] & { landingHeight?: number; packetEveryAfterEquip?: number; phase3DelayMs?: number } = {}) {
-  const { landingHeight = 2, packetEveryAfterEquip = 3, phase3DelayMs = 150, ...rest } = options;
+function landingRig(options: Parameters<typeof rig>[0] & { landingHeight?: number; packetEveryAfterEquip?: number; phase3DelayMs?: number;
+  interruptStandGo?: boolean; arriveOnInterruption?: boolean } = {}) {
+  const { landingHeight = 2, packetEveryAfterEquip = 3, phase3DelayMs = 150, interruptStandGo = false, arriveOnInterruption = false, ...rest } = options;
   const r = rig({ limit: 18_000, beds: 8, obsidian: 16, damage: 55, ...rest });
   r.deps.ask.mockResolvedValue('Test passed, count: 10');
   r.enableRaw(); r.actor.player = { ping: 0 }; r.d.phase = 2;
   r.d.position = new Vec3(r.perch.x, r.perch.y + 3, r.perch.z - 20);
   for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) r.blocks.set(key(p(Math.floor(r.perch.x) + dx, 69, Math.floor(r.perch.z) + dz)), solid('bedrock'));
-  let ticks = 0, switched = false, equippedAt: number | null = null;
+  let ticks = 0, switched = false, interrupted = false, equippedAt: number | null = null;
   const positions = () => {
     ticks++;
     if (r.actor.heldItem?.name === 'white_bed') equippedAt ??= ticks;
@@ -1376,11 +1377,18 @@ function landingRig(options: Parameters<typeof rig>[0] & { landingHeight?: numbe
   };
   r.actor.on('physicsTick', positions);
   r.setHandler(async hands => {
+    if (hands.some(h => h.do === 'place' && h.block === 'obsidian')) r.actor.heldItem = { name: 'obsidian' };
+    const standGo = hands.find(h => h.do === 'go' && h.to.y === r.perch.y - 3);
+    if (interruptStandGo && standGo && !interrupted) {
+      interrupted = true;
+      if (arriveOnInterruption) r.actor.entity.position = new Vec3(standGo.to.x + .8, standGo.to.y, standGo.to.z + .5);
+      return false;
+    }
     if (!switched && hands.some(h => h.do === 'equip' && h.item === 'white_bed')) {
       switched = true;
       setTimeout(() => {
         r.d.phase = 3;
-        r.d.position = new Vec3(r.perch.x, r.perch.y + landingHeight, r.perch.z - 6.5);
+        r.d.position = new Vec3(r.perch.x, r.perch.y + landingHeight, r.perch.z - 3.5);
       }, phase3DelayMs);
     }
   });
@@ -1438,7 +1446,8 @@ describe('M2 through the real probe loop with packet observations', () => {
     expect(out.transitions.map((p: any) => p.phase)).toEqual([0, 1, 2]);
     expect(out.actions.some((a: any) => a.label.startsWith('open_wait'))).toBe(true);
     if (phase3) {
-      expect(out.landingPackets.packets).toEqual([]); expect(out.landingPreparation).toEqual([]);
+      expect(out.landingPackets.packets).toEqual([]);
+      expect(out.landingPreparation.every((p: any) => p.readyTick === null)).toBe(true);
       expect(out.actions.filter((a: any) => a.label.startsWith('open_wait'))).toHaveLength(1);
       const abort = out.abortTiming.find((a: any) => a.reason === 'observation_changed');
       expect(abort).toMatchObject({ phase: 2, label: 'open_wait_return' });
@@ -1472,17 +1481,32 @@ describe('M2 through the real probe loop with packet observations', () => {
     expect(out.landing[0].readyBeforePhase3).toBe(true);
     expect(out.landing[0].readyTickAtEntry).toBe(out.landingPreparation[0].readyTick);
     expect(out.landing[0].readiness).toEqual({ completedInPhase2: true, beforeEntry: true, targetObserved: true, sameTarget: true, ready: true });
-    expect(out.landing[0].shots.length).toBeGreaterThan(0);
+    // Completion survives the gap; an entry with no fresh safety path cannot
+    // select a pillow later using a different observation/bearing.
+    expect(out.landing[0].shots).toEqual([]);
+    expect(out.landing[0].entrySelection.reason).toBe('no_safe_entry_pillow');
     const ready = out.landingPreparation[0].readyTick;
     expect(out.actions.some((a: any) => a.label.startsWith('open_wait') && a.tick > ready && a.tick < out.landing[0].startTick)).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
   it('rejects a ping requiring more than the 1..3 tick firing horizon', async () => {
-    vi.useFakeTimers(); const r = landingRig({ limit: 3000 }); r.actor.player.ping = 100;
-    const running = r.run(); await vi.advanceTimersByTimeAsync(4000); const out = await running;
+    vi.useFakeTimers(); const r = landingRig({ limit: 8000 }); r.actor.player.ping = 100;
+    const running = r.run(); await vi.advanceTimersByTimeAsync(9000); const out = await running;
     expect(out.landing[0].readyBeforePhase3).toBe(true);
     expect(out.landing[0].shots).toEqual([]);
-    expect(out.refusals.some((r: any) => r.reason === 'landing_latency_unknown_or_over_near_horizon')).toBe(true);
+    expect(out.refusals.some((r: any) => r.reason === 'landing_latency_unknown_or_over_near_horizon'),
+      JSON.stringify({ entry: out.landing[0].entrySelection, supports: out.landing[0].supportConstruction, refusals: out.refusals.slice(-5) })).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each([false, true])('resumes the same phase-2 stand after go interruption, accepting observed arrival: %s', async arriveOnInterruption => {
+    vi.useFakeTimers(); const r = landingRig({ interruptStandGo: true, arriveOnInterruption });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(19_000); const out = await running;
+    expect(out.error).toBeUndefined(); expect(out.landingPreparation).toHaveLength(1);
+    const prep = out.landingPreparation[0];
+    expect(prep.goAttempts).toBe(arriveOnInterruption ? 1 : 2);
+    expect(prep.readyTick).not.toBeNull();
+    expect(out.landing[0].readyTickAtEntry).toBe(prep.readyTick);
+    expect(out.landing[0].shots.length).toBeGreaterThan(0);
     expect(vi.getTimerCount()).toBe(0);
   });
   it('builds/equips in phase 2, lands four raw hits at detonation+10, records server HP and cleans up listeners', async () => {
@@ -1499,6 +1523,15 @@ describe('M2 through the real probe loop with packet observations', () => {
     expect(l.shots.map((s: any) => s.serverDragonLoss)).toEqual([55, 55, 55, 35]);
     expect(l.shots.slice(1).map((s: any) => s.useTick - s.previousDetonationTick)).toEqual([10, 10, 10]);
     expect(l.shots.every((s: any) => s.prediction.self.exposure === 0)).toBe(true);
+    expect(l.entrySelection).toMatchObject({ reason: 'entry_pillow_frozen', attempts: 1 });
+    expect(l.candidates).toHaveLength(1);
+    const entryEquip = out.actions.find((a: any) => a.label === 'landing_entry_equip_bed');
+    expect(entryEquip).toBeDefined();
+    expect(entryEquip.endTick).toBeLessThanOrEqual(l.shots[0].useTick);
+    expect(l.firstBlast.body.y).toBeGreaterThan(0);
+    expect(l.firstBlast.velocity).not.toBeNull();
+    expect(l.firstBlast.samples.length).toBeGreaterThan(0);
+    expect(l.firstBlast.pushExtendedLanding).toBeNull();
     expect(l.predictions.length).toBeGreaterThan(0); expect(l.errors.length).toBeGreaterThan(0);
     expect(l.pushExtendedLanding).toBeNull();
     expect(out.operationBudget.bedsPerPerch).toBeUndefined();
@@ -1542,6 +1575,8 @@ describe('M2 through the real probe loop with packet observations', () => {
       expect(out.transitions.some((p: any) => p.phase === 6)).toBe(true);
       expect(out.landing[0].nextPhase).toBe(6);
       expect(out.landing[0].shots[0].phase3RemainingTicks).toBeGreaterThanOrEqual(0);
+      expect(out.landing[0].firstBlast.phase3RemainingTicks).toBe(out.landing[0].shots[0].phase3RemainingTicks);
+      expect(out.landing[0].firstBlast.phase3RemainingCensored).toBe(false);
       expect(out.landing[0].shots[0].burst.observationInterrupted).toBe('phase_metadata_changed');
       expect(out.seatedBudget).toEqual([]); // the phase-3 hit is not a seated hit just because HP arrived in phase 6
     }

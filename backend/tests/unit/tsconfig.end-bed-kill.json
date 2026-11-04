@@ -5,7 +5,9 @@
   "files": [
     "../../scripts/minecraft-end-fight-probe.ts",
     "../../src/services/minebot/utils/dragonBedGeometry.ts",
-    "minecraftEndFightBudget.test.ts",
-    "minecraftEndBedKill.test.ts"
+    "../../src/services/minebot/utils/dragonLandingPath.ts",
+    "minecraftEndBedKill.test.ts",
+    "minecraftLandingMiddle.test.ts",
+    "minecraftLandingReplay.test.ts"
   ]
 }

@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { interpolateHeads, countWindows, replay } = require('../../scripts/lab/landing-replay.cjs');
+const { interpolateHeads, countWindows, replay, replayMiddle } = require('../../scripts/lab/landing-replay.cjs');
 const head = { x: 0, y: 0, z: 0 };
 
 describe('M2 read-only landing replay aggregation', () => {
@@ -27,6 +27,18 @@ describe('M2 read-only landing replay aggregation', () => {
     expect(countWindows(samples, head, 2.07, new Set([0, 10, 31])).train).toEqual([0, 10]);
   });
   const evidence = new URL('../../../lab-evidence/r245-report.json', import.meta.url);
+  const r250 = new URL('../../../lab-evidence/r250-report.json', import.meta.url);
+  it.skipIf(!fs.existsSync(evidence) || !fs.existsSync(r250))('replays the entry-frozen middle ring with first-tick cadence, never choosing a later train', () => {
+    const rows = [evidence, r250].flatMap(file => replayMiddle(JSON.parse(fs.readFileSync(file, 'utf8'))));
+    expect(rows.map((r: any) => r.shots)).toEqual([0, 1, 0, 2, 1]);
+    expect(rows.map((r: any) => r.train)).toEqual([[], [4093], [], [2697, 2707], [4156]]);
+    expect(rows.map((r: any) => r.geometric.shots)).toEqual([2, 1, 1, 2, 1]);
+    for (const row of rows) expect(row.train[0] ?? null).toBe(row.admitted[0] ?? null);
+    // A later head mutation cannot change the selected pillow.
+    const original = JSON.parse(fs.readFileSync(evidence, 'utf8')), changed = structuredClone(original);
+    for (const l of changed.scenes.end_bed_crystals_p3.landing) for (const p of l.observations) if (p.tick > l.startTick) p.head.x += 100;
+    expect(replayMiddle(changed).map((r: any) => r.cell)).toEqual(replayMiddle(original).map((r: any) => r.cell));
+  });
   it.skipIf(!fs.existsSync(evidence))('reproduces the r245 entry-frozen table and a causal near-horizon comparison', () => {
     const report = JSON.parse(fs.readFileSync(evidence, 'utf8'));
     const rows = replay(report).filter((r: any) => ['central', 'midpoint', 'terminal'].includes(r.kind));

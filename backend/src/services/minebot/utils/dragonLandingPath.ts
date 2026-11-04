@@ -150,6 +150,46 @@ export function landingEndHead(history: readonly LandingObservation[], target: P
     observedTick: last.tick, source: measured ? 'inbound_packet_progress' : 'target_bearing' };
 }
 
+/** Twenty cells on the middle annulus (2..3m, a subset of 2..4m). No world grid
+ * search or phase-2 bearing. Cell centres are relative to the observed column. */
+export function landingMiddleRing(target: P3): P3[] {
+  if (!finite(target)) return [];
+  const cells = new Map<string, P3>();
+  for (const [a, b] of [[3, 0], [2, 2], [2, 1], [1, 2], [2, 0]]) for (let turn = 0; turn < 4; turn++) {
+    const [x, z] = turn === 0 ? [a, b] : turn === 1 ? [-b, a] : turn === 2 ? [-a, -b] : [b, -a];
+    const p = { x: Math.floor(target.x) + x, y: Math.floor(target.y), z: Math.floor(target.z) + z };
+    cells.set(`${p.x},${p.z}`, p);
+  }
+  return [...cells.values()];
+}
+
+/** Phase-3 entry uses a fresh velocity if it is inbound, then packet progress or
+ * the current target bearing. The phase-2 corridor helper retains its old meaning. */
+export function landingEntryDirection(history: readonly LandingObservation[], target: P3) {
+  const last = history.at(-1);
+  if (last?.velocity && (last.velocityTick ?? last.tick) <= last.tick) {
+    const v = last.velocity;
+    return landingEndHead([{ ...last, tick: last.tick - 1,
+      position: { x: last.position.x - v.x, y: last.position.y - v.y, z: last.position.z - v.z } }, last], target);
+  }
+  return landingEndHead(history, target);
+}
+
+/** Freeze this ordering ONCE at phase-3 entry. No future heads in the score. */
+export function landingEntryOrder<T extends { head: P3 }>(candidates: readonly T[], history: readonly LandingObservation[], target: P3): T[] {
+  const end = landingEntryDirection(history, target);
+  if (!end) return [];
+  const aim = { x: target.x + 3 * end.direction.x, y: target.y + 0.5, z: target.z + 3 * end.direction.z };
+  return candidates.filter(c => (c.head.x + 0.5 - target.x) * end.direction.x + (c.head.z + 0.5 - target.z) * end.direction.z > 0)
+    .sort((a, b) => distance({ x: a.head.x + .5, y: a.head.y + .5, z: a.head.z + .5 }, aim)
+      - distance({ x: b.head.x + .5, y: b.head.y + .5, z: b.head.z + .5 }, aim));
+}
+
+/** Arrival is evidence even if go returned an interruption. Never erase completion. */
+export function landingArrival(plan: { readyTick: number | null; stand: P3 }, feet: P3, tick: number, built: boolean): number | null {
+  return plan.readyTick ?? (built && finite(feet) && distance(plan.stand, feet) <= 1 ? tick : null);
+}
+
 /** Completion is durable evidence for this phase-2 plan, not current permission to fire.
  * A missing fresh packet or reflex displacement must not erase its completion tick. */
 export function landingReadiness(plan: { readyTick: number | null; phaseStart: number; target: P3 } | null, target: P3 | null, entry: number) {
