@@ -90,3 +90,30 @@ scene('s6_pearls_kind', '自然湧き: fight target=enderman（体が選ぶ）�
   return { ...summary, rows };
 });
 
+// ===== S6 (11/5): the seed's barter sequence with real piglins, and count=N ===========================================================
+// /loot of gameplay/piglin_bartering on a fresh c1 gave pearls at the 8th (2), 18th (3) and 24th (4) roll: 9 in the first 24. Three piglins on a plate,
+// 24 ingots given by `use item=gold_ingot target=piglin count=24` (one hand). The same 9 pearls say the real barter draws on the same sequence.
+scene('s6_barter_seq', '交換の列: ピグリン 3 体・金 24 個を count=24 の 1 手で。c1 の /loot の列なら パール 9', async note => {
+  const stand = (sites.blazeStand ?? sites.netherArrival) as number[];
+  const n = Number(process.env.MINECRAFT_HUNT_GOLD ?? 24);
+  await ask('difficulty normal'); await ask('time set noon');
+  await ask('execute in minecraft:the_nether run kill @e[type=minecraft:piglin]');
+  await equip({ diamond_sword: 1, gold_ingot: n, golden_boots: 1, cooked_beef: 8 }, { armor: 'none', shield: true });
+  const y = await netherPlate(stand[0], stand[2]);
+  await placeActor('the_nether', stand[0], y, stand[2], 24);
+  await act('wear', [{ do: 'equip', item: 'golden_boots' }], 15);
+  for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2]]) await ask(`execute in minecraft:the_nether run summon minecraft:piglin ${stand[0] + 0.5 + dx} ${y} ${stand[2] + 0.5 + dz} {PersistenceRequired:1b,IsImmuneToZombification:1b}`);
+  await sleep(2500);
+  const start = Date.now(), before = packClient();
+  const run = await act('s6-barter', [{ do: 'use', item: 'gold_ingot', target: 'piglin', count: n }], 170);
+  const after = packClient();
+  const gained: Record<string, number> = {};
+  for (const [name, count] of Object.entries(after)) { const more = count - (before[name] ?? 0); if (more > 0) gained[name] = more; }
+  // What may lie about still (thrown wide): counted from the server, then the plate is cleared.
+  const lying = await ask(`execute in minecraft:the_nether if entity @e[type=minecraft:item,nbt={Item:{id:"minecraft:ender_pearl"}}]`);
+  await ask('execute in minecraft:the_nether run kill @e[type=minecraft:piglin]');
+  const result = { seconds: (Date.now() - start) / 1000, given: n - (after.gold_ingot ?? 0), pearls: gained.ender_pearl ?? 0, expectedFromLoot: n >= 24 ? 9 : null, lyingPearl: lying.slice(0, 80), gained, line: (run.lines[0] ?? '').slice(0, 400) };
+  note(`S6 BARTER ${JSON.stringify(result)}`);
+  return result;
+});
+
