@@ -21,14 +21,14 @@ import { entityHealth } from '../src/services/minebot/utils/mapMarks.js';
 import { partBox, partTarget, boxDistance, type DragonPart } from '../src/services/minebot/utils/dragonParts.js';
 import { breathCloudsOf, dragonPhaseOf, endDragonOf, endObservation } from '../src/services/minebot/utils/dragonState.js';
 import { dragonHazards } from '../src/services/minebot/utils/dragonDanger.js';
-import { recordEndKnocks } from '../src/services/minebot/utils/endKnockRecord.js';
+import { knockGeometry, recordEndKnocks } from '../src/services/minebot/utils/endKnockRecord.js';
 import { FALL_CLUTCH_ENABLED } from '../src/services/minebot/utils/floorReflexes.js';
 import { activeActionCapabilities, hasActiveSafetyLease, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../src/services/minebot/execution/ActionExecution.js';
 import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
 import { feetCentre, standing, walkGround } from '../src/services/minebot/utils/dragonWalk.js';
 import { bodyReader } from '../src/services/minebot/utils/localMap.js';
 import { bedHalves } from '../src/services/minebot/utils/bedRules.js';
-import { perchBedFoot, bedWallCells, bedCellSupported, supportedBedCells, seatedBedLayouts, bedLayoutDragonRefusal, bedOperationClear, bedOpenWaitCells, BED_LEAVE_DISTANCE, bedLeaveState, bedLeaveCell, bedLeaveSeconds, bedSelfEstimate, bedExposure, bedDamage, bedCentre, bedEyeReach, type SeatedBedLayout, type BedBlockReader, type BedCloud } from '../src/services/minebot/utils/dragonBedGeometry.js';
+import { perchBedFoot, bedWallCells, bedCellSupported, supportedBedCells, seatedBedLayouts, bedLayoutDragonRefusal, bedOperationClear, bedOperationHazards, bedApproachGate, bedApproachRetryTicks, bedNextLayout, bedIsFire, bedUnsafeFire, bedRecordFireFailure, bedFireStandExcluded, bedFireTargets, bedFireWorkCell, bedOpenWaitCells, BED_LEAVE_DISTANCE, bedLeaveState, bedLeaveCell, bedLeaveSeconds, bedSelfEstimate, bedExposure, bedDamage, bedCentre, bedEyeReach, type BedFireFailure, type SeatedBedLayout, type BedBlockReader, type BedCloud } from '../src/services/minebot/utils/dragonBedGeometry.js';
 import { approachClear } from '../src/services/minebot/utils/dragonApproach.js';
 import { dragonNook, insideDragonNook, nookCellSupported, type DragonNook } from '../src/services/minebot/utils/dragonNook.js';
 import { BLOCK_REACH } from '../src/services/minebot/utils/blockReach.js';
@@ -3522,6 +3522,7 @@ async function endBedKill() {
     operationBudget: { windowTicks: 240, approachByTick: 100, screenByTick: 160, placeByTick: 200, useByTick: 240, bedsPerPerch: 3, observationDelayTicks: 4, placeToUseTicks: 4, blastGapTicks: 11,
       leaveDistance: BED_LEAVE_DISTANCE, leaveReserveTicks: 100, thirdBedReserveTicks: 140, flameMidpointTicks: 100 },
     bedTrials: [], perches: [], refusals: [], actions: [], healthTimeline: [], transitions: [], phaseTimeline: [], phaseDurations: [],
+    fireCleared: 0, fireFailures: 0, fireWaits: [], fireBudget: { blocksPerWait: 4, millisecondsPerWait: 8000, blastRadius: 6 },
     anchorTimeline: [], anchorTimelineStrideSeconds: 1, anchorSamples: 0, anchorDistanceMetric: '3d_metres; centreDistance is horizontal',
     anchorOver8Seconds: 0, maxAnchorDistance: null, anchorMissingSeconds: 0, anchorReturnAttempts: 0, anchorReturnFailures: 0,
     leaveFailures: 0, leaveDistanceMetric: 'horizontal_metres_from_perch.body.position; phase4 captured on first observed tick',
@@ -3534,6 +3535,10 @@ async function endBedKill() {
   let leaveNeeded = false, enteredSit = false, bedBlocked = false, nextOpenMove = 0, layoutPerch = 0;
   let perch = null as Record<string, any> | null;
   let leavingPerch = null as Record<string, any> | null;
+  const fireFailures = new Map<string, BedFireFailure>(), namedFires = new Map<string, P3>(), standHints = new Map<string, P3>();
+  const standExclusions = new Set<string>();
+  const pointKey = (p: P3) => `${p.x},${p.y},${p.z}`;
+  let cleanupPhaseStart = -1, cleanupWaitPerch = -1, lastBedBlast: P3 | null = null;
   type HeadSample = { tick: number; head: P3; pose: NonNullable<ReturnType<typeof seatedDragonHead>> };
   const heads: HeadSample[] = [];
   // ask() uses chat markers. Serialise these reads so overlapping marker windows cannot mix replies.
@@ -3654,7 +3659,7 @@ async function endBedKill() {
     if (pending.detonationTick !== null) return;
     pending.detonationTick = tick; pending.explosion = { x: p.x, y: p.y, z: p.z };
     pending.headAtExplosion = headOf(view?.dragon); pending.phaseAtExplosion = view?.dragon?.phase ?? null;
-    lastBlast = tick; out.detonations++; killBlasts.push(bedCentre(layout.head));
+    lastBlast = tick; lastBedBlast = bedCentre(layout.head); out.detonations++; killBlasts.push(bedCentre(layout.head));
     const owner = out.perches.find((p: any) => p.n === pending!.perch);
     if (owner) owner.bedsDetonated++;
   };
@@ -3678,11 +3683,19 @@ async function endBedKill() {
       }
       if (p === 7) {
         bedBlocked = false; enteredSit = false;
+        standExclusions.clear();
+        // Keep repeated receipt evidence across sits only while the same fire is still observed
+        // (or unloaded). Within this sit an excluded stand stays excluded.
+        for (const [id, entry] of fireFailures) if (read(entry.fire) && !bedIsFire(read(entry.fire))) fireFailures.delete(id);
         const raw = dragonEntity();
         perch = { n: out.perches.length + 1, startTick: tick, startSeconds: seconds(), endTick: null, endReason: null,
           body: raw?.position ? { position: { ...raw.position }, yaw: raw.yaw, phase: 7 } : null, bedsPlaced: 0, bedsDetonated: 0, steps: [],
+          fire: { waits: [], unsafeFailures: [], excludedStands: [] }, layoutSwitches: [],
           leave: { startTick: null, startPhase: null, reason: null, goCount: 0, goResults: [], safeTick: null, completedTick: null, phase4: null } };
         perch.head = perch.body ? seatedDragonHead(perch.body) : null;
+        for (const entry of fireFailures.values()) if (entry.count >= 2 && !standExclusions.has(pointKey(entry.stand))) {
+          standExclusions.add(pointKey(entry.stand)); perch.fire.excludedStands.push({ tick, ...entry, inherited: true });
+        }
         out.perches.push(perch);
       }
       if (p === 4 && perch) {
@@ -3740,6 +3753,11 @@ async function endBedKill() {
     return !!raw && bedOperationClear({ position: raw.position, yaw: raw.yaw, phase: view?.dragon?.phase ?? null }, feet, view?.dragonBreath ?? [])
       && dragonHazards(actor, { along: [feet] }).length === 0;
   };
+  const clearHazardsNow = (feet: P3): string[] => {
+    const pose = currentDragonPose();
+    return [...new Set([...(pose ? bedOperationHazards(pose, feet, view?.dragonBreath ?? []) : ['pose_unknown']),
+      ...dragonHazards(actor, { along: [feet] }).map(h => h.kind)])];
+  };
   const swordWindow = () => !leaveNeeded && sitting() && bedSwordAllowed(packCount('white_bed'), bedBlocked)
     && (!perch || perch.endTick === null || view?.dragon?.phase === 6);
   const live = () => !terminal;
@@ -3758,7 +3776,12 @@ async function endBedKill() {
       return { tick, phase: view?.dragon?.phase ?? null, stand: stand ? { ...stand } : null, position: { ...actor.entity.position },
         standChanged: stand && standObserved ? chainDistance(stand, standObserved) > 1e-6 : null,
         standToDragon: distances ? Math.min(...Object.values(distances)) : null, standToParts: distances,
-        standHazards: stand ? dragonHazards(actor, { along: [stand] }) : [], bodyHazards: dragonHazards(actor) };
+        standHazards: stand ? dragonHazards(actor, { along: [stand] }) : [], bodyHazards: dragonHazards(actor),
+        ...(stand && actionPerch ? bedApproachGate({ now: tick, startTick: actionPerch.startTick, windowOpen: bedWindow(),
+          samePerch: perch === actionPerch, clearHazards: clearHazardsNow(stand) }) : {}),
+        // Wings are context, not an invented cause of the existing clearNow veto.
+        contactGeometry: stand && raw ? knockGeometry(stand, { position: raw.position, yaw: raw.yaw, phase: view?.dragon?.phase ?? null }).parts
+          .map(p => ({ part: p.part, overlaps: p.overlaps, contactOverlap: p.contactOverlap, pushOverlap: p.pushOverlap })) : null };
     };
     if (standObserved) row.approachObserved = approachSnapshot();
     const bedStep = label === 'place_seated_head_bed' || label === 'use_seated_head_bed';
@@ -3796,6 +3819,7 @@ async function endBedKill() {
       row.ok = false; row.error = String(error); row.cancelled = controller.signal.reason ?? null;
       throw error;
     } finally {
+      row.totalMs = Date.now() - observedAt;
       if (bedStep) row.bedHalvesDiag.after = bedHalvesDiag();
       if (standObserved) {
         observeReflex();
@@ -3824,12 +3848,13 @@ async function endBedKill() {
   const chooseLayout = () => {
     if (!perch?.body || !bedWindow()) return null;
     const diag: Record<string, number> = {}, obsidian = packCount('obsidian'), cobblestone = packCount('cobblestone');
-    const candidates = seatedBedLayouts(perch.body, plannedRead, obsidian, cobblestone, Number(actor.health), diag, actor);
+    const hints: P3[] = [];
+    const candidates = seatedBedLayouts(perch.body, plannedRead, obsidian, cobblestone, Number(actor.health), diag, actor, hints);
+    hints.forEach(p => standHints.set(pointKey(p), p));
+    candidates.flatMap(l => l.fireToClear ?? []).forEach(p => namedFires.set(pointKey(p), p));
     const clear = candidates.filter(l => clearNow(l.stand));
-    const selected = clear
-      .filter(l => !pending || (JSON.stringify(l.foot) === JSON.stringify(pending.foot) && JSON.stringify(l.head) === JSON.stringify(pending.head)))
-      .sort((a, b) => b.headDamage - a.headDamage || a.screen.length - b.screen.length || a.supportBlocks.length - b.supportBlocks.length
-        || chainDistance(a.stand, actor.entity.position) - chainDistance(b.stand, actor.entity.position))[0] ?? null;
+    const excluded = new Set([...standExclusions, ...candidates.filter(l => bedFireStandExcluded(fireFailures.values(), l.stand)).map(l => pointKey(l.stand))]);
+    const selected = bedNextLayout(candidates, actor.entity.position, excluded, clearNow, pending as { foot: P3; head: P3 } | null);
     if (perch.n <= 12 && !perch.layoutDiag) {
       const pose = seatedDragonHead(perch.body), columns: Array<Record<string, unknown>> = [];
       const minY = actor.game?.minY ?? 0, maxY = minY + (actor.game?.height ?? 256) - 1;
@@ -3849,6 +3874,61 @@ async function endBedKill() {
         groundScan: { minY, maxY, columns } };
     }
     return selected;
+  };
+  const fireWaitOpen = () => live() && !leaveNeeded && !bedWindow() && [0, 1, 2, 3].includes(view?.dragon?.phase ?? -1);
+  const fireSafe = (feet: P3) => {
+    const pose = currentDragonPose();
+    return !!pose && dragonHazards(actor, { along: [feet] }).length === 0
+      && !bedLeaveState(pose, feet).wingPushOverlap
+      && !(view?.dragonBreath ?? []).some((c: BedCloud) => Math.hypot(c.x - feet.x, c.z - feet.z) <= Math.max(7, c.dangerRadius ?? c.radius) + 0.5);
+  };
+  const clearWaitingFire = async () => {
+    const waitPerch = perch?.n ?? 0;
+    if (!fireWaitOpen() || cleanupPhaseStart === phaseStart || cleanupWaitPerch === waitPerch) return;
+    cleanupPhaseStart = phaseStart; // scan at most once per phase if there is nothing to clear
+    const started = Date.now();
+    const targets = bedFireTargets(read, actor.entity.position, [...namedFires.values()], [...standHints.values()], lastBedBlast);
+    if (!targets.length || !fireSafe(actor.entity.position)) return;
+    cleanupWaitPerch = waitPerch; // one batch across ALL phases 0/1/2/3 between two sits
+    const owner = perch, until = Math.min(deadline, started + out.fireBudget.millisecondsPerWait);
+    const batch: Record<string, any> = { tick, phase, perch: owner?.n ?? null, targets: targets.length, attempts: [], cleared: 0, failures: 0 };
+    out.fireWaits.push(batch); owner?.fire.waits.push(batch);
+    const allowed = () => fireWaitOpen() && Date.now() < until && fireSafe(actor.entity.position);
+    try {
+      for (const fire of targets.slice(0, out.fireBudget.blocksPerWait)) {
+        if (!allowed()) break;
+        const attempt: Record<string, any> = { tick, fire, before: read(fire)?.name ?? null };
+        batch.attempts.push(attempt);
+        try {
+          if (!bedIsFire(read(fire))) { attempt.skipped = 'fire_no_longer_observed'; continue; }
+          if (!fireSafe(bedCentre(fire))) { attempt.reason = 'target_hazard'; continue; }
+          if (bedEyeReach(actor.entity.position, fire) > 4.5) {
+            const to = bedFireWorkCell(read, actor.entity.position, fire, fireSafe);
+            if (!to) { attempt.reason = 'no_safe_cleanup_footing'; continue; }
+            attempt.to = to;
+            if (!await go('approach_waiting_fire', to, () => allowed() && fireSafe(to), 5)) { attempt.reason = 'cleanup_go_failed'; continue; }
+          }
+          const digAllowed = () => allowed() && fireSafe(bedCentre(fire)) && bedEyeReach(actor.entity.position, fire) <= 4.5;
+          const check = () => digAllowed() && bedIsFire(read(fire));
+          const actionStart = out.actions.length;
+          attempt.ok = await perform('clear_waiting_fire', [{ do: 'dig', at: [fire], collect: false }], digAllowed, check, 8);
+          const row = out.actions.slice(actionStart).find((a: any) => a.label === 'clear_waiting_fire');
+          attempt.lines = row?.lines ?? []; attempt.cancelled = row?.cancelled ?? null;
+          attempt.after = read(fire)?.name ?? null;
+          // Neither a receipt nor an unloaded cell proves that the fire disappeared.
+          attempt.cleared = attempt.ok && !!read(fire) && !bedIsFire(read(fire));
+          if (attempt.cleared) { batch.cleared++; out.fireCleared++; namedFires.delete(pointKey(fire)); }
+          else attempt.reason = 'dig_not_confirmed';
+        } catch (error) { attempt.reason = 'cleanup_error'; attempt.error = String(error); }
+        finally {
+          attempt.endTick = tick;
+          if (attempt.reason) { batch.failures++; out.fireFailures++; }
+        }
+      }
+    } finally {
+      batch.endTick = tick; batch.ms = Date.now() - started;
+      batch.endReason = Date.now() >= until ? 'time_limit' : !fireWaitOpen() ? 'wait_closed' : !fireSafe(actor.entity.position) ? 'body_hazard' : 'batch_complete';
+    }
   };
   const placementCheck = (record = false) => {
     if (!layout || !perch) return false;
@@ -3977,10 +4057,37 @@ async function endBedKill() {
         }
         if (!layout) { layout = chooseLayout(); layoutPerch = perch!.n; }
         if (!layout) { blockBeds('no_reachable_screened_head_layout'); continue; }
+        const placementFires = [layout.head, layout.foot, ...layout.supportBlocks, ...layout.screen].filter(p => bedIsFire(read(p)));
+        if (placementFires.length) {
+          placementFires.forEach(p => namedFires.set(pointKey(p), p));
+          refuse('placement_fire_requires_wait_cleanup', { fire: placementFires });
+          requestLeave('placement_fire_requires_wait_cleanup'); continue;
+        }
         const byTick = (offset: number) => bedWindow() && tick - perch!.startTick < offset;
         if (!atStand()) {
-          if (!await go('approach_turned_head', layout.stand, () => byTick(100) && clearNow(layout!.stand))) {
-            layout = null; blockBeds('operating_footing_unreachable_in_time');
+          const attempted = layout, owner = perch!, actionStart = out.actions.length;
+          if (!await go('approach_turned_head', attempted.stand, () => byTick(100) && clearNow(attempted.stand))) {
+            const row = out.actions.slice(actionStart).find((a: any) => a.label === 'approach_turned_head');
+            const fire = bedUnsafeFire(row?.lines ?? []);
+            if (fire) {
+              namedFires.set(pointKey(fire), fire);
+              const failure = bedRecordFireFailure(fireFailures, attempted.stand, fire);
+              owner.fire.unsafeFailures.push({ tick, ...failure });
+              if (failure.count >= 2) {
+                standExclusions.add(pointKey(attempted.stand)); owner.fire.excludedStands.push({ tick, ...failure, inherited: false });
+              }
+            }
+            const breath = row?.cancelled === 'observation_changed' && row?.interruption?.clearHazards?.includes('breath');
+            if (breath) standExclusions.add(pointKey(attempted.stand));
+            const next: SeatedBedLayout | null = (breath || fire) && perch === owner && byTick(100) ? chooseLayout() : null;
+            const needed: number | null = next ? bedApproachRetryTicks(actor.entity.position, next.stand) : null;
+            const remaining = Math.max(0, 100 - (tick - owner.startTick));
+            const switched: boolean = !!next && needed !== null && needed <= remaining;
+            if (breath || fire) owner.layoutSwitches.push({ tick, trigger: fire ? 'unsafe_fire' : 'breath', from: attempted.stand,
+              to: next?.stand ?? null, remainingApproachTicks: remaining, neededApproachTicks: needed, switched,
+              reason: switched ? 'retry_within_approach_budget' : next ? 'insufficient_approach_ticks' : 'no_clear_alternative' });
+            layout = switched ? next : null;
+            if (!switched) blockBeds('operating_footing_unreachable_in_time');
           }
           continue;
         }
@@ -4079,6 +4186,8 @@ async function endBedKill() {
         continue;
       }
       if (sitting()) { await sleep(50); continue; } // phase 6 turns first; never place at its old yaw
+      await clearWaitingFire();
+      if (terminal || sitting() || leaveNeeded) continue;
       // Stay in the open while flying, rather than in a roofed hole that can hold phase 1 indefinitely.
       const anchor = waitAnchor, here = actor.entity.position, centre = view?.perch ?? null;
       const recover = !anchor || (!!centre && Math.hypot(here.x - centre.x, here.z - centre.z) >= 25);
@@ -4108,6 +4217,17 @@ async function endBedKill() {
     finally { knockRecord.stop(terminal ?? 'scene_end'); }
     out.phaseDurations.push({ phase, fromTick: phaseStart, toTick: out.endTick, ticks: out.endTick - phaseStart, seconds: out.seconds - phaseStartSeconds, partial: true });
     out.phase1Seconds = out.phaseDurations.filter((p: any) => p.phase === 1).reduce((n: number, p: any) => n + p.seconds, 0);
+    for (const owner of out.perches) {
+      const steps = owner.steps.filter((s: any) => s.label === 'approach_turned_head');
+      owner.approachTiming = { attempts: steps.length, ms: steps.map((s: any) => s.ms ?? null),
+        missingMs: steps.filter((s: any) => s.ms == null).length, totalIncludingObservationMs: steps.reduce((sum: number, s: any) => sum + s.totalMs, 0),
+        totalMs: steps.reduce((sum: number, s: any) => sum + (s.ms ?? 0), 0),
+        elapsedTicks: steps.map((s: any) => s.endTick - owner.startTick),
+        failures: { fire: steps.filter((s: any) => !!bedUnsafeFire(s.lines ?? [])).length,
+          observationChanged: steps.filter((s: any) => s.cancelled === 'observation_changed').length,
+          reflex: steps.filter((s: any) => s.ok === false && (s.reflexPreempts?.length || /反射/u.test((s.lines ?? []).join(' ')))
+            && s.cancelled !== 'observation_changed' && !bedUnsafeFire(s.lines ?? [])).length } };
+    }
     out.deaths = actorDeaths - deaths0; out.minHealth = lowest.stop(); out.dragonHealthEnd = view?.dragon?.health ?? null;
     if (terminal === 'time_limit') out.dragonHealthAt25Minutes = out.dragonHealthEnd;
     if (pending) pending.notDetonatedReason ??= terminal;

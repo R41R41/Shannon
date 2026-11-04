@@ -182,7 +182,7 @@ describe('turned seated head and bed operation geometry', () => {
     expect(diag.accepted).toBe(result.length);
     expect(diag.head_candidates).toBe(diag.head_not_air + diag.head_in_dragon + diag.head_far_or_weak + diag.head_passed);
     expect(diag.foot_candidates).toBe(diag.foot_not_air + diag.foot_in_dragon + diag.foot_passed);
-    expect(diag.stand_candidates).toBe(diag.stand_not_open + diag.stand_no_floor + diag.stand_in_reflex_zone + diag.stand_not_clear + diag.stand_out_of_reach + diag.stand_passed);
+    expect(diag.stand_candidates).toBe(diag.stand_not_open + diag.stand_no_floor + diag.stand_next_to_fire + diag.stand_in_reflex_zone + diag.stand_not_clear + diag.stand_out_of_reach + diag.stand_passed);
     expect(diag.screen_candidates).toBe(diag.screen_unsupported + diag.screen_over_budget + diag.support_over_budget + diag.screen_conflict + diag.screen_out_of_reach
       + diag.support_in_dragon + diag.screen_in_dragon + diag.self_damage_too_high + diag.head_damage_low + diag.accepted);
     if (mode === 'budget') {
@@ -377,7 +377,7 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
   let handler: ((hands: any[], signal: AbortSignal) => Promise<void | boolean | { ok: boolean; lines: string[]; ms?: number }>) | undefined;
   const clouds: any[] = [];
   actor.entities = { 77: d };
-  const deps = { ...geometry, ...headModel, dragonEntity: () => d, Vec3, partBox, boxDistance, dragonHazards, isPerched, bedHalves, actor, actorDeaths: 0, disconnected, scenes, KILL_LIMIT_MS: options.limit ?? 10_000,
+  const deps = { ...geometry, ...headModel, knockGeometry, dragonEntity: () => d, Vec3, partBox, boxDistance, dragonHazards, isPerched, bedHalves, actor, actorDeaths: 0, disconnected, scenes, KILL_LIMIT_MS: options.limit ?? 10_000,
     trackEndKnocks: (tick: () => number, bedTrials: () => Array<{ detonationTick: number | null }>) => recordEndKnocks(actor, { enabled: false, tick, bedTrials, dragon: () => d, clouds: () => [] }),
     chainDistance: (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z),
     killCell: (v: P3) => p(Math.floor(v.x), Math.floor(v.y), Math.floor(v.z)), killPlaced: new Map(), killBlasts: [],
@@ -401,6 +401,7 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
       if (signal.aborted) return { ok: false, lines: ['aborted'], ms: 0 };
       for (const hand of hands) {
         if (hand.do === 'go') actor.entity.position = new Vec3(hand.to.x + 0.5, hand.to.y, hand.to.z + 0.5);
+        if (hand.do === 'dig') for (const cell of hand.at) t.blocks.set(key(cell), air());
         if (hand.do === 'place') {
           const cell = hand.at[0];
           if (hand.block === 'white_bed') {
@@ -443,7 +444,222 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
   return { run, actor, d, deps, calls, commands, clouds, ...t, materials: () => ({ cobblestone, obsidian }), disconnect: api.disconnect, die: api.die, setHandler: (f: typeof handler) => { handler = f; }, counts, preempts, entries };
 }
 
+describe('bed fire geometry and approach decisions', () => {
+  it.each(['fire', 'soul_fire'])('excludes all body-cell neighbours including upper/lower diagonals for %s', name => {
+    const stand = p(103.5, 70, -39.5);
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 2; dy++) {
+      const fire = p(103 + dx, 70 + dy, -40 + dz);
+      expect(geometry.bedStandFires(v => key(v) === key(fire) ? { name } : air(), stand)).toEqual([fire]);
+    }
+    expect(geometry.bedStandFires(() => null, stand)).toEqual([]);
+    expect(geometry.bedStandFires(v => v.x === 105 ? { name } : air(), stand)).toEqual([]);
+  });
+  it('counts stand_next_to_fire, preserving other non-adjacent layouts and search accounting', () => {
+    const d = { position: p(103.5, 74, -39.5), yaw: 0, phase: 7 }, t = terrain();
+    const original = geometry.seatedBedLayouts(d, t.read, 4, 64), stand = original[0].stand;
+    const fire = p(Math.floor(stand.x) - 1, stand.y + 1, Math.floor(stand.z) - 1);
+    t.blocks.set(key(fire), { name: 'fire' });
+    const diag: Record<string, number> = {}, next = geometry.seatedBedLayouts(d, t.read, 4, 64, 20, diag);
+    expect(next.some(l => key(l.stand) === key(stand))).toBe(false);
+    expect(diag.stand_next_to_fire).toBeGreaterThan(0);
+    expect(diag.candidates).toBe(diag.rejected + diag.expanded + diag.accepted);
+    expect(next.every(l => !geometry.bedStandFires(t.read, l.stand).length)).toBe(true);
+  });
+  it('allows fire by a bed/support/wall; a fire IN a placement cell is explicitly deferred for cleanup', () => {
+    const d = { position: p(103.5, 74, -39.5), yaw: 0, phase: 7 }, t = terrain();
+    const original = geometry.seatedBedLayouts(d, t.read, 4, 64);
+    const l = original.find(l => [l.head, l.foot, ...l.supportBlocks, ...l.screen]
+      .some(cell => !geometry.bedStandFires(v => key(v) === key(cell) ? { name: 'fire' } : air(), l.stand).length))!;
+    const cell = [l.head, l.foot, ...l.supportBlocks, ...l.screen].find(cell =>
+      !geometry.bedStandFires(v => key(v) === key(cell) ? { name: 'fire' } : air(), l.stand).length)!;
+    t.blocks.set(key(cell), { name: 'soul_fire', shapes: [], boundingBox: 'empty' });
+    const found = geometry.seatedBedLayouts(d, t.read, 4, 64).find(n => key(n.stand) === key(l.stand) && key(n.head) === key(l.head) && key(n.foot) === key(l.foot));
+    expect(found).toBeTruthy(); expect(found!.fireToClear).toContainEqual(cell);
+  });
+  it('orders named blockers, stand neighbours and blast residue, deduplicating and ignoring non-fire', () => {
+    const blocks = new Map<string, any>(), named = p(108, 70, -40), stand = p(103.5, 70, -39.5), neighbour = p(104, 70, -40), residue = p(100, 70, -40), far = p(150, 70, -40);
+    for (const [cell, name] of [[named, 'soul_fire'], [neighbour, 'fire'], [residue, 'fire'], [far, 'fire']] as const) blocks.set(key(cell), { name });
+    const read = (v: P3) => blocks.get(key(v)) ?? solid();
+    expect(geometry.bedFireTargets(read, p(99, 70, -41), [named, named, p(109, 70, -40)], [stand, stand], geometry.bedCentre(residue)))
+      .toEqual([named, neighbour, residue]);
+    expect(geometry.bedFireTargets(read, stand, [], [], null)).toEqual([]);
+  });
+  it('does not reject a layout just because a bed or wall has a fire neighbour outside the stand neighbourhood', () => {
+    const d = { position: p(103.5, 74, -39.5), yaw: 0, phase: 7 }, t = terrain();
+    const layouts = geometry.seatedBedLayouts(d, t.read, 4, 64), l = layouts[0];
+    const occupied = new Set([l.head, l.foot, ...l.supportBlocks, ...l.screen].map(key));
+    const neighbours = [l.head, l.foot, ...l.screen].flatMap(cell => [p(cell.x + 1, cell.y, cell.z), p(cell.x, cell.y, cell.z + 1)]);
+    const fire = neighbours.find(cell => !occupied.has(key(cell)) && t.read(cell).name === 'air'
+      && !geometry.bedStandFires(v => key(v) === key(cell) ? { name: 'fire' } : air(), l.stand).length)!;
+    expect(fire).toBeTruthy(); t.blocks.set(key(fire), { name: 'fire', boundingBox: 'empty', shapes: [] });
+    expect(geometry.seatedBedLayouts(d, t.read, 4, 64).some(n => key(n.stand) === key(l.stand)
+      && key(n.head) === key(l.head) && key(n.foot) === key(l.foot))).toBe(true);
+  });
+  it('counts identical stand/fire pairs independently and excludes on the second failure', () => {
+    const history = new Map<string, geometry.BedFireFailure>(), stand = p(103.5, 70, -39.5), fire = p(104, 70, -40);
+    geometry.bedRecordFireFailure(history, stand, fire);
+    geometry.bedRecordFireFailure(history, stand, p(103, 70, -41));
+    expect(geometry.bedFireStandExcluded(history.values(), stand)).toBe(false);
+    expect(geometry.bedRecordFireFailure(history, stand, fire).count).toBe(2);
+    expect(geometry.bedFireStandExcluded(history.values(), stand)).toBe(true);
+    expect(geometry.bedFireStandExcluded(history.values(), p(103.5, 71, -39.5))).toBe(false);
+    const lines = ['go 止まった unsafe: 行き先 (103,70,-40) はsoul_fire の隣。火 (104,70,-40) は dig で消せる'];
+    expect(geometry.bedUnsafeFire(lines)).toEqual(fire);
+    expect(geometry.bedUnsafeFire(['unsafe: lava。火 (104,70,-40) は dig'])).toBeNull();
+    expect(geometry.bedUnsafeFire(['火 (104,70,-40) は dig で消せる'])).toBeNull();
+  });
+  it.each([['breath'], ['head'], ['neck'], ['body'], ['wing1'], ['wing2'], ['fireball']])('keeps the exact clearNow hazard %s separate from the tick limit', hazard => {
+    const gate = geometry.bedApproachGate({ now: 99, startTick: 0, windowOpen: true, samePerch: true, clearHazards: [hazard] });
+    expect(gate.allowed).toBe(false); expect(gate.tickLimitExceeded).toBe(false); expect(gate.clearNowFalse).toBe(true);
+    expect(gate.clearHazards).toEqual([hazard]); expect(gate.causes).toEqual(['clear_now_false']);
+    const both = geometry.bedApproachGate({ now: 100, startTick: 0, windowOpen: true, samePerch: true, clearHazards: [hazard] });
+    expect(both.causes).toEqual(['approach_tick_limit', 'clear_now_false']);
+  });
+  it('classifies deadline-only and closed/changed windows, without inventing a danger', () => {
+    expect(geometry.bedApproachGate({ now: 100, startTick: 0, windowOpen: true, samePerch: true, clearHazards: [] }))
+      .toMatchObject({ allowed: false, tickLimitExceeded: true, clearNowFalse: false, causes: ['approach_tick_limit'] });
+    expect(geometry.bedApproachGate({ now: 20, startTick: 0, windowOpen: false, samePerch: false, clearHazards: [] }).causes)
+      .toEqual(['perch_changed', 'window_closed']);
+  });
+  it('reports observed breath, forecast breath and head/neck contacts using the unchanged clear predicate', () => {
+    const d = { position: p(103.5, 74, -39.5), yaw: 0, phase: 7 }, t = terrain();
+    const stand = geometry.seatedBedLayouts(d, t.read, 4, 64)[0].stand;
+    expect(geometry.bedOperationHazards(d, stand, [{ ...stand, radius: 7 }])).toContain('breath');
+    expect(geometry.bedOperationHazards(d, headModel.seatedDragonHead(d)!.cloud)).toContain('breath_forecast');
+    const box = partBox(d, 'neck');
+    expect(geometry.bedOperationHazards(d, p((box.minX + box.maxX) / 2, box.minY, (box.minZ + box.maxZ) / 2))).toContain('neck');
+    expect(geometry.bedOperationClear(d, stand)).toBe(true);
+  });
+  it('chooses the next distinct clear stand, respecting exclusion and the pending bed pair', () => {
+    const d = { position: p(103.5, 74, -39.5), yaw: 0, phase: 7 }, t = terrain(), here = p(115.5, 70, -39.5);
+    const layouts = geometry.seatedBedLayouts(d, t.read, 4, 64), first = geometry.bedNextLayout(layouts, here, new Set(), () => true)!;
+    const next = geometry.bedNextLayout(layouts, here, new Set([key(first.stand)]), () => true)!;
+    expect(next).toBeTruthy(); expect(next.stand).not.toEqual(first.stand);
+    expect(geometry.bedNextLayout(layouts, here, new Set(), () => false)).toBeNull();
+    expect(geometry.bedNextLayout(layouts, here, new Set(), () => true, { head: p(0, 0, 0), foot: p(1, 0, 0) })).toBeNull();
+    expect(geometry.bedApproachRetryTicks(next.stand, next.stand)).toBe(8);
+  });
+});
+
 describe('end_bed_kill scene with mocked I/O', () => {
+  it('switches to a distinct next stand when breath arrives during approach, within the unchanged deadline', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 2500 }); let first = true;
+    r.setHandler(async (hands, signal) => {
+      if (!first || hands[0]?.do !== 'go') return;
+      first = false; const stand = p(hands[0].to.x + 0.5, hands[0].to.y, hands[0].to.z + 0.5);
+      const layouts = geometry.seatedBedLayouts(r.d, r.read, 4, 64);
+      const cloud = Array.from({ length: 32 }, (_, i) => ({ x: stand.x + 7 * Math.cos(i * Math.PI / 16), y: stand.y, z: stand.z + 7 * Math.sin(i * Math.PI / 16), radius: 7 }))
+        .find(c => layouts.some(l => key(l.stand) !== key(stand) && geometry.bedOperationClear(r.d, l.stand, [c])))!;
+      expect(cloud).toBeTruthy(); r.clouds.push(cloud);
+      await new Promise(resolve => setTimeout(resolve, 150)); expect(signal.aborted).toBe(true); return false;
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(3000); const out = await running;
+    const approaches = out.perches[0].steps.filter((s: any) => s.label === 'approach_turned_head');
+    expect(approaches.length).toBeGreaterThanOrEqual(2);
+    expect(approaches[0].interruption).toMatchObject({ tickLimitExceeded: false, clearNowFalse: true, clearHazards: ['breath'] });
+    expect(approaches[1].hands[0].to).not.toEqual(approaches[0].hands[0].to);
+    expect(out.perches[0].layoutSwitches[0]).toMatchObject({ trigger: 'breath', switched: true });
+    expect(out.perches[0].approachTiming.attempts).toBe(approaches.length);
+  });
+  it('records the first deadline failure independently and never retries past 100 ticks', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 6500 }); let first = true;
+    r.setHandler(async (hands, signal) => {
+      if (!first || hands[0]?.do !== 'go') return;
+      first = false; await new Promise(resolve => setTimeout(resolve, 5100)); expect(signal.aborted).toBe(true);
+      return { ok: false, lines: ['aborted'], ms: 5100 };
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(7000); const out = await running;
+    const approaches = out.perches[0].steps.filter((s: any) => s.label === 'approach_turned_head');
+    expect(approaches).toHaveLength(1);
+    expect(approaches[0].interruption).toMatchObject({ elapsedTicks: 100, tickLimitExceeded: true, clearNowFalse: false, causes: ['approach_tick_limit'] });
+    expect(out.perches[0].approachTiming.ms).toEqual([5100]); expect(out.operationBudget.approachByTick).toBe(100);
+  });
+  it('declines a breath alternative when the remaining approach ticks cannot cover the walk', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 5500 }); let first = true;
+    r.setHandler(async (hands, signal) => {
+      if (!first || hands[0]?.do !== 'go') return;
+      first = false;
+      await new Promise(resolve => setTimeout(resolve, 4000));
+      const stand = p(hands[0].to.x + 0.5, hands[0].to.y, hands[0].to.z + 0.5);
+      const layouts = geometry.seatedBedLayouts(r.d, r.read, 4, 64);
+      const cloud = Array.from({ length: 32 }, (_, i) => ({ x: stand.x + 7 * Math.cos(i * Math.PI / 16), y: stand.y, z: stand.z + 7 * Math.sin(i * Math.PI / 16), radius: 7 }))
+        .find(c => layouts.some(l => key(l.stand) !== key(stand) && geometry.bedOperationClear(r.d, l.stand, [c])))!;
+      r.clouds.push(cloud); await new Promise(resolve => setTimeout(resolve, 150)); expect(signal.aborted).toBe(true); return false;
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(6000); const out = await running;
+    expect(out.perches[0].layoutSwitches[0]).toMatchObject({ trigger: 'breath', switched: false, reason: 'insufficient_approach_ticks' });
+    expect(out.perches[0].steps.filter((s: any) => s.label === 'approach_turned_head')).toHaveLength(1);
+  });
+  it('defers a fire occupying a placement cell until a later wait, with no seated dig or placement', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 1200 });
+    const first = geometry.bedNextLayout(geometry.seatedBedLayouts(r.d, r.read, 4, 64), r.actor.entity.position, new Set(), () => true)!;
+    expect(geometry.bedStandFires(v => key(v) === key(first.head) ? { name: 'fire' } : air(), first.stand)).toEqual([]);
+    r.blocks.set(key(first.head), { name: 'fire', boundingBox: 'empty', shapes: [] });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(1600); const out = await running;
+    expect(out.refusals.some((f: any) => f.reason === 'placement_fire_requires_wait_cleanup')).toBe(true);
+    expect(r.calls.some(c => c.hands.some((h: any) => h.do === 'dig' || h.do === 'place'))).toBe(false);
+  });
+  it('rechecks the reused layout for fire created by the confirmed blast before starting a repeat', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 4500 }); let planted = false;
+    r.setHandler(async hands => {
+      if (hands[0]?.do !== 'use' || planted) return;
+      planted = true; const foot = bedHalves(r.read(hands[0].at[0]), hands[0].at[0])!.foot;
+      r.actor._client.once('explosion', () => setTimeout(() => r.blocks.set(key(foot), { name: 'fire', boundingBox: 'empty', shapes: [] }), 60));
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(5000); const out = await running;
+    expect(out.detonations).toBe(1);
+    expect(out.refusals.some((f: any) => f.reason === 'placement_fire_requires_wait_cleanup')).toBe(true);
+    expect(r.calls.filter(c => c.hands.some((h: any) => h.block === 'white_bed'))).toHaveLength(1);
+    expect(r.calls.some(c => c.hands.some((h: any) => h.do === 'dig'))).toBe(false);
+  });
+  it('excludes a repeatedly refused stand on the second identical unsafe fire receipt and uses the next stand', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 2500 }); let failures = 0;
+    r.setHandler(async hands => {
+      if (hands[0]?.do !== 'go' || failures >= 2) return;
+      failures++;
+      return { ok: false, ms: 3, lines: ['go 止まった unsafe: 行き先 はfire の隣。火 (104,70,-40) は dig で消せる'] };
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(3000); const out = await running;
+    const owner = out.perches[0], approaches = owner.steps.filter((s: any) => s.label === 'approach_turned_head');
+    expect(owner.fire.unsafeFailures.map((f: any) => f.count)).toEqual([1, 2]);
+    expect(owner.fire.excludedStands).toHaveLength(1);
+    expect(approaches[1].hands[0].to).toEqual(approaches[0].hands[0].to);
+    expect(approaches[2].hands[0].to).not.toEqual(approaches[0].hands[0].to);
+  });
+  it.each(['cleared', 'failed', 'unconfirmed', 'slow', 'phase_closed', 'hazard'] as const)('cleans blast fire only in waiting phases, bounded by four attempts/eight seconds (%s)', async mode => {
+    vi.useFakeTimers(); const r = rig({ limit: 18_000 }); let planted = false;
+    r.setHandler(async (hands, signal) => {
+      const h = hands[0];
+      if (h?.do === 'use' && !planted) {
+        planted = true; const halves = bedHalves(r.read(h.at[0]), h.at[0])!;
+        for (let i = -2; i <= 2; i++) r.blocks.set(key(p(halves.head.x + i, 70, halves.head.z + 4)), { name: i % 2 ? 'soul_fire' : 'fire', boundingBox: 'empty', shapes: [] });
+        setTimeout(() => { r.d.phase = 0; }, 80);
+        if (mode === 'cleared') setTimeout(() => { r.d.phase = 1; }, 9000); // same wait: the cap must not reset on a phase change
+      }
+      if (h?.do === 'dig') {
+        expect(r.d.phase).toBe(0);
+        if (mode === 'failed') return false;
+        if (mode === 'unconfirmed') return { ok: true, ms: 0, lines: ['receipt without block update'] };
+        if (mode === 'slow' || mode === 'phase_closed' || mode === 'hazard') {
+          if (mode === 'phase_closed') setTimeout(() => { r.d.phase = 6; }, 100);
+          if (mode === 'hazard') setTimeout(() => r.clouds.push({ ...r.actor.entity.position, radius: 50 }), 100);
+          await new Promise(resolve => setTimeout(resolve, mode === 'slow' ? 8100 : 200));
+          expect(signal.aborted).toBe(true); return false;
+        }
+      }
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(19_000); const out = await running;
+    expect(planted).toBe(true); expect(out.fireWaits).toHaveLength(1);
+    const batch = out.fireWaits[0], digs = out.actions.filter((a: any) => a.label === 'clear_waiting_fire');
+    expect(batch.attempts.length).toBeLessThanOrEqual(4); expect(digs.length).toBeGreaterThan(0);
+    expect(out.perches[0].fire.waits[0]).toBe(batch);
+    expect(digs.every((d: any) => d.phase === 0)).toBe(true);
+    if (mode === 'cleared') { expect(out.fireCleared).toBe(4); expect(batch.ms).toBeLessThanOrEqual(8000); }
+    else { expect(out.fireCleared).toBe(0); expect(out.fireFailures).toBeGreaterThan(0); }
+    if (mode === 'slow') { expect(digs).toHaveLength(1); expect(batch.endReason).toBe('time_limit'); }
+    if (mode === 'phase_closed') expect(batch.endReason).toBe('wait_closed');
+    if (mode === 'hazard') expect(batch.endReason).toBe('body_hazard');
+  });
   it('places columns with cobblestone and walls with obsidian, consuming each inventory separately', async () => {
     vi.useFakeTimers(); const r = rig({ limit: 4000, obsidian: 2 }), running = r.run();
     await vi.advanceTimersByTimeAsync(4600); const out = await running;
@@ -703,6 +919,7 @@ describe('end_bed_kill scene with mocked I/O', () => {
     const row = out.perches[0].steps.find((s: any) => s.label === 'approach_turned_head');
     expect(row.ok).toBe(false); expect(row.interruption.phase).toBe(7); expect(row.interruption.standChanged).toBe(false);
     expect(row.interruption.stand).toEqual(row.approachObserved.stand);
+    expect(row.interruption.contactGeometry.map((p: any) => p.part)).toEqual(['head', 'neck', 'body', 'wing1', 'wing2']);
     expect(row.interruption.tick).toBeLessThan(row.endTick);
     expect(row.interruption.standToDragon).toBe(Math.min(...Object.values(row.interruption.standToParts) as number[]));
     for (const part of ['head', 'neck', 'body'] as const) expect(row.interruption.standToParts[part]).toBeCloseTo(boxDistance(row.interruption.stand, partBox(r.d, part)));
