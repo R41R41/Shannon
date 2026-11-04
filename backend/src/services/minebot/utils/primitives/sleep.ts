@@ -2,7 +2,7 @@ import { createMotorPort, executeAction } from '../../execution/ActionExecution.
 import { bedExplodesHere, isBedName, leaveBed } from '../bedRules.js';
 import { isThreatEntity, type ThreatBody } from '../hostileMobHints.js';
 import type { Cell } from '../localMap.js';
-import { StepStopped, stopped, type StepContext, type StepOutcome } from './common.js';
+import { StepStopped, stopped, waitUntil, type StepContext, type StepOutcome } from './common.js';
 
 /**
  * The act's `sleep` hand (2026-11-05, the owner's rule of 10/21: when and where she sleeps is the head's; the body keeps only the parts):
@@ -122,5 +122,7 @@ export async function sleep(ctx: StepContext, args: SleepArgs): Promise<StepOutc
   // A bed already standing near is used as it is: nothing was set down (the skill says nothing of a bed it took back).
   const bed = result.bedLeft === undefined ? '近くのベッドを使った' : result.bedLeft ? `ベッドは置いたまま（${text.match(/\(-?\d+, -?\d+, -?\d+\)/u)?.[0] ?? ''}）` : 'ベッドは拾い直した';
   if (!result.nightPassed) return none('night_went_on', `${bedName}で寝たが夜は明けなかった（起きているプレイヤーがいる）。起き上がった。${bed}`);
+  // The server's time update comes a moment after the wake: the tick in the line is the morning's, not the night's last.
+  await waitUntil(ctx, () => !isNight(Number(bot.time?.timeOfDay ?? 0)), 1500).catch(() => false);
   return { ok: true, text: `${bedName}で寝て朝にした（今 ${Number(bot.time?.timeOfDay ?? 0)}）。${bed}` };
 }
