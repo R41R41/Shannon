@@ -272,8 +272,8 @@ scene('blaze_head_hold', 'blaze camp as a head plays it (attack hold): the same 
 // S4 (run61 d0161-d0183): "leave from 33 blocks under the surface to the surface in one go". The head's way (vertical stairs, seal_water, repeated as often as it stops),
 // a dry pillar, a go. `water` puts a block of water (7 x 6 x 7) around the way, 12 blocks up, as the water the head met at y21-25.
 async function surfaceExit(mode: 'stairs' | 'pillar' | 'go', water: boolean, note: (text: string) => void): Promise<Record<string, unknown>> {
-  const top = (sites.strongholdSurface ?? sites.strongholdPortalCenter) as number[] | undefined;
-  if (!top) throw new Error('no strongholdSurface in the sites');
+  const top = (sites.exitSurface ?? sites.spawn) as number[] | undefined;
+  if (!top) throw new Error('no exitSurface / spawn in the sites');
   const deaths0 = deaths, depth = 33, surfaceY = top[1], y0 = surfaceY - depth, x = top[0], z = top[2];
   await ask('difficulty normal'); await ask('gamerule doMobSpawning false'); await ask('time set day'); await ask('weather clear');
   await equip({ diamond_pickaxe: 1, iron_sword: 1, water_bucket: 1, cobblestone: 64, cooked_beef: 16 }, { armor: 'iron', shield: true });
