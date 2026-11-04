@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
 import { Vec3 } from 'vec3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bodyReader } from '../../src/services/minebot/utils/localMap.js';
@@ -11,6 +12,8 @@ vi.mock('../../src/services/minebot/utils/dragonState.js', () => ({ isEnd: (bot:
 const cube = [[0, 0, 0, 1, 1, 1]];
 const cellKey = (v: Vec3) => `${Math.floor(v.x)},${Math.floor(v.y)},${Math.floor(v.z)}`;
 const nextVy = (vy: number) => (vy - 0.08) * 0.98;
+// Exercise the installed Mineflayer's empty-slot/LRU equip policy, including its bare-bot calls after awaits.
+const injectInventory = createRequire(import.meta.url)('mineflayer/lib/plugins/simple_inventory.js') as (bot: any) => void;
 
 /**
  * Tick model: velocity is blocks/tick, position += velocity, then gravity/drag.
@@ -35,6 +38,7 @@ function rig(top: (x: number, z: number) => number = () => 65, name = 'end_stone
       return { name: wet ? 'water' : solid ? name : 'air', metadata: 0, boundingBox: solid ? 'block' : 'empty', shapes: solid ? cube : [] };
     },
     _client: { write: (_name: string, data: { rotation?: { x: number; y: number } }) => {
+      if (_name !== 'use_item') return;
       if (bot.heldItem.name !== 'water_bucket') return; // scoop-back is covered by minecraftDragonFight; count pours only
       const b = bot.entity, v = b.velocity;
       const eye = b.position.offset(v.x * movementLead, nextVy(v.y) * movementLead + 1.62, v.z * movementLead);
@@ -49,7 +53,7 @@ function rig(top: (x: number, z: number) => number = () => 65, name = 'end_stone
       sends.push({ tick, eye, source, reachable: source !== null, pitch });
       if (source && bot.heldItem.name === 'water_bucket') {
         water.set(cellKey(source), source);
-        bot.heldItem = { name: 'bucket', slot: 37 };
+        bot.heldItem = { ...bot.heldItem, name: 'bucket' };
       }
     } },
     activateItem: () => bot._client.write('use_item', { rotation: { x: 180, y: 0 } }),
@@ -66,7 +70,270 @@ function rig(top: (x: number, z: number) => number = () => 65, name = 'end_stone
   return { bot, memory, sends, water, emit, collisionTop, get tick() { return tick; } };
 }
 
+function packedRig(full = false, clickMs = 40, floorTop = 65) {
+  const f = rig(() => floorTop), slots: Array<{ name: string; slot: number } | null> = Array(46).fill(null);
+  slots[36] = { name: 'iron_sword', slot: 36 };
+  if (full) for (let slot = 37; slot <= 44; slot++) slots[slot] = { name: `hotbar_${slot}`, slot };
+  if (full) for (let slot = 9; slot < 36; slot++) slots[slot] = { name: `pack_${slot}`, slot };
+  slots[20] = { name: 'water_bucket', slot: 20 };
+  const packets: Array<{ name: string; slot?: number; mode?: number }> = [];
+  const original = f.bot._client.write;
+  const bot = Object.assign(f.bot, {
+    quickBarSlot: 0, heldItem: slots[36]!,
+    supportFeature: () => false,
+    updateHeldItem: () => { bot.heldItem = slots[36 + bot.quickBarSlot]!; },
+    inventory: {
+      items: () => slots.filter((item): item is NonNullable<typeof item> => item !== null), slots,
+      firstEmptySlotRange: (start: number, end: number) => {
+        for (let slot = start; slot < end; slot++) if (!slots[slot]) return slot;
+        return null;
+      },
+    },
+    // Model native click completion/ACK latency. A full destination needs a third click to put the displaced stack back.
+    moveSlotItem: async (source: number, destination: number) => {
+      const moved = slots[source]!, displaced = slots[destination];
+      await click(source);
+      await click(destination);
+      slots[destination] = { ...moved, slot: destination }; slots[source] = null; bot.updateHeldItem();
+      if (displaced) { await click(source); slots[source] = { ...displaced, slot: source }; }
+    },
+  });
+  async function click(slot: number) {
+    // Includes a delay before write, like native clickWindow's recent-dig wait: an entry-only port guard is insufficient.
+    await new Promise(resolve => setTimeout(resolve, clickMs));
+    bot._client.write('window_click', { slot, mode: 0 } as never);
+  }
+  bot._client.write = ((name: string, data: any) => {
+    packets.push({ name, slot: data.slot ?? data.slotId, mode: data.mode });
+    original(name, data);
+    if (name === 'use_item') slots[36 + bot.quickBarSlot] = bot.heldItem;
+  }) as typeof original;
+  injectInventory(bot);
+  // Capture the actual equip without replacing the implementation.
+  const equip = vi.spyOn(bot as unknown as FallBody & { equip: NonNullable<FallBody['equip']> }, 'equip');
+  return { ...f, bot: bot as typeof bot & Required<Pick<FallBody, 'equip' | 'setQuickBarSlot'>>, slots, packets, equip };
+}
+
 afterEach(() => { vi.useRealTimers(); });
+
+describe('pack bucket preparation and forecast start (r220)', () => {
+  it.each([false, true])('equips a pack bucket through the motor and pours before landing; full hotbar=%s', async full => {
+    vi.useFakeTimers();
+    const f = packedRig(full), b = f.bot.entity;
+    b.velocity.y = -1.6;
+    expect(clutchWanted(f.bot, f.memory, 1000)).not.toBeNull();
+    const running = executeAction(f.bot as never, 'floor-clutch', 8000,
+      (() => runFallClutch(f.bot, createMotorPort(f.bot), f.memory)) as never,
+      { priority: 380, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.equip).toHaveBeenCalledWith(expect.objectContaining({ name: 'water_bucket', slot: 20 }), 'hand');
+    for (let n = 0; n < 50 && !b.onGround; n++) {
+      b.position = b.position.plus(b.velocity); b.velocity.y = nextVy(b.velocity.y);
+      if (b.position.y <= 65) { b.position.y = 65; b.onGround = true; }
+      b.isInWater = f.water.has(cellKey(b.position));
+      f.emit(); await vi.advanceTimersByTimeAsync(50);
+    }
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(await running).toMatchObject({ success: true });
+    expect(f.sends).toHaveLength(1);
+    expect(f.sends[0].reachable).toBe(true);
+    expect(f.packets.filter(p => p.name === 'window_click').map(p => p.slot)).toEqual(full ? [20, 36, 20] : [20, 37]);
+    // Native LRU moves the displaced stack back into the bucket's old pack slot; no empty hotbar slot or discarded stack is needed.
+    if (full) expect(f.slots[20]).toEqual({ name: 'iron_sword', slot: 20 });
+    else expect(f.bot.heldItem.name).toBe('iron_sword');
+    expect(f.bot.listenerCount('physicsTick')).toBe(0);
+    expect(f.bot.listenerCount('end')).toBe(0);
+  });
+
+  it.each([1, 2, 3])('does not start a pack swap with only %s tick(s) until impact, even if damage is lethal', async left => {
+    vi.useFakeTimers();
+    const f = packedRig(), b = f.bot.entity;
+    b.position.y = 65 + left * 2; b.velocity.y = -2.4; f.memory.from = 168;
+    expect(clutchWanted(f.bot, f.memory, 1000)).toBeNull();
+    expect(await runFallClutch(f.bot, f.bot, f.memory)).toMatchObject({ success: false });
+    expect(f.equip).not.toHaveBeenCalled();
+    expect(f.packets).toHaveLength(0);
+  });
+
+  it('refuses pack preparation without equip capability or a known source slot', () => {
+    const f = packedRig(); f.bot.entity.velocity.y = -1.6;
+    const equip = f.bot.equip;
+    (f.bot as FallBody).equip = undefined;
+    expect(clutchWanted(f.bot, f.memory, 1000)).toBeNull();
+    f.bot.equip = equip;
+    delete (f.slots[20] as { slot?: number }).slot;
+    expect(clutchWanted(f.bot, f.memory, 1000)).toBeNull();
+    expect(f.packets).toHaveLength(0);
+  });
+
+  it('ends pack preparation after three catch-up ticks even if no wall time has passed', async () => {
+    vi.useFakeTimers();
+    const f = packedRig(true, 250); f.bot.entity.velocity.y = -1.6;
+    const running = runFallClutch(f.bot, f.bot, f.memory);
+    for (let i = 0; i < 4; i++) f.emit();
+    expect(await running).toMatchObject({ success: false });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(f.packets.filter(p => p.name === 'window_click')).toHaveLength(0);
+    expect(f.bot.listenerCount('physicsTick')).toBe(0);
+  });
+
+  it('retains the immediate hotbar path at the last pour opportunity and prefers it over a pack duplicate', async () => {
+    vi.useFakeTimers();
+    const f = packedRig(), b = f.bot.entity;
+    f.slots[40] = { name: 'water_bucket', slot: 40 };
+    b.position.y = 69; b.velocity.y = -2.4; f.memory.from = 168;
+    expect(clutchWanted(f.bot, f.memory, 1000)).not.toBeNull();
+    const running = runFallClutch(f.bot, f.bot, f.memory);
+    f.emit(); b.onGround = true; b.position.y = 65;
+    await vi.advanceTimersByTimeAsync(4000); await running;
+    expect(f.equip).not.toHaveBeenCalled();
+    expect(f.packets.filter(p => p.name === 'window_click')).toHaveLength(0);
+    expect(f.sends).toHaveLength(1);
+  });
+
+  it('fences delayed native clicks after preemption, releases promptly, and permits the next owner to select its hand', async () => {
+    vi.useFakeTimers();
+    const f = packedRig(true), b = f.bot.entity;
+    b.velocity.y = -1.6;
+    const original = f.bot._client.write;
+    const running = executeAction(f.bot as never, 'floor-clutch', 8000,
+      (() => runFallClutch(f.bot, createMotorPort(f.bot), f.memory)) as never,
+      { priority: 380, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true });
+    await vi.advanceTimersByTimeAsync(50); // first native click sent; second is waiting inside the bare-bot method
+    expect(f.packets.filter(p => p.name === 'window_click')).toHaveLength(1);
+    preemptLowerPriorityActions(f.bot, 500, 'wall-escape');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await running).toMatchObject({ success: false, failureType: 'interrupted' });
+    expect(f.bot.listenerCount('physicsTick')).toBe(0);
+    const next = executeAction(f.bot as never, 'wall-escape', 1000,
+      (async () => { createMotorPort(f.bot).setQuickBarSlot(2); return { success: true, result: 'fixture' }; }) as never,
+      { priority: 500, safetyLease: true, waitForQuiescence: false });
+    await vi.advanceTimersByTimeAsync(0); await next;
+    const afterCut = f.packets.length;
+    b.position.y = 69; b.velocity.y = -2.4; f.emit();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(f.packets).toHaveLength(afterCut);
+    expect(f.packets[f.packets.length - 1]).toMatchObject({ name: 'held_item_slot', slot: 2 });
+    expect(f.sends).toHaveLength(0);
+    expect(f.bot._client.write).toBe(original);
+    expect(f.memory.scoop).toBeUndefined();
+  });
+
+  it('sends nothing if ownership is taken before pack equip begins', async () => {
+    vi.useFakeTimers();
+    const f = packedRig(); f.bot.entity.velocity.y = -1.6;
+    const running = executeAction(f.bot as never, 'floor-clutch', 8000, (() => {
+      preemptLowerPriorityActions(f.bot, 500, 'wall-escape');
+      return runFallClutch(f.bot, createMotorPort(f.bot), f.memory);
+    }) as never, { priority: 380, safetyLease: true, waitForQuiescence: false });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await running).toMatchObject({ success: false, failureType: 'interrupted' });
+    expect(f.equip).not.toHaveBeenCalled(); expect(f.packets).toHaveLength(0);
+  });
+
+  it.each(['timeout', 'end', 'dead', 'landed'])('stops a slow equip on %s and blocks its later native packets', async reason => {
+    vi.useFakeTimers();
+    const f = packedRig(true, 250); f.bot.entity.velocity.y = -1.6;
+    const original = f.bot._client.write;
+    const running = runFallClutch(f.bot, f.bot, f.memory);
+    if (reason === 'end') f.bot.emit('end');
+    if (reason === 'dead') { f.bot.health = 0; f.emit(); }
+    if (reason === 'landed') { f.bot.entity.onGround = true; f.emit(); }
+    await vi.advanceTimersByTimeAsync(160);
+    expect(await running).toMatchObject({ success: false });
+    const afterStop = f.packets.length;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.packets).toHaveLength(afterStop);
+    expect(f.sends).toHaveLength(0);
+    expect(f.bot._client.write).toBe(original);
+    expect(f.bot.listenerCount('physicsTick')).toBe(0);
+    expect(f.bot.listenerCount('end')).toBe(0);
+  });
+
+  it('reproduces r220 depth exhaustion, then starts at 8411 with 29 ticks until ground despite the bucket being in the pack', () => {
+    const f = packedRig(false, 40, 64), b = f.bot.entity;
+    // Same local surface as the descending r220 samples; no fixture coordinates are used by the implementation.
+    const at = (y: number, vy: number) => { b.position.y = y; b.velocity = new Vec3(-0.05, vy, 0.04); };
+    at(168.44968243998906, -0.06757544541092037);
+    expect(clutchWanted(f.bot, f.memory, 1000)).toBeNull();
+    at(164.48534267783214, -0.7722887410403505); // 8388
+    expect(groundUnder(bodyReader(f.bot as never), b.position).kind).toBe('void');
+    expect(clutchWanted(f.bot, f.memory, 2000)).toBeNull();
+    at(134.7198898466626, -1.9017802857172537); // 8410: block y=63 lies outside the 70-cell scan
+    expect(groundUnder(bodyReader(f.bot as never), b.position).kind).toBe('void');
+    expect(clutchWanted(f.bot, f.memory, 3000)).toBeNull();
+    at(132.81810956094535, -1.9421447178023679); // 8411
+    expect(groundUnder(bodyReader(f.bot as never), b.position).kind).toBe('floor');
+    expect(clutchWanted(f.bot, f.memory, 3050)).not.toBeNull();
+    expect(8440 - 8411).toBe(29);
+  });
+
+  it('equips early enough after r220 tick 8411 and pours at 8438 in the sampled landing window', async () => {
+    vi.useFakeTimers();
+    const f = packedRig(true, 40, 64), b = f.bot.entity;
+    const frames = [
+      [8411, 11.851234113797528, 132.81810956094535, -8.498072511543468, -0.05656363307977265, -1.9421447178023679, 0.04084066748540961],
+      [8412, 11.794670480717755, 130.87596484314298, -8.457231844058057, -0.0721308926917508, -1.98170186201567, 0.052080703509531305],
+      [8413, 11.794670480717755, 128.8942629811273, -8.457231844058057, -0.02065798658915768, -2.0204678640991984, 0.014915696097808559],
+      [8414, 11.774012494128598, 126.8737951170281, -8.442316147960248, -0.03945675438529117, -2.0584585468804595, 0.02848897954681435],
+      [8437, 9.771757087467941, 71.30613209759059, -6.99662670349042, -0.18334305787412541, -2.7503063814559865, 0.13237927719096687],
+      [8438, 9.588414029593816, 68.5558257161346, -6.864247426299452, -0.18750016925461183, -2.773700307810677, 0.13538083834158843],
+      [8439, 9.400913860339204, 65.78212540832394, -6.728866587957864, -0.19128314061085444, -2.7966263560844773, 0.13811225898865404],
+      [8440, 9.209630719728349, 64, -6.59075432896921, -0.17406765795587756, -0.0784000015258789, 0.12568215567967517],
+    ];
+    f.memory.from = 168.44968243998906;
+    let running: Promise<unknown> | undefined, sentTick: number | undefined;
+    for (const [tick, x, y, z, vx, vy, vz] of frames) {
+      Object.assign(b, { position: new Vec3(x, y, z), velocity: new Vec3(vx, vy, vz), onGround: tick === 8440 });
+      if (!running) {
+        expect(clutchWanted(f.bot, f.memory, Date.now())).not.toBeNull();
+        running = runFallClutch(f.bot, createMotorPort(f.bot), f.memory);
+      }
+      f.emit();
+      if (f.sends.length && sentTick === undefined) sentTick = tick;
+      await vi.advanceTimersByTimeAsync(50);
+      if (tick === 8414) expect(f.bot.heldItem.name).toBe('water_bucket');
+    }
+    await vi.advanceTimersByTimeAsync(4000); await running;
+    expect(sentTick).toBe(8438);
+    expect(f.sends).toHaveLength(1);
+    expect(f.sends[0]).toMatchObject({ reachable: true, source: { x: 9, y: 64, z: -7 } });
+  });
+
+  it('starts while over void when the forecast reaches the island, and pours onto that landing footprint', async () => {
+    vi.useFakeTimers();
+    const f = rig(x => x >= 3 ? 65 : -Infinity), b = f.bot.entity;
+    b.position = new Vec3(0.5, 75, 0.5); b.velocity = new Vec3(1, -1.6, 0); f.memory.from = 100;
+    expect(groundUnder(bodyReader(f.bot as never), b.position).kind).toBe('void');
+    expect(clutchWanted(f.bot, f.memory, 1000)).not.toBeNull();
+    const running = runFallClutch(f.bot, f.bot, f.memory);
+    for (let n = 0; n < 12 && !b.onGround; n++) {
+      b.position = b.position.plus(b.velocity); b.velocity.y = nextVy(b.velocity.y);
+      if (b.position.y <= 65 && b.position.x >= 3) { b.position.y = 65; b.onGround = true; }
+      b.isInWater = f.water.has(cellKey(b.position));
+      f.emit(); await vi.advanceTimersByTimeAsync(50);
+    }
+    await vi.advanceTimersByTimeAsync(4000); await running;
+    expect(f.sends).toHaveLength(1);
+    expect(f.sends[0].reachable).toBe(true);
+    expect(f.sends[0].source!.x).toBeGreaterThanOrEqual(3);
+  });
+
+  it.each(['void', 'unknown', 'lava', 'water', 'partial'])('waits when every predicted footprint is %s; starts once a loaded full cube is seen', ground => {
+    const f = rig(), b = f.bot.entity, original = f.bot.blockAt;
+    b.position = new Vec3(0.5, 85, 0.5); b.velocity = new Vec3(5.1, -1.6, -3.7);
+    let visible = false;
+    f.bot.blockAt = p => {
+      if (visible || p.y >= 65) return original(p);
+      if (ground === 'unknown') return null as never;
+      if (ground === 'partial') return { ...original(p), shapes: [[0, 0, 0, 1, 0.5, 1]] };
+      return { ...original(p), name: ground === 'void' ? 'air' : ground, shapes: [], boundingBox: 'empty' };
+    };
+    expect(clutchWanted(f.bot, f.memory, 1000)).toBeNull();
+    visible = true;
+    expect(clutchWanted(f.bot, f.memory, 1050)).not.toBeNull();
+  });
+});
 
 describe('fall clutch at physics ticks (one movement lead model)', () => {
   it('replays r214 fatal final ticks: centre top 64, collision top 65; the old 4.2 check has no airborne sample', async () => {

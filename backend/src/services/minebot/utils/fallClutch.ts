@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3';
 import { bodyReader, type BlockReader } from './localMap.js';
 import { dropUnder } from './voidFooting.js';
 import { isEnd } from './dragonState.js';
-import { actionSignal, bindActionCallback } from '../execution/ActionExecution.js';
+import { actionSignal, assertActionActive, bindActionCallback } from '../execution/ActionExecution.js';
 
 /**
  * A fall that would cripple or kill, stopped with a bucket of water (the clutch every player knows). In the End a body that climbed a pillar for a caged crystal is up to 40 blocks over the ground, and
@@ -12,11 +12,10 @@ import { actionSignal, bindActionCallback } from '../execution/ActionExecution.j
  * The old wall-clock poll and current-eye-only 4.2 test missed r214: eye distances 5.8668, 4.5025, then grounded. The centre column's surface was 64 but the body's 0.6-wide footprint landed at 65.
  * There is no guaranteed airborne in-reach sample at high speed. The one-movement lead assumes the server resolves use at the predicted position; the local physics event precedes updatePosition, so this
  * assumption needs packet/server validation in S1 (see docs/minecraft-end-fight.md). Only in the End, only with a bucket of water
- * in the hand or in the hotbar, only where the ground under the body is a solid floor (not water, lava, the void or what is not loaded) and the fall would cost at least CLUTCH_MIN_DAMAGE.
+ * in the inventory, only where a short forecast sees a solid floor (not water, lava, the void or what is not loaded) and the fall would cost at least CLUTCH_MIN_DAMAGE.
  *
- * The bucket is taken into the hand by selecting its hotbar slot: one packet, nothing to wait for (the game's own `equip` does just that for an item in the hotbar). For an item in the pack `equip` moves the
- * stack with clicks of the window over several ticks that a stronger reflex taking the body cannot stop (independent review 2026-11-02, round 6: two window clicks after the interruption, the wall escape
- * late by half a second). So a bucket in the pack, not in the hotbar, does not start the clutch.
+ * A hotbar bucket is selected in one packet. A pack bucket needs up to three ticks of preparation before the pour window: `port.equip` moves it to an empty hotbar slot, or swaps with the hotbar's LRU slot.
+ * Native equip continues across awaits with the bare bot: its inventory/selection packets are fenced separately until it settles, including after interruption (round 6's two late window clicks).
  * The water poured is taken up again afterwards. A clutch cut off between the pour and the taking-up leaves a note in the floor's memory (`FallMemory.scoop`: the cell of the water), and the floor takes the
  * water up later, in a quiet moment, with a new hold on the body (`scoopWanted`, `scoopBack`): a water source and an empty bucket left behind would end the clutch for the next fall.
  *
@@ -39,6 +38,8 @@ const LOOK_DOWN = 70;
 const GAP_MS = 6000;
 const CLUTCH_TICKS = 160;
 const CLUTCH_WAIT_MS = 8000;
+const EQUIP_TICKS = 3;
+const EQUIP_WAIT_MS = EQUIP_TICKS * 50;
 const SCOOP_TRIES = 3;
 /** A note of water left behind is kept this long, tried this many times (one try per SCOOP_GAP_MS at the most), and only while the body is within SCOOP_NEAR blocks of the water. */
 export const SCOOP_PENDING_MS = 90_000;
@@ -64,6 +65,7 @@ export interface FallBody {
   look?(yaw: number, pitch: number, force?: boolean): unknown;
   lookAt?(target: Vec3, force?: boolean): unknown;
   setQuickBarSlot?(slot: number): void;
+  equip?(item: Item, destination: 'hand'): Promise<void>;
   activateItem?(offHand?: boolean): void;
   deactivateItem?(): void;
   blockAt?(position: Vec3): { name?: string; metadata?: number; shapes?: unknown } | null;
@@ -97,6 +99,23 @@ function inHand(bot: FallBody, name: string): { held: boolean; slot: number } | 
   return item ? { held: false, slot: (item.slot as number) - HOTBAR_FIRST } : null;
 }
 
+type WaterBucket = { held: boolean; slot: number; item?: Item };
+/** Prefer the immediate hand/hotbar path; only a pack bucket needs native equip. Scoop-back keeps its immediate-only contract. */
+function waterBucket(bot: FallBody): WaterBucket | null {
+  const immediate = inHand(bot, 'water_bucket');
+  if (immediate) return immediate;
+  const item = bot.inventory?.items().find(entry => entry.name === 'water_bucket' && Number.isInteger(entry.slot));
+  return item ? { held: false, slot: -1, item } : null;
+}
+
+/** Leave three movements for equip and one for the next-position pour decision. A late pack swap never starts. */
+function timeToEquip(body: BodyEntity, floor: number): boolean {
+  if (!body.velocity || body.velocity.y > CLUTCH_FALLING_VY) return false;
+  let y = body.position.y, vy = body.velocity.y;
+  for (let tick = 0; tick <= EQUIP_TICKS; tick++) { vy = (vy - 0.08) * 0.98; y += vy; }
+  return y > floor && y + (body.eyeHeight ?? EYE_HEIGHT) - floor > CLUTCH_REACH;
+}
+
 /**
  * Whether the clutch starts at this physics tick, and why. Keeps `memory.from` (the highest y since the body last stood) to know how far the body has already fallen: the damage is the whole fall less three.
  */
@@ -108,12 +127,15 @@ export function clutchWanted(bot: FallBody, memory: FallMemory, now: number): st
   memory.from = Math.max(memory.from ?? y, y);
   if ((body.velocity?.y ?? 0) > CLUTCH_FALLING_VY) return null;
   if (memory.clutchAt !== undefined && now - memory.clutchAt < GAP_MS) return null;
-  if ((bot.health ?? 20) <= 0 || !inHand(bot, 'water_bucket')) return null;
-  const ground = groundUnder(bodyReader(bot as never), body.position);
-  if (ground.kind !== 'floor') return null;
-  const total = (memory.from - y) + ground.drop;
+  const have = waterBucket(bot);
+  if ((bot.health ?? 20) <= 0 || !have) return null;
+  if (have.item && (!bot.equip || !bot._client || !bot.on || !bot.removeListener)) return null;
+  const support = forecastSupports(bot, bodyReader(bot as never), body).pop();
+  if (!support || (have.item && !timeToEquip(body, support.source.y))) return null;
+  const drop = Math.max(0, y - support.source.y);
+  const total = memory.from - support.source.y;
   const damage = total - 3;
-  return damage >= CLUTCH_MIN_DAMAGE ? `落ちて${total.toFixed(0)}ブロック（地面まであと${ground.drop}、受ける被害およそ${damage.toFixed(0)}）` : null;
+  return damage >= CLUTCH_MIN_DAMAGE ? `落ちて${total.toFixed(0)}ブロック（地面まであと${drop.toFixed(0)}、受ける被害およそ${damage.toFixed(0)}）` : null;
 }
 
 /**
@@ -306,6 +328,41 @@ export function scoopWanted(bot: FallBody, memory: FallMemory, now: number): boo
 
 type PourTarget = { source: Vec3; yaw: number; pitch: number };
 
+type ForecastSupport = { source: Vec3; feet: Vec3 };
+/** Shared by start and pour: next 1..8 footprints, stopping at the first collision. Still a bounded 70-cell column read, not proof of a bottomless world. */
+function forecastSupports(bot: FallBody, read: BlockReader, body: BodyEntity): ForecastSupport[] {
+  const v = body.velocity;
+  if (!v || ![v.x, v.y, v.z].every(Number.isFinite) || v.y > CLUTCH_FALLING_VY) return [];
+  const half = (body.width ?? 0.6) / 2 - 1e-6, supports: ForecastSupport[] = [];
+  const columns = new Map<string, Vec3 | null>();
+  let predicted = body.position.clone(), vy = v.y;
+  for (let tick = 0; tick < 8; tick++) {
+    vy = (vy - 0.08) * 0.98;
+    predicted = predicted.offset(v.x, vy, v.z);
+    let support: Vec3 | null = null, nearest = Infinity;
+    for (let x = Math.floor(predicted.x - half); x <= Math.floor(predicted.x + half); x++) {
+      for (let z = Math.floor(predicted.z - half); z <= Math.floor(predicted.z + half); z++) {
+        const key = `${x},${z}`;
+        if (!columns.has(key)) {
+          const ground = groundUnder(read, { x: x + 0.5, y: body.position.y, z: z + 0.5 });
+          columns.set(key, ground.kind === 'floor' && fullCube(bot, new Vec3(x, ground.top - 1, z)) ? new Vec3(x, ground.top, z) : null);
+        }
+        const candidate = columns.get(key);
+        if (!candidate) continue;
+        const distance = Math.hypot(x + 0.5 - predicted.x, z + 0.5 - predicted.z);
+        if (!support || candidate.y > support.y || (candidate.y === support.y && distance < nearest)) {
+          support = candidate; nearest = distance;
+        }
+      }
+    }
+    if (support) {
+      supports.push({ source: support, feet: predicted });
+      if (predicted.y <= support.y) break;
+    }
+  }
+  return supports;
+}
+
 /**
  * A short ballistic forecast, with the observed horizontal velocity held constant (no steering).
  * The first full-cube support across the landing footprint wins, including a higher adjacent cell.
@@ -315,25 +372,11 @@ type PourTarget = { source: Vec3; yaw: number; pitch: number };
 function targetForPour(bot: FallBody, read: BlockReader, body: BodyEntity): PourTarget | null {
   const v = body.velocity;
   if (!v || ![v.x, v.y, v.z].every(Number.isFinite) || v.y > CLUTCH_FALLING_VY) return null;
-  const eyeHeight = body.eyeHeight ?? EYE_HEIGHT, half = (body.width ?? 0.6) / 2 - 1e-6;
-  let predicted = body.position.clone(), vy = v.y;
+  const eyeHeight = body.eyeHeight ?? EYE_HEIGHT;
   const useEye = body.position.offset(v.x, (v.y - 0.08) * 0.98 + eyeHeight, v.z);
   // At the pour window even a slow eligible fall lands within eight ticks. No distant trajectory is trusted.
-  for (let tick = 0; tick < 8; tick++) {
-    vy = (vy - 0.08) * 0.98;
-    predicted = predicted.offset(v.x, vy, v.z);
-    let support: Vec3 | null = null, nearest = Infinity;
-    for (let x = Math.floor(predicted.x - half); x <= Math.floor(predicted.x + half); x++) {
-      for (let z = Math.floor(predicted.z - half); z <= Math.floor(predicted.z + half); z++) {
-        const ground = groundUnder(read, { x: x + 0.5, y: body.position.y, z: z + 0.5 });
-        if (ground.kind !== 'floor' || !fullCube(bot, new Vec3(x, ground.top - 1, z))) continue;
-        const distance = Math.hypot(x + 0.5 - predicted.x, z + 0.5 - predicted.z);
-        if (!support || ground.top > support.y || (ground.top === support.y && distance < nearest)) {
-          support = new Vec3(x, ground.top, z); nearest = distance;
-        }
-      }
-    }
-    if (!support || predicted.y > support.y) continue;
+  for (const { source: support, feet } of forecastSupports(bot, read, body)) {
+    if (feet.y > support.y) continue;
     // The source must have room, and the eye must still be above the face at use time.
     if (!AIR_NAMES.has(read(support.x, support.y, support.z)?.name ?? '') || useEye.y <= support.y) return null;
     const aim = support.offset(0.5, 0, 0.5).minus(useEye);
@@ -394,11 +437,87 @@ function pourOnTick(bot: FallBody, port: FallBody, memory: FallMemory, clock: ()
   });
 }
 
+type Client = NonNullable<FallBody['_client']>;
+type EquipFence = { signal: AbortSignal | undefined; check(): void };
+const equipFences = new WeakMap<Client, { original: Client['write']; write: Client['write']; guards: Set<EquipFence> }>();
+
+/** Native equip/moveSlotItem retain the bare bot across awaits. Fence their packets in that action's async context; other owners and protocol replies pass through. */
+function fenceEquip(bot: FallBody, port: FallBody, check: () => void): () => void {
+  const client = port._client;
+  if (!client) throw new Error('持ち替えの送信を監視できない');
+  let entry = equipFences.get(client);
+  if (!entry) {
+    const original = client.write, guards = new Set<EquipFence>();
+    const write: Client['write'] = function (this: unknown, name: string, ...args: any[]) {
+      if (name === 'window_click' || name === 'held_item_slot') {
+        for (const guard of guards) if (actionSignal(bot) === guard.signal) guard.check();
+      }
+      return original.call(this, name, ...args);
+    };
+    entry = { original, write, guards }; equipFences.set(client, entry); client.write = write;
+  }
+  const guard = { signal: actionSignal(port), check };
+  entry.guards.add(guard);
+  const saved = entry;
+  return () => {
+    saved.guards.delete(guard);
+    if (saved.guards.size === 0) {
+      if (client.write === saved.write) client.write = saved.original;
+      equipFences.delete(client);
+    }
+  };
+}
+
+/** At most three ticks/150ms of preparation. A timed-out native promise may still settle later: its fence stays until then, but the action releases immediately. */
+function equipWhileFalling(bot: FallBody, port: FallBody, item: Item): Promise<void> {
+  if (!port.equip || !bot.on || !bot.removeListener) return Promise.reject(new Error('落下中に持ち替えを監視できない'));
+  const signal = actionSignal(port);
+  return new Promise((resolve, reject) => {
+    let closed = false, ticks = 0;
+    const check = () => {
+      assertActionActive(port);
+      if (closed || signal?.aborted) throw new Error('Motor owner expired');
+      if (!bot.entity || (bot.health ?? 20) <= 0 || bot.entity.onGround || bot.entity.isInWater) throw new Error('持ち替え中に落下が終わった');
+    };
+    const finish = (error?: unknown) => {
+      if (closed) return;
+      closed = true; clearTimeout(timer);
+      bot.removeListener?.('physicsTick', tick); bot.removeListener?.('end', ended);
+      signal?.removeEventListener('abort', aborted);
+      if (error) reject(error); else resolve();
+    };
+    const ended = () => finish(new Error('持ち替え中に落下が終わった'));
+    const aborted = () => finish(new Error('Motor owner expired'));
+    const tick = bindActionCallback(port, () => {
+      try { check(); if (++ticks > EQUIP_TICKS) finish(new Error('持ち替えが3 tickに間に合わなかった')); }
+      catch (error) { finish(error); }
+    });
+    const timer = setTimeout(() => finish(new Error('持ち替えが150msに間に合わなかった')), EQUIP_WAIT_MS);
+    bot.on?.('physicsTick', tick); bot.on?.('end', ended);
+    signal?.addEventListener('abort', aborted, { once: true });
+    let release: (() => void) | undefined;
+    try {
+      check();
+      release = fenceEquip(bot, port, check);
+      const pending = port.equip!(item, 'hand');
+      void Promise.resolve(pending).then(() => {
+        try { check(); finish(); } catch (error) { finish(error); }
+        finally { release?.(); }
+      }, error => { release?.(); finish(error); });
+    } catch (error) { release?.(); finish(error); }
+  });
+}
+
 /** The clutch itself (`runFallClutch` gives the hand back after it). */
-async function clutch(bot: FallBody, port: FallBody, memory: FallMemory, clock: () => number, have: { held: boolean; slot: number }, before: HandBack | undefined): Promise<Outcome> {
+async function clutch(bot: FallBody, port: FallBody, memory: FallMemory, clock: () => number, have: WaterBucket, before: HandBack | undefined): Promise<Outcome> {
   try {
     if (interrupted(port)) return TAKEN;
-    if (!have.held) port.setQuickBarSlot?.(have.slot);
+    if (have.item) {
+      const support = bot.entity && forecastSupports(bot, bodyReader(bot as never), bot.entity).pop();
+      if (!support || !bot.entity || !timeToEquip(bot.entity, support.source.y)) return { success: false, result: '持ち替えの3 tickを残していないので水バケツを動かさない' };
+      await equipWhileFalling(bot, port, have.item);
+      if (interrupted(port)) return TAKEN;
+    } else if (!have.held) port.setQuickBarSlot?.(have.slot);
     if (bot.heldItem?.name !== 'water_bucket') return { success: false, result: 'バケツを手に持てなかった' };
     // A visual preparation only: the eventual use has its own rotation and waits for no look promise.
     void Promise.resolve(port.look?.(bot.entity?.yaw ?? 0, -Math.PI / 2, true)).catch(() => undefined);
@@ -433,8 +552,8 @@ async function clutch(bot: FallBody, port: FallBody, memory: FallMemory, clock: 
  * The hand the bucket was taken from is given back when the clutch ends with the body still its own, and is in the note for a taking-up that comes later (`PendingScoop.hand`).
  */
 export async function runFallClutch(bot: FallBody, port: FallBody, memory: FallMemory = {}, clock: () => number = Date.now): Promise<Outcome> {
-  const have = inHand(bot, 'water_bucket');
-  if (!have || !bot.entity) return { success: false, result: '水の入ったバケツを手にも hotbar にも持っていない' };
+  const have = waterBucket(bot);
+  if (!have || !bot.entity) return { success: false, result: '水の入ったバケツをインベントリに持っていない' };
   const before: HandBack | undefined = !have.held && typeof bot.quickBarSlot === 'number' ? { slot: bot.quickBarSlot, ...(bot.heldItem?.name ? { name: bot.heldItem.name } : {}) } : undefined;
   const result = await clutch(bot, port, memory, clock, have, before);
   giveBackHand(bot, port, before);
