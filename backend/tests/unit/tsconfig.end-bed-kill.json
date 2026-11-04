@@ -5,6 +5,10 @@
   "files": [
     "../../scripts/minecraft-end-fight-probe.ts",
     "../../src/services/minebot/utils/bedBurst.ts",
+    "../../src/services/minebot/utils/dragonLandingPath.ts",
+    "../../src/services/minebot/utils/dragonBedGeometry.ts",
+    "minecraftDragonLandingPath.test.ts",
+    "minecraftDragonHeadModel.test.ts",
     "minecraftEndBedKill.test.ts",
     "minecraftBedBurst.test.ts"
   ]

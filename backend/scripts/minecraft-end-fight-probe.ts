@@ -18,7 +18,7 @@ import { createProbeBot } from '../src/services/minebot/testing/MinecraftProbeBo
 import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonFca/nativeBody.js';
 import { madeStamp } from './lab/madeStamp.js';
 import { entityHealth } from '../src/services/minebot/utils/mapMarks.js';
-import { partBox, partTarget, boxDistance, type DragonPart } from '../src/services/minebot/utils/dragonParts.js';
+import { partBox, partTarget, boxDistance, boxesOverlap, type DragonPart } from '../src/services/minebot/utils/dragonParts.js';
 import { breathCloudsOf, dragonPhaseOf, endDragonOf, endObservation } from '../src/services/minebot/utils/dragonState.js';
 import { dragonHazards } from '../src/services/minebot/utils/dragonDanger.js';
 import { knockGeometry, recordEndKnocks } from '../src/services/minebot/utils/endKnockRecord.js';
@@ -35,6 +35,8 @@ import { dragonNook, insideDragonNook, nookCellSupported, type DragonNook } from
 import { BLOCK_REACH } from '../src/services/minebot/utils/blockReach.js';
 import { isPerched, type P3 } from '../src/services/minebot/utils/dragonParts.js';
 import { appendDragonBody, predictDragonHead, forecastDragonHead, seatedDragonHead, dragonHeadCentre, observedDragonPart, type DragonBodySample } from '../src/services/minebot/utils/dragonHeadModel.js';
+import { appendLandingObservation, dragonLandingTarget, landingBurstDue, landingDamageDistance, landingDragonBoxes, landingHeadResidual, landingMode, landingPreparationCorridor, predictLandingPath, type LandingObservation, type LandingPoint } from '../src/services/minebot/utils/dragonLandingPath.js';
+import { bedBodyBox, landingBedFireClear, landingBedLayouts, landingBedRefusal, landingBedSelf, type LandingBedLayout } from '../src/services/minebot/utils/dragonBedGeometry.js';
 import { cageRoots, cageWall, cageGuardCells, cageGuardWork, cageRecoveryFootings, cageWaterLandings, cageWaterSource, cageWaterExit, cageDryFooting, cagePoolExits, cageShadowFootings, crystalShelterState, crystalShelterExits, islandFootings } from '../src/services/minebot/utils/endFightGeometry.js';
 import { CHAIN_LIMIT_MS, CRYSTAL_LIMIT_MS, CRYSTAL_WAIT_MS, CAGE_TRAVEL_WAIT_MS, FAST_CAGE_POLICY, chainCell, chainWalkRetry, chainShootSet, chainDescent, chainDragonSample, chainDragonRush, chainBasin, chainClear, chainCloudClear, chainCompareTravel, chainCrystal, chainDistance, chainHands, chainOnShaft, chainPause, chainRetreat, chainShot, chainSitting, chainTravel, chainWait, type ChainCrystal, type CagePolicy, type DragonMotionSample } from '../src/services/minebot/utils/endFullChainPlan.js';
 
@@ -2657,7 +2659,7 @@ for (const [name, policy] of Object.entries(cageComparePolicies)) scenes[name] =
 type KillStyle = 'sword_stage' | 'bed' | 'bow';
 type KillNookBuilder = 'operator' | 'body';
 const KILL_LIMIT_MS = 25 * 60 * 1000;
-const killEntries = ['end_bed_kill', 'end_bed_crystals', 'end_bed_kill_raw', 'end_bed_crystals_raw', 'dragon_head_model', 'dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_far', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain', 'cage_descent_compare', 'cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'];
+const killEntries = ['end_bed_kill', 'end_bed_crystals', 'end_bed_kill_raw', 'end_bed_crystals_raw', 'end_bed_crystals_p3', 'dragon_head_model', 'dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_far', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain', 'cage_descent_compare', 'cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'];
 const killCell = (p: P3): P3 => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
 const packCount = (name: string): number => actor.inventory.items().filter((item: any) => item.name === name).reduce((n: number, item: any) => n + item.count, 0);
 let killArena: { ground: P3; perch: P3; yaw: number } | null = null;
@@ -3479,7 +3481,7 @@ function observeBedBurstProtocol(bot: any, clock: () => number) {
  * No block update, promise, timer, or physics event can split look/place/use. */
 async function bedBurstOnMove(bot: any, protocol: ReturnType<typeof observeBedBurstProtocol>, options: {
   tick: () => number; previousDetonationTick: number | null; foot: P3; head: P3;
-  check: () => string | null; before: (stage: BedBurstSend['stage']) => void;
+  check: () => string | null; ready?: () => boolean; before: (stage: BedBurstSend['stage']) => void;
   onEvidence: (evidence: BedBurstEvidence) => void; evidence?: BedBurstEvidence; signal?: AbortSignal;
 }): Promise<BedBurstEvidence> {
   const { foot, head } = options, client = bot._client;
@@ -3536,6 +3538,7 @@ async function bedBurstOnMove(bot: any, protocol: ReturnType<typeof observeBedBu
       e.reach = bedBurstReach(bot.entity.position, foot);
       e.awaitingPosition ||= protocol.state.awaitingPosition;
       if (reason) { e.dragonOverlap = reason.endsWith('_in_dragon') ? reason : null; finish(reason); return; }
+      if (options.ready && !options.ready()) return;
       if (protocol.state.awaitingPosition || options.tick() <= protocol.state.settledTick) return;
       sending = true;
       try {
@@ -3576,6 +3579,7 @@ async function bedBurstOnMove(bot: any, protocol: ReturnType<typeof observeBedBu
       queueMicrotask(() => {
         if (done || sentTick !== null || !bedBurstDue(options.tick(), options.previousDetonationTick)) return;
         const refusal = options.check(); if (refusal) { finish(refusal); return; }
+        if (options.ready && !options.ready()) return;
         if (protocol.state.awaitingPosition || options.tick() <= protocol.state.settledTick) { e.awaitingPosition ||= protocol.state.awaitingPosition; return; }
         try {
           const p = bot.entity.position;
@@ -3616,24 +3620,26 @@ const bedSwordAllowed = (beds: number, placementUnavailable: boolean) => beds ==
  * midpoint of the roughly 200-tick flame. A third construction/use needs another
  * 40 ticks; telemetry and repeated placement must not consume the escape reserve. */
 function bedLeaveReason(input: { now: number; startTick: number; endTick: number | null; phase: number | null; phaseStart: number;
-  bedsPlaced: number; bedsDetonated: number; bedsRemaining: number; pending: boolean; failedBed: boolean }): string | null {
+  bedsPlaced: number; bedsDetonated: number; bedsRemaining: number; pending: boolean; failedBed: boolean; seatedDamage?: number }): string | null {
   const remaining = 240 - (input.now - input.startTick);
+  if (input.seatedDamage !== undefined && (!Number.isFinite(input.seatedDamage) || input.seatedDamage < 0)) return 'seated_damage_unknown';
   if (input.endTick !== null) return 'seated_window_ended';
   if (input.failedBed) return 'unusable_bed';
-  if (input.bedsDetonated >= 3 || (input.bedsPlaced >= 3 && !input.pending)) return 'three_bed_perch_limit';
+  if (input.seatedDamage !== undefined ? input.seatedDamage > 50 : input.bedsDetonated >= 3 || (input.bedsPlaced >= 3 && !input.pending)) return input.seatedDamage !== undefined ? 'seated_damage_over_50' : 'three_bed_perch_limit';
   if (input.bedsPlaced > 0 && input.bedsRemaining === 0 && !input.pending) return 'beds_exhausted';
   if (input.phase === 5 && input.now - input.phaseStart >= 100) return 'flame_midpoint';
   if (remaining <= 100) return 'leave_time_reserve';
-  if (input.bedsPlaced >= 2 && !input.pending && (remaining <= 140
+  if (input.seatedDamage === undefined && input.bedsPlaced >= 2 && !input.pending && (remaining <= 140
     || (input.phase === 5 && 200 - (input.now - input.phaseStart) <= 140))) return 'third_bed_exit_budget';
   return null;
 }
 
 /** Lab HEAD: a repeat belongs to this sit and follows a confirmed blast, never a bare use receipt. */
 function bedPlacementRefusal(input: { phase: number | null; now: number; startTick: number; endTick: number | null;
-  perch: number; detonated: number; previous: { perch: number; detonationTick: number | null } | null; damage: number; health: number }): string | null {
+  perch: number; detonated: number; previous: { perch: number; detonationTick: number | null } | null; damage: number; health: number; seatedDamage?: number }): string | null {
   if ((input.phase !== 7 && input.phase !== 5) || input.endTick !== null || input.now - input.startTick >= 240) return 'seated_window_ended';
-  if (input.detonated >= 3) return 'three_bed_perch_limit';
+  if (input.seatedDamage !== undefined && (!Number.isFinite(input.seatedDamage) || input.seatedDamage < 0)) return 'seated_damage_unknown';
+  if (input.seatedDamage !== undefined ? input.seatedDamage > 50 : input.detonated >= 3) return input.seatedDamage !== undefined ? 'seated_damage_over_50' : 'three_bed_perch_limit';
   if (input.previous && (input.previous.perch !== input.perch || input.previous.detonationTick === null
     || input.previous.detonationTick >= input.now)) return 'previous_blast_unconfirmed';
   if (!Number.isFinite(input.damage) || !Number.isFinite(input.health) || input.damage < 0) return 'estimate_unknown';
@@ -3665,8 +3671,64 @@ function bedWaitPlan(anchor: P3 | null, here: P3, centre: P3 | null, fallback: P
   return to ? { kind: 'move' as const, to } : null;
 }
 
-async function endBedKill(keepCrystals = false, raw = false) {
+/** Raw position packets after Mineflayer's decoder, not repeated physicsTick positions.
+ * Correct sync's FLOAT-DEGREE yaw locally without changing the shared entity or node_modules.
+ * update_time anchors are evidence only: the protocol does not stamp each dragon packet. */
+function observeDragonLanding(bot: any, clock: () => number, dragonId: number, receive: (s: LandingObservation) => void,
+  health: (value: number, phase: number | null) => void, changed?: () => void) {
+  const client = bot._client, listeners: Array<[string, (p: any) => void]> = [];
+  const evidence: Record<string, any> = { packets: [], velocities: [], timeAnchors: [], tickBasis: 'client_receipt; server_slot_alignment_unverified' };
+  let velocity: { tick: number; value: P3 } | null = null, yaw: number | null = null;
+  let latest: LandingObservation | null = null;
+  const on = (name: string, f: (p: any) => void) => { client.on(name, f); listeners.push([name, f]); };
+  for (const name of ['rel_entity_move', 'entity_move_look', 'entity_teleport', 'sync_entity_position']) on(name, packet => {
+    if (packet.entityId !== dragonId) return;
+    const entity = bot.entities?.[dragonId], phase = entity && dragonPhaseOf(bot, entity);
+    if (!entity || (phase !== 2 && phase !== 3)) return;
+    if (name === 'sync_entity_position' && [packet.dx, packet.dy, packet.dz].every(Number.isFinite)) velocity = { tick: clock(), value: { x: packet.dx, y: packet.dy, z: packet.dz } };
+    if (Number.isFinite(packet.yaw)) yaw = Math.PI - packet.yaw * Math.PI / (name === 'sync_entity_position' ? 180 : 128);
+    yaw ??= entity.yaw;
+    const sample = { tick: clock(), position: { x: entity.position.x, y: entity.position.y, z: entity.position.z }, yaw: yaw!, phase,
+      ...(velocity && clock() - velocity.tick <= 1 ? { velocity: { ...velocity.value }, velocityTick: velocity.tick } : {}) };
+    latest = sample; receive(sample); evidence.packets.push({ ...sample, name });
+    if (evidence.packets.length > 256) evidence.packets.shift();
+  });
+  on('entity_look', packet => { if (packet.entityId === dragonId && Number.isFinite(packet.yaw)) yaw = Math.PI - packet.yaw * Math.PI / 128; });
+  on('entity_velocity', packet => {
+    if (packet.entityId !== dragonId) return;
+    const value = packet.velocity ?? (Number.isFinite(packet.velocityX) ? { x: packet.velocityX / 8000, y: packet.velocityY / 8000, z: packet.velocityZ / 8000 } : null);
+    if (value && [value.x, value.y, value.z].every(Number.isFinite)) {
+      velocity = { tick: clock(), value: { ...value } };
+      evidence.velocities.push(velocity); if (evidence.velocities.length > 256) evidence.velocities.shift();
+      // Preserve the last POSITION timestamp. A velocity packet is not a new observed body pose.
+      if (latest && clock() - latest.tick <= 3 && [2, 3].includes(dragonPhaseOf(bot, bot.entities[dragonId]) ?? -1)) {
+        latest = { ...latest, velocity: { ...value }, velocityTick: clock() }; receive(latest);
+      }
+    }
+  });
+  on('entity_metadata', packet => {
+    if (packet.entityId !== dragonId) return;
+    const value = packet.metadata?.find((m: any) => m.key === 9)?.value;
+    if (Number.isFinite(value)) health(value, dragonPhaseOf(bot, bot.entities[dragonId]));
+    changed?.();
+  });
+  on('update_time', packet => {
+    evidence.timeAnchors.push({ tick: clock(), age: String(packet.age ?? packet.worldAge ?? ''), receivedAt: Date.now() });
+    if (evidence.timeAnchors.length > 128) evidence.timeAnchors.shift();
+  });
+  return { evidence, stop: () => { for (const [name, f] of listeners) client.removeListener(name, f); } };
+}
+
+async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
+  if (phase3 && (!keepCrystals || !raw)) throw new Error('phase3_scene_requires_raw_and_kept_crystals');
   const initial = keepCrystals ? await prepareKillRun(true, true, true) : await prepareKillRun(true, true);
+  const countCrystals = async () => {
+    const reply = await ask(`${END} execute if entity @e[type=minecraft:end_crystal]`);
+    const match = /count:\s*(\d+)/iu.exec(reply);
+    return { count: match ? Number(match[1]) : null, reply };
+  };
+  const crystalStart = phase3 ? await countCrystals() : null;
+  if (phase3 && crystalStart?.count !== 10) throw new Error('phase3_scene_requires_ten_server_counted_crystals');
   const t0 = Date.now(), deadline = t0 + KILL_LIMIT_MS, deaths0 = actorDeaths;
   const counts0 = actor.reflexLedger.counts(), lowest = trackMinHealth();
   const out: Record<string, any> = { scene: 'dragon_kill_compare', style: 'end_bed_kill', limitSeconds: KILL_LIMIT_MS / 1000,
@@ -3688,12 +3750,29 @@ async function endBedKill(keepCrystals = false, raw = false) {
     Object.assign(out.operationBudget, { observationDelayTicks: 0, placeToUseTicks: 0, blastGapTicks: 10, receiptTicks: 3 });
     out.rawProtocol = rawProtocol!.state;
   }
+  if (phase3) {
+    out.style = 'end_bed_crystals_p3';
+    out.headModel = 'packet body history interpolated by tick; dragonHeadVanilla; target from central column heightmap';
+    delete out.operationBudget.bedsPerPerch;
+    Object.assign(out.operationBudget, { seatedDamageLimit: 50, maximumSeatedTotal: 121, landingRadii: { four: 2.07, five: 3.22 }, initialErrorMargin: 0.5 });
+    Object.assign(out, { landing: [], landingPreparation: [], seatedBudget: [], predictionTruth: 'head_from_observed_body; no_independent_head_packet',
+      crystalStart,
+      assumptions: ['phase2 corridor is spatial preparation only; approach path nodes are unknown',
+        'phase3 target-following forecast is uncalibrated; yaw accumulator inferred, minimum error allowance 0.5m',
+        '10 client receipt ticks between bursts; server tick gaps require lab measurement',
+        'explosion lift is observed, not assumed; extended landing duration alone does not establish causation'] });
+  }
   let layout: SeatedBedLayout | null = null, pending: Record<string, any> | null = null, lastBlast: number | null = null;
   let phase: number | null = null, phaseStart = 0, phaseStartSeconds = 0, lastHp = Number(actor.health), lastBeds = packCount('white_bed');
   let view = endView(), sampleBusy = false, samplePending: Promise<void> = Promise.resolve(), nextSample = 0;
   let bedReadPending: Promise<void> = Promise.resolve(), afterReadBusy = false;
   let leaveNeeded = false, enteredSit = false, bedBlocked = false, nextOpenMove = 0, layoutPerch = 0;
   let perch = null as Record<string, any> | null;
+  let landingHistory: LandingObservation[] = [], landingTarget: P3 | null = null, landingRow: Record<string, any> | null = null;
+  let landingPlan: { candidates: LandingBedLayout[]; cells: P3[]; stand: P3; readyTick: number | null; phaseStart: number; target: P3 } | null = null;
+  let preparationAttempt = -1, checkedPacketTick = -1, serverDragonHp = 200, seatedCarry = 0, seatedUpper = 0;
+  const landingForecasts = new Map<number, LandingPoint[]>();
+  const residuals: Array<{ tick: number; ahead: number; metres: number }> = [];
   let leavingPerch = null as Record<string, any> | null;
   const fireFailures = new Map<string, BedFireFailure>(), namedFires = new Map<string, P3>(), standHints = new Map<string, P3>();
   const standExclusions = new Set<string>();
@@ -3777,9 +3856,10 @@ async function endBedKill(keepCrystals = false, raw = false) {
     const raw = dragonEntity();
     return raw?.id === initial.dragonId ? { position: { ...raw.position }, yaw: raw.yaw, phase: view?.dragon?.phase ?? null } : null;
   };
-  const leavePriority = () => perch && perch.leave.completedTick == null && bedLeaveReason({ now: tick, startTick: perch.startTick, endTick: perch.endTick,
+  const leavePriority = () => perch && perch.kind !== 'landing' && perch.leave.completedTick == null && bedLeaveReason({ now: tick, startTick: perch.startTick, endTick: perch.endTick,
     phase: view?.dragon?.phase ?? null, phaseStart, bedsPlaced: perch.bedsPlaced, bedsDetonated: perch.bedsDetonated,
     bedsRemaining: packCount('white_bed'),
+    ...(phase3 ? { seatedDamage: perch.seatedDamage ?? seatedUpper } : {}),
     pending: !!pending, failedBed: !!pending && pending.placedTick !== null && !pending.useRequested
       && ['self_damage', 'out_of_reach', 'operating_position_changed', 'breath_or_contact_at_operation', 'seated_pose_changed',
         'bed_destroyed_before_use', 'bed_halves_missing_or_wrong_facing'].includes(pending.notDetonatedReason) });
@@ -3827,6 +3907,76 @@ async function endBedKill(keepCrystals = false, raw = false) {
     lastBlast = tick; lastBedBlast = blastCentre; out.detonations++; killBlasts.push(blastCentre);
     const owner = out.perches.find((p: any) => p.n === pending!.perch);
     if (owner) owner.bedsDetonated++;
+    if (phase3 && pending.landing !== undefined) {
+      pending.gapTicks = pending.previousDetonationTick === null ? null : tick - pending.previousDetonationTick;
+      pending.bodyAtBlast = currentDragonPose()?.position ?? null;
+      pending.observedRise = 0;
+    }
+  };
+  const landingRecorder = phase3 ? observeDragonLanding(actor, () => tick, initial.dragonId, s => {
+    landingHistory = appendLandingObservation(landingHistory, s);
+  }, (hp, observedPhase) => {
+    const before = serverDragonHp, loss = Math.max(0, before - hp), healing = Math.max(0, hp - before);
+    serverDragonHp = hp;
+    out.healthTimeline.push({ tick, health: hp, before, loss, healing, phase: observedPhase, source: 'server_entity_metadata_9' });
+    if (observedPhase === 3 && landingRow && healing) landingRow.healing.push({ tick, before, after: hp, amount: healing });
+    const trial = out.bedTrials.findLast((b: any) => b.useRequested && !b.healthRecorded && tick >= b.useTick && tick - b.useTick <= 5);
+    if (loss && trial) {
+      Object.assign(trial, { healthRecorded: true, serverHpBefore: before, serverHpAfter: hp, serverLossTick: tick,
+        serverDragonLoss: loss, inverseDistanceE1: hp <= 1 ? null : landingDamageDistance(loss),
+        inverseDistanceWithOneHiddenHealE1: hp <= 1 ? null : landingDamageDistance(loss + 1),
+        damageCaveat: hp <= 1 ? 'fatal/overkill loss clipped; cannot invert distance' : 'net server HP loss; a same-tick heal may hide 1HP; inverse d assumes E=1' });
+    }
+    // A landing hit can be reported in the packet which also enters phase 6. Do not
+    // charge that phase-3 trial to the sitting accumulator merely because receipt is later.
+    const damagePhase = trial?.phaseAtUse ?? observedPhase;
+    if (loss && isPerched(damagePhase)) {
+      seatedCarry += loss; seatedUpper += loss + 1;
+      if (perch && perch.kind !== 'landing') { perch.seatedDamage = seatedUpper; perch.seatedDamageLower = seatedCarry; }
+      const crossed = seatedCarry > 50;
+      out.seatedBudget.push({ tick, loss, phaseAtUse: damagePhase, phaseAtHealth: observedPhase, carryLower: seatedCarry, carryUpper: seatedUpper, crossed, reset: crossed });
+      if (seatedUpper > 50) requestLeave('seated_damage_budget_or_takeoff');
+      // Only an observed lower bound over 50 proves vanilla reset its accumulator.
+      if (crossed) { seatedCarry = 0; seatedUpper = 0; }
+    }
+  }, () => { if (active && !active.allowed()) active.controller.abort('phase_metadata_changed'); }) : null;
+  if (landingRecorder) out.landingPackets = landingRecorder.evidence;
+  const observedLandingTarget = () => view?.perch ? dragonLandingTarget(view.perch, actor.game?.minY ?? 0,
+    (actor.game?.minY ?? 0) + (actor.game?.height ?? 256) - 1, read) : null;
+  const landingPath = (ahead = 20) => landingTarget ? predictLandingPath(landingHistory, landingTarget, tick, ahead) : [];
+  const recordLanding = () => {
+    if (!phase3 || ![2, 3].includes(phase ?? -1)) return;
+    if (phase === 2) landingTarget = observedLandingTarget();
+    if (!landingTarget) return;
+    const packet = landingHistory.at(-1);
+    if (packet && packet.tick !== checkedPacketTick) {
+      checkedPacketTick = packet.tick;
+      const observed = predictLandingPath(landingHistory, landingTarget, packet.tick, 0)[0];
+      if (observed) {
+        if (phase === 3 && landingRow) landingRow.observations.push(observed);
+        for (const prediction of landingForecasts.get(packet.tick) ?? []) {
+          const error = landingHeadResidual(prediction, observed);
+          if (error) {
+            if (landingRow) landingRow.errors.push(error);
+            if (!error.phaseChanged) residuals.push({ tick: packet.tick, ahead: error.ahead, metres: error.metres });
+          }
+        }
+        landingForecasts.delete(packet.tick);
+      }
+    }
+    while (residuals.length > 1280) residuals.shift(); // covers all 1..20 horizons over the last 60 ticks
+    for (const t of landingForecasts.keys()) if (t < tick - 6) landingForecasts.delete(t);
+    const path = landingPath();
+    if (landingRow && phase === 3) {
+      landingRow.predictions.push({ tick, points: path });
+      for (const trial of landingRow.shots) if (trial.bodyAtBlast && tick - trial.detonationTick <= 20) {
+        const body = landingHistory.at(-1)?.position;
+        if (body) trial.observedRise = Math.max(trial.observedRise, body.y - trial.bodyAtBlast.y);
+      }
+    }
+    for (const p of path) if (p.tick > tick) {
+      const forecasts = landingForecasts.get(p.tick) ?? []; forecasts.push(p); landingForecasts.set(p.tick, forecasts);
+    }
   };
   const sample = () => {
     if (terminal) return;
@@ -3838,11 +3988,19 @@ async function endBedKill(keepCrystals = false, raw = false) {
     if (d && d.id !== initial.dragonId) return stop('dragon_identity_changed');
     if (d?.health === 0) return stop('dragon_dead');
     const p = d?.phase ?? null;
+    if (phase3 && view?.crystals?.gone > 0) return stop('crystal_lost');
     if (p !== phase || !out.transitions.length) {
+      if (phase3 && phase === 3 && landingRow) {
+        Object.assign(landingRow, { endTick: tick, ticks: tick - landingRow.startTick, nextPhase: p,
+          durationExceedsEntryLinearEstimate: landingRow.entryLinearTicks === null ? null : tick - landingRow.startTick > landingRow.entryLinearTicks,
+          pushExtendedLanding: null, pushCausality: 'requires matched no-blast lab baseline; observedRise is measured separately' });
+        if (perch?.kind === 'landing' && isPerched(p)) { perch.endTick = tick; perch.endReason = 'switch_to_seated_budget'; }
+      }
       if (out.transitions.length) out.phaseDurations.push({ phase, fromTick: phaseStart, toTick: tick, ticks: tick - phaseStart, seconds: seconds() - phaseStartSeconds });
       phase = p; phaseStart = tick; phaseStartSeconds = seconds();
       out.transitions.push({ tick, seconds: seconds(), phase });
-      if (perch && p !== 7 && p !== 5 && perch.endTick === null) {
+      if (phase3 && p === 2) { landingPlan = null; landingRow = null; preparationAttempt = -1; landingForecasts.clear(); }
+      if (perch && p !== 7 && p !== 5 && !(phase3 && (p === 3 || (p === 6 && perch.kind === 'landing'))) && perch.endTick === null) {
         requestLeave('phase_changed'); bedBlocked = false;
         if (pending && !pending.useRequested) pending.notDetonatedReason ??= 'phase_changed_before_action';
       }
@@ -3855,12 +4013,28 @@ async function endBedKill(keepCrystals = false, raw = false) {
         const raw = dragonEntity();
         perch = { n: out.perches.length + 1, startTick: tick, startSeconds: seconds(), endTick: null, endReason: null,
           body: raw?.position ? { position: { ...raw.position }, yaw: raw.yaw, phase: 7 } : null, bedsPlaced: 0, bedsDetonated: 0, steps: [],
+          ...(phase3 ? { kind: 'seated', seatedDamage: seatedUpper, seatedDamageLower: seatedCarry } : {}),
           fire: { waits: [], unsafeFailures: [], excludedStands: [] }, layoutSwitches: [],
           leave: { startTick: null, startPhase: null, reason: null, goCount: 0, goResults: [], safeTick: null, completedTick: null, phase4: null } };
         perch.head = perch.body ? seatedDragonHead(perch.body) : null;
         for (const entry of fireFailures.values()) if (entry.count >= 2 && !standExclusions.has(pointKey(entry.stand))) {
           standExclusions.add(pointKey(entry.stand)); perch.fire.excludedStands.push({ tick, ...entry, inherited: true });
         }
+        out.perches.push(perch);
+      }
+      if (phase3 && p === 3) {
+        landingTarget = observedLandingTarget(); // freeze phase-3 target; arms/walls never enter this column
+        const raw = dragonEntity(), last = landingHistory.at(-1);
+        landingRow = { n: out.landing.length + 1, startTick: tick, endTick: null, ticks: null, target: landingTarget,
+          preparation: out.landingPreparation.at(-1) ?? null, candidates: landingPlan?.candidates ?? [],
+          readyBeforePhase3: landingPlan?.readyTick != null && landingPlan.readyTick < tick && !!landingTarget && chainDistance(landingPlan.target, landingTarget) === 0,
+          predictions: [], observations: [], errors: [], shots: [], healing: [],
+          entryLinearTicks: last?.velocity && landingTarget && last.velocity.y < 0 ? Math.max(0, (last.position.y - landingTarget.y - 1) / -last.velocity.y) : null };
+        out.landing.push(landingRow);
+        perch = { n: out.perches.length + 1, kind: 'landing', startTick: tick, startSeconds: seconds(), endTick: null, endReason: null,
+          body: raw ? { position: { ...raw.position }, yaw: raw.yaw, phase: 3 } : null, bedsPlaced: 0, bedsDetonated: 0, steps: [],
+          fire: { waits: [], unsafeFailures: [], excludedStands: [] }, layoutSwitches: [],
+          leave: { startTick: null, startPhase: null, reason: null, goCount: 0, goResults: [], safeTick: null, completedTick: null, phase4: null } };
         out.perches.push(perch);
       }
       if (p === 4 && perch) {
@@ -3873,7 +4047,7 @@ async function endBedKill(keepCrystals = false, raw = false) {
       }
       if (!isPerched(p)) enteredSit = false;
     }
-    if (perch && perch.endTick === null && tick - perch.startTick >= 240) {
+    if (perch && perch.kind !== 'landing' && perch.endTick === null && tick - perch.startTick >= 240) {
       requestLeave('twelve_second_limit');
     }
     const priority = leavePriority();
@@ -3886,6 +4060,7 @@ async function endBedKill(keepCrystals = false, raw = false) {
       heads.push({ tick, head, pose: pose! });
       if (heads.length > 32) heads.shift();
     }
+    recordLanding();
     out.phaseTimeline.push({ tick, seconds: seconds(), phase, position: d?.position ?? null, yaw: d?.yaw ?? null, headPosition: head,
       headSource: pose?.source ?? null, rawPosition: raw?.position ? { ...raw.position } : null, rawYaw: raw?.yaw ?? null,
       dragonHealth: d?.health ?? null, actorHealth: Number(actor.health) });
@@ -3911,6 +4086,7 @@ async function endBedKill(keepCrystals = false, raw = false) {
   }, 50);
   const sitting = () => !terminal && isPerched(view?.dragon?.phase);
   const bedWindow = () => !terminal && !leaveNeeded && !!perch && perch.endTick === null && (view?.dragon?.phase === 7 || view?.dragon?.phase === 5)
+    && (!phase3 || [5, 7].includes(dragonPhaseOf(actor, dragonEntity()) ?? -1))
     && tick - perch.startTick < 240;
   const poseNow = () => { const raw = dragonEntity(); return raw && seatedDragonHead({ position: raw.position, yaw: raw.yaw, phase: view?.dragon?.phase ?? null }); };
   const clearNow = (feet: P3) => {
@@ -3924,6 +4100,7 @@ async function endBedKill(keepCrystals = false, raw = false) {
       ...dragonHazards(actor, { along: [feet] }).map(h => h.kind)])];
   };
   const swordWindow = () => !leaveNeeded && sitting() && bedSwordAllowed(packCount('white_bed'), bedBlocked)
+    && !phase3
     && (!perch || perch.endTick === null || view?.dragon?.phase === 6);
   const live = () => !terminal;
   const delay = async (from: number, started: number) => {
@@ -4014,7 +4191,14 @@ async function endBedKill(keepCrystals = false, raw = false) {
     if (!perch?.body || !bedWindow()) return null;
     const diag: Record<string, number> = {}, obsidian = packCount('obsidian'), cobblestone = packCount('cobblestone');
     const hints: P3[] = [];
-    const candidates = seatedBedLayouts(perch.body, plannedRead, obsidian, cobblestone, Number(actor.health), diag, actor, hints);
+    const remainingSeated = 50 - seatedUpper;
+    // Try a below-threshold first blow if a real safe layout exists. Otherwise plan ONE
+    // strong crossing blow and leave; no bed-count allowance can extend vanilla's budget.
+    const gentle = phase3 && remainingSeated >= 40 ? seatedBedLayouts(perch.body, plannedRead, obsidian, cobblestone, Number(actor.health), diag, actor, hints,
+      { min: Math.max(40, remainingSeated - 2), max: remainingSeated, distance: 3.22 }) : [];
+    const candidates = gentle.length ? gentle : seatedBedLayouts(perch.body, plannedRead, obsidian, cobblestone, Number(actor.health), diag, actor, hints);
+    if (phase3) perch.plannedSeatedDamage = { carryLower: seatedCarry, carryUpper: seatedUpper, remainingSeated,
+      kind: gentle.length ? 'stay_at_or_below_50_then_reobserve' : 'cross_50_then_leave', damageCandidates: candidates.map(c => c.headDamage) };
     hints.forEach(p => standHints.set(pointKey(p), p));
     candidates.flatMap(l => l.fireToClear ?? []).forEach(p => namedFires.set(pointKey(p), p));
     const clear = candidates.filter(l => clearNow(l.stand));
@@ -4101,8 +4285,10 @@ async function endBedKill(keepCrystals = false, raw = false) {
     const previous = out.bedTrials.filter((b: any) => b.perch === perch!.n && b !== pending).at(-1) ?? null;
     const halves = [layout.head, layout.foot].map(cell => ({ cell, name: read(cell)?.name ?? null }));
     let reason = bedPlacementRefusal({ phase: view?.dragon?.phase ?? null, now: tick, startTick: perch.startTick, endTick: perch.endTick,
-      perch: perch.n, detonated: perch.bedsDetonated, previous, damage: self.expected, health: Number(actor.health) });
+      perch: perch.n, detonated: perch.bedsDetonated, previous, damage: self.expected, health: Number(actor.health),
+      ...(phase3 ? { seatedDamage: perch.seatedDamage ?? seatedUpper } : {}) });
     if (!reason && out.bedTrials.filter((b: any) => b.useRequested).length >= 8) reason = 'eight_bed_limit';
+    if (!reason && phase3 && previous?.useRequested && !previous.healthRecorded) reason = 'seated_health_unconfirmed';
     if (!reason) reason = raw ? bedLayoutDragonRefusal({ position: raw.position, yaw: raw.yaw, phase: view?.dragon?.phase ?? null }, layout) : 'head_observation_missing';
     if (!reason && halves.some(h => !h.name || !/^(air|cave_air|void_air)$/u.test(h.name))) reason = 'bed_cells_not_air';
     if (!reason && [layout.head, layout.foot].some(p => read({ ...p, y: p.y - 1 })?.boundingBox !== 'block')) reason = 'bed_support_missing';
@@ -4186,7 +4372,7 @@ async function endBedKill(keepCrystals = false, raw = false) {
       trial.latestEstimate = { tick, headDistance, exposure, headDamage, self, latestHead: current.centre };
       if (![headDistance, headDamage, self.expected, Number(actor.health)].every(Number.isFinite)) return 'estimate_unknown';
       if (self.expected > 6 || self.expected + 4 >= Number(actor.health)) return 'self_damage';
-      if (headDistance > 2.2 || headDamage < 50) return 'head_not_at_pillow';
+      if (headDistance > (phase3 ? 3.22 : 2.2) || headDamage < (phase3 ? 40 : 50)) return 'head_not_at_pillow';
       if (bedBurstReach(actor.entity.position, target.foot) > 5.5) return 'out_of_reach';
       if (actor.heldItem?.name !== 'white_bed') return 'bed_not_in_hand';
       return null;
@@ -4213,6 +4399,7 @@ async function endBedKill(keepCrystals = false, raw = false) {
             trial.useRequested = true; trial.useTick = tick; trial.phaseAtUse = view?.dragon?.phase;
             trial.headAtUse = headOf(view?.dragon); trial.prediction = trial.latestEstimate;
             trial.healthBefore = Number(actor.health); trial.dragonBefore = view?.dragon?.health ?? null;
+            if (phase3) trial.seatedBudgetAtUse = { lower: seatedCarry, upper: seatedUpper };
             trial.positionAtUse = { ...actor.entity.position };
             trial.supportsAtUse = target.supportBlocks.map(cell => ({ cell, name: read(cell)?.name ?? null }));
             trial.screenAtUse = target.screen.map(cell => ({ cell, name: read(cell)?.name ?? null }));
@@ -4226,6 +4413,8 @@ async function endBedKill(keepCrystals = false, raw = false) {
       trial.selfDamageAtWorst = trial.healthBefore === null ? null : Math.max(0, trial.healthBefore - trial.minHealth);
       trial.observedDragonLoss = trial.dragonBefore !== null && trial.dragonAfter !== null ? trial.dragonBefore - trial.dragonAfter : null;
       if (row.ok && trial.observedDragonLoss > 0) out.explosionsHit++;
+      if (phase3 && trial.detonationTick !== null && (!trial.healthRecorded
+        || (trial.latestEstimate?.headDamage ?? 0) + (trial.seatedBudgetAtUse?.lower ?? seatedCarry) > 50)) requestLeave('predicted_seated_budget_crossing_or_unknown_health');
       // Telemetry can complete after the next burst; do not serialize raw timing on an operator chat reply.
       bedReadPending = serverHealth().then(health => { trial.dragonHealthServerAfter = health; trial.serverAfterTick = tick; })
         .catch(error => { trial.serverAfterError = String(error); });
@@ -4238,6 +4427,158 @@ async function endBedKill(keepCrystals = false, raw = false) {
       row.endTick = tick; out.actions.push(row); owner.steps.push(row); active = null;
     }
   };
+  const landingBodyOwned = () => hasActiveSafetyLease(actor) || activeActionCapabilities(actor).length > 0 || actor.floorReflexes?.busy
+    || actor.floorReflexes?.retreat?.engaged || actor.shieldBlock?.up;
+  const landingClear = (feet: P3) => {
+    const path = landingPath(3);
+    return !!path.length && landingBedFireClear(read, feet) && dragonHazards(actor, { along: [feet] }).length === 0
+      && !path.some(p => landingDragonBoxes(p, 0.5).some(box => boxesOverlap(bedBodyBox(feet), box)));
+  };
+  const prepareLanding = async () => {
+    if (!phase3 || phase !== 2 || preparationAttempt === phaseStart || !landingTarget || !landingHistory.length) return;
+    if (!landingPath(3).length) return; // wait for a real, bracketed 12-tick history before choosing/walking
+    preparationAttempt = phaseStart;
+    const target = { ...landingTarget }, ownerPhase = phaseStart;
+    const corridor = landingPreparationCorridor(landingHistory, target);
+    const candidates = landingBedLayouts(target, corridor, read, packCount('obsidian'), Number(actor.health));
+    const row: Record<string, any> = { tick, phase: 2, target, corridor, candidateCount: candidates.length,
+      candidates: [], readyTick: null, reason: null, construction: [] };
+    out.landingPreparation.push(row);
+    const first = candidates.find(c => landingClear(c.stand));
+    if (!first) { row.reason = 'no_observed_zero_exposure_landing_layout'; refuse(row.reason); return; }
+    // A single prebuilt stand; retain alternative pillows only if the UNION can be built
+    // without filling any pillow/foot cell or increasing the central column heightmap.
+    const selected: LandingBedLayout[] = [], cells = new Map<string, P3>();
+    for (const c of candidates.filter(c => chainDistance(c.stand, first.stand) === 0)) {
+      const union = new Map([...cells, ...c.screen.map(p => [pointKey(p), p] as const)]);
+      if (union.size > packCount('obsidian') || [...selected, c].some(l => [l.head, l.foot].some(p => union.has(pointKey(p))))) continue;
+      const projected: BedBlockReader = p => union.has(pointKey(p)) ? { name: 'obsidian', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : read(p);
+      if ([...selected, c].some(l => landingBedRefusal(l, l.stand, corridor.filter(p => chainDistance(p.head, bedCentre(l.head)) <= 2), projected, Number(actor.health)))) continue;
+      selected.push(c); c.screen.forEach(p => cells.set(pointKey(p), p));
+      if (selected.length === 5) break;
+    }
+    if (!selected.length) { row.reason = 'landing_build_union_conflict'; return; }
+    landingPlan = { candidates: selected, cells: [...cells.values()], stand: first.stand, readyTick: null, phaseStart: ownerPhase, target };
+    row.candidates = selected; row.stand = first.stand; row.cells = [...cells.values()];
+    const allowed = () => live() && phase === 2 && dragonPhaseOf(actor, dragonEntity()) === 2 && phaseStart === ownerPhase && !leaveNeeded && landingClear(first.stand);
+    if (!await go('prepare_landing_stand', first.stand, allowed, 12)) { row.reason = 'landing_stand_go_interrupted'; return; }
+    const plan = landingPlan;
+    for (const cell of [...plan.cells].sort((a, b) => a.y - b.y)) {
+      if (read(cell)?.name === 'obsidian') continue;
+      const safeBuild = () => allowed() && chainDistance(actor.entity.position, plan.stand) <= 0.7
+        && landingClear(actor.entity.position) && bedEyeReach(actor.entity.position, cell) <= 4.5 && bedCellSupported(read, cell)
+        && !landingPath(3).some(p => landingDragonBoxes(p).some(box => boxesOverlap({ minX: cell.x, minY: cell.y, minZ: cell.z, maxX: cell.x + 1, maxY: cell.y + 1, maxZ: cell.z + 1 }, box)))
+        && /^(air|cave_air|void_air)$/u.test(read(cell)?.name ?? '') && packCount('obsidian') > 0;
+      if (!safeBuild()) { row.reason = 'landing_construction_veto'; return; }
+      killPlaced.set(pointKey(cell), cell);
+      const ok = await perform('prepare_landing_obsidian', [{ do: 'place', block: 'obsidian', at: [cell] }],
+        () => allowed() && chainDistance(actor.entity.position, plan.stand) <= 0.7 && landingClear(actor.entity.position), safeBuild);
+      row.construction.push({ tick, cell, ok, observed: read(cell)?.name ?? null });
+      if (!ok || read(cell)?.name !== 'obsidian') { row.reason = 'landing_construction_unconfirmed'; return; }
+    }
+    if (!allowed() || chainDistance(actor.entity.position, plan.stand) > 0.7 || !landingClear(actor.entity.position)) { row.reason = 'landing_preparation_closed'; return; }
+    // Equip during phase 2. Subsequent re-equips run between confirmed bursts, never inside the raw pair.
+    if (!await perform('prepare_landing_bed', [{ do: 'equip', item: 'white_bed', onFail: 'stop' }], allowed)) { row.reason = 'landing_equip_interrupted'; return; }
+    if (!allowed()) { row.reason = 'phase3_started_before_preparation_complete'; return; }
+    plan.readyTick = tick; row.readyTick = tick; row.reason = 'ready_in_phase2';
+  };
+  const landingBurst = async () => {
+    const owner = perch!, window = landingRow!, plan = landingPlan!;
+    if (!window.readyBeforePhase3 || !plan || !plan.candidates.length) { refuse('landing_not_prepared_in_phase2'); return false; }
+    const previous = window.shots.at(-1) ?? null;
+    if (previous && (previous.detonationTick === null || !previous.healthRecorded)) {
+      refuse('landing_previous_blast_or_health_unconfirmed'); requestLeave('landing_previous_blast_or_health_unconfirmed'); return false;
+    }
+    if (previous && tick - previous.detonationTick > 10) { refuse('landing_ten_tick_slot_missed'); requestLeave('landing_ten_tick_slot_missed'); return false; }
+    if (window.shots.length >= (window.trainBeds ?? 5)) { requestLeave('landing_train_finished'); return false; }
+    const controller = new AbortController();
+    const allowed = () => live() && !leaveNeeded && phase === 3 && dragonPhaseOf(actor, dragonEntity()) === 3 && perch === owner && landingRow === window;
+    let chosen: LandingBedLayout | null = null, estimate: Record<string, any> | null = null;
+    const lead = () => {
+      const ms = Number(actor.player?.ping);
+      return Number.isFinite(ms) && ms >= 0 ? 1 + Math.ceil(ms / 50) : Infinity;
+    };
+    if (lead() + 1 > 20) { refuse('landing_latency_unknown_or_over_horizon'); return false; }
+    const select = (at = tick, only?: LandingBedLayout) => {
+      const ahead = lead(); if (ahead + 1 > 20) return null;
+      const horizon = at - tick + ahead + 1; if (horizon < 0 || horizon > 20) return null;
+      const path = landingPath(horizon), hits = path.filter(p => p.tick >= at + ahead);
+      if (hits.length !== 2 || hits.some(p => p.phase !== 3)) return null;
+      const error = Math.max(0.5, ...residuals.filter(e => tick - e.tick <= 60 && e.ahead >= ahead && e.ahead <= ahead + 1).map(e => e.metres + 0.35));
+      for (const beds of (window.trainBeds ? [window.trainBeds] : [4, 5]) as Array<4 | 5>) {
+        if (packCount('white_bed') < beds - window.shots.length) continue;
+        for (const c of only ? [only] : plan.candidates) {
+          if (hits.some(p => !landingBurstDue({ phase, now: at, lastBlast: previous?.detonationTick ?? null,
+            head: p.head, pillow: bedCentre(c.head), beds, error }))) continue;
+          if (landingBedRefusal(c, actor.entity.position, path, read, Number(actor.health), error, actor.entity)) continue;
+          const damage = hits.map(p => bedDamage(chainDistance(p.head, bedCentre(c.head)) + error, bedExposure(read, bedCentre(c.head), p.headBox, [c.head, c.foot])));
+          if (Math.min(...damage) < (200 + beds - 1) / beds) continue;
+          return { candidate: c, estimate: { tick, ahead, heads: hits, error, beds, conservativeDamage: Math.min(...damage),
+            self: landingBedSelf(read, c.head, c.foot, actor.entity.position, actor.entity), safetyPath: path } };
+        }
+      }
+      return null;
+    };
+    // Choose the first pillow from the short horizon. The ready callback revalidates the
+    // SAME pillow at the exact move tick; a late match cannot move a cadence slot.
+    const first = previous ? select(previous.detonationTick + 10)?.candidate
+      ?? plan.candidates.find(c => pointKey(c.head) === pointKey(previous.head) && pointKey(c.foot) === pointKey(previous.foot)) : select()?.candidate;
+    if (!first) return false;
+    chosen = first;
+    layout = { ...first, supportBlocks: [], selfDamage: 1 };
+    const trial: Record<string, any> = { n: ++out.placementAttempts, perch: owner.n, landing: window.n, foot: first.foot, head: first.head,
+      stand: plan.stand, supportBlocks: [], screen: plan.cells, previousDetonationTick: previous?.detonationTick ?? null,
+      placedTick: null, useRequested: false, useTick: null, detonationTick: null, minHealth: Number(actor.health), healthBefore: null,
+      burst: emptyBedBurst(lastBlast) };
+    pending = trial; out.bedTrials.push(trial);
+    const check = (): string | null => {
+      if (!allowed()) return 'landing_phase_or_window_changed';
+      if (landingBodyOwned()) return 'reflex_or_action_owns_body';
+      if (previous && tick - previous.detonationTick > 10) return 'landing_ten_tick_slot_missed';
+      if (out.bedTrials.filter((b: any) => b.useRequested).length >= 8) return 'eight_bed_limit';
+      if (chainDistance(actor.entity.position, plan.stand) > 0.7 || !landingClear(actor.entity.position)) return 'landing_stand_or_hazard_changed';
+      if (actor.heldItem?.name !== 'white_bed') return 'bed_not_in_hand';
+      const path = landingPath(Math.min(20, lead() + 1));
+      return landingBedRefusal(chosen!, actor.entity.position, path, read, Number(actor.health), 0.5, actor.entity);
+    };
+    try {
+      active = { controller, allowed };
+      if (landingBodyOwned()) { trial.notDetonatedReason = 'reflex_or_action_owns_body'; return false; }
+      if (actor.heldItem?.name !== 'white_bed') {
+        const equipped = await act([{ do: 'equip', item: 'white_bed', onFail: 'stop' }], 16, {}, controller.signal);
+        if (!equipped.ok || !allowed()) { trial.notDetonatedReason = 'landing_equip_failed'; return false; }
+      }
+      const reason = check(); if (reason) { trial.notDetonatedReason = reason; refuse(reason); requestLeave(reason); return false; }
+      const burst = await bedBurstOnMove(actor, rawProtocol!, { tick: () => tick, previousDetonationTick: lastBlast,
+        foot: first.foot, head: first.head, check, evidence: trial.burst, signal: controller.signal,
+        ready: () => {
+          const selected = select(tick, first);
+          if (!selected || pointKey(selected.candidate.head) !== pointKey(first.head) || pointKey(selected.candidate.foot) !== pointKey(first.foot)) return false;
+          estimate = selected.estimate; return true;
+        }, onEvidence: e => { trial.burst = e; },
+        before: stage => {
+          if (stage === 'place') { trial.placeRequestTick = tick; trial.phaseAtPlace = phase; }
+          if (stage === 'use') {
+            trial.useRequested = true; trial.useTick = tick; trial.phaseAtUse = phase; trial.prediction = estimate;
+            trial.healthBefore = Number(actor.health); trial.serverHpAtUse = serverDragonHp; trial.positionAtUse = { ...actor.entity.position };
+            window.trainBeds ??= estimate?.beds; window.shots.push(trial);
+            for (const p of [first.head, first.foot]) killPlaced.set(pointKey(p), p);
+          }
+        } });
+      trial.gapFromUseToDetonation = burst.useToDetonationTicks;
+      const ok = burst.detonationTick !== null && !burst.orientationMismatch;
+      if (!ok) { trial.notDetonatedReason = burst.failure ?? burst.observationInterrupted ?? 'landing_burst_unconfirmed'; }
+      else if (trial.serverDragonLoss > 0) out.explosionsHit++;
+      if (!ok && trial.useRequested) requestLeave(trial.notDetonatedReason);
+      return ok;
+    } finally {
+      out.actions.push({ label: 'raw_landing_head_bed', tick: trial.placeRequestTick, endTick: tick, landing: window.n, burst: trial.burst });
+      active = null; pending = null; layout = null;
+    }
+  };
+  // Getter boundaries keep TypeScript from treating event/callback-owned state as its initial null.
+  const preparedLanding = () => landingPlan;
+  const currentLanding = () => landingRow;
   try {
     sample();
     while (!terminal) {
@@ -4284,6 +4625,20 @@ async function endBedKill(keepCrystals = false, raw = false) {
           if (!result.safe) await sleep(50);
         } else { refuse('no_observed_retreat'); await sleep(250); }
         continue;
+      }
+      if (phase3 && landingMode(phase) === 'prepare') {
+        await prepareLanding();
+        const plan = preparedLanding();
+        if (plan?.readyTick != null) {
+          if (chainDistance(actor.entity.position, plan.stand) > 0.7 || !landingClear(actor.entity.position)) {
+            plan.readyTick = null; refuse('landing_prepared_stand_lost');
+          } else { await sleep(25); continue; }
+        }
+      }
+      if (phase3 && landingMode(phase) === 'burst') {
+        if (currentLanding()?.readyBeforePhase3 && landingClear(actor.entity.position)) await landingBurst();
+        else { refuse('landing_not_prepared_or_stand_unsafe'); requestLeave('landing_not_prepared_or_stand_unsafe'); }
+        await sleep(10); continue;
       }
       // A telemetry reply must not delay takeoff evacuation. Finish it before another damage-producing hand.
       if (!raw && afterReadBusy) { await sleep(25); continue; }
@@ -4367,6 +4722,7 @@ async function endBedKill(keepCrystals = false, raw = false) {
               requestLeave('raw_burst_failed_or_interrupted');
               if ([layout.foot, layout.head].some(p => String(read(p)?.name).endsWith('_bed'))) pending.unusedBedLeft = true;
             }
+            if (phase3 && ok) layout = null; // choose the next shot from the NEW cumulative HP budget
             pending = null;
             continue;
           }
@@ -4468,7 +4824,16 @@ async function endBedKill(keepCrystals = false, raw = false) {
     actor.removeListener('physicsTick', onTick); actor.removeListener('entityDead', onDead); actor.removeListener('death', onDeath);
     actor.removeListener('health', onHealth); actor.removeListener('blockUpdate', onBlock); actor._client.removeListener('explosion', onExplosion);
     try { await Promise.all([samplePending, bedReadPending, serverQueue]); await knockRecord.settle(); }
-    finally { knockRecord.stop(terminal ?? 'scene_end'); rawProtocol?.stop(); }
+    finally { knockRecord.stop(terminal ?? 'scene_end'); rawProtocol?.stop(); landingRecorder?.stop(); }
+    const finalLanding = currentLanding();
+    if (phase3 && finalLanding?.endTick === null) Object.assign(finalLanding, { endTick: out.endTick, ticks: out.endTick - finalLanding.startTick, partial: true, pushExtendedLanding: null });
+    if (phase3) for (const l of out.landing) l.trainEvidence = {
+      requestedBeds: l.trainBeds ?? null, sent: l.shots.length,
+      confirmed: l.shots.filter((s: any) => s.detonationTick !== null).length,
+      receiptGaps: l.shots.slice(1).map((s: any) => s.gapTicks),
+      positiveServerLosses: l.shots.filter((s: any) => s.serverDragonLoss > 0).length,
+      maximumObservedRise: Math.max(0, ...l.shots.map((s: any) => s.observedRise ?? 0)),
+      serverTickCadenceVerified: false };
     out.phaseDurations.push({ phase, fromTick: phaseStart, toTick: out.endTick, ticks: out.endTick - phaseStart, seconds: out.seconds - phaseStartSeconds, partial: true });
     out.phase1Seconds = out.phaseDurations.filter((p: any) => p.phase === 1).reduce((n: number, p: any) => n + p.seconds, 0);
     for (const owner of out.perches) {
@@ -4501,13 +4866,16 @@ async function endBedKill(keepCrystals = false, raw = false) {
     } while (Date.now() < until && !disconnected && actorDeaths === deaths0);
   }
   out.deaths = actorDeaths - deaths0;
+  if (phase3 && !disconnected) out.crystalEnd = await countCrystals();
   out.ok = out.deaths === 0 && out.killSeconds !== null && out.killSeconds <= KILL_LIMIT_MS / 1000 && out.bossVerified;
+  if (phase3) out.ok &&= out.crystalEnd?.count === 10 && out.landing.some((l: any) => l.shots.some((s: any) => s.detonationTick !== null));
   return out;
 }
 scenes.end_bed_kill = () => endBedKill();
 scenes.end_bed_crystals = () => endBedKill(true);
 scenes.end_bed_kill_raw = () => endBedKill(false, true);
 scenes.end_bed_crystals_raw = () => endBedKill(true, true);
+scenes.end_bed_crystals_p3 = () => endBedKill(true, true, true);
 // ===== end end_bed_kill =====
 
 // ===== dragon_head_model: independent measurements, no combat hands =====
@@ -4690,7 +5058,7 @@ scenes.death = async () => {
 // ===== run =====
 let exitCode = 0;
 try {
-  const invalidKillSelection = wanted.some(name => name.startsWith('dragon_kill') || name.startsWith('cage_descent_compare') || name === 'end_full_chain' || name === 'end_bed_kill' || name === 'end_bed_crystals' || name === 'end_bed_kill_raw' || name === 'end_bed_crystals_raw' || name === 'dragon_head_model') && (wanted.filter(name => name !== 'enter').length !== 1 || !killEntries.includes(wanted.find(name => name !== 'enter')!));
+  const invalidKillSelection = wanted.some(name => name.startsWith('dragon_kill') || name.startsWith('cage_descent_compare') || name === 'end_full_chain' || name === 'end_bed_kill' || name === 'end_bed_crystals' || name === 'end_bed_kill_raw' || name === 'end_bed_crystals_raw' || name === 'end_bed_crystals_p3' || name === 'dragon_head_model') && (wanted.filter(name => name !== 'enter').length !== 1 || !killEntries.includes(wanted.find(name => name !== 'enter')!));
   if (invalidKillSelection) { report.errors.push('choose exactly one standalone entry (dragon_kill_compare or end_full_chain, optionally after enter), without other scenes'); exitCode = 1; }
   for (const name of invalidKillSelection ? [] : Object.keys(scenes)) {
     if (killEntries.includes(name) && wanted.filter(n => n !== 'enter').join() !== name) continue;

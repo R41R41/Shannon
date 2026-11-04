@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../../src/services/minebot/config/MinebotConfig.js', () => ({ CONFIG: {} }));
 import * as model from '../../src/services/minebot/utils/dragonHeadModel.js';
 import type { DragonBodySample } from '../../src/services/minebot/utils/dragonHeadModel.js';
 import type { P3 } from '../../src/services/minebot/utils/dragonParts.js';

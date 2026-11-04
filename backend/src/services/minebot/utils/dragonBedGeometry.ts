@@ -3,6 +3,7 @@ import { seatedDragonHead } from './dragonHeadModel.js';
 import { Vec3 } from 'vec3';
 import { dragonHazards } from './dragonDanger.js';
 import { knockGeometry } from './endKnockRecord.js';
+import { landingDragonBoxes, type LandingPoint } from './dragonLandingPath.js';
 
 type BedBlock = { name: string; boundingBox?: string; shapes?: number[][] } | null;
 export type BedBlockReader = (p: P3) => BedBlock;
@@ -185,6 +186,103 @@ export function bedSelfEstimate(read: BedBlockReader, head: P3, foot: P3, feet: 
   return { distance, exposure, shielded: 1 - exposure, box, expected: bedDamage(distance, exposure), model: 'normal_before_armour' };
 }
 
+/** Only permanent blast-resistant collision shapes count for M2. In particular an
+ * end-stone wall must not certify the second explosion. This also preserves the +1 damage. */
+export function landingBedSelf(read: BedBlockReader, head: P3, foot: P3, feet: P3, dimensions: { width?: number; height?: number } = {}) {
+  const durable: BedBlockReader = p => { const b = read(p); return b && ['obsidian', 'bedrock'].includes(b.name) ? b : { name: 'air', shapes: [] }; };
+  return bedSelfEstimate(durable, head, foot, feet, { width: Math.max(0.6, dimensions.width ?? 0.6), height: Math.max(1.8, dimensions.height ?? 1.8) });
+}
+
+export function landingBedFireClear(read: BedBlockReader, stand: P3): boolean {
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 2; dy++) {
+    const b = read({ x: Math.floor(stand.x) + dx, y: Math.floor(stand.y) + dy, z: Math.floor(stand.z) + dz });
+    if (!b || bedIsFire(b)) return false;
+  }
+  return true;
+}
+
+export interface LandingBedLayout {
+  head: P3; foot: P3; stand: P3; screen: P3[]; supports: P3[];
+  headDistance: number; selfExposure: number; headDamage: number; score: number;
+}
+
+/** The full 45-ray, reach, fire, durable footing and flight-box checks are also run at dispatch,
+ * at the actor's REAL position. A nominal stand tolerance alone cannot prove zero exposure. */
+export function landingBedRefusal(layout: LandingBedLayout, feet: P3, path: readonly LandingPoint[], read: BedBlockReader,
+  health: number, error = 0.5, dimensions: { width?: number; height?: number } = {}): string | null {
+  if (!Number.isFinite(health) || !Object.values(feet).every(Number.isFinite)) return 'landing_estimate_unknown';
+  if (!path.length || !Number.isFinite(error) || error < 0) return 'landing_prediction_missing';
+  if ([layout.head, layout.foot].some(p => !air(read(p)))) return 'landing_bed_cells_not_air';
+  if ([layout.head, layout.foot].some(p => bedEyeReach(feet, p) > 4.5)
+    || bedEyeReach(feet, { ...layout.foot, y: layout.foot.y - 1 }) > 4.5) return 'landing_out_of_reach';
+  const cell = { x: Math.floor(feet.x), y: Math.floor(feet.y), z: Math.floor(feet.z) };
+  if (!air(read(cell)) || !air(read({ ...cell, y: cell.y + 1 }))) return 'landing_stand_not_open';
+  if (!['bedrock', 'obsidian'].includes(read({ ...cell, y: cell.y - 1 })?.name ?? '')) return 'landing_footing_not_durable';
+  if (!landingBedFireClear(read, feet)) return 'landing_fire_or_unloaded_neighbour';
+  if ([...layout.supports, ...layout.screen].some(p => !['obsidian', 'bedrock'].includes(read(p)?.name ?? ''))) return 'landing_shield_missing';
+  const body = bedBodyBox(feet, Math.max(0.6, dimensions.width ?? 0.6), Math.max(1.8, dimensions.height ?? 1.8));
+  if (path.some(p => landingDragonBoxes(p, error).some(box => boxesOverlap(body, box)))) return 'landing_stand_in_dragon';
+  // Include new/existing supports: an arm intersecting a part is not an admissible layout.
+  const occupied = [layout.head, layout.foot, ...layout.supports, ...layout.screen].map(p => cellBox(p));
+  if (path.some(p => landingDragonBoxes(p).slice(0, 3).some((box, i) => occupied.some(cell => boxesOverlap(cell, i < 2 ? inflate(box, -1.1) : box))))) return 'landing_build_in_dragon';
+  const self = landingBedSelf(read, layout.head, layout.foot, feet, dimensions);
+  if (!Number.isFinite(self.expected) || self.expected > 6 || self.expected + 4 >= health) return 'self_damage';
+  if (self.exposure !== 0) return 'landing_exposure_not_zero';
+  return null;
+}
+
+/** Bounded, translation-invariant search in the observed fountain. The spatial corridor is
+ * a phase-2 preparation hypothesis; only future dated forecasts authorize bursts. All new
+ * supports AND screens are obsidian; never add a block to the central heightmap column.
+ * Return a row of pillows sharing a stand/build, so repeats require no walking/construction. */
+export function landingBedLayouts(target: P3, corridor: readonly LandingPoint[], read: BedBlockReader,
+  budget: number, health = 20): LandingBedLayout[] {
+  if (!corridor.length || !Object.values(target).every(Number.isFinite) || !Number.isInteger(budget) || budget < 0) return [];
+  const durable = (p: P3) => ['bedrock', 'obsidian'].includes(read(p)?.name ?? '');
+  const pillows = new Map<string, P3>();
+  for (const p of corridor) for (const dx of [-1, 0, 1]) for (const dz of [-1, 0, 1]) {
+    const head = { x: Math.floor(p.head.x) + dx, y: Math.floor(p.head.y) - 1, z: Math.floor(p.head.z) + dz };
+    if (Math.hypot(head.x + 0.5 - target.x, head.z + 0.5 - target.z) <= 4 && head.y >= target.y && head.y <= target.y + 3 && air(read(head))) pillows.set(key(head), head);
+  }
+  const found: LandingBedLayout[] = [];
+  for (const head of [...pillows.values()].sort((a, b) => distance(bedCentre(a), target) - distance(bedCentre(b), target))) {
+    const near = corridor.filter(p => distance(p.head, bedCentre(head)) <= 2);
+    if (!near.length) continue;
+    for (const [dx, dz] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
+      const foot = { x: head.x + dx, y: head.y, z: head.z + dz };
+      if (!air(read(foot))) continue;
+      const supports = [head, foot].map(p => ({ ...p, y: p.y - 1 }));
+      for (const along of [1, 2, 3]) for (const side of [-1, 0, 1]) for (let y = Math.floor(target.y) - 4; y < target.y; y++) {
+        const stand = { x: head.x + dx * along + dz * side + 0.5, y, z: head.z + dz * along - dx * side + 0.5 };
+        const cell = { x: Math.floor(stand.x), y, z: Math.floor(stand.z) };
+        if (Math.hypot(stand.x - target.x, stand.z - target.z) > 4 || !durable({ ...cell, y: y - 1 })
+          || !air(read(cell)) || !air(read({ ...cell, y: y + 1 })) || bedStandFires(read, stand).length
+          || [head, foot, supports[1]].some(p => bedEyeReach(stand, p) > 4.5)) continue;
+        for (const wall of [[], bedWallCells(head, stand, y, y + 2, 1), bedWallCells(head, stand, y, y + 2, 3)]) {
+          const targets = [...supports, ...wall];
+          // No excavating end stone to replace it, no hypothetical shield from fragile solids.
+          if (targets.some(p => !air(read(p)) && !durable(p))) continue;
+          const screen = supportedBedCells(targets, read, 4);
+          if (!screen || screen.length > budget || screen.some(p => p.x === Math.floor(target.x) && p.z === Math.floor(target.z))
+            || screen.some(p => bedEyeReach(stand, p) > 4.5 || [head, foot].some(b => key(b) === key(p)) || boxesOverlap(bedBodyBox(stand), cellBox(p)))) continue;
+          const projected: BedBlockReader = p => screen.some(c => key(c) === key(p))
+            ? { name: 'obsidian', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : read(p);
+          const candidate = { head, foot, stand, supports, screen, selfExposure: 0, headDistance: 0, headDamage: 0, score: 0 };
+          if (landingBedRefusal(candidate, stand, near, projected, health)) continue;
+          const best = near.map(p => ({ distance: distance(p.head, bedCentre(head)),
+            damage: bedDamage(distance(p.head, bedCentre(head)), bedExposure(projected, bedCentre(head), p.headBox, [head, foot])) }))
+            .sort((a, b) => b.damage - a.damage)[0];
+          if (best.damage < 50.75) continue;
+          found.push({ ...candidate, headDistance: best.distance, headDamage: best.damage, score: best.distance + screen.length * 0.05 });
+          if (found.length >= 48) return found.sort((a, b) => a.score - b.score);
+          break;
+        }
+      }
+    }
+  }
+  return found.sort((a, b) => a.score - b.score);
+}
+
 export interface DescentBedLayout { foot: P3; head: P3; stand: P3; screen: P3[]; score: number }
 /** Geometry only: pillow over the OBSERVED pillar, foot/support toward a low operating point.
  * No requirement to reach the moving head or the perched strike window. At most four obsidian. */
@@ -293,7 +391,10 @@ export interface SeatedBedLayout extends DescentBedLayout { supportBlocks: P3[];
  * The foot faces FROM the operating point TOWARD the pillow, matching placeBlock's look at its
  * bottom support. Columns use cobblestone; only the optional two-high screen uses obsidian.
  * This offers destinations; go and the unchanged reflexes still decide whether a walk is possible. */
-export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, budget: number, cobblestoneBudget: number, health = 20, diag?: Record<string, number>, reflexBot?: any, standHints?: P3[]): SeatedBedLayout[] {
+export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, budget: number, cobblestoneBudget: number, health = 20, diag?: Record<string, number>, reflexBot?: any, standHints?: P3[],
+  damageRange = { min: 50, max: Infinity, distance: 2.2 }): SeatedBedLayout[] {
+  if (!Number.isFinite(damageRange.min) || damageRange.min < 0 || !(damageRange.max >= damageRange.min)
+    || !Number.isFinite(damageRange.distance) || damageRange.distance <= 0) return [];
   // Counts are a search tree, not a Cartesian product: every visited node is rejected,
   // expanded into the next stage, or accepted. Thus candidates = rejected + expanded + accepted.
   const add = (name: string) => { if (diag) diag[name] = (diag[name] ?? 0) + 1; };
@@ -325,7 +426,7 @@ export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, bu
         const head = { x, y, z }, headDistance = distance(bedCentre(head), pose.feet);
         if (!air(buildRead(head))) { reject('head_not_air'); continue; }
         if (inDragon(head)) { reject('head_in_dragon'); continue; }
-        if (headDistance > 2.2 || bedDamage(headDistance, 1) < 50) { reject('head_far_or_weak'); continue; }
+        if (headDistance > damageRange.distance || bedDamage(headDistance, 1) < damageRange.min) { reject('head_far_or_weak'); continue; }
         pass('head');
         for (const [dx, dz] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
           visit('foot');
@@ -377,7 +478,7 @@ export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, bu
               const selfDamage = bedSelfEstimate(projected, head, foot, stand).expected;
               if (!Number.isFinite(selfDamage) || selfDamage > 6 || selfDamage + 4 >= health) { reject('self_damage_too_high'); continue; }
               const headDamage = bedDamage(headDistance, bedExposure(projected, bedCentre(head), pose.box, [head, foot]));
-              if (!Number.isFinite(headDamage) || headDamage < 50) { reject('head_damage_low'); continue; }
+              if (!Number.isFinite(headDamage) || headDamage < damageRange.min || headDamage > damageRange.max) { reject('head_damage_low'); continue; }
               add('accepted');
               found.push({ head, foot, stand, supportBlocks, screen, headDistance, headDamage, selfDamage,
                 fireToClear: [head, foot, ...cells].filter(p => bedIsFire(read(p))),

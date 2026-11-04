@@ -4,9 +4,11 @@ import ts from 'typescript';
 import { z } from 'zod';
 import { Vec3 } from 'vec3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../../src/services/minebot/config/MinebotConfig.js', () => ({ CONFIG: {} }));
 import * as geometry from '../../src/services/minebot/utils/dragonBedGeometry.js';
 import * as burst from '../../src/services/minebot/utils/bedBurst.js';
 import * as headModel from '../../src/services/minebot/utils/dragonHeadModel.js';
+import * as landingModel from '../../src/services/minebot/utils/dragonLandingPath.js';
 import { partBox, boxDistance, boxesOverlap, inflate, isPerched, type P3 } from '../../src/services/minebot/utils/dragonParts.js';
 import { dragonHazards } from '../../src/services/minebot/utils/dragonDanger.js';
 import { bedHalves } from '../../src/services/minebot/utils/bedRules.js';
@@ -358,6 +360,14 @@ describe('takeoff evacuation destinations and time reserve', () => {
     expect(bedLeaveReason({ ...early, bedsPlaced: 0, now: 140 })).toBe('leave_time_reserve');
     expect(bedLeaveReason({ ...early, bedsPlaced: 0, phase: 5, now: 100 })).toBe('flame_midpoint');
   });
+  it('uses carried damage rather than a three-bed counter in M2 and keeps the flame/time escape reserve', () => {
+    expect(bedLeaveReason({ ...early, bedsPlaced: 4, bedsDetonated: 4, seatedDamage: 49 })).toBeNull();
+    expect(bedLeaveReason({ ...early, seatedDamage: 50 })).toBeNull();
+    expect(bedLeaveReason({ ...early, bedsPlaced: 1, bedsDetonated: 1, seatedDamage: 50.01 })).toBe('seated_damage_over_50');
+    expect(bedLeaveReason({ ...early, seatedDamage: NaN })).toBe('seated_damage_unknown');
+    expect(bedLeaveReason({ ...early, seatedDamage: 1, phase: 5, now: 100 })).toBe('flame_midpoint');
+    expect(bedLeaveReason({ ...early, seatedDamage: 1, now: 140 })).toBe('leave_time_reserve');
+  });
 });
 
 function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; limit?: number; damage?: number; headDelayMs?: number; beds?: number; obsidian?: number; cobblestone?: number; destroySupports?: boolean } = {}) {
@@ -378,7 +388,8 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
   let handler: ((hands: any[], signal: AbortSignal) => Promise<void | boolean | { ok: boolean; lines: string[]; ms?: number }>) | undefined;
   const clouds: any[] = [];
   actor.entities = { 77: d };
-  const deps = { ...geometry, ...headModel, ...burst, hasActiveSafetyLease: () => false, activeActionCapabilities: () => [] as string[], knockGeometry, dragonEntity: () => d, Vec3, partBox, boxDistance, dragonHazards, isPerched, bedHalves, actor, actorDeaths: 0, disconnected, scenes, KILL_LIMIT_MS: options.limit ?? 10_000,
+  const deps = { ...geometry, ...headModel, ...burst, ...landingModel, boxesOverlap, dragonPhaseOf: (_bot: any, dragon: any) => dragon?.phase ?? null, hasActiveSafetyLease: () => false, activeActionCapabilities: () => [] as string[], knockGeometry, dragonEntity: () => d, Vec3, partBox, boxDistance, dragonHazards, isPerched, bedHalves, actor, actorDeaths: 0, disconnected, scenes, KILL_LIMIT_MS: options.limit ?? 10_000,
+    END: 'execute in minecraft:the_end run',
     trackEndKnocks: (tick: () => number, bedTrials: () => Array<{ detonationTick: number | null }>) => recordEndKnocks(actor, { enabled: false, tick, bedTrials, dragon: () => d, clouds: () => [] }),
     chainDistance: (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z),
     killCell: (v: P3) => p(Math.floor(v.x), Math.floor(v.y), Math.floor(v.z)), killPlaced: new Map(), killBlasts: [],
@@ -442,7 +453,7 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
   };
   const api = new Function(...Object.keys(deps), `${compiled}\nreturn { run: endBedKill, disconnect() { disconnected = 'mock'; }, die() { actorDeaths++; actor.health = 0; actor.emit('death'); } };`)(...Object.values(deps));
   const pump = setInterval(() => actor.emit('physicsTick'), 50);
-  const run = async (keepCrystals = false, raw = false) => { try { return await api.run(keepCrystals, raw); } finally { clearInterval(pump); } };
+  const run = async (keepCrystals = false, raw = false, phase3 = false) => { try { return await api.run(keepCrystals, raw, phase3); } finally { clearInterval(pump); } };
   const rawWrites: Array<{ name: string; data: any; at: number }> = [];
   const enableRaw = (wrongFacing = false) => {
     let serverYaw = 0;
@@ -459,6 +470,7 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
           actor._client.emit('explosion', { center: geometry.bedCentre(existing.head) });
           t.blocks.delete(key(existing.foot)); t.blocks.delete(key(existing.head));
           d.health = Math.max(0, d.health - (options.damage ?? 45));
+          actor._client.emit('entity_metadata', { entityId: 77, metadata: [{ key: 9, value: d.health }] });
           if (d.health === 0) actor.emit('entityDead', { id: 77 });
         } else if (data.cursorY === 1) {
           const cell = { ...data.location, y: data.location.y + 1 };
@@ -1332,16 +1344,151 @@ describe('end_bed_kill scene with mocked I/O', () => {
     expect(source).toContain("const killEntries = ['end_bed_kill',");
     const selection = source.slice(source.indexOf('const invalidKillSelection ='), source.indexOf('for (const name of invalidKillSelection'));
     const choose = new Function('wanted', 'killEntries', 'report', 'exitCode', ts.transpileModule(`${selection}\nreturn invalidKillSelection;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText);
-    const entries = ['end_bed_kill', 'dragon_kill_bed', 'end_bed_crystals_raw', 'end_bed_kill_raw'];
+    const entries = ['end_bed_kill', 'dragon_kill_bed', 'end_bed_crystals_raw', 'end_bed_kill_raw', 'end_bed_crystals_p3'];
     for (const wanted of [['end_bed_kill'], ['enter', 'end_bed_kill']]) expect(choose(wanted, entries, { errors: [] }, 0)).toBe(false);
     for (const wanted of [['enter', 'end_bed_kill', 'bed'], ['end_bed_kill', 'dragon_kill_bed']]) expect(choose(wanted, entries, { errors: [] }, 0)).toBe(true);
-    for (const name of ['end_bed_kill_raw', 'end_bed_crystals_raw']) {
+    for (const name of ['end_bed_kill_raw', 'end_bed_crystals_raw', 'end_bed_crystals_p3']) {
       expect(choose([name], entries, { errors: [] }, 0)).toBe(false);
       expect(choose(['enter', name], entries, { errors: [] }, 0)).toBe(false);
       expect(choose([name, 'bed'], entries, { errors: [] }, 0)).toBe(true);
     }
     expect(source).toContain("wanted.some(name => killEntries.includes(name)) ? path.join(worldDirectory, 'report.json')");
     expect(ts.transpileModule(source, { reportDiagnostics: true, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).diagnostics).toEqual([]);
+  });
+});
+
+function landingRig(options: Parameters<typeof rig>[0] & { landingHeight?: number } = {}) {
+  const { landingHeight = 2, ...rest } = options;
+  const r = rig({ limit: 18_000, beds: 8, obsidian: 16, damage: 55, ...rest });
+  r.deps.ask.mockResolvedValue('Test passed, count: 10');
+  r.enableRaw(); r.actor.player = { ping: 0 }; r.d.phase = 2;
+  r.d.position = new Vec3(r.perch.x, r.perch.y + 3, r.perch.z - 20);
+  for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) r.blocks.set(key(p(Math.floor(r.perch.x) + dx, 69, Math.floor(r.perch.z) + dz)), solid('bedrock'));
+  let ticks = 0, switched = false;
+  const positions = () => {
+    ticks++;
+    if (ticks % 3 === 0) r.actor._client.emit('rel_entity_move', { entityId: 77 });
+  };
+  r.actor.on('physicsTick', positions);
+  r.setHandler(async hands => {
+    if (!switched && hands.some(h => h.do === 'equip' && h.item === 'white_bed')) {
+      switched = true;
+      setTimeout(() => {
+        r.d.phase = 3;
+        r.d.position = new Vec3(r.perch.x, r.perch.y + landingHeight, r.perch.z - 6.5);
+      }, 150);
+    }
+  });
+  const run = async () => { try { return await r.run(true, true, true); } finally { r.actor.removeListener('physicsTick', positions); } };
+  return { ...r, run };
+}
+
+describe('M2 raw observation adapter', () => {
+  it('uses only real position updates, corrects float-degree sync yaw, retains lpVec3 velocity and removes every listener', () => {
+    const observe = new Function('scenes', 'dragonPhaseOf', compiled + '\nreturn observeDragonLanding;')({}, (_bot: any, e: any) => e?.phase ?? null);
+    let tick = 10;
+    const d = { position: p(13, 77, -49), yaw: 7, phase: 3 }, bot = { _client: new EventEmitter(), entities: { 77: d } };
+    const poses: any[] = [], health = vi.fn(), changed = vi.fn();
+    const recorder = observe(bot, () => tick, 77, (s: any) => poses.push(s), health, changed);
+    bot._client.emit('sync_entity_position', { entityId: 88, yaw: 90 }); expect(poses).toEqual([]);
+    bot._client.emit('sync_entity_position', { entityId: 77, yaw: 270, dx: 0, dy: -0.1, dz: 0.2 });
+    expect(poses[0]).toMatchObject({ tick: 10, yaw: -Math.PI / 2, velocity: { x: 0, y: -0.1, z: 0.2 } });
+    tick = 11; bot._client.emit('entity_velocity', { entityId: 77, velocity: { x: 0, y: 0.33, z: 0.2 } });
+    expect(poses[1]).toMatchObject({ tick: 10, velocityTick: 11, velocity: { y: 0.33 } }); // position time is unchanged
+    tick = 13; d.position = p(13, 76.8, -48.4); bot._client.emit('rel_entity_move', { entityId: 77 });
+    expect(poses.at(-1)).toMatchObject({ tick: 13, yaw: -Math.PI / 2, position: d.position });
+    expect(poses.at(-1).velocity).toBeUndefined(); // no stale velocity reused as a fresh observation
+    bot._client.emit('update_time', { age: 1000n });
+    expect(recorder.evidence.timeAnchors[0]).toMatchObject({ tick: 13, age: '1000' });
+    d.phase = 6; bot._client.emit('entity_metadata', { entityId: 77, metadata: [{ key: 9, value: 145 }, { key: 16, value: 6 }] });
+    expect(health).toHaveBeenCalledWith(145, 6); expect(changed).toHaveBeenCalledTimes(1);
+    bot._client.emit('rel_entity_move', { entityId: 77 }); expect(poses).toHaveLength(3);
+    recorder.stop(); expect(bot._client.eventNames()).toEqual([]); expect(d.yaw).toBe(7);
+  });
+});
+
+describe('M2 through the real probe loop with packet observations', () => {
+  it('builds/equips in phase 2, lands four raw hits at detonation+10, records server HP and cleans up listeners', async () => {
+    vi.useFakeTimers(); const r = landingRig();
+    const running = r.run(); await vi.advanceTimersByTimeAsync(19_000); const out = await running;
+    expect(out.error).toBeUndefined();
+    expect(out.landingPreparation[0]?.reason).toBe('ready_in_phase2');
+    expect(out.landing).toHaveLength(1);
+    const l = out.landing[0];
+    expect(l.readyBeforePhase3).toBe(true);
+    expect(l.shots).toHaveLength(4);
+    expect(l.shots.map((s: any) => s.phaseAtUse)).toEqual([3, 3, 3, 3]);
+    expect(l.shots.every((s: any) => s.burst.placeToUseTicks === 0)).toBe(true);
+    expect(l.shots.map((s: any) => s.serverDragonLoss)).toEqual([55, 55, 55, 35]);
+    expect(l.shots.slice(1).map((s: any) => s.useTick - s.previousDetonationTick)).toEqual([10, 10, 10]);
+    expect(l.shots.every((s: any) => s.prediction.self.exposure === 0)).toBe(true);
+    expect(l.predictions.length).toBeGreaterThan(0); expect(l.errors.length).toBeGreaterThan(0);
+    expect(l.pushExtendedLanding).toBeNull();
+    expect(out.operationBudget.bedsPerPerch).toBeUndefined();
+    expect(r.calls.flatMap(c => c.hands).some(h => h.do === 'attack')).toBe(false);
+    expect(r.actor._client.listenerCount('rel_entity_move')).toBe(0);
+    expect(r.actor._client.listenerCount('entity_metadata')).toBe(0);
+    expect(out.bossVerified).toBe(true); expect(out.ok).toBe(true); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('keeps a phase-3 arrival without completed phase-2 construction silent and leaves using the existing go', async () => {
+    vi.useFakeTimers(); const r = landingRig({ limit: 2500 }); r.d.phase = 3;
+    r.d.position = new Vec3(r.perch.x, r.perch.y + 2, r.perch.z - 6.5);
+    r.actor.entity.position = new Vec3(r.perch.x + 2, r.perch.y - 4, r.perch.z);
+    const running = r.run(); await vi.advanceTimersByTimeAsync(3000); const out = await running;
+    expect(out.error).toBeUndefined(); expect(out.landing[0].readyBeforePhase3).toBe(false);
+    expect(out.detonations).toBe(0); expect(r.rawWrites.some(w => w.name === 'block_place')).toBe(false);
+    expect(out.actions.some((a: any) => a.label === 'leave_on_takeoff')).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('selects five instead of four when the forecast plus error exceeds 2.07 m and keeps every +10 slot', async () => {
+    vi.useFakeTimers(); const r = landingRig({ landingHeight: 2.5, damage: 42 });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(19_000); const out = await running;
+    expect(out.error).toBeUndefined(); expect(out.landing[0].trainBeds).toBe(5);
+    expect(out.landing[0].shots).toHaveLength(5);
+    expect(out.landing[0].shots.slice(1).map((s: any) => s.useTick - s.previousDetonationTick)).toEqual([10, 10, 10, 10]);
+    expect(out.ok).toBe(true); expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(['fire', 'reflex', 'phase6'] as const)('stops the landing train after its first hit on %s', async change => {
+    vi.useFakeTimers(); const r = landingRig({ limit: 12_000 });
+    let interrupted = false;
+    r.actor._client.on('entity_metadata', (packet: any) => {
+      if (interrupted || !packet.metadata?.some((m: any) => m.key === 9 && m.value < 200)) return;
+      interrupted = true;
+      if (change === 'fire') r.blocks.set(key(p(Math.floor(r.actor.entity.position.x) + 1, r.actor.entity.position.y, Math.floor(r.actor.entity.position.z))), { name: 'fire' });
+      if (change === 'reflex') r.actor.floorReflexes = { busy: true };
+      if (change === 'phase6') { r.d.phase = 6; r.actor._client.emit('entity_metadata', { entityId: 77, metadata: [{ key: 16, value: 6 }] }); }
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(13_000); const out = await running;
+    expect(out.error).toBeUndefined(); expect(out.landing[0].shots).toHaveLength(1);
+    expect(r.rawWrites.filter(w => w.name === 'block_place')).toHaveLength(2);
+    if (change === 'phase6') {
+      expect(out.transitions.some((p: any) => p.phase === 6)).toBe(true);
+      expect(out.landing[0].nextPhase).toBe(6);
+      expect(out.landing[0].shots[0].burst.observationInterrupted).toBe('phase_metadata_changed');
+      expect(out.seatedBudget).toEqual([]); // the phase-3 hit is not a seated hit just because HP arrived in phase 6
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('refuses a server count other than ten without arming the landing recorder', async () => {
+    vi.useFakeTimers(); const r = landingRig(); r.deps.ask.mockResolvedValue('Test passed, count: 9');
+    await expect(r.run()).rejects.toThrow('ten_server_counted_crystals');
+    expect(r.actor._client.listenerCount('rel_entity_move')).toBe(0); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('switches from landing to the seated cumulative budget through phase 6 -> 7', async () => {
+    vi.useFakeTimers(); const r = landingRig({ limit: 13_000 }); let switched = false;
+    r.actor._client.on('entity_metadata', (packet: any) => {
+      if (switched || !packet.metadata?.some((m: any) => m.key === 9 && m.value < 200)) return;
+      switched = true; r.d.phase = 6;
+      r.actor._client.emit('entity_metadata', { entityId: 77, metadata: [{ key: 16, value: 6 }] });
+      setTimeout(() => { r.d.phase = 7; r.actor._client.emit('entity_metadata', { entityId: 77, metadata: [{ key: 16, value: 7 }] }); }, 500);
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(14_000); const out = await running;
+    expect(out.error).toBeUndefined(); expect(out.landing[0].shots).toHaveLength(1);
+    expect(out.perches.some((p: any) => p.kind === 'seated' && p.plannedSeatedDamage)).toBe(true);
+    expect(out.landing[0].nextPhase).toBe(6);
+    expect(out.bedTrials.filter((t: any) => t.useRequested).every((t: any) => [3, 5, 7].includes(t.phaseAtUse))).toBe(true);
+    expect(out.operationBudget.seatedDamageLimit).toBe(50); expect(out.operationBudget.bedsPerPerch).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

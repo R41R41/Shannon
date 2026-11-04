@@ -1516,3 +1516,66 @@ node tests/unit/checkEndBedKill.cjs は変更した4 TS root（**scripts/minecra
 同一接続の複数packetを送信順にサーバーが処理し、同じserver tickで設置に続いて使用を受理すること、post-positionの使用がサーバーのP(N)で判定されることを前提にする。同じclient tickに書けたことは同じserver tickの処理保証ではない。explosionの時刻も受信したclient physicsTickで、server gameTimeとの同期はない。したがって10tickの実server間隔、ネットワーク遅延／catch-up時のずれ、Paper等の受付差、block更新の圧縮、実際の向き不一致率はS1ラボで測る。実測前に討伐成功の証拠とは扱わない。
 
 現在の窓は従来どおりphase7／5で、phase3への拡張、M1頭モデルとの接続、1サイクル戦略はこのM3に含めない。反射／落下救済／危険判定／自傷上限を緩めず、禁止ファイルとM1節・lab scriptsには変更しない。作業・検証は指定コピー内だけ。ラボ・VM・外部資料更新・本体・DB・commit・pushは行わない。
+
+## M2：結晶10本を残す phase 3 のベッド連打（2026-11-05、ラボ未実施）
+
+### 成立に必要な条件
+
+頭の足元から枕中心までの予測距離に、予測誤差の余裕を加えて、4発なら2.07 m、5発なら3.22 m以内であること。E=1、200 HP、10 tickごとに最大1 HP回復という資料の条件で、それぞれ最初から最後まで30／40 server tickの命中窓が必要になる。現実のphase 3がその長さ続くことも、爆風で延びることも、今回のモック検証だけでは確定しない。
+
+実装の最小誤差余裕は**仮の0.5 m**。したがって初期の発射条件は予測距離1.57／2.72 m以内となる。同じ先読み幅について直近60 receipt tickの観測残差＋0.35 mが大きければ、さらに余裕を増やす。この値は精度保証ではない。M1のphase 5の距離残差をphase 3の3次元誤差保証として使わない。
+
+待ち位置は、観測した泉の中央柱から水平4 m以内にある、岩盤または黒曜石の床の上。空いた2セル、火のない周囲、目から両ベッドセルと設置クリック面まで4.5 m以内、45本すべての露出線が岩盤／黒曜石で遮られること、頭・首の接触箱、胴の箱、翼の押し箱との非重複を要求する。E=0でも軽減前1ダメージは残る。自傷見積り6以下かつ見積り＋4＜現在体力の既存上限は維持する。
+
+**架空の平行移動した泉ではこの条件の候補を構成できた。実際の泉で準備できるかは未検証。** 見つからない場合、phase 2で準備を終えられない場合、届く経路を既存goが拒否する場合は起爆しない。
+
+### 場面と予測
+
+`end_bed_crystals_p3`をscenes／killEntries／invalidKillSelectionへ追加。単独指定またはenterに続く単独指定のみ。既存の隔離ラボ選択を使い、新しいenvスイッチやhandは追加していない。開始前と終了後にoperatorの読取り専用`execute if entity @e[type=minecraft:end_crystal]`で10本を照合する。応答のcountが読めなくても拒否する。実行中に観測したcrystals.goneが増えれば停止する。結晶破壊／剣への代替はこの場面で使わない。
+
+純関数`utils/dragonLandingPath.ts`の入力は、実際の位置packetごとのposition／yaw／phaseと、新鮮なvelocity。中央柱の全上方セルが読めた場合だけ、最上段のmotion-blockingセル＋1を目標とする。腕や壁を目標の高さに足さない。M2は中央列に新しい黒曜石を置かない。各packetの間をtickで補間し、historyのH0／H5／H10とyaw差からp／hy／yRotAを求め、`dragonHeadVanilla`で1〜20 tick先の頭を作る。
+
+phase 2は観測した接線方向、phase 3は観測速度を使い中央列へ水平に向きを寄せる局所予測。未知の接近経路nodeやバニラAI全体を再現するものではない。上向きの速度を目標高で切り捨てず、位置packetの間に来たvelocityはその受信時刻から使う。velocityだけで新しい本体位置を観測した扱いにはしない。位置の鮮度が3 tickを超える、履歴が不足する、間隔が6 tickを超える場合は発射用予測を作らない。
+
+生packetのadapterはprobe内だけ。syncのfloat度yawはこのadapterの値だけをラジアンへ変換し、共有entityやnode_modulesを書き換えない。通常のyawはbyte変換。1.21.11のlpVec3はblocks/tickのまま使う。physicsTickで同じ本体位置を観測履歴へ重複登録しない。
+
+### 準備・連打・着座への切替
+
+phase 2中、観測した中央柱と接近側から、泉の近くの頭の通る空間を仮定したcorridorを作る。これは日時付きの予測とは分ける。`landingBedLayouts`が頭の線から2 m以内の枕と低い待ち位置を探索する。同じ待ち位置から使える最大5候補を、建築セルの和集合と持ち物を照合して残す。新しい腕・支え・壁はすべて黒曜石。エンドストーンや丸石を盾に数えず、既存の壊れやすい固体を掘って置換もしない。
+
+既存goで移動し、支持面を実際に確認しながらplace handで建て、各セルのobsidianを読戻してからbedを装備する。すべてphase 2の間に完了したreadyTickが必要。現在の竜の箱・火・反射は施工中も拒否条件になる。途中でphase 3へ移った建築を完成扱いにしない。
+
+phase 3では、最新の既知pingから`1 + ceil(ping/50)`を先読み幅とし、そのtickと次のtickの両方について距離・頭の露出・自傷・箱を再検査する。ping不明、20 tick以内に収まらない場合は送らない。M3のmove内のplayer_input→look→block_place×2を再利用する。raw pairにawaitや建築を挟まない。静止中でも既存のpost-position moveを使い、再装備は起爆確認後の間に行う。
+
+2発目以降は**前のexplosion受信からちょうど10 receipt tick**のslotだけを許す。距離条件が外れたslotを後から埋めない。新しい起爆の確認とserver HPの減少確認なしには繰り返さない。ベッドの両セルが実際に空気で、黒曜石の支え／壁が残ることも毎回確認する。火、立ち位置のずれ、支持消失、既存の反射／actionによる身体使用、phase変更は拒否／離脱につながる。phase metadataが到着すれば次のphysicsTickを待たず送信待ちを中断する。
+
+phase 6では着座側へ切り替え、頭の向きがまだ変わる間は配置しない。phase 7／5では既存の配置／離脱経路を使い、`bedsPerPerch`の代わりに累計のserver HP損失で予算を管理する。回復で予算を減らさず、50以下の持ち越しを保つ。同時回復1 HPが隠れる可能性を上限側に足す。下限側の累計が50を超えた場合だけバニラの累計resetを確定する。可能なら残予算以下の40〜50の一撃を選び、次は再観測した予算で配置を選び直す。強い一撃で50を越える見込み、体力応答不明、上限側超過なら離脱する。
+
+着座の理論上限は約121。炎4回完了／scanning 100 tickによる離陸もphase変更として扱い、既存の14 m・翼の外へのgo、炎の中ほどでの退避と100 tickの余裕は維持する。fallClutch／floorReflexes／dragonDangerなど禁止ファイルを変更していない。
+
+### 記録と測定の限界
+
+- `landing[]`：phase 3ごとのstartTick／endTick／ticks、目標、phase 2の準備、候補の枕、予測列、観測から作った頭、同じtickでのerrors、shots、healing、次のphase。
+- `errors[]`：予測したtickを後着の位置packetのtickと照合し、頭の差の各軸／距離を保存する。aheadは発行からの幅、observationLeadは元packetからの幅。観測側も同じ頭の式であり、独立したサーバー部位座標の正解ではない。packetの来ないtickを実測扱いしない。
+- `shots[]`：M3 burstの送信列・確認度に加え、枕／足、先読みと誤差余裕、実際の立ち位置の露出、起爆tickとgapTicks、server HP損失、E=1で逆算したdと同時1回復を仮定したd。致死／overkillで体力の減りが切られた場合はdをnullにする。
+- `healing[]`／healthTimeline：server metadata 9の正の体力変化。爆発と同じtickで相殺された回復量は別途観測できない。遅いoperator体力queryを連打の拍子には使わない。
+- 各起爆後20 tickまでの本体の観測上昇量、phase 3の長さと入口での直線的な降下時間見積りを分ける。`pushExtendedLanding`は対照ラボなしではnull。時間が長いだけで爆風の因果効果を断定しない。
+- `landingPackets`：位置／速度packetとupdate_timeのage anchor。時刻はclient receipt tick。`trainEvidence.serverTickCadenceVerified=false`であり、10 server tickの実証とは区別する。
+
+20 tickの先読みだけでは、4発30 tick／5発40 tickの窓全体を事前保証できない。各起爆後に新たな速度と位置で予測を更新し、次のslotを承認する。phase 3の長さ、着地直前のyRotA、爆発直後の軌道、packet遅延／catch-up、サーバー版による違いは残る。
+
+### オフライン検証とS1の最初の測定
+
+Node v24.21.0。関係5試験、**262件成功**（minecraftEndBedKill 172＋minecraftBedBurst 27＋minecraftDragonLandingPath 10＋minecraftDragonHeadVanilla 31＋minecraftDragonHeadModel 22）。サービス設定moduleのimportを試験でmockし、共有env／DB／LLM／本体は使用していない。probe全体を含む対象8 TS rootは`node tests/unit/checkEndBedKill.cjs`で通常のsemantic検査を行い、診断0件。依存先自身や全backendの型検査ではない。
+
+試験は、中央列の高さと腕の非干渉、3 tick補間、直線接近、1〜20 tick予測、上向き速度の時刻、残差照合、E=0・4.5 m・火・未観測隣接・実位置と箱の拒否、4発／5発の10 tick列、施工完了前のphase 3、phase metadataによる即時停止、反射所有、結晶数の拒否、累計50の境界と既存離脱余裕を対象にする。
+
+S1がラボ再開後に最初に測る順番：
+
+1. 自然な泉でphase 2のうちに候補が見つかり、既存go／placeで施工できるか。立ち位置の実際の45線、火、支持の残存、反射での移動を確認する。
+2. phase 3の1〜20 tick先の残差を、特に実際のpingに相当する先読み幅で測る。HPからのdとも突き合わせ、誤差余裕0.5 mを支持できるか判定する。
+3. 4／5発の各server HP損失と回復、サーバー側のgameTimeによる本当の10 tick間隔、同tick設置→使用、受信とのずれを測る。
+4. 同じ進入条件の無起爆対照と比較し、起爆ごとの上昇量、phase 3が30／40 tick続くか、着地が実際に延びるかを判定する。
+5. phase 6／7への切替と累計持ち越し、3種類の離陸条件から翼の外へ退避できるかを測る。
+
+この変更ではラボ／VM／実Bot／DB／外部資料の更新・commit・pushは行っていない。討伐成功率や実機で4〜5発が成立したという証拠はまだない。
