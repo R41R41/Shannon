@@ -218,11 +218,15 @@ export function hazardAtFeet(bot: any, x: number, y: number, z: number): string 
  * The dig hand puts a fire out in 0.2 s (S2 lab, 2026-11-02: `dig` at the fire's cell, the block was air after), so the line says where it is.
  */
 export function fireNear(bot: any, x: number, y: number, z: number): Cell | null {
+  return firesNear(bot, x, y, z)[0] ?? null;
+}
+function firesNear(bot: any, x: number, y: number, z: number): Cell[] {
+  const fires: Cell[] = [];
   for (const [dx, dy, dz] of [[0, 0, 0], [0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1]]) {
     const name = nameAt(bot, x + dx, y + dy, z + dz);
-    if (name === 'fire' || name === 'soul_fire') return { x: x + dx, y: y + dy, z: z + dz };
+    if (name === 'fire' || name === 'soul_fire') fires.push({ x: x + dx, y: y + dy, z: z + dz });
   }
-  return null;
+  return fires;
 }
 /** The same, reading the cells through `read` (the route search's own reader, which keeps what it has read during a search). */
 export function hazardAtFeetWith(read: (x: number, y: number, z: number) => string | null, x: number, y: number, z: number): string | null {
@@ -716,8 +720,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
 
   // ---- how a line ends (the contract's result lines) ----
   const packNote = fullPackWatch(bot);
-  /** Fires this go put out beside or in its place (a blaze camp's cells burn again and again). */
-  let doused = 0;
+  /** Fires this go put out beside or in its place or way (a blaze camp's cells burn again and again). */
+  let doused = 0, fireRedraws = 0;
   const tail = () => `${cellText(feetCell(bot) ?? start)} 道 ${state.steps} 歩・掘 ${state.dug}・置 ${state.placed}・引き直し ${state.redraws} 回`;
   const fail = (code: string, reason: string, hint: string): StepOutcome => {
     const at = feetCell(bot) ?? start;
@@ -1044,13 +1048,45 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       '10m 以内の中継点へ go か、dig と walk の階段・縦穴で');
   };
 
-  const explain = async (goal: any): Promise<StepOutcome> => {
+  // Raid4 (2026-11-05): fireballs shut the way to cover. Only fire on the lifted way is put out; the next drawing keeps every hazard rule.
+  const douseWay = async (found: Plan): Promise<StepOutcome | null> => {
+    const blocked = () => fail('lava', '道の先が溶岩・火・マグマ・サボテンなどで、避けると道が無い', '別の行き先か、別の側から');
+    const way = found.path.map(node => nodeCell(node));
+    const withoutFire = (x: number, y: number, z: number) => {
+      const name = nameAt(bot, x, y, z);
+      return name === 'fire' || name === 'soul_fire' ? 'air' : name;
+    };
+    // Read again with just fire absent: a fire must not hide lava or another hazard in the same cell's surroundings.
+    if (way.some(cell => hazardAtFeetWith(withoutFire, cell.x, cell.y, cell.z))) return blocked();
+    const clouds = lyingCloudZones(bot);
+    if (!clouds.some(zone => cloudReaches(zone.centre, zone.radius, bot.entity.position, 0))
+      && way.some(cell => cloudZoneAtCell(clouds, cell.x, cell.y, cell.z))) return blocked();
+    const fires = new Map<string, Cell>();
+    for (const cell of way) for (const fire of firesNear(bot, cell.x, cell.y, cell.z)) fires.set(keyOf(fire), fire);
+    if (!fires.size) return blocked();
+    const before = doused;
+    if (fireRedraws < 2) {
+      for (const fire of fires.values()) {
+        if (doused >= 8 || ctx.stop?.aborted) break;
+        const name = nameAt(bot, fire.x, fire.y, fire.z);
+        if ((name !== 'fire' && name !== 'soul_fire') || distanceTo(bot, fire) > 4.2) continue;
+        manualBusy = true;
+        try { const out = await dig(ctx, { at: [fire], collect: false }); if (out.ok) doused++; }
+        finally { manualBusy = false; }
+      }
+    }
+    if (doused > before) { fireRedraws++; return null; }
+    const fire = [...fires.values()].find(cell => distanceTo(bot, cell) > 4.2) ?? [...fires.values()][0]!;
+    return fail('lava', `火 ${cellText(fire)} が道を塞いでいる（${distanceTo(bot, fire) > 4.2 ? '届かない' : '消しても道が開かない'}）`, '別の行き先か、別の側から');
+  };
+
+  const explain = async (goal: any): Promise<StepOutcome | null> => {
     const ms = Math.min(args.searchMs ?? 2500, Math.max(300, timeLeft() - 500));
     const shown = (map: Map<string, number>) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${name}×${count}`).join('・');
     const ignored = rule.ignored.length ? `（無視した canDig: ${rule.ignored.slice(0, 3).join('・')}）` : '';
-    const lifts: Array<[Relax, (found: Plan) => StepOutcome]> = [
+    const lifts: Array<[Relax, (found: Plan) => StepOutcome | Promise<StepOutcome | null>]> = [
       ...(lyingCloudZones(bot).length ? [[{ dragon: true }, () => fail('dead_end', '道の先が竜の息の雲の中で、避けると道が無い（雲は約 30 秒で消える）', '雲が消える（観測の dragonBreath が空になる）まで高い足場で待つか、別の側から')] as [Relax, (found: Plan) => StepOutcome]] : []),
-      [{ hazards: true }, () => fail('lava', '道の先が溶岩・火・マグマ・サボテンなどで、避けると道が無い', '別の行き先か、別の側から')],
+      [{ hazards: true }, douseWay],
       ...(state.dug >= limits.maxDig || state.placed >= limits.maxPlace ? [[{ limits: true }, () => state.dug >= limits.maxDig
         ? fail('limit_dig', `掘る数の上限 ${limits.maxDig} に着いた（この先にも掘る所がある）`, 'maxDig を増やすか、別の道を')
         : fail('limit_place', `置く数の上限 ${limits.maxPlace} に着いた（この先にも置く所がある）`, 'maxPlace を増やすか、別の道を')] as [Relax, (found: Plan) => StepOutcome]] : []),
@@ -1340,7 +1376,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         }
         return searchedOutStop(found, aim);
       }
-      return await explain(finalGoal);
+      const reason = await explain(finalGoal);
+      if (reason) return reason;
+      state.redraws++;
     }
   } catch (error) {
     // The act's stop, the action's abort, a reflex: the body lets go of everything and the stop goes on.
