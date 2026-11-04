@@ -22,6 +22,11 @@
 #      at most 2 GB (minecraft-isolated-lab.mjs, seedscan.py), and a lab is stopped as soon as it is not used.
 #   7. prod.lock: whoever uses shannon-home (a deploy restart, a real run, trials.py) holds `flock ~/.cache/minebot-lab/prod.lock`; the lab stays off
 #      while it is held (the same reason as rule 3, and exact where rule 3 only looks at the database).
+#   9. First come, first served (coordinator 2026-11-05 02:00): every start takes a ticket in $SCRATCH/slot.queue (one line per waiting pid,
+#      the order of the lines is the order) and tries a slot only while it is among the first <free slots> live tickets. Without it the
+#      waiter whose 5-second poll happened to come first won (S7 waited 1 h 15 min behind later starts). The coordinator's priority order
+#      is put on the queue by slot-handoff.py, which moves the chosen waiter's line to the front. Waiters of an older copy of this
+#      script take no ticket and still race; they go as they end. LAB_SLOT_QUEUE=0 skips the tickets.
 #
 # Exit status: the command's own; 3 = the slot is taken, 4 = a production run is active or prod.lock is held, 5 = another lab is listening,
 # 6 = too little disk or memory, 2 = usage.
@@ -31,7 +36,7 @@ COUNT=${LAB_SLOT_COUNT:-1}
 # The PC (its WSL has the Windows PowerShell): at most LAB_SLOT_MAX (2) labs at a time, whatever the caller asks for (coordinator 2026-11-02 21:46: Windows had 1-2 GB free with three labs and tests running).
 if [ -x /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe ] && [ "$COUNT" -gt "${LAB_SLOT_MAX:-2}" ]; then COUNT=${LAB_SLOT_MAX:-2}; fi
 DB=${LAB_SLOT_PRODUCTION_DB:-$HOME/shannon-ios-data/shannon.sqlite}
-HANDS_LOCK=/tmp/hands-live.lock
+HANDS_LOCK=${LAB_SLOT_HANDS_LOCK:-/tmp/hands-live.lock}   # the override is for a test in a private scratch
 PROD_LOCK=${LAB_SLOT_PROD_LOCK:-$SCRATCH/prod.lock}
 WIN_PS=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
 mkdir -p "$SCRATCH"
@@ -57,6 +62,35 @@ prod_lock_held() { [ -e "$PROD_LOCK" ] && ! (exec 7>"$PROD_LOCK"; flock -n 7); }
 
 PORT_BASE=${LAB_PORT_BASE:-${LAB_PORT_FROM:-25590}}     # slot i uses port PORT_BASE + i (exported as LAB_PORT; the VM: 25590 + slot)
 port_listening() { ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":$1\$"; }
+
+slot_lock() { if [ "$1" -gt 0 ]; then echo "$SCRATCH/slot.$1.lock"; else echo "$SCRATCH/slot.lock"; fi; }
+
+free_slots() {      # slots nobody holds and whose port nobody listens to
+  local i n=0
+  for i in $(seq 0 $((COUNT - 1))); do
+    (exec 7>"$(slot_lock "$i")"; flock -n 7) && ! port_listening $((PORT_BASE + i)) && n=$((n + 1))
+  done
+  echo "$n"
+}
+
+QUEUE="$SCRATCH/slot.queue"
+queue() {   # rule 9. queue join | leave | turn <free slots>   (turn: 0 while this pid is among the first <free slots> live tickets)
+  [ "${LAB_SLOT_QUEUE:-1}" = 1 ] || return 0
+  local op=$1 line pid live="" pos=0 me=-1 rc=0
+  exec 9>"$QUEUE.lock"; flock 9
+  touch "$QUEUE"
+  while IFS= read -r line; do
+    pid=${line#pid=}; pid=${pid%% *}
+    [ -n "$pid" ] && [ -d "/proc/$pid" ] || continue     # a waiter that is gone (kill -0 cannot see another user's pid)
+    if [ "$pid" = "$$" ]; then [ "$op" = leave ] && continue; me=$pos; fi
+    live+="$line"$'\n'; pos=$((pos + 1))
+  done < "$QUEUE"
+  if [ "$op" != leave ] && [ "$me" -lt 0 ]; then live+="pid=$$ since=$(date +%s) label=$QLABEL"$'\n'; me=$pos; fi
+  printf '%s' "$live" > "$QUEUE.tmp" && mv -f "$QUEUE.tmp" "$QUEUE"
+  if [ "$op" = turn ] && [ "$me" -ge "${2:-1}" ]; then rc=1; fi
+  exec 9>&-
+  return $rc
+}
 
 lab_listeners() {   # ports 25570-25599 with a listener
   ss -ltn 2>/dev/null | awk '{print $4}' | sed -n 's/.*:\(255[7-9][0-9]\)$/\1/p' | sort -u | tr '\n' ' '
@@ -94,6 +128,9 @@ status() {
     wp=${w##*.}
     if kill -0 "$wp" 2>/dev/null; then echo "waiting: $(sed 's/since=\([0-9]*\)/since=\1/' "$w" | cut -c1-220)  ($(( ($(date +%s) - $(sed -n 's/.*since=\([0-9]*\).*/\1/p' "$w")) / 60 )) min)"; else rm -f "$w"; fi
   done
+  # rule 9's tickets, in their order (a pid that is gone is shown but no longer counts)
+  n=0; while IFS= read -r line; do n=$((n + 1)); qp=${line#pid=}; qp=${qp%% *}
+    echo "ticket $n: $line$([ -d "/proc/$qp" ] || echo '  (gone)')"; done < <(cat "$QUEUE" 2>/dev/null)
   # a tmux lab session of the minebot-lab socket whose port no slot holds: left over
   held_ports=" $(cat "$SCRATCH"/slot*.holder 2>/dev/null | sed -n 's/.* port=\([0-9]*\) .*/\1/p' | tr '\n' ' ')"
   for s in $(tmux -L minebot-lab ls 2>/dev/null | sed -n 's/^\(codex-progressive-lab-[0-9]*\):.*/\1/p'); do
@@ -126,6 +163,9 @@ if [ -n "$problem" ]; then echo "lab-slot: $problem; the lab does not start (rul
 
 taken=""; why=""
 deadline=$(( $(date +%s) + WAIT ))
+QLABEL=${LABEL:-$1}
+trap 'queue leave; rm -f "$WAITING"' EXIT
+queue join
 while :; do
   if [ "$ALLOW_RUN" -ne 1 ]; then       # rules 3 and 7 are looked at again on every round: a run may start while we wait, and then we leave
     active=$(run_active)
@@ -134,6 +174,8 @@ while :; do
   fi
   if [ -e "$HANDS_LOCK" ] && ! (exec 7>"$HANDS_LOCK"; flock -n 7); then
     why="$HANDS_LOCK is held by another lab run (rule 2)"
+  elif free=$(free_slots); [ "$free" -gt 0 ] && ! queue turn "$free"; then
+    why="not my turn yet in $QUEUE (rule 9: first come, first served; lab-slot.sh status shows the tickets)"
   else
     why="every slot is held: $(pgrep -af 'flock.*slot' | head -1 | cut -c1-200)"
     for i in $(seq 0 $((COUNT - 1))); do
@@ -153,6 +195,7 @@ while :; do
   sleep 5
 done
 rm -f "$WAITING"
+queue leave
 lock="$SCRATCH/slot.lock"; [ "$taken" -gt 0 ] && lock="$SCRATCH/slot.$taken.lock"
 
 # a lab that is not ours may still be listening (left over by a crashed run): with the only slot in hand it is certain
