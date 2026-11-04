@@ -410,10 +410,13 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     hideoutNote = '';
     sample();
     const health = Number(bot.health ?? 0), food = Number(bot.food ?? 20);
-    const foods = ((bot.inventory?.items?.() ?? []) as Array<{ name: string; count?: number }>).filter(item => itemFoodPoints(bot, item.name) > 0 && !NEVER_EAT.has(item.name))
-      .map(item => `${item.name} ${item.count ?? 1}`);
+    const items = (bot.inventory?.items?.() ?? []) as Array<{ name: string; count?: number }>;
+    const foods = items.filter(item => itemFoodPoints(bot, item.name) > 0 && !NEVER_EAT.has(item.name)).map(item => `${item.name} ${item.count ?? 1}`);
+    // The rods as the head's gate counts them (a rod, or two powders or two eyes): with enough of them the way back to the camp cell is not the head's to take.
+    const held = (name: string) => items.filter(item => item.name === name).reduce((sum, item) => sum + (item.count ?? 1), 0);
+    const rods = held('blaze_rod') + (held('blaze_powder') + held('ender_eye')) / 2;
     // The facts only: whether the health mends here is the hunger's (18 or more), which the planner reads to choose between eating, waiting and going back.
-    return fail('retreat', `体力 ${r1(hp0)}→${r1(health)}・満腹度 ${food}（${food >= 18 ? '体力が戻る' : '18 未満では体力が戻らない'}） 退いた先 (${spot.x},${spot.y},${spot.z}) は湧き場から見えない（${spot.steps}歩）に着いた・食べ物 ${foods.length ? foods.join('・') : 'なし'}。食べる・待つ・野営マスへ戻るは頭が選ぶ（戻る前に probe kind=around で blaze の数を見る）`);
+    return fail('retreat', `体力 ${r1(hp0)}→${r1(health)}・満腹度 ${food}（${food >= 18 ? '体力が戻る' : '18 未満では体力が戻らない'}） 退いた先 (${spot.x},${spot.y},${spot.z}) は湧き場から見えない（${spot.steps}歩）に着いた・食べ物 ${foods.length ? foods.join('・') : 'なし'}・ロッド換算 ${rods}。食べる・待つ・野営マスへ戻るは頭が選ぶ（戻る前に probe kind=around で blaze の数を見る）`);
   }
 
   /** Below retreatHp: gets out of reach; eats what helps, with a gap, and goes back in when the health is back; else leaves for good. Null: fight on. */

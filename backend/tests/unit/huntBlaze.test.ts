@@ -348,6 +348,7 @@ describe('fight on a blaze: below the retreat health, to a hideout', () => {
     scanSpawner(); walkTo();
     vi.mocked(eat).mockClear();
     const camp = setUp(7);
+    (camp.bot.inventory.slots as any[])[21] = itemOf('blaze_rod', 5, 21); (camp.bot.inventory.slots as any[])[22] = itemOf('blaze_powder', 3, 22);
     healBy(camp, 6);
     const { json } = await act(camp, [{ do: 'fight', target: 'blaze', seconds: 20 }]);
     camp.stop();
@@ -356,6 +357,7 @@ describe('fight on a blaze: below the retreat health, to a hideout', () => {
     expect(json.ok).toBe(false);
     expect(line).toContain('retreat');
     expect(line).toMatch(/体力 7→7・満腹度 14（18 未満では体力が戻らない） 退いた先 \(\d+,64,-?\d+\) は湧き場から見えない（\d+歩）に着いた・食べ物 cooked_beef 10/u);
+    expect(line).toContain('ロッド換算 6.5。');
     expect(line).toContain('頭が選ぶ');
     const goal = vi.mocked(go).mock.calls.at(-1)![1].goals[0];
     expect(goal.x).toBeGreaterThanOrEqual(4);
