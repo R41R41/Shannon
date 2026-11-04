@@ -2,7 +2,8 @@ import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { buildMovements } from '../setMovements.js';
 import { beginEngagement } from '../engagement.js';
-import { markHeadCombat } from '../combatOwner.js';
+import { HEAD_COMBAT_YIELD_HEALTH, markHeadCombat } from '../combatOwner.js';
+import { createLogger } from '../../../../utils/logger.js';
 import { combatFootingRisk } from '../combatFooting.js';
 import { actionSignal, nativeActionHost } from '../../execution/ActionExecution.js';
 import { bodyReader, feetCell, type Cell } from '../localMap.js';
@@ -28,6 +29,7 @@ import { scanLoadedBlocks } from '../loadedBlockScan.js';
 import { go } from './go.js';
 
 const { goals } = pathfinder;
+const log = createLogger('Minebot:Fight');
 
 /**
  * fight (run 39, 2026-10-26; the hands contract, docs/minecraft-hands-2026-10.md): a fight the planner chose, and the small work of it left to the body.
@@ -243,7 +245,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   /** The shield's wear since the fight began (a blocked fireball costs it 6 of its 336), or that it broke; across swaps for a spare, what each broken one had left counts as worn. */
   let retiredWear = 0, spares = 0, spareTriedAt = 0;
   const shieldCounts0 = { caught: bot.shieldBlock?.shieldCaught ?? 0, missed: bot.shieldBlock?.shieldMissed ?? 0 };
-  // Status 29 confirms a block, but carries no source: these catches include attacks of unknown kind (shieldBlock).
+  // 受けの成功音（古い版はstatus 29）に攻撃元は無い。火の玉と推測せず種別不明で伝える（shieldBlock）。
   const shieldCounts = () => hovering && bot.shieldBlock ? `・盾で受けた ${bot.shieldBlock.shieldCaught - shieldCounts0.caught || 0}（種別不明）・受け損ね ${bot.shieldBlock.shieldMissed - shieldCounts0.missed || 0}` : '';
   const wear = () => {
     const now = shieldState(bot);
@@ -324,11 +326,22 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   // Health packets wake it at once; physicsTick also covers a health change without that event, including during a sortie or a shield wait.
   const RETREAT = 'fight-retreat';
   let fightingStop: AbortController | null = null, fightingCtx = ctx;
+  const actSignal = actionSignal(bot);
+  let retreatWait = '';
   const retreatDue = () => retreatHp !== null && Number(bot.health ?? 20) > 0 && Number(bot.health ?? 20) < retreatHp;
   const checkRetreat = () => {
-    if (!fightingStop || fightingStop.signal.aborted || ctx.stop.aborted || actionSignal(bot)?.aborted || dead || !retreatDue() || reflexHeld(bot)) return;
+    if (!retreatDue()) { retreatWait = ''; return; }
+    // 次のラボで、呼ばれなかったのか、床や中断に譲ったのかを区別する。同じ待ち理由は毎tick書かない。
+    const held = reflexHeld(bot);
+    const why = dead ? '相手は死んだ' : ctx.stop.aborted ? 'actの停止' : actSignal?.aborted ? 'actionSignalの停止'
+      : held ? `反射 ${held}` : !fightingStop ? '退きの途中' : fightingStop.signal.aborted ? '戦う待ちを中断済み' : '';
+    if (why) {
+      if (why !== retreatWait) log.info(`↩ fight: 体力 ${r1(Number(bot.health))} < retreatHp ${retreatHp}、退きは待つ（${why}）`);
+      retreatWait = why; return;
+    }
+    log.info(`↩ fight: 体力 ${r1(Number(bot.health))} < retreatHp ${retreatHp}、戦う待ちを切って退く`);
     unfollow(); atHome(); releaseKeys();
-    fightingStop.abort(RETREAT);
+    fightingStop!.abort(RETREAT);
   };
   bot.on?.('health', checkRetreat); bot.on?.('physicsTick', checkRetreat);
 
@@ -692,6 +705,8 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
         if (ctx.stop.aborted) throw new StepStopped(String(ctx.stop.reason));
         if (actionSignal(bot)?.aborted) throw new Error('Action interrupted');
         if (reflexHeld(bot)) return fail('reflex', '退く前に反射が体を握った');
+        // 待ちを解く間に5以下になった時も床へ譲る。go と床の逃げ・食事を同時に始めない。
+        if (Number(bot.health ?? 20) <= HEAD_COMBAT_YIELD_HEALTH) return fail('reflex', `体力 ${r1(Number(bot.health))} で床へ譲る`);
         // The old wait has unwound before go takes the legs. Fire and lava remain go's hazards, even while the body burns.
         fightingStop = null; fightingCtx = ctx;
         endermanCamp?.release();

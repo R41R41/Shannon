@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { executeAction, physicalActionBusy } from '../../src/services/minebot/execution/ActionExecution.js';
 import { coverChoice, supportCells, creeperLit, floorEatChoice, floorRetreatTick, retreatThreat, shootersInReach, type FloorBody, type RetreatState } from '../../src/services/minebot/utils/floorReflexes.js';
+import { markHeadCombat } from '../../src/services/minebot/utils/combatOwner.js';
 
 function body(patch: Partial<FloorBody> & { items?: { name: string }[]; slots?: ({ name: string } | null)[] } = {}) {
   const keys: Record<string, boolean> = {}, looks: number[] = [];
@@ -16,6 +17,22 @@ function body(patch: Partial<FloorBody> & { items?: { name: string }[]; slots?: 
 }
 const retreat = (): RetreatState => ({ engaged: false, ticks: 0, cooldown: 0, engagements: 0 });
 const add = (bot: FloorBody, id: number, entity: Record<string, unknown>) => { bot.entities![id] = { id, ...entity } as any; };
+
+describe('戦う印の間の食事はcover/fleeと同じ境で待つ', () => {
+  it.each([true, false])('wide=%s: 5より上は飢えても待ち、5以下では床が食べる', wide => {
+    const bot = body({ health: 5.21, food: 2, items: [{ name: 'cooked_beef' }] });
+    expect(floorEatChoice(bot, wide)?.name).toBe('cooked_beef');
+    const end = markHeadCombat(bot, 'fight', ['blaze']);
+    expect(floorEatChoice(bot, wide)).toBeNull();
+    for (const hp of [5, 4.7]) {
+      bot.health = hp;
+      expect(floorEatChoice(bot, wide)?.name).toBe('cooked_beef');
+    }
+    bot.health = 6; end();
+    // 相手が居ない時は猶予も解け、既存の食事に戻る。
+    expect(floorEatChoice(bot, wide)?.name).toBe('cooked_beef');
+  });
+});
 
 describe('cover digging preserves footing and a way back', () => {
   const field = () => {

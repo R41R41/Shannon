@@ -11,6 +11,8 @@ import { createMotorPort, executeAction } from '../../src/services/minebot/execu
 import { cooldownMs } from '../../src/services/minebot/utils/primitives/attack.js';
 import { isEngaged } from '../../src/services/minebot/utils/engagement.js';
 import { isHeadCombatActive } from '../../src/services/minebot/utils/combatOwner.js';
+import { floorEatChoice, installFloorReflexes } from '../../src/services/minebot/utils/floorReflexes.js';
+import { floorConfig } from '../../src/services/minebot/utils/floorConfig.js';
 import { installShieldBlock } from '../../src/services/minebot/utils/shieldBlock.js';
 import { go } from '../../src/services/minebot/utils/primitives/go.js';
 import { fight } from '../../src/services/minebot/utils/primitives/fight.js';
@@ -498,15 +500,60 @@ describe('fight on a blaze: below the retreat health, to a hideout', () => {
       expect(vi.mocked(go)).not.toHaveBeenCalled();
     });
 
+    it.each([11.9, 5.2133331298828125])('体力%s: 床のtickが先でも、食事を待ち隠れ場所へのgoが始まる', async health => {
+      camp = setUp(20, { blazes: [{ at: new Vec3(-6.5, 64.5, 0.5), health: 400 }] });
+      camp.bot.consume = vi.fn(async () => { camp.bot.food = 20; });
+      // 実機と同じく床を先に登録。healthイベントの無い変化でも退きを起こす。
+      installFloorReflexes(camp.bot, floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'retreat,budget' }));
+      let walkedAt = Infinity;
+      vi.mocked(go).mockImplementationOnce((async (ctx: any) => {
+        walkedAt = Date.now();
+        expect(isHeadCombatActive(camp.bot)).toBe(true);
+        expect(ctx.stop.aborted).toBe(false);
+        expect(floorEatChoice(camp.bot)).toBeNull();
+        return { ok: true, text: '着いた' };
+      }) as never);
+      const running = act(camp, [{ do: 'fight', target: 'blaze', seconds: 30 }]);
+      await vi.advanceTimersByTimeAsync(100);
+      const injuredAt = Date.now();
+      camp.bot.food = 17; camp.bot.health = health; camp.bot.entity.onFire = true;
+      camp.bot.emit('physicsTick');
+      await vi.advanceTimersByTimeAsync(100);
+      const { json } = await running;
+      expect(walkedAt - injuredAt).toBeLessThanOrEqual(100);
+      expect(vi.mocked(go)).toHaveBeenCalledTimes(1);
+      expect(camp.bot.consume).not.toHaveBeenCalled();
+      expect(camp.bot.floorReflexes.engagements).toMatchObject({ eat: 0, flee: 0 });
+      expect(lineOf(json)).toContain('退いた先');
+    });
+
+    it.each(['health', 'physicsTick'])('体力5: %sが先でも床が持ち、退きのgoは並走しない', async event => {
+      camp = setUp(20, { blazes: [{ at: new Vec3(-6.5, 64.5, 0.5), health: 400 }] });
+      camp.bot.consume = vi.fn(async () => { camp.bot.food = 20; });
+      // この試験では床の食事を実行する。逃げ・coverの5以下の既存試験とは分ける。
+      installFloorReflexes(camp.bot, floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'retreat,flee,budget' }));
+      const running = act(camp, [{ do: 'fight', target: 'blaze', seconds: 30 }]);
+      await vi.advanceTimersByTimeAsync(100);
+      camp.bot.health = 5; camp.bot.emit(event);
+      await vi.advanceTimersByTimeAsync(100);
+      const { json } = await running;
+      expect(isHeadCombatActive(camp.bot)).toBe(false);
+      expect(camp.bot.consume).toHaveBeenCalled();
+      expect(vi.mocked(go)).not.toHaveBeenCalled();
+      expect(lineOf(json)).toContain('reflex');
+    });
+
     it('counts confirmed shield blocks and direct small_fireball health loss in the fight line, from its own start', async () => {
       camp = setUp(20, { blazes: [{ at: new Vec3(-6.5, 70.5, 0.5), health: 400 }] });
       camp.bot._client = new EventEmitter(); installShieldBlock(camp.bot);
-      const status = (entityId = 1, entityStatus = 29) => camp.bot._client.emit('entity_status', { entityId, entityStatus });
-      status(); status(); // before the fight: the hand must subtract these
+      const caught = () => { const at = camp.bot.entity.position; camp.bot._client.emit('sound_effect', { sound: { data: { soundName: 'minecraft:item.shield.block' } },
+        x: Math.trunc(at.x * 8), y: Math.trunc(at.y * 8), z: Math.trunc(at.z * 8) }); };
+      caught(); caught(); // before the fight: the hand must subtract these
       walkTo();
       const running = act(camp, [{ do: 'fight', target: 'blaze', seconds: 30 }]);
       await vi.advanceTimersByTimeAsync(100);
-      status(); status(99); status(1, 2);
+      caught();
+      camp.bot._client.emit('entity_status', { entityId: 1, entityStatus: 29 }); // 1.21.11では二重に数えない
       camp.bot.inventory.slots[45].durabilityUsed = 6;
       camp.bot.entities[700] = { id: 700, name: 'small_fireball', type: 'projectile', position: new Vec3(0.5, 65, 0.5) };
       camp.bot._client.emit('damage_event', { entityId: 1, sourceDirectId: 701, sourceCauseId: 101 });

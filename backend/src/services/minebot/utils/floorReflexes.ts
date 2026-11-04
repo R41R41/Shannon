@@ -408,6 +408,8 @@ const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spi
  */
 export function floorEatChoice(bot: FloorBody, wide = true): Item | null {
   const health = bot.health ?? 20, food = bot.food ?? 20;
+  // 戦う印がある間は cover/flee と同じく体力5より上で待つ。射線の中の食事で退きを切らず、隠れた先の食事は頭が選ぶ。
+  if (isHeadCombatActive(bot)) return null;
   if (!(food <= SELF_EAT_FOOD || health <= SELF_EAT_HEALTH)) return null;
   if (wide) {
     // Nearly dead with food 18 or more: a meal gains next to nothing.
