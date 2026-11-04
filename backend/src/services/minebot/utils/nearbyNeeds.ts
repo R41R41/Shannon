@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3';
 import type { NearbyNeed } from '../cognition/types.js';
 import { nativeActionHost } from '../execution/ActionExecution.js';
 import { scanLoadedBlocks } from './loadedBlockScan.js';
-import { bedStock, bedWool, descentKit, isPreparedFood, sheepWool } from './nightGate.js';
+import { BED_TARGET, bedStock, bedWool, descentKit, isPreparedFood, sheepWool } from './nightGate.js';
 import { wasUnreachable } from './unreachableTargets.js';
 
 /**
@@ -10,8 +10,9 @@ import { wasUnreachable } from './unreachableTargets.js';
  * remembered (rememberedPlaces, ten kinds): run 18 made 49 decisions and never once had the iron ore in its own surroundings before it
  * (the owner, 2026-10-20). Only the needs not met yet, judged from what the body carries:
  *
- * - bed: no bed (carried or set): a bed already standing (an igloo's, a village's), from the places seen, within BED_RANGE; dig it
- *   (dig-block-at) and it is carried. Run 19: an igloo's bed 13 m away at D10, never taken in 30 minutes, and no sheep at all.
+ * - bed: no bed (carried or set), or fewer than BED_TARGET beds' worth (beds carried + wool / 3 of a colour): the beds already standing
+ *   (an igloo's, a village's), from the places seen, within BED_RANGE, nearest first, as many as the beds still short (at most
+ *   STANDING_BEDS); dig one (dig-block-at) and it is carried, whatever its colour. Before the sheep: one block broken is a bed. Run 19: an igloo's bed 13 m away at D10, never taken in 30 minutes, and no sheep at all.
  * - bed_wool: no bed (carried or set): sheep, of the colour most wool is carried of (any colour with none), not shorn. With a bed carried
  *   too, until the pack holds the wool for BED_TARGET beds (beds carried + wool / 3 of a colour; the dragon fight sets up to ten): the
  *   sheep of the colour with wool over, and `tool: 'shears'` when shears are carried (a shorn sheep gives the wool again, a kill gives one).
@@ -37,6 +38,8 @@ const WOOD_ENOUGH = 12;
 const FUEL_ENOUGH = 8;
 /** A standing bed is worth a walk this far (the places seen reach further than the loaded blocks). */
 const BED_RANGE = 96;
+/** Standing beds said at once (a village has many); never more than the beds still short of BED_TARGET. */
+const STANDING_BEDS = 3;
 /** Read again after this long, or when the body has moved this far: the observation is taken far more often than this. */
 const CACHE_MS = 3_000;
 const CACHE_MOVE = 4;
@@ -136,7 +139,10 @@ function readNeeds(bot: NeedsBody, at: Vec3, now: number): NearbyNeed[] {
     }
     if (wantFood) out.push(...animals.slice(0, PER_NEED).map(({ entity, distance }) => animalNeed(bot, at, 'food', entity, distance)));
   }
-  if (wantBed) out.unshift(...standingBeds(bot, now));
+  if (wantBed || wantMoreWool) {
+    const short = stock ? Math.max(0, BED_TARGET - stock.beds - stock.makeable) : 1;
+    out.unshift(...standingBeds(bot, now, Math.max(1, Math.min(STANDING_BEDS, short))));
+  }
 
   // iron, fuel and wood: blocks in the loaded chunks.
   const carried = [...items, ...worn.map(item => ({ name: item.name, count: 1 }))];
@@ -162,18 +168,18 @@ function logNames(registry: any): string[] {
 }
 
 /**
- * The nearest bed standing within BED_RANGE, from the places seen, and only one (it is the one to walk to): not a bed of her own (her
+ * The nearest `limit` beds standing within BED_RANGE, from the places seen (the nearest first is the one to walk to): not a bed of her own (her
  * respawn bed, or one she placed at her base: hers already), nor one whose block, loaded, is no longer a bed (taken or broken since).
  * The block's own name when it is loaded.
  */
-function standingBeds(bot: NeedsBody, now: number): NearbyNeed[] {
-  const places = (() => { try { return bot.placeMemory?.recall?.('bed', 4) ?? []; } catch { return []; } })();
+function standingBeds(bot: NeedsBody, now: number, limit = 1): NearbyNeed[] {
+  const places = (() => { try { return bot.placeMemory?.recall?.('bed', 8) ?? []; } catch { return []; } })();
   const cell = (place: { position: { x: number; y: number; z: number } }) => new Vec3(Math.floor(place.position.x), Math.floor(place.position.y), Math.floor(place.position.z));
   const loaded = (at: Vec3) => { try { return bot.blockAt?.(at)?.name; } catch { return undefined; } };
   const standing = places.filter(place => place.keep !== 'respawn' && place.keep !== 'base' && place.distance <= BED_RANGE)
     .map(place => ({ place, at: cell(place), name: loaded(cell(place)) }))
     .filter(entry => entry.name === undefined || entry.name === null || entry.name.endsWith('_bed'));
-  return standing.slice(0, 1).map(({ place, at, name }) => {
+  return standing.slice(0, limit).map(({ place, at, name }) => {
     const failed = wasUnreachable(bot, at, now);
     return { id: `bed:b:${at.x},${at.y},${at.z}`, need: 'bed' as const, name: name?.endsWith('_bed') ? name : 'bed', position: { x: at.x, y: at.y, z: at.z },
       distance: place.distance, canReach: !failed, ...(failed ? { why: 'failed_recently' as const } : {}) };

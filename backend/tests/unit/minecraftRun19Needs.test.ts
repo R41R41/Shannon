@@ -50,7 +50,23 @@ describe('run 19: a standing bed and fuel are needs too', () => {
     // Her own bed at her base is hers already; a remembered bed whose loaded block is air now is gone.
     expect(nearbyNeeds(body(fed, [{ position: { x: 69, y: 66, z: 4 }, distance: 13, keep: 'base' }]), 6_000)).toEqual([]);
     expect(nearbyNeeds(body(fed, [{ position: { x: 70, y: 66, z: 4 }, distance: 14 }]), 7_000)).toEqual([]);
-    expect(nearbyNeeds(body([...fed, { name: 'white_bed', count: 1 }], [{ position: { x: 69, y: 66, z: 4 }, distance: 13 }]), 9_000)).toEqual([]);
+    expect(nearbyNeeds(body([...fed, { name: 'white_bed', count: 10 }], [{ position: { x: 69, y: 66, z: 4 }, distance: 13 }]), 9_000)).toEqual([]);
+  });
+
+  it('keeps saying standing beds, nearest first and no more than are short, while the pack is short of ten beds (colour does not matter)', () => {
+    scanned.hits = [];
+    const village = [{ position: { x: 69, y: 66, z: 4 }, distance: 13 }, { position: { x: 69, y: 66, z: 6 }, distance: 14 }, { position: { x: 69, y: 66, z: 8 }, distance: 16 },
+      { position: { x: 69, y: 66, z: 10 }, distance: 20 }];
+    const bedNeeds = (items: any[], at: number) => nearbyNeeds(body([...fed, ...items], village), at).filter(need => need.need === 'bed');
+    const allBeds = (p: Vec3) => p.x === 69 && p.y === 66 && p.z % 2 === 0 && p.z >= 4 && p.z <= 10 ? { name: 'red_bed', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' };
+    const villageBody = (items: any[]) => ({ ...body([...fed, ...items], village), blockAt: allBeds });
+    // Three beds carried: seven short, three said, the nearest first.
+    expect(nearbyNeeds(villageBody([{ name: 'white_bed', count: 3 }]), 1_000).filter(need => need.need === 'bed').map(need => need.distance)).toEqual([13, 14, 16]);
+    // Nine beds: one short, one said.
+    expect(nearbyNeeds(villageBody([{ name: 'white_bed', count: 9 }]), 2_000).filter(need => need.need === 'bed').map(need => need.distance)).toEqual([13]);
+    // Eight beds and six wool of one colour make ten: none said.
+    expect(nearbyNeeds(villageBody([{ name: 'white_bed', count: 8 }, { name: 'red_wool', count: 6 }]), 3_000).filter(need => need.need === 'bed')).toEqual([]);
+    expect(bedNeeds([{ name: 'white_bed', count: 10 }], 4_000)).toEqual([]);
   });
 
   it('says coal ore while fewer than eight coal are carried, charcoal counting', () => {
