@@ -3,7 +3,7 @@ import { makeHandsSim, type Ground, type HandsSim, type Stack } from '../helpers
 import { obsidian, obsidianProblem, planPours, pourSpots, type ObsidianArgs } from '../../src/services/minebot/utils/primitives/obsidian.js';
 import { StepStopped, type StepContext, type StepOutcome } from '../../src/services/minebot/utils/primitives/common.js';
 import { bodyReader, feetCell } from '../../src/services/minebot/utils/localMap.js';
-import { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.js';
+import Act, { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.js';
 import { normalizeSkillSchema } from '../../src/services/minebot/integration/commonFca/skillCatalog.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { z } from 'zod';
@@ -172,6 +172,84 @@ describe('obsidian: a lava source on a shore', () => {
   });
 });
 
+describe('obsidian: a connected pool', () => {
+  const surface = (x0: number, width: number, depth: number) =>
+    Array.from({ length: width * depth }, (_, i) => at(x0 + i % width, 63, Math.floor(i / width)));
+
+  it.each([8, 12])('sets a 3 by 3 surface with one pour at x=%i, then mines all nine dry (count omitted)', async x0 => {
+    const cells = surface(x0, 3, 3);
+    const sim = makeHandsSim(over(flat, box('lava', x0, x0 + 2, 63, 63, 0, 2)), { items: stacks(WATER, PICK) });
+    const beforeDigs: number[] = [];
+    const dry: boolean[] = [];
+    const dig = sim.bot.dig;
+    sim.bot.dig = async (block: any) => {
+      if (block.name === 'obsidian') {
+        beforeDigs.push(cells.filter(cell => sim.nameAt(cell.x, cell.y, cell.z) === 'obsidian').length);
+        dry.push(sim.count('water_bucket') === 1);
+      }
+      return dig(block);
+    };
+    const ctx = ctxOf(sim);
+    ctx.progress = vi.fn();
+    const outcome = await drive(sim, obsidian(ctx, { at: cells, seconds: 180 }));
+    expect(outcome.ok).toBe(true);
+    expect(sim.count('obsidian')).toBe(9);
+    expect(beforeDigs[0]).toBe(9);
+    expect(dry).toEqual(new Array(9).fill(true));
+    expect(sim.bot.poured).toHaveLength(1);
+    expect(sim.bot.scooped).toHaveLength(1);
+    expect(sim.bot.dugBlocks.slice().sort()).toEqual(cells.map(cell => `obsidian@${cell.x},${cell.y},${cell.z}`).sort());
+    expect(sim.count('water_bucket')).toBe(1);
+    expect(ctx.progress).toHaveBeenCalledWith(expect.stringContaining('湖面 9/9'));
+    expect(sim.bot.health).toBe(20);
+  }, 120_000);
+
+  it('stops mining at count even when the pour set more named cells', async () => {
+    const cells = surface(8, 2, 1);
+    const sim = makeHandsSim(over(flat, box('lava', 8, 9, 63, 63, 0, 0)), { items: stacks(WATER, PICK) });
+    const outcome = await drive(sim, run(sim, { at: cells, count: 1 }));
+    expect(outcome.ok).toBe(true);
+    expect(sim.count('obsidian')).toBe(1);
+    expect(sim.bot.dugBlocks).toHaveLength(1);
+    expect(cells.filter(cell => sim.nameAt(cell.x, cell.y, cell.z) === 'obsidian')).toHaveLength(1);
+    expect(sim.count('water_bucket')).toBe(1);
+  });
+
+  it('moves along a long surface and pours again for sources beyond the first flow', async () => {
+    const cells = surface(8, 12, 1);
+    const sim = makeHandsSim(over(flat, box('lava', 8, 19, 63, 63, 0, 0)), { items: stacks(WATER, PICK) });
+    const outcome = await drive(sim, run(sim, { at: cells, seconds: 300 }));
+    expect(outcome.ok).toBe(true);
+    expect(sim.count('obsidian')).toBe(12);
+    expect(sim.bot.poured.length).toBeGreaterThan(1);
+    expect(sim.bot.poured.length).toBeLessThan(cells.length);
+    expect(sim.bot.scooped).toHaveLength(sim.bot.poured.length);
+    expect(sim.count('water_bucket')).toBe(1);
+  }, 120_000);
+
+  it('covers the hole before mining the set crust over deeper lava and collects each drop', async () => {
+    const cells = surface(8, 2, 2);
+    const sim = makeHandsSim(over(flat, lake(8, 9, 0, 1)), { items: stacks(WATER, PICK) });
+    const covered: boolean[] = [];
+    const dig = sim.bot.dig;
+    sim.bot.dig = async (block: any) => {
+      if (block.name === 'obsidian' && block.position.y === 63 && sim.nameAt(block.position.x, 62, block.position.z) === 'lava') {
+        const { x, y, z } = block.position;
+        covered.push([[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
+          .some(([dx, dy, dz]) => sim.nameAt(x + dx!, y + dy!, z + dz!) === 'water'));
+      }
+      return dig(block);
+    };
+    const outcome = await drive(sim, run(sim, { at: cells, seconds: 300 }));
+    expect(outcome.ok).toBe(true);
+    expect(sim.count('obsidian')).toBe(4);
+    expect(covered.length).toBeGreaterThan(0);
+    expect(covered.every(Boolean)).toBe(true);
+    expect(sim.count('water_bucket')).toBe(1);
+    expect(sim.bot.health).toBe(20);
+  }, 120_000);
+});
+
 describe('obsidian: a place to stand that is not one', () => {
   it('stands elsewhere and pours again when the floor of the planned place is not there (the walk says target_unstandable)', async () => {
     const sim = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK) });
@@ -278,7 +356,7 @@ describe('obsidian: what it refuses before it begins', () => {
   });
   it('takes the sources that are lava and says which it skipped', async () => {
     const sim = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK) });
-    const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0), at(3, 63, 0)] }));
+    const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0), at(3, 63, 0)], count: 1 }));
     expect(outcome.ok).toBe(true);
     expect(outcome.text).toContain('飛ばした (3,63,0) は stone');
   });
@@ -295,6 +373,40 @@ describe('obsidian: what it refuses before it begins', () => {
 });
 
 describe('obsidian: its limits, and the act round it', () => {
+  it('accepts 24 distinct cells at the primitive boundary and refuses 25', async () => {
+    const cells = Array.from({ length: 25 }, (_, i) => at(i, 63, 0));
+    const sim = makeHandsSim(flat, { items: stacks(WATER, PICK) });
+    expect((await run(sim, { at: cells.slice(0, 24), seconds: 300 })).reason).toBe('no_lava');
+    expect((await run(sim, { at: cells, seconds: 300 })).reason).toBe('invalid_input');
+    expect(sim.bot.poured).toHaveLength(0);
+  });
+
+  it('collects 22 in one act with seconds=300, beyond both the old hand and act deadlines', async () => {
+    const cells = Array.from({ length: 22 }, (_, i) => at(8 + i % 6, 63, Math.floor(i / 6)));
+    const sim = makeHandsSim(over(flat, box('lava', 8, 13, 63, 63, 0, 3)), { items: stacks(WATER, PICK) });
+    expect(new Act(sim.bot).maxDurationMs).toBeGreaterThanOrEqual(320_000);
+    const began = Date.now();
+    const acting = runAct(sim.bot, ACT_HANDS.parse([{ do: 'obsidian', at: cells, seconds: 300 }]), undefined, undefined, { tickMs: 50 });
+    const result: any = JSON.parse((await drive(sim, acting)).result);
+    expect(result.ok).toBe(true);
+    expect(sim.count('obsidian')).toBe(22);
+    expect(Date.now() - began).toBeGreaterThan(180_000);
+    expect(Date.now() - began).toBeLessThan(320_000);
+    expect(sim.count('water_bucket')).toBe(1);
+    // The water can also set the two cells the head did not name. Only its 22 cells may be mined.
+    expect(sim.bot.dugBlocks.slice().sort()).toEqual(cells.map(cell => `obsidian@${cell.x},${cell.y},${cell.z}`).sort());
+    expect(sim.bot.poured.length).toBeLessThan(cells.length);
+  }, 120_000);
+
+  it('keeps an explicit parent time limit even for a 300 s obsidian hand', async () => {
+    const cells = Array.from({ length: 9 }, (_, i) => at(8 + i % 3, 63, Math.floor(i / 3)));
+    const sim = makeHandsSim(over(flat, box('lava', 8, 10, 63, 63, 0, 2)), { items: stacks(WATER, PICK) });
+    const acting = runAct(sim.bot, ACT_HANDS.parse([{ do: 'obsidian', at: cells, seconds: 300 }]), undefined, undefined, { tickMs: 50, maxMs: 20_000 });
+    const result: any = JSON.parse((await drive(sim, acting)).result);
+    expect(result.ok).toBe(false);
+    expect(sim.count('obsidian')).toBeLessThan(9);
+  });
+
   it('stops at its own time (limit_time) with the water back in the bucket', async () => {
     // The shore is a long walk off and the limit is 5 s.
     const sim = makeHandsSim(over(flat, lake(30, 36, -4, 4)), { items: stacks(WATER, PICK) });
@@ -394,15 +506,23 @@ describe('obsidian: the plan and the head\'s ranges', () => {
     expect(footed!.footing!.floor).toEqual({ x: 4, y: 63, z: 0 });
   });
 
-  it('has the head\'s fields and ranges (needs at; may count, seconds, canPlace, maxPlace; at 1 to 8, seconds 5 to 120, count 1 to 64)', () => {
+  it('has the new ranges (at 1 to 24, seconds 5 to 300, count 1 to 64)', () => {
     const ok = () => true;
     const hand = (extra: Record<string, unknown> = {}) => ({ do: 'obsidian', at: [{}], ...extra });
     expect(obsidianProblem(hand({ count: 3, seconds: 60, canPlace: ['cobblestone'], maxPlace: 4, rel: true, note: 'x', onFail: 'stop' }), ok)).toBeNull();
     expect(obsidianProblem({ do: 'obsidian' }, ok)).toContain('at');
-    expect(obsidianProblem(hand({ at: new Array(9).fill({}) }), ok)).toContain('8 つまで');
+    expect(obsidianProblem(hand({ at: new Array(24).fill({}), seconds: 300 }), ok)).toBeNull();
+    expect(obsidianProblem(hand({ at: new Array(25).fill({}) }), ok)).toContain('24 つまで');
+    const cells = Array.from({ length: 24 }, (_, i) => at(i, 63, 0));
+    expect(ACT_HANDS.safeParse([{ do: 'obsidian', at: cells, seconds: 300 }]).success).toBe(true);
+    expect(ACT_HANDS.safeParse([{ do: 'obsidian', at: [...cells, at(24, 63, 0)] }]).success).toBe(false);
+    expect(ACT_HANDS.safeParse([{ do: 'dig', at: cells.slice(0, 16) }]).success).toBe(true);
+    expect(ACT_HANDS.safeParse([{ do: 'dig', at: cells.slice(0, 17) }]).success).toBe(false);
     expect(obsidianProblem(hand({ item: 'bucket' }), ok)).toContain('item は使えない');
-    expect(obsidianProblem(hand({ seconds: 4 }), ok)).toContain('seconds は 5〜120');
-    expect(obsidianProblem(hand({ seconds: 121 }), ok)).toContain('seconds は 5〜120');
+    expect(obsidianProblem(hand({ seconds: 5 }), ok)).toBeNull();
+    expect(obsidianProblem(hand({ seconds: 121 }), ok)).toBeNull();
+    expect(obsidianProblem(hand({ seconds: 4 }), ok)).toContain('seconds は 5〜300');
+    expect(obsidianProblem(hand({ seconds: 301 }), ok)).toContain('seconds は 5〜300');
     expect(obsidianProblem(hand({ count: 65 }), ok)).toContain('count は 1〜64');
     expect(obsidianProblem(hand({ canPlace: ['Cobble Stone'] }), ok)).toContain('canPlace');
     expect(obsidianProblem(hand(), () => false)).toContain('読めない');

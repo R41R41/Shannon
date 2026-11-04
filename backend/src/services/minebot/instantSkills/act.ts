@@ -26,7 +26,7 @@ import { shoot } from '../utils/primitives/shoot.js';
 import { pillarUp } from '../utils/primitives/pillarUp.js';
 import { go, goProblem } from '../utils/primitives/go.js';
 import { vertical } from '../utils/primitives/vertical.js';
-import { obsidian, obsidianProblem } from '../utils/primitives/obsidian.js';
+import { obsidian, obsidianProblem, OBSIDIAN_DEFAULTS, OBSIDIAN_LIMITS } from '../utils/primitives/obsidian.js';
 import { portal, portalProblem } from '../utils/primitives/portal.js';
 import { fight, HandCut } from '../utils/primitives/fight.js';
 import { shieldRush, shieldRushProblem, SHIELD_RUSH_DESCRIPTION, type ShieldRushResult, type ShieldRushOutcome } from '../utils/primitives/shieldRush.js';
@@ -70,7 +70,7 @@ const Hand = z.object({
   do: z.enum(HAND_KINDS),
   to: Pos.optional().describe('walk の着く所、look の向く点'),
   path: z.array(Pos).max(64).optional().describe('walk の道（点の列）'),
-  at: z.array(Pos).max(16).optional().describe('dig・place は順に全部、use・furnace・chest・shoot・drop は 1 つ、mine は鉱脈のマス（1〜4）、smelt は使うかまど（最大4）'),
+  at: z.array(Pos).max(OBSIDIAN_LIMITS.sources).optional().describe('dig・place は順に全部（16まで）、obsidian は溶岩の源（24まで）、use・furnace・chest・shoot・drop は 1 つ、mine は鉱脈のマス（1〜4）、smelt は使うかまど（最大4）'),
   face: Face.optional().describe('place・use: 当てる面'),
   block: z.string().optional(),
   groups: z.array(z.object({
@@ -126,7 +126,8 @@ const Hand = z.object({
   liquid: z.enum(['stop', 'seal', 'seal_water']).optional().describe('vertical: 溶岩・水が見えた時。stop=止める、seal=塞いで続ける、seal_water=水だけ塞ぎ溶岩で止める'),
   dependsOn: z.array(z.number().int().min(1).max(12)).max(11).optional().describe('この手が頼る、同じ act の同じ周回の前の手の番号（1 から）。無い: 今どおり。[]: どの手にも頼らない。[1,3]: 手 1 と 3 が済み（done か already）の時だけ動く'),
   onFail: z.enum(['continue', 'stop']).optional().describe('この手が自分で失敗したとき: continue=失敗と記録して次の手へ、stop=ここで止める（省略: equip・eat・look・sneak・jump は continue、他は stop）。反射・stopIf・取り消し・時間切れ・満杯は常に止める'),
-}).strict();
+}).strict().refine(hand => hand.do === 'obsidian' || (hand.at?.length ?? 0) <= 16,
+  { path: ['at'], message: 'obsidian 以外の at は 16 つまで' });
 export const ACT_HANDS = z.array(Hand).min(1).max(12);
 export const ACT_STOP_IF = z.object({
   hostileWithin: z.number().optional(),
@@ -174,7 +175,7 @@ const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は
   + '手: walk / go / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait / obsidian / portal / fight / mine / make / smelt / vertical。'
   + 'vertical: 縦に長く下る・上る。dir(down/up)・shape(stairs=階段 toward 必須 / shaft=真下の縦穴 down だけ / pillar=足の下に置いて真上 up だけ)・toY(足の y)・canDig(必須)・maxDig・canPlace・maxPlace・liquid(stop/seal/seal_water)・range・seconds。体は道探しをせず一段ずつ掘る・置く・歩くだけで、止まる時は「vertical 止まった <code>」の行と進んだ段数を返す。'
   + 'go: 行き先（to か goals）へ体が道を引いて着くまで行く。canDig の物だけ掘り・canPlace の物（持っている物）だけ置き、溶岩・火・マグマ・サボテンは避ける。止まる時は「go 止まった <code>」の行で理由を返す。'
-  + 'obsidian: 挙げた溶岩の源（at、8 まで）に水を注いで黒曜石にして掘り、水を汲み戻す（立ち位置・注ぐ所・待ちは体。count・seconds・canPlace・maxPlace）。'
+  + 'obsidian: 挙げた溶岩の源（at、1〜24）を水で固めて掘り、水を汲み戻す。同じ高さでつながった溜まりは一括注水し、固まった面から続けて掘る。下が溶岩なら水で覆う（count 省略は重複を除いた at の数、seconds 5〜300・既定90、canPlace・maxPlace）。'
   + 'portal: at（枠の内側の左下）と axis（x か z）の枠 10 個を組み、火打ち金で点け、enter なら入る（足場は canPlace の物）。止まる時は「<手> 止まった <code>」の行で理由を返す。'
   + 'fight: 挙げた相手 target を戦い（stance=flee なら range m 離れるまで逃げ）、狙い・間合い・盾・クリティカル・低体力で食べる/退くは体がこなす。反射が優先。'
   + 'mine(block: 掘る種類 id, at: その鉱脈のマス1〜4, count, tool, collect, seconds, canDig・maxDig: 鉱脈へ行く道を掘ってよい物) は at のマスにつながった同じ種類だけを近い順に掘って拾う（ほかの鉱石は探さない）。'
@@ -184,12 +185,15 @@ const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は
   + SHIELD_RUSH_DESCRIPTION
   + FILL_DESCRIPTION;
 
+/** Allow an in-flight dig (9.4 s), its drop and the bucket to finish after the hand's own deadline. */
+const OBSIDIAN_RECOVERY_MS = 20_000;
+
 class Act extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'act';
     this.description = DESCRIPTION;
-    this.maxDurationMs = 180_000;
+    this.maxDurationMs = OBSIDIAN_LIMITS.seconds * 1000 + OBSIDIAN_RECOVERY_MS;
     this.params = [
       { name: 'hands', type: 'json', schema: ACT_HANDS, description: '順に動かす手（1〜12）', required: true },
       { name: 'stopIf', type: 'json', schema: ACT_STOP_IF, description: '止める条件（任意）' },
@@ -426,7 +430,12 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     keepActReport(bot, bad);
     return { success: false, result: renderActReport(bot, bad), failureType: 'invalid_input', recoverable: true };
   }
-  const deadline = startedAt + (options.maxMs ?? 180_000);
+  // The catalog/outer lease allows the largest obsidian batch; ordinary acts retain their 180 s budget.
+  // An explicit maxMs remains a hard parent limit. Do not multiply this allowance by hands or repeat.
+  const obsidianSeconds = Math.max(0, ...hands
+    .filter(hand => hand.do === 'obsidian' && obsidianProblem(hand as Record<string, unknown>, () => true) === null)
+    .map(hand => hand.seconds ?? OBSIDIAN_DEFAULTS.seconds));
+  const deadline = startedAt + (options.maxMs ?? Math.max(180_000, obsidianSeconds * 1000 + OBSIDIAN_RECOVERY_MS));
   const facing: Facing = (['north', 'east', 'south', 'west'] as const).find(name => name === facingName) ?? facingOfYaw(Number(bot.entity?.yaw ?? 0));
   // Task queue: the hand list may be run up to `repeat` times, and `done` ends the act ok where it holds (the head's contract; both optional).
   const passes = Math.max(1, Math.min(8, Math.floor(options.repeat ?? 1)));
