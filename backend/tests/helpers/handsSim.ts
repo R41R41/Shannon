@@ -273,10 +273,10 @@ export function makeHandsSim(ground: Ground, options: { start?: [number, number,
     settling = setTimeout(() => { settling = null; recompute(); }, SETTLE_MS);
   }
 
-  /** A fire lit at `cell`: a frame of obsidian round an empty 2 by 3 inside (either plane) becomes the portal. */
+  /** A fire lit at `cell`: a frame of obsidian (crying obsidian is none) round an empty 2 by 3 inside (either plane) becomes the portal. */
   function makePortal(cell: Vec3) {
     const open = (x: number, y: number, z: number) => { const name = world.nameAt(x, y, z); return !!name && (AIR.has(name) || name === 'fire'); };
-    const frameOk = (x: number, y: number, z: number) => { const name = world.nameAt(x, y, z); return name === 'obsidian' || name === 'crying_obsidian'; };
+    const frameOk = (x: number, y: number, z: number) => { const name = world.nameAt(x, y, z); return name === 'obsidian'; };
     for (const axis of ['x', 'z'] as const) for (let a0 = -1; a0 <= 0; a0++) for (let y0 = -2; y0 <= 0; y0++) {
       const at = (a: number, up: number): [number, number, number] => (axis === 'x' ? [cell.x + a0 + a, cell.y + y0 + up, cell.z] : [cell.x, cell.y + y0 + up, cell.z + a0 + a]);
       const cells: Array<[number, number, number]> = [];

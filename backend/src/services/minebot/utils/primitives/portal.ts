@@ -11,8 +11,8 @@ import { DIG_REACH_PLAN, FACES, OPPOSITE, PLACE_REACH, clickLands, dist, eyeAtCe
 
 /**
  * portal: the frame of a nether portal, lit, and gone into (contract hands-contract.md 5, 2026-10-26). The planner decides WHERE (`at`: the left, lower
- * cell of the inside, the one with the lowest coordinate along the plane's axis; `axis`: x or z, the way the plane runs), the block (`block`, obsidian
- * or crying obsidian), whether to go in once it burns (`enter`), what may be laid for a scaffold (`canPlace`, `maxPlace`) and the limit (`seconds`). The
+ * cell of the inside, the one with the lowest coordinate along the plane's axis; `axis`: x or z, the way the plane runs), the block (`block`, obsidian:
+ * crying obsidian lights no portal), whether to go in once it burns (`enter`), what may be laid for a scaffold (`canPlace`, `maxPlace`) and the limit (`seconds`). The
  * body builds the frame, a 4 wide, 5 tall ring without its corners (ten blocks), lights the inside's floor with the flint and steel, and walks into the
  * portal with walk's own way of going in (it stands in it until the dimension changes).
  *
@@ -24,7 +24,8 @@ import { DIG_REACH_PLAN, FACES, OPPOSITE, PLACE_REACH, clickLands, dist, eyeAtCe
 export interface PortalArgs { at: Cell; axis: 'x' | 'z'; block?: string; enter?: boolean; canPlace?: string[]; maxPlace?: number; seconds?: number }
 
 export const PORTAL_DEFAULTS = { block: 'obsidian', enter: true, seconds: 60, maxPlace: 8 } as const;
-const FRAME_BLOCKS = new Set(['obsidian', 'crying_obsidian']);
+/** Vanilla lights a nether portal only in a frame of obsidian: crying obsidian is not one (no fire takes, and it is not counted). */
+const FRAME_BLOCKS = new Set(['obsidian']);
 const IGNITE_WAIT_MS = 2500;
 const MAX_PLACE_TRIES = 3;
 
@@ -47,7 +48,7 @@ export async function portal(parent: StepContext, args: PortalArgs): Promise<Ste
   const block = args.block ?? PORTAL_DEFAULTS.block;
   if (axis !== 'x' && axis !== 'z') return stopped(bot, 'invalid_input', 'portal には axis（x か z）が要る');
   if (!args.at) return stopped(bot, 'invalid_input', 'portal には at（枠の内側の左下のマス 1 つ）が要る');
-  if (!FRAME_BLOCKS.has(block)) return stopped(bot, 'invalid_input', `portal の枠は obsidian か crying_obsidian（${block} ではポータルにならない）`);
+  if (!FRAME_BLOCKS.has(block)) return stopped(bot, 'invalid_input', `portal の枠は obsidian だけ（${block} ではポータルにならない。泣く黒曜石でも火はつかない）`);
   const seconds = Math.max(5, Math.min(120, args.seconds ?? PORTAL_DEFAULTS.seconds));
   const maxPlace = Math.max(0, Math.min(100, Math.floor(args.maxPlace ?? PORTAL_DEFAULTS.maxPlace)));
   const enter = args.enter ?? PORTAL_DEFAULTS.enter;
@@ -81,7 +82,7 @@ export async function portal(parent: StepContext, args: PortalArgs): Promise<Ste
     if (have < missing) return stop('no_obsidian', `${block} を ${have} 個しか持っていない（枠に足りないのは ${missing} 個。枠は全部で 10 個、元からある ${existing} 個）`, args.at);
     if (!inventoryCount(bot, 'flint_and_steel')) return stop('no_flint', '火打ち金（flint_and_steel）を持っていない', args.at);
   }
-  const scaffoldBlock = footingBlock(bot, args.canPlace, [...FRAME_BLOCKS]);
+  const scaffoldBlock = footingBlock(bot, args.canPlace, [...FRAME_BLOCKS, 'crying_obsidian']);
   const budget = () => (scaffoldBlock ? Math.max(0, Math.min(maxPlace - counts.scaffold - counts.pillar, inventoryCount(bot, scaffoldBlock))) : 0);
   const scaffolds: Cell[] = [];
 
