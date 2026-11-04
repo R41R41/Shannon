@@ -405,6 +405,34 @@ describe('attack hold on a blaze', () => {
     expect(lineOf(json)).toContain('blaze_rod×1');
   }, 60_000);
 
+  it('a long charge spends the charge wait only: a fireball that lands after it is still waited for (review 2026-11-05: one shared patience left no wait for the shot)', async () => {
+    // The target is within reach and does not die; the other blaze, in sight, charges for 2 s (never long enough to be "about to shoot") and its fireball comes in at 3 s.
+    const camp = makeCamp({ shield: true, blazes: [
+      { at: new Vec3(1.5, 65.0, 0.5), health: 1000 },
+      { at: new Vec3(-6.5, 66, 3.5), charged: ms => ms < 2000 },
+    ] });
+    const swings: number[] = [];
+    const attack = camp.bot.attack;
+    camp.bot.attack = (mob: any) => { swings.push(Date.now()); attack(mob); };
+    const started = Date.now();
+    let shotAt = 0;
+    const fly = setTimeout(() => {
+      shotAt = Date.now();
+      const ball: any = { id: 500, name: 'small_fireball', type: 'projectile', position: new Vec3(0.5, 65.5, -8.5), velocity: new Vec3(0, 0, 0.8), isValid: true };
+      camp.bot.entities[ball.id] = ball;
+      const move = () => { ball.position = ball.position.plus(ball.velocity); if (ball.position.z > 0.5) { delete camp.bot.entities[ball.id]; camp.bot.off('physicsTick', move); } };
+      camp.bot.on('physicsTick', move);
+    }, 3000);
+    const { json } = await act(camp, [{ do: 'attack', target: 'blaze', hold: true, seconds: 6 }], { accept: ['blaze'] });
+    clearTimeout(fly);
+    camp.stop();
+    console.log('[blaze charge+shot]', lineOf(json), swings.map(at => at - started).join(','), 'shot', shotAt - started);
+    // two holds: the charge's, and the shot's after it
+    expect(lineOf(json)).toMatch(/見送り 2/u);
+    // no blow while the shot is on its last few ticks to the body
+    expect(swings.filter(at => at > shotAt + 100 && at < shotAt + 450)).toEqual([]);
+  }, 60_000);
+
   it('a blaze that never comes within reach and is not in sight ends the hold as before, after the default patience', async () => {
     const camp = makeCamp({ shield: true, blazes: [] });
     const started = Date.now();

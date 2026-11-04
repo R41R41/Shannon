@@ -372,10 +372,12 @@ describe('fill ordered work and retreat', () => {
       return r;
     });
     const r = await fill(f.ctx, f.args);
-    expect(r.ok).toBe(true); expect(r.fill).toMatchObject({ status: 'done', code: null, placed: 2, safe: true, seen: 1 });
+    expect(r.ok).toBe(true); expect(r.fill).toMatchObject({ status: 'done', code: null, placed: 2, safe: false, reached: true, seen: 1 });
+    // Arriving is not cover: safe keeps its meaning (no shooter sees the body), and the line says who sees it (review 2026-11-05).
+    expect(r.text).toContain('安全未確認（射手1に見られている）');
     // The work HP floor remains inclusive; recover above it before starting another build.
     f.bot.health = 20;
-    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'done', code: null, safe: true, seen: 1 });
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'done', code: null, safe: false, reached: true, seen: 1 });
   });
   it('keeps HP_FLOOR when a visible blaze remains at home below the HP threshold', async () => {
     const f = field();
@@ -383,14 +385,14 @@ describe('fill ordered work and retreat', () => {
     vi.mocked(place).mockImplementationOnce(async (c, a) => { const r = await f.lay(c, a); f.bot.health = 9; f.bot.emit('health'); return r; });
     const r = await fill(f.ctx, f.args);
     expect(r.ok).toBe(false);
-    expect(r.fill).toMatchObject({ code: 'HP_FLOOR', placed: 1, safe: false, seen: 1, at: { x: 0.5, y: 64, z: 0.5 } });
+    expect(r.fill).toMatchObject({ code: 'HP_FLOOR', placed: 1, safe: false, reached: false, seen: 1, at: { x: 0.5, y: 64, z: 0.5 } });
     expect(place).toHaveBeenCalledTimes(1);
   });
   it('still treats a covered home as safe below the HP threshold', async () => {
     const f = field(); f.blocks.set('2,65,0', 'stone');
     f.bot.entities[41] = { id: 41, name: 'blaze', position: new Vec3(4.5, 64, 0.5), width: 0.6, height: 1.8, type: 'hostile' };
     vi.mocked(place).mockImplementationOnce(async (c, a) => { const r = await f.lay(c, a); f.bot.health = 9; f.bot.emit('health'); return r; });
-    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'retreated', code: 'HP_FLOOR', placed: 1, safe: true, seen: 0 });
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'retreated', code: 'HP_FLOOR', placed: 1, safe: true, reached: true, seen: 0 });
     expect(place).toHaveBeenCalledTimes(1);
   });
   it.each(['blocked', 'wrong_cell', 'burning', 'lava', 'lost_floor'])('fails if the return is %s even at full HP with a visible blaze', async why => {

@@ -274,7 +274,7 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
   let atSpawner = false;
   if (wantedName === 'blaze') { try { atSpawner = scanLoadedBlocks(bot, ['spawner'], { maxHits: 1, maxDistance: 8 }).hits.length > 0; } catch { atSpawner = false; } }
   let lastInReach = started, unreached = false;
-  const gate = new StrikeGate();
+  const gate = new StrikeGate(), chargeGate = new StrikeGate();
   const struckProgress = (): Progress => ({ unit: 'blow', done: landed, left: null });
   try {
     try { bot.clearControlStates?.(); bot.pathfinder?.setGoal?.(null); } catch { /* standing */ }
@@ -303,7 +303,12 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
       // (the gate's patience still bounds it: 1.5 s in all within each 8 s, so a stream of fireballs does not stop every blow)
       // (a blaze that sees the body has its flame on: no blow while it charges, only the shield; the gate's patience still bounds the wait)
       const charging = !!near && HOVERING_SHOOTERS.has(String(near.entity.name)) ? chargeHold(watch, Date.now()) : null;
-      const held = !!near && HOVERING_SHOOTERS.has(String(near.entity.name)) && !gate.may(Date.now(), shotComing || !raised || charging ? (why ?? charging) : null);
+      // The charge wait has its own patience (chargeGate): spent on a flame that only charges, it would leave no wait for the shot that lands about 3 s later (review 2026-11-05).
+      const shotWhy = shotComing || !raised ? why : null;
+      const now = Date.now();
+      const hovering = !!near && HOVERING_SHOOTERS.has(String(near.entity.name));
+      // Both gates are asked each time (no short cut), so each one's hold is timed.
+      const held = hovering && [!gate.may(now, shotWhy), !chargeGate.may(now, shotWhy ? null : charging)].some(Boolean);
       if (near && !held && Date.now() - lastSwing >= cooldownMs(bot.heldItem?.name)) {
         raise();
         try { await bot.lookAt(near.entity.position.offset(0, (near.entity.height ?? 1.8) * 0.6, 0), true); } catch { /* looked */ }
@@ -330,7 +335,7 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
   const wornTotal = retiredWear + (shieldNow?.name === 'shield' ? Math.max(0, Number(shieldNow.durabilityUsed ?? 0) - shieldUsed0) : 0);
   const sparesNote = spares ? `・予備に替えた×${spares}` : '';
   const wear = shield && shieldNow?.name !== 'shield' ? `・盾が壊れた${sparesNote}` : shield && wornTotal > 0 ? `・盾 −${wornTotal}${sparesNote}` : shield && spares ? sparesNote : '';
-  const counts = `${blows}回打った・${landed}回当たった・倒した ${killed.length}${killed.length ? `（${killed.join('・')}）` : ''}・受けた傷 ${lost}${wear}${gate.count ? `・見送り ${gate.count}` : ''}`;
+  const counts = `${blows}回打った・${landed}回当たった・倒した ${killed.length}${killed.length ? `（${killed.join('・')}）` : ''}・受けた傷 ${lost}${wear}${gate.count + chargeGate.count ? `・見送り ${gate.count + chargeGate.count}` : ''}`;
   const drops = (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity?.name === 'item' && !before.has(entity.id)
     && entity.position.distanceTo(bot.entity.position) <= 8);
   const dropNames = drops.map(entity => { try { const item = entity.getDroppedItem?.(); return item ? `${item.name}×${item.count}` : `#${entity.id}`; } catch { return `#${entity.id}`; } });
