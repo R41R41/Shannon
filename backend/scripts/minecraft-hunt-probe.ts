@@ -1296,6 +1296,7 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
   const damage: any[] = [], jumps: any[] = [], observations: any[] = [];
   const previous = new Map<number, { position: Vec3; at: number; lookingAtEyes: boolean; eyeVisible: boolean }>();
   const candidateViews = (list: ReturnType<typeof candidateList>) => list.map(e => ({ id: e.id, via: e.via }));
+  const feetCell = (a: any): Cell => ({ x: Math.floor(a.entity.position.x), y: Math.floor(a.entity.position.y + 0.001), z: Math.floor(a.entity.position.z) });
   const topReading = () => {
     const c = (active ? endermanCampObservation(actor)?.roofCell : null) ?? roof ?? feetCell(actor);
     return topReadings.observe(bodyReader(actor), c ? { x: c.x + 0.5, y: c.y, z: c.z + 0.5 } : null, endermen());
