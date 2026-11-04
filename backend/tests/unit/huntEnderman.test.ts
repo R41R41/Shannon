@@ -145,6 +145,9 @@ describe('the block for the roof, and the look', () => {
     expect(roofBlockFor(pack(['cobblestone', 5], ['dirt', 64]), 11)).toEqual({ name: 'dirt', count: 64 });
     expect(roofBlockFor(pack(['cobblestone', 5], ['dirt', 3]), 11)).toEqual({ name: 'cobblestone', count: 5 });
     expect(roofBlockFor(pack(['sand', 64], ['diamond', 3]), 11)).toBeNull();
+    // Codex's pre-deploy review 6 (11/5): netherrack is a roof as the head says; obsidian is never spent on one.
+    expect(roofBlockFor(pack(['netherrack', 40]), 11)).toEqual({ name: 'netherrack', count: 40 });
+    expect(roofBlockFor(pack(['obsidian', 20]), 11)).toBeNull();
   });
 
   it('the look is on the eyes by the server\'s own measure: within 1 - 0.025 / distance', () => {
