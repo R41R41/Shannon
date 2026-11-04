@@ -205,7 +205,8 @@ scene('frames_enter', 'S10 on the real seed: twelve eyes into the twelve frames 
       const run = await act(`frame#${metrics.tries + 1}`, [{ do: 'go', to: { x: frame.x, y: frame.y, z: frame.z }, range: 3, seconds: 25, canPlace: ['cobblestone'], maxPlace: 8 }, { do: 'use', item: 'ender_eye', at: [{ x: frame.x, y: frame.y, z: frame.z }] }], 60);
       metrics.tries++; if (run.ok) metrics.placed++;
       metrics.hpLost += Math.max(0, hp0 - Number(actor.health)); metrics.lowestHp = Math.min(metrics.lowestHp, Number(actor.health));
-      if (!run.ok) stops.push(`pass ${pass} frame ${frame.x},${frame.z}: ${s4Why(run)}`);
+      if (!run.ok && /falling_above|dead_end|no_floor/u.test(s4Why(run))) turns++;
+    if (!run.ok) stops.push(`pass ${pass} frame ${frame.x},${frame.z}: ${s4Why(run)}`);
     }
   }
   const eyesServer = await filled();
@@ -288,11 +289,11 @@ async function surfaceExit(mode: 'stairs' | 'pillar' | 'go', water: boolean, not
   const metrics = { acts: 0, okActs: 0, hpLost: 0, lowestHp: 20, minY: startY, maxDrop: 0 };
   const canDig = ['stone', 'deepslate', 'tuff', 'andesite', 'diorite', 'granite', 'dirt', 'gravel', 'sand', 'cobblestone'];
   const reached = () => s4Feet() >= surfaceY - 1;
-  let lastY = startY;
+  let lastY = startY, turns = 0;
   while (Date.now() - started < limitMs && s4Alive(deaths0) && !reached() && metrics.acts < 10) {
     const hp0 = Number(actor.health), y0a = s4Feet();
     const hand = mode === 'go' ? { do: 'go', to: { x, y: surfaceY, z }, range: 1.5, seconds: 120, maxDig: 60, maxPlace: 40, canDig, canPlace: ['cobblestone'] }
-      : { do: 'vertical', dir: 'up', shape: mode === 'stairs' ? 'stairs' : 'pillar', ...(mode === 'stairs' ? { toward: 'north' } : {}), toY: surfaceY, liquid: 'seal_water', range: 2, seconds: 120, canDig, canPlace: ['cobblestone'] };
+      : { do: 'vertical', dir: 'up', shape: mode === 'stairs' ? 'stairs' : 'pillar', ...(mode === 'stairs' ? { toward: ['north', 'east', 'south', 'west'][turns % 4] } : {}), toY: surfaceY, liquid: 'seal_water', range: 2, seconds: 120, canDig, canPlace: ['cobblestone'] };
     const run = await act(`exit-${mode}#${metrics.acts + 1}`, [hand], 150, { stopIf: { hostileWithin: 6, hpBelow: 12 } });
     metrics.acts++; if (run.ok) metrics.okActs++;
     metrics.hpLost += Math.max(0, hp0 - Number(actor.health)); metrics.lowestHp = Math.min(metrics.lowestHp, Number(actor.health));
