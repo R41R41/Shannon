@@ -20,6 +20,9 @@ import { madeStamp } from './lab/madeStamp.js';
 import { blackBoxOf } from '../src/services/minebot/utils/blackbox.js';
 import { exposureFromSpawner, hideoutsFrom, campSite } from '../src/services/minebot/utils/huntCamp.js';
 import { bodyReader } from '../src/services/minebot/utils/localMap.js';
+import { blazeSpawnRate, greedySpawnBlocks, spawnCells } from '../src/services/minebot/utils/spawnCells.js';
+import { standableAt, type StandCell, type StandReader } from '../src/services/minebot/utils/standability.js';
+import { BLOCK_REACH } from '../src/services/minebot/utils/blockReach.js';
 
 const port = Number(process.env.MINECRAFT_HUNT_PORT);
 const worldDirectory = process.env.MINECRAFT_HUNT_WORLD_DIRECTORY ?? '';
@@ -770,7 +773,78 @@ scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wid
 // The lane built BY THE BODY's hands (S2, 2026-11-03): the scripted head reads probe kind=lane (no spawner given: the near one), takes the first candidate (fewest cobblestones), and builds what the probe lists in the order
 // it lists it, with go and place hands (up to 4 cells per group, a go to a floor cell within reach first), the blazes alive and shooting. Then it re-reads the plan (what still stands to be built outside the lane), goes to the
 // waiting cell and holds for the rest of the time, fetching what falls. Measures the time to build, the lowest health while building, the cobblestones used and the kills after.
-async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean; torches?: boolean; settle?: boolean; lidOnly?: boolean; window?: number; ambush?: boolean; checkOnly?: boolean } = {}): Promise<Record<string, unknown>> {
+/** Lab head's hypothetical full-cube plan. Reserve the ambush route; no digging, gifts or world writes here. */
+function blazeThinPlan(spawner: StandCell, home: StandCell, attack: StandCell | null) {
+  const key = (p: StandCell) => `${p.x},${p.y},${p.z}`;
+  const snapshot = new Map<string, any>();
+  const read: StandReader = (x, y, z) => {
+    const k = key({ x, y, z });
+    if (!snapshot.has(k)) {
+      const b = actor.blockAt(new Vec3(x, y, z));
+      snapshot.set(k, b ? { name: b.name, boundingBox: b.boundingBox, shapes: b.shapes } : null);
+    }
+    return snapshot.get(k);
+  };
+  const cube = { name: 'cobblestone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] };
+  const pathsFrom = (world: StandReader) => {
+    const paths = new Map<string, StandCell[]>();
+    if (!standableAt(world, home).ok) return paths;
+    const queue = [home]; paths.set(key(home), [home]);
+    for (let i = 0; i < queue.length; i++) {
+      const p = queue[i];
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1, -1]) {
+        const to = { x: p.x + dx, y: p.y + dy, z: p.z + dz };
+        if (Math.abs(to.x - spawner.x) > 9 || Math.abs(to.z - spawner.z) > 9 || Math.abs(to.y - spawner.y) > 3 || paths.has(key(to))) continue;
+        // One-block steps need clearance above both ends; no parkour, drops, digging or placement in this report.
+        if (!standableAt(world, to).ok || (dy > 0 && world(p.x, p.y + 2, p.z)?.boundingBox !== 'empty')
+          || (dy < 0 && world(to.x, to.y + 2, to.z)?.boundingBox !== 'empty')) continue;
+        paths.set(key(to), [...paths.get(key(p))!, to]); queue.push(to);
+      }
+    }
+    return paths;
+  };
+  const initialPaths = pathsFrom(read), attackPath = attack ? initialPaths.get(key(attack)) : undefined;
+  const protectedCells = new Set<string>();
+  for (const p of [...(attackPath ?? []), home, ...(attack ? [attack] : [])]) for (const dy of [0, 1]) protectedCells.add(key({ ...p, y: p.y + dy }));
+  let generation = -1, paths = initialPaths, simulated: StandReader = read;
+  const routes: Array<{ at: StandCell; stand: StandCell; route: StandCell[] }> = [];
+  const routeFor = (at: StandCell, placed: readonly StandCell[]) => {
+    if (protectedCells.has(key(at))) return null;
+    if (generation !== placed.length) {
+      generation = placed.length;
+      const filled = new Set(placed.map(key));
+      simulated = (x, y, z) => filled.has(key({ x, y, z })) ? cube : read(x, y, z);
+      paths = pathsFrom(simulated);
+    }
+    const face = [[0, -1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0], [0, 1, 0]]
+      .find(([dx, dy, dz]) => simulated(at.x + dx, at.y + dy, at.z + dz)?.boundingBox === 'block');
+    if (!face) return null;
+    for (const route of paths.values()) {
+      const stand = route[route.length - 1];
+      if (Math.hypot(stand.x - at.x, stand.y + 1.62 - (at.y + 0.5), stand.z - at.z) > BLOCK_REACH) continue;
+      if (route.some(p => p.x === at.x && p.z === at.z && (p.y === at.y || p.y + 1 === at.y))) continue;
+      const eye = new Vec3(stand.x + 0.5, stand.y + 1.62, stand.z + 0.5);
+      const end = new Vec3(at.x + 0.5 + face[0] * 0.5, at.y + 0.5 + face[1] * 0.5, at.z + 0.5 + face[2] * 0.5);
+      const v = end.minus(eye), n = Math.ceil(v.norm() / 0.15);
+      let clear = true;
+      for (let j = 0; j < n; j++) {
+        const p = eye.plus(v.scaled(j / n)).floored(), b = simulated(p.x, p.y, p.z);
+        if (!b || b.boundingBox === 'block') { clear = false; break; }
+      }
+      if (clear) return { at, stand, route };
+    }
+    return null;
+  };
+  const plan = greedySpawnBlocks(read, spawner, { targetPerMinute: 2.7, minPerMinute: 1.5, maxBlocks: 162,
+    eligible: (at, placed) => !!routeFor(at, placed) });
+  generation = -1;
+  const placed: StandCell[] = [];
+  for (const step of plan.steps) { const route = routeFor(step.at, placed); if (route) routes.push(route); placed.push(step.at); }
+  return { ...plan, routes, attackRoute: attackPath ?? null,
+    blockedReason: !attack || !attackPath ? 'no loaded walking route from cover to attack cell' : null };
+}
+
+async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number; away?: boolean; awaySeconds?: number; fill?: boolean; torches?: boolean; settle?: boolean; lidOnly?: boolean; window?: number; ambush?: boolean; checkOnly?: boolean; thin?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const holdSeconds = options.holdSeconds ?? 300, groupSize = options.groupSize ?? 5, thinkMs = 5000;
@@ -781,7 +855,40 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const readLane = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'lane' }, 25); laneRaw = String(found.receipt?.result ?? found.lines?.join(' ') ?? '').slice(0, 240); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
   const hp = () => Number(actor.health);
   const track: number[] = [];
-  const sampler = setInterval(() => { const value = hp(); if (Number.isFinite(value)) track.push(r1(value)); }, 1000);
+  type ThinWindow = { label: string; started: number; until: number; last: number; elapsedMs: number; capMs: number; activeMs: number; ids: number[]; firstSeen: Array<{ id: number; t: number }> };
+  const thinWindows: ThinWindow[] = [], thinKnown = new Set<number>();
+  let thinWindow: ThinWindow | null = null;
+  const inThinBox = (e: any) => {
+    const s = sites.blazeSpawner as number[] | undefined, p = e?.position;
+    return !!s && String(e?.name) === 'blaze' && p && p.x + 0.3 > s[0] - 4 && p.x - 0.3 < s[0] + 5
+      && p.y + 1.8 > s[1] - 4 && p.y < s[1] + 5 && p.z + 0.3 > s[2] - 4 && p.z - 0.3 < s[2] + 5;
+  };
+  const sampleThin = () => {
+    const w = thinWindow;
+    if (!w) return;
+    const now = Math.min(Date.now(), w.until), entities = (Object.values(actor.entities ?? {}) as any[]).filter(inThinBox);
+    if (entities.length >= 6) w.capMs += Math.max(0, now - w.last);
+    const s = sites.blazeSpawner as number[] | undefined;
+    if (s && dimensionOf() === 'the_nether' && actor.entity.position.distanceTo(new Vec3(s[0] + 0.5, s[1] + 0.5, s[2] + 0.5)) < 16) w.activeMs += Math.max(0, now - w.last);
+    w.last = now; w.elapsedMs = now - w.started;
+    // Tracking + spawn events count first observations, not a difference between two population snapshots.
+    if (Date.now() <= w.until) for (const e of entities) if (!thinKnown.has(e.id)) {
+      thinKnown.add(e.id); w.ids.push(e.id); w.firstSeen.push({ id: e.id, t: r1((now - w.started) / 1000) });
+    }
+  };
+  const beginThinWindow = (label: string, seconds: number) => {
+    thinKnown.clear();
+    for (const e of Object.values(actor.entities ?? {}) as any[]) if (String(e?.name) === 'blaze') thinKnown.add(e.id);
+    const now = Date.now();
+    thinWindow = { label, started: now, until: now + seconds * 1000, last: now, elapsedMs: 0, capMs: 0, activeMs: 0, ids: [], firstSeen: [] };
+    thinWindows.push(thinWindow);
+  };
+  const thinMeasures = () => thinWindows.map(w => ({ label: w.label, seconds: r1(w.elapsedMs / 1000), complete: w.elapsedMs >= w.until - w.started,
+    newlySeen: w.ids.length, perMinute: w.elapsedMs ? r1(w.ids.length * 60_000 / w.elapsedMs) : null, capSeconds: r1(w.capMs / 1000), actorWithin16Seconds: r1(w.activeMs / 1000), firstSeen: w.firstSeen }));
+  if (options.thin) actor.on('entitySpawn', sampleThin);
+  const sampler = setInterval(() => { const value = hp(); if (Number.isFinite(value)) track.push(r1(value)); if (options.thin) sampleThin(); }, 1000);
+  const cleanup: Array<() => void> = [];
+  try {
   const cobble0 = packClient().cobblestone ?? 0;
   const t0 = Date.now(), deaths0 = deaths;
   // timeline (the coordinator's order d49: the seconds the body is exposed, by stretch)
@@ -841,7 +948,15 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     // the clearing-away: the room fills for a minute (the spawner runs with the body near), the body goes far off (the spawner stops, what it made fades), waits, and comes back to build
     const arrival = sites.netherArrival as number[] | undefined;
     if (!arrival) throw new Error('no netherArrival in the sites');
-    await act('warm', [{ do: 'wait', seconds: 40 }], 60, { accept: ['blaze'] });
+    if (options.thin) {
+      beginThinWindow('before (warm, before clearing away)', 60);
+      await act('warm baseline', [{ do: 'wait', seconds: 60 }], 80, { accept: ['blaze'] });
+      sampleThin();
+      // A reflex can end wait early; finish the specified window only while this body is alive.
+      while (thinWindow && Date.now() < thinWindow.until && !disconnected && hp() > 0 && deaths === deaths0) await sleep(250);
+      sampleThin(); thinWindow = null;
+      note(`thin before: ${JSON.stringify(thinMeasures())}`);
+    } else await act('warm', [{ do: 'wait', seconds: 40 }], 60, { accept: ['blaze'] });
     note(`blazes known before leaving: ${(Object.values(actor.entities ?? {}) as any[]).filter(e => String(e?.name) === 'blaze').length}`);
     await placeActor('the_nether', arrival[0], arrival[1], arrival[2], 24);
     await sleep((options.awaySeconds ?? 150) * 1000);
@@ -1071,11 +1186,12 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const holdCell = holdOpen(-1) && holdOpen(0) && holdOpen(1) ? { x: wait[0], y: wait[1], z: wait[2] } : { x: stand[0], y: stand[1], z: stand[2] };
   { const here = holdCell;
     mark('hold begins'); await act('to the hold cell', [{ do: 'go', to: here, range: 0.5, seconds: 15, onFail: 'continue' }], 30, { accept: ['blaze'] }); }
-  const rods0 = packClient().blaze_rod ?? 0, holdStart = Date.now();
+  let rods0 = packClient().blaze_rod ?? 0, holdStart = Date.now();
   let killed = 0, shieldHits = 0, woundsTaken = 0, unseenActs = 0;
   const killedAt = new Map<number, number>();
   const onDead = (entity: any) => { if (String(entity?.name ?? '') === 'blaze') { killed++; killedAt.set(entity.id, Date.now()); } };
   actor.on('entityDead', onDead);
+  cleanup.push(() => actor.removeListener('entityDead', onDead));
   // each second, every blaze within 12 m: its distance from the eyes, whether the line from the eyes to it is clear, and the height difference (read at the end as a table: does a blaze come on while it cannot see the body, and stop while it can)
   const watchRows = new Map<number, Array<{ t: number; d: number; los: boolean; dy: number; box: number; line: boolean }>>();
   const watch = setInterval(() => {
@@ -1094,6 +1210,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
       }
     } catch { /* a raycast on an unloaded chunk: skip this second */ }
   }, 1000);
+  cleanup.push(() => clearInterval(watch));
   const watchReport = () => {
     const bands: Array<[string, (d: number) => boolean]> = [['<2m', d => d < 2], ['2-3m', d => d >= 2 && d < 3], ['3-5m', d => d >= 3 && d < 5], ['5-12m', d => d >= 5]];
     const out: string[] = [];
@@ -1137,6 +1254,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   // (the blazes that see the body: the line from the blaze to the eye is clear)
   const sightCount = () => { const eye = actor.entity.position.offset(0, 1.62, 0); let n = 0; for (const e of Object.values(actor.entities ?? {}) as any[]) { if (String(e?.name) !== 'blaze' || !e.position) continue; const v = e.position.offset(0, 0.9, 0).minus(eye), len = v.norm(); if (len > 48 || len < 0.1) continue; try { if (!(actor.world as any).raycast(eye, v.normalize(), len, (b: any) => b.boundingBox === 'block')) n++; } catch { /* unloaded */ } } return n; };
   const fireballWatch = setInterval(() => { for (const e of Object.values(actor.entities ?? {}) as any[]) if (String(e?.name) === 'small_fireball' && e.position && e.position.distanceTo(actor.entity.position) < 24) fireballIds.add(e.id); }, 100);
+  cleanup.push(() => clearInterval(fireballWatch));
   const lossWatch = setInterval(() => {
     const h = hp();
     if (!Number.isFinite(h)) return;
@@ -1144,6 +1262,52 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     if (h < lastHp) { const drop = lastHp - h; if (drop > 1.25) { hitLoss += drop; hitCount++; } else if (burning()) burnLoss += drop; else smallLoss += drop; }
     lastHp = h;
   }, 250);
+  cleanup.push(() => clearInterval(lossWatch));
+  let thinReport: Record<string, unknown> | null = null;
+  if (options.thin || options.checkOnly) {
+    const plan = blazeThinPlan(spawnerCell, holdCell, attackCell), final = plan.steps.at(-1);
+    const compact = { pBefore: [plan.pMin, plan.pMax], pAfterPlanned: final ? [final.pMin, final.pMax] : [plan.pMin, plan.pMax],
+      blocks: plan.steps.length, reached: plan.reached, blockedReason: plan.blockedReason, attackRoute: plan.attackRoute,
+      table: [{ k: 0, p: plan.pMax, perMinute: blazeSpawnRate(Math.min(1, plan.pMax)).perMinute },
+        ...plan.steps.map((s, i) => ({ k: i + 1, p: s.pMax, perMinute: s.perMinute }))] };
+    note(`thin plan (cobblestone, no light test): ${JSON.stringify(compact)}`);
+    for (const row of plan.routes) note(`thin planned cell/stand/route out (reverse to return): ${JSON.stringify(row)}`);
+    thinReport = { ...compact, routes: plan.routes, cellsBefore: plan.cells };
+    if (options.thin) {
+      if (plan.blockedReason || !plan.reached || plan.pMax - plan.pMin > 1e-10) {
+        sampleThin();
+        return { thin: { ...thinReport, placed: 0, failed: 0, notPlaced: plan.steps.length, aborted: 'unreachable target or unknown geometry; no thin blocks placed' }, measurements: thinMeasures(), lowestHp: Math.min(...track, 20) };
+      }
+      const began = Date.now(), placementResults: Array<Record<string, unknown>> = [];
+      let placed = 0, failed = 0, stopped = '';
+      for (const row of plan.routes) {
+        if (disconnected || hp() < 14 || deaths !== deaths0) { stopped = 'health/death/disconnect before placement'; break; }
+        const read: StandReader = (x, y, z) => actor.blockAt(new Vec3(x, y, z));
+        if (!standableAt(read, row.stand).ok || !standableAt(read, holdCell).ok) {
+          failed++; placementResults.push({ at: row.at, ok: false, why: 'stance or retreat changed' }); continue;
+        }
+        const before = actor.blockAt(new Vec3(row.at.x, row.at.y, row.at.z))?.name;
+        const run = await act(`thin#${placementResults.length + 1}`, [{ do: 'fill', block: 'cobblestone', groups: [{ stand: row.stand, at: [row.at] }],
+          retreatHp: 10, retreatTo: holdCell, seconds: 60 }], 90, { accept: ['blaze'] });
+        const f = ((run.json?.lines ?? []) as any[]).map(l => l.fill).find(Boolean);
+        const ok = before !== 'cobblestone' && actor.blockAt(new Vec3(row.at.x, row.at.y, row.at.z))?.name === 'cobblestone';
+        if (ok) placed++; else failed++;
+        placementResults.push({ at: row.at, ok, code: f?.code, reasons: f?.reasons, safe: f?.safe, hp: hp() });
+        note(`thin placed ${placed}, failed ${failed}: ${JSON.stringify(placementResults.at(-1))}`);
+        if (!f?.safe || f?.code) { stopped = `fill stopped: ${f?.code ?? 'return not confirmed safe'}`; break; }
+      }
+      const actual = spawnCells((x, y, z) => actor.blockAt(new Vec3(x, y, z)), spawnerCell), rate = blazeSpawnRate(Math.min(1, actual.pMax)).perMinute;
+      thinReport = { ...thinReport, placed, failed, notPlaced: plan.steps.length - placed, notAttempted: plan.steps.length - placementResults.length, stopped,
+        placementResults, seconds: r1((Date.now() - began) / 1000), actualP: [actual.pMin, actual.pMax], actualPerMinute: rate };
+      note(`thin actual: ${JSON.stringify(thinReport)}`);
+      if (stopped || actual.pMax - actual.pMin > 1e-10 || rate < 1.5 || rate > 3 || disconnected || hp() <= 0 || deaths !== deaths0) {
+        return { thin: { ...thinReport, aborted: 'actual geometry/rate outside 1.5..3; no sortie' }, measurements: thinMeasures(), lowestHp: Math.min(...track, 20), burnSeconds: r1(burnSeconds) };
+      }
+      // Begin the 120 s after window at the start of the ordinary ambush, including cover time.
+      holdStart = Date.now(); rods0 = packClient().blaze_rod ?? 0; killed = 0; killedAt.clear(); watchRows.clear();
+      beginThinWindow('after (first 120 s of ambush)', 120);
+    }
+  }
   if (options.checkOnly) {
     // the preview: one minute or two; the lane report as JSON, the cells with a stand, the way out to the attack cell and back (the way back said again up to three times), the sealing of the holes
     const standCells = (c.build as any[]).filter(row => row[4] !== null && row[4] !== undefined).length;
@@ -1164,7 +1328,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     }
     note(`CHECK: lane report as JSON yes; stand cells ${standCells} of ${c.build.length}; sealing ${sealState ? (sealState.walls ? (sealState.ok ? 'done' : 'failed') : 'not needed') : 'not run'}; out ${out}; back ${back}; body at ${actor.entity.position.floored().toString()}`);
     clearInterval(sampler); clearInterval(watch); clearInterval(lossWatch); clearInterval(fireballWatch);
-    return { check: true, standCells, cells: c.build.length, sealed: sealState?.walls ?? 0, sealOk: sealState?.ok ?? null, out, back };
+    return { check: true, standCells, cells: c.build.length, sealed: sealState?.walls ?? 0, sealOk: sealState?.ok ?? null, out, back, thinPreview: thinReport };
   }
   try {
     while (Date.now() - holdStart < holdSeconds * 1000 && !disconnected && hp() > 0 && deaths === deaths0) {
@@ -1221,11 +1385,19 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   } finally { clearInterval(sampler); clearInterval(watch); clearInterval(lossWatch); clearInterval(fireballWatch); actor.removeListener('entityDead', onDead); }
   note(`health lost: ${r1(hitLoss)} in single drops over 1.25 (fireballs), ${r1(burnLoss)} while burning, ${r1(smallLoss)} other; burning ${r1(burnSeconds)} s; out ${outs} times, back ${retreats} times; fireballs seen ${fireballIds.size}, direct hits ${hitCount}, shield wear ${Number((actor.inventory?.slots?.[45] as any)?.durabilityUsed ?? 0) - shield0} (${r1((Number((actor.inventory?.slots?.[45] as any)?.durabilityUsed ?? 0) - shield0) / 6)} blocked)`);
   for (const line of watchReport()) note(`blaze watch ${line}`);
+  if (options.thin) { sampleThin(); note(`thin before/after first observations (cap/entrants can bias this): ${JSON.stringify(thinMeasures())}`); }
   return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
-    killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null, shieldHits, woundsTaken: r1(woundsTaken), actsWithBlazeUnseen: unseenActs, holdActs: n, hitLoss: r1(hitLoss), burnLoss: r1(burnLoss), burnSeconds: r1(burnSeconds), outs, retreats };
+    killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null, shieldHits, woundsTaken: r1(woundsTaken), actsWithBlazeUnseen: unseenActs, holdActs: n, hitLoss: r1(hitLoss), burnLoss: r1(burnLoss), burnSeconds: r1(burnSeconds), outs, retreats,
+    ...(options.thin ? { thin: thinReport, measurements: thinMeasures(), rodsPerMin: r1(((packClient().blaze_rod ?? 0) - rods0) / Math.max((Date.now() - holdStart) / 60_000, 0.1)) } : {}) };
+  } finally {
+    sampleThin(); clearInterval(sampler);
+    if (options.thin) actor.removeListener('entitySpawn', sampleThin);
+    for (const close of cleanup) close();
+  }
 }
 scene('blaze_ambush_check', 'the one-to-two minute preview of the ambush: stand, lane report, stand cells, sealing of the holes beside the stand, the way out to the attack cell and back; no clearing-away, no hold', note => blazeLaneBuild(note, { fill: true, lidOnly: true, ambush: true, checkOnly: true, holdSeconds: 1 }));
 scene('blaze_ambush', 'the lid cover set with the fill hand after clearing away; in the cover until one to four blazes are in the counting box, then out to a cell beside the spawner and 3 s strikes; back at once when none, more than four, below 14 hp or on fire (rest to 18); health lost split into fireball drops and fire; a blaze table at the end; 480 s', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, ambush: true, holdSeconds: 480 }));
+scene('blaze_thin_ambush', 'lab only: 60 s baseline, clearing away, ordinary ambush cover, weighted cobblestone thinning by fill hands, 120 s first-observation window during the ordinary 480 s ambush', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, ambush: true, thin: true, holdSeconds: 480 }));
 scene('blaze_lid_window', 'the lid only with a window: two head-height cells next to the body towards the spawner stay open; fill, then attack hold 400 s; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, window: 2, holdSeconds: 400 }));
 scene('blaze_lid_fill', 'the lid only (the lid cells of the lane probe) set with the fill hand right after clearing away, no torches, then attack hold from the cover for 300 s; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, lidOnly: true, holdSeconds: 300 }));
 scene('blaze_lane_fill_settle', 'the lane set with the fill hand after clearing away: fight from the cover what came back, torches first, fill, settle between steps; timeline marks', note => blazeLaneBuild(note, { away: true, fill: true, torches: true, settle: true }));
