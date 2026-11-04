@@ -70,3 +70,21 @@ describe('a walk into a portal that a reflex cuts in the moment the body crosses
     expect(json.lines[0].status).toBe('stopped');
   });
 });
+
+describe('a walk into the End portal cut by a reflex just before the crossing (S5 rig, c1: the lava reflex 0.1 s before the server moved the body; the task paused in the End)', () => {
+  it('waits for the crossing while the body touches the portal, and tells it as the crossing', async () => {
+    const bot = body('overworld');
+    // The End portal's sheet one block over the feet (the body slipped past it into the lava under it).
+    bot.blockAt = (p: Vec3) => (Math.floor(p.y) === 65 && Math.abs(Math.floor(p.x)) <= 1 && Math.abs(Math.floor(p.z)) <= 1 ? { name: 'end_portal', boundingBox: 'empty' } : AIR);
+    stub.crossNow = () => {
+      const ledger = ensureReflexLedger(bot);
+      ledger.end(ledger.begin('lava', '溶岩回避の反射が始まった（脱出は未確認）'), 'done');
+      setTimeout(() => { bot.game.dimension = 'the_end'; bot.entity.position = new Vec3(100.5, 49, 0.5); bot.blockAt = () => AIR; }, 300);
+    };
+    const result = await runAct(bot, ACT_HANDS.parse([{ do: 'walk', to: { x: 1, y: 64, z: 1 } }]), undefined, undefined, { tickMs: 10 });
+    const json = JSON.parse(result.result);
+    expect(json.ok).toBe(true);
+    expect(json.lines[0]).toMatchObject({ do: 'walk', status: 'done' });
+    expect(json.lines[0].line).toContain('エンドへ移った');
+  });
+});

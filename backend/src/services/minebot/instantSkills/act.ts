@@ -224,6 +224,19 @@ function cellsOf(ctx: StepContext, hand: ActHand, specs: unknown[] | undefined):
 }
 const bad = (text: string): StepOutcome => ({ ok: false, reason: 'invalid_input', text });
 /** A creature named as the contract does ("#41" an id, else a name), or a plain id. */
+/** How long a walk or portal hand cut by a reflex waits for the crossing while the body still touches a portal (a nether portal takes four seconds of standing in it). */
+export const PORTAL_CROSS_WAIT_MS = 4500;
+/** The body touches a portal: a nether portal or End portal cell within a block of its feet, from three below them (the lava under the End portal's sheet) to two above. */
+export function touchingPortal(bot: any): boolean {
+  const p = bot.entity?.position;
+  if (!p) return false;
+  const fx = Math.floor(p.x), fy = Math.floor(p.y + 1e-3), fz = Math.floor(p.z);
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (let dy = -3; dy <= 2; dy++) {
+    const name = String(blockAt(bot, { x: fx + dx, y: fy + dy, z: fz + dz })?.name ?? '');
+    if (name === 'end_portal' || name === 'nether_portal') return true;
+  }
+  return false;
+}
 const targetOf = (value: string | number | undefined) => value === undefined ? undefined : typeof value === 'number' ? value
   : /^#\d+$/u.test(value.trim()) ? Number(value.trim().slice(1)) : value;
 const PILLAR_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'end_stone', 'obsidian'];
@@ -657,6 +670,13 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         }
         if (error instanceof StepStopped || control.signal.aborted || /Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) {
           if (!control.signal.aborted && signal?.aborted) onCut();
+          // S5 rig (c1, 2026-11-05): the walk onto the End portal was cut by the lava reflex 0.1 s before the server moved the body to the End (it had slipped past the sheet into
+          // the lava under it, touching the sheet); the act said "stopped: reflex", the head had no receipt it could read and the task paused (fca_recovery_unknown) in the End. A
+          // walk or portal hand cut by a reflex while the body still touches a portal's cells is given the moment the crossing takes (the sheet at once, a nether portal's four seconds).
+          if ((hand.do === 'walk' || hand.do === 'portal') && report.stoppedBy === 'reflex' && dimensionOf(bot) === dimension0 && touchingPortal(bot)) {
+            for (const until = Date.now() + PORTAL_CROSS_WAIT_MS; Date.now() < until && dimensionOf(bot) === dimension0 && touchingPortal(bot);) await new Promise(resolve => setTimeout(resolve, 100));
+            for (const until = Date.now() + 600; Date.now() < until && dimensionOf(bot) === dimension0;) await new Promise(resolve => setTimeout(resolve, 100));
+          }
           // A walk or a portal hand cut by a reflex in the very moment the body crossed: the old world's lava under the End portal's sheet reads as lava as the body leaves it, the lava reflex
           // takes the act, and the body is in the End all the same (the PC lab and S4's c1 run: "walk stopped: lava_escape" with the dimension the_end). The hand did what it was sent for.
           if ((hand.do === 'walk' || hand.do === 'portal') && report.stoppedBy === 'reflex' && dimensionOf(bot) !== dimension0) {
