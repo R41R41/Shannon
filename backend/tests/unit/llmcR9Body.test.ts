@@ -166,16 +166,21 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
   it('health 6 or less, or no blade: no blow. A block between (the planner\'s pickaxe is no blade); with nothing to put, a step away above the flee\'s health', async () => {
     const clock = { at: 52_000_000 };
     for (const [label, health, items] of [['no blade', 11, [IRON_PICKAXE, COBBLE]], ['six', 6, [IRON_SWORD, COBBLE]]] as const) {
-      const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [...items], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+      // 固定6の境は小さな一撃で試す。大きな一撃なら先に離れる（run62）。
+      const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: label === 'six' ? 6.5 : 15.5, items: [...items], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+      const mobs = bot.entities; bot.entities = {};
       await hurtTo(bot, clock, health);
+      bot.entities = mobs;
       await rounds(bot, clock, 1);
       expect(bot.__swings, label).toEqual([]);
       expect(bot.__placed, label).toEqual(['1,64,0']);
       expect(meleeLines(ledger)[0].detail, label).toMatch(/^近接の piglin #1677 2\.1m: 間 \(1,64,0\) に cobblestone を置いた。足場: 空所なし 今2\.1m 体力/u);
     }
     // Seven is above six: the blow.
-    const seven = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+    const seven = scene(field, new Vec3(0.5, 64, 0.5), { health: 7.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+    const sevenMobs = seven.bot.entities; seven.bot.entities = {};
     await hurtTo(seven.bot, clock, 7);
+    seven.bot.entities = sevenMobs;
     await rounds(seven.bot, clock, 1);
     expect(seven.bot.__swings).toHaveLength(2);
     // Nothing to put, no blade, health 15: a step away (r8's hand).
@@ -184,8 +189,10 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
     await rounds(bare.bot, clock, 1);
     expect(meleeLines(bare.ledger)[0].detail).toMatch(/^近接の piglin #1677 2\.1m: 敵から離れる向きへ西1/u);
     // At the flee's health with nothing to put: the flee is the one that runs (no melee line at all).
-    const low = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+    const low = scene(field, new Vec3(0.5, 64, 0.5), { health: 7.5, items: [], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+    const lowMobs = low.bot.entities; low.bot.entities = {};
     await hurtTo(low.bot, clock, 7);
+    low.bot.entities = lowMobs;
     await rounds(low.bot, clock, 1);
     expect(meleeLines(low.ledger)).toHaveLength(0);
   }, 30_000);
@@ -251,7 +258,7 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
     expect(bot.equip.mock.calls).toHaveLength(equips);
   }, 40_000);
 
-  it('a blow back stops when the health falls to 6 in the hand (the next hand is a block between)', async () => {
+  it('a blow back stops during the hand and says the heavy hit that made it unsafe', async () => {
     const clock = { at: 56_000_000 };
     const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: piglin(1677, 2.6, 64, 0.5, 1000) }, now: () => clock.at, damage: 1 });
     await hurtTo(bot, clock, 11);
@@ -262,7 +269,7 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
     await vi.waitFor(() => expect(bot.floorReflexes.busy).toBeNull(), { timeout: 5000, interval: 5 });
     expect(bot.__swings).toHaveLength(1);
     expect(meleeLines(ledger)[0].detail).toContain('打ち返した 1 回（iron_sword）');
-    expect(meleeLines(ledger)[0].detail).toContain('体力が6以下になった');
+    expect(meleeLines(ledger)[0].detail).toContain('打ち返しをやめる：piglin 1体、一撃 6.5、体力 4.5');
   }, 20_000);
 });
 

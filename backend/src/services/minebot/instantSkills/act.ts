@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { CustomBot, InstantSkill } from '../types.js';
 import { actionSignal, delegateShield, handoverOf, motorOpsOf, nativeActionHost } from '../execution/ActionExecution.js';
-import { isThreat, LAYING_HANDS, reflexHeld, shooterWords, shootersInReach, shootersSeeing } from '../utils/floorReflexes.js';
+import { FLEE_HEALTH, isThreat, LAYING_HANDS, meleeDanger, reflexHeld, shooterWords, shootersInReach, shootersSeeing, watchDamage } from '../utils/floorReflexes.js';
 import { threatExposure } from '../utils/threatExposure.js';
 import { beginEngagement } from '../utils/engagement.js';
 import { bodyReader, cellKey, facingOfYaw, feetCell, noteMapStop, type Cell, type Facing } from '../utils/localMap.js';
@@ -449,6 +449,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const startDimension = String(bot.game?.dimension ?? '');
   /** The body (not the motor port): the hand running now is told on it, for the floor's last stand (floorReflexes LAYING_HANDS). */
   const host = nativeActionHost(bot) as { actHandNow?: string };
+  const endDamage = watchDamage(bot);
   const accepted = new Set((options.accept ?? []).map(kind => kind.replace(/^minecraft:/u, '').toLowerCase()).filter(Boolean));
   const sealed = (entity: any) => { try { return threatExposure(bot, entity) === 'sealed'; } catch { return false; } };
   const ledger = bot.reflexLedger as { mark(): number; entriesSince(mark: number): Array<{ kind: string; detail: string }> } | undefined;
@@ -487,6 +488,13 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const HURT_GRACE_MS = 250;
   const acceptedNear = () => accepted.size > 0 && (Object.values(bot.entities ?? {}) as any[]).some(entity => entity?.position && entity !== bot.entity
     && accepted.has(String(entity.name ?? '').toLowerCase()) && entity.position.distanceTo(bot.entity.position) <= 6);
+  const stopForMeleeDanger = (): boolean => {
+    if (handNow?.do === 'fight') return false;
+    const danger = meleeDanger(bot);
+    if (!danger.count || (bot.health ?? 20) > Math.max(FLEE_HEALTH, danger.health)) return false;
+    stopWith(`受け切れない: ${danger.kind} の一撃 ${danger.hit.toFixed(1)} ×${danger.blows}、残り ${Number(bot.health).toFixed(1)}`, 'damage_taken');
+    return true;
+  };
   const hurtOrFall = () => {
     const health = Number(bot.health ?? 20);
     // fill owns its HP floor and return budget, including during its go; a damage notice must not cut that return short.
@@ -508,6 +516,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (doneWhen && !doneMet && holdsDone()) return finishDone();
       // A walk into a portal says the crossing itself (its arrival) and the act ends after it (below): not a stop in the middle of the hand.
       if (String(bot.game?.dimension ?? '') !== startDimension && !(host.actHandNow === 'portal' || (host.actHandNow === 'walk' && portalWalks.has(bot))) && !crossedByWalk) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
+      if (stopForMeleeDanger()) return;
       const entries = ledger?.entriesSince(mark).filter(entry => !LEDGER_QUIET.has(entry.kind)) ?? [];
       // r6 (run 29): a reflex's note does not stop a hand that is laying blocks (it may be what walls the threat off); the act stops when
       // that hand is over. A reflex that takes the body still cuts it at once (its lease aborts the action: onCut).
@@ -541,6 +550,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   // A reflex's lease aborts the action with its own name (preemptLowerPriorityActions); anything else is the command's end.
   const onCut = () => {
     const reason = String(signal?.reason ?? '');
+    if ((/^(floor-|constant:|auto-|lava|breath)/u.test(reason) || REFLEX_NAMES[reason]) && stopForMeleeDanger()) return;
     if (/^(floor-|constant:|auto-|lava|breath)/u.test(reason) || REFLEX_NAMES[reason]) stopWith(`${reflexName(reason)}`, 'interrupted_by_reflex');
     // A tool that broke with no spare of its kind in the pack (types/skills.ts cuts the command there): said as that, with the way on (S2 lab, a 125 m Nether walk, one iron pickaxe).
     else if (reason === 'tool_broke') stopWith('道具が壊れて止まった（同じ種類以上の予備が荷に無い）。作るか拾って持ってから、同じ手をもう一度', 'cancelled');
@@ -770,6 +780,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   } finally {
     host.actHandNow = undefined;
     clearInterval(timer);
+    endDamage();
     endAccepted();
     signal?.removeEventListener('abort', onCut);
     try { bot.setControlState?.('sneak', false); } catch { /* released */ }

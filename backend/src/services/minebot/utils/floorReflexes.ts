@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { actionLeaseStatus, actionSignal, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
+import { actionLeaseStatus, actionSignal, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, nativeActionHost, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
 import { isHeadCombatActive, isHeadCombatRunning } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
@@ -62,6 +62,8 @@ const FLEE_RANGE_SHOOTER = 16;
 const FLEE_KEEP_RANGE = 12;
 const FLEE_KEEP_RANGE_SHOOTER = 20;
 const FLEE_SEGMENT_TICKS = 24;
+const FLEE_STILL_TICKS = 6;
+const FLEE_STILL_BLOCKS = 0.3;
 const FLEE_SEGMENT_BLOCKS = 7;
 const FLEE_YIELD_AFTER_TICKS = 4;
 /** How far ahead a heading is read for lava, fire, a drop or a wall (the heading itself is chosen again at every tick). */
@@ -122,7 +124,8 @@ export interface FloorBody {
   look?(yaw: number, pitch: number, force?: boolean): unknown;
   equip?(item: Item, destination: string): Promise<void>;
   consume?(): Promise<void>;
-  on(event: 'physicsTick', listener: () => void): unknown;
+  on(event: 'physicsTick' | 'health' | 'spawn', listener: () => void): unknown;
+  removeListener?(event: 'health' | 'spawn', listener: () => void): unknown;
   floorReflexes?: FloorState;
   lavaReflex?: { engaged: boolean };
   breathingReflex?: { engaged: boolean };
@@ -158,8 +161,11 @@ export interface RetreatState {
 /** One run from danger, in segments (`fleeStart`). */
 export interface FleeEpisode {
   startedAt: number; origin: Vec3; segments: number;
+  /** 始めた時の危険域。腕が届く所を出ただけで走る区切りを終えない。 */
+  healthLimit?: number;
   /** The heading of the last tick, kept from one segment to the next (`fleeHeadingPlan`: no oscillation between several threats). */
   heading?: number;
+  blockedHeadings?: number[];
   /** Segments in a row that made no headway. */
   stalls: number;
   /** How the latest segment ended, for the ledger entry the episode leaves. */
@@ -168,7 +174,9 @@ export interface FleeEpisode {
   end?: (outcome: ReflexOutcome) => void;
 }
 export interface FloorState {
-  retreat: RetreatState; busy: 'eat' | 'armor' | 'flee' | null; retryAt: number; engagements: { eat: number; armor: number; flee?: number; fleeRefused?: number };
+  retreat: RetreatState; busy: 'eat' | 'armor' | 'flee' | null; retryAt: number; engagements: { eat: number; armor: number; flee?: number; fleeRefused?: number; meleeStopped?: number; fleeStuckTurns?: number; pillar?: number };
+  meleeDangerNoted?: boolean;
+  fleeStuck?: boolean;
   /** When each flee episode of the last 20 s began (the flee's own allowance). */
   fleeStarts?: number[];
   fleeEpisode?: FleeEpisode;
@@ -825,18 +833,20 @@ const angleBetween = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - 
  * `fleeHeading`, with whether the body must jump to follow it (a whole block to climb a step or two ahead). `previous` is the last heading of the run.
  * `noJump` (the dragon's reach: a body in the air cannot step aside) takes only a heading that is walked on the level.
  */
-export function fleeHeadingPlan(bot: FloorBody, from: Vec3 | Vec3[], previous?: number, options: { noJump?: boolean; wide?: boolean } = {}): { yaw: number; jump: boolean } | null {
+export function fleeHeadingPlan(bot: FloorBody, from: Vec3 | Vec3[], previous?: number, options: { noJump?: boolean; wide?: boolean; blockedHeadings?: number[] } = {}): { yaw: number; jump: boolean } | null {
   const at = bot.entity?.position; if (!at) return null;
   const sources = Array.isArray(from) ? from : [from];
   if (!sources.length) return null;
   const away = repulsionYaw(at, sources);
   const allowed = (scan: { safe: boolean; jump: boolean }) => scan.safe && !(options.noJump && scan.jump);
-  if (previous !== undefined && sources.length > 1 && angleBetween(previous, away) <= HEADING_HOLD && !runsToward(at, previous, sources)) {
+  const blocked = (yaw: number) => options.blockedHeadings?.some(heading => angleBetween(yaw, heading) < Math.PI / 8) === true;
+  if (previous !== undefined && !blocked(previous) && sources.length > 1 && angleBetween(previous, away) <= HEADING_HOLD && !runsToward(at, previous, sources)) {
     const held = scanHeading(bot, at, previous);
     if (allowed(held)) return { yaw: previous, jump: held.jump };
   }
   for (const turn of options.wide ? FLEE_TURNS_WIDE : FLEE_TURNS) {
     const yaw = away + turn;
+    if (blocked(yaw)) continue;
     if (turn !== 0 && runsToward(at, yaw, sources)) continue;
     const scan = scanHeading(bot, at, yaw);
     if (allowed(scan)) return { yaw, jump: scan.jump };
@@ -849,7 +859,8 @@ export interface FleeThreat { from: Vec3; threats: Vec3[]; nearest: number }
 
 /**
  * The threats to run from at low health: every `isThreat` entity that can get at the body (not walled off) within the flee's range, which is
- * wider for a kind that shoots, and wider once an episode is running (`keeping`: so that the body is not let go at 8.1 m). Null above FLEE_HEALTH.
+ * wider for a kind that shoots, and wider once an episode is running (`keeping`: so that the body is not let go at 8.1 m).
+ * FLEE_HEALTH is the lower bound; a recent heavy blow among melee enemies raises it (`meleeDanger`).
  */
 /**
  * Shooters that hold their place and fire only at what they see (utils/huntBlaze: a blaze goes after a body it has lost sight of for a fifth of a second and no longer; a ghast does not
@@ -862,7 +873,8 @@ const outOfSightOfAShooter = (name: string, exposure: string, distance: number):
 
 export function fleeThreat(bot: FloorBody, keeping = false): FleeThreat | null {
   const health = bot.health ?? 20, at = bot.entity?.position;
-  if (!at || !(health > 0 && health <= FLEE_HEALTH) || bot.entity?.isInLava) return null;
+  if (!at || health <= 0 || bot.entity?.isInLava) return null;
+  if (health > Math.max(FLEE_HEALTH, keeping ? bot.floorReflexes?.fleeEpisode?.healthLimit ?? 0 : 0, meleeDanger(bot).health)) return null;
   const found: Array<{ distance: number; position: Vec3 }> = [];
   for (const entity of others(bot)) {
     if (!isThreat(bot, entity)) continue;
@@ -902,7 +914,7 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeS
   // An episode nobody came back to (the body was held by something else for longer than it could run) is over.
   if (state.fleeEpisode && now - state.fleeEpisode.startedAt > FLEE_EPISODE_MS + 2000) endEpisode();
   // Healthy, and nothing to end: nothing to do (this runs every physics tick).
-  if (!state.fleeEpisode && !((bot.health ?? 20) > 0 && (bot.health ?? 20) <= FLEE_HEALTH)) return null;
+  if (!state.fleeEpisode && !((bot.health ?? 20) > 0 && (bot.health ?? 20) <= Math.max(FLEE_HEALTH, meleeDanger(bot).health))) return null;
   if (state.retreat.engaged || state.busy || hasActiveSafetyLease(bot)) return null;
   if (bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) return null;
   if (escapeRunning(bot)) return null;
@@ -926,7 +938,7 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeS
   if (!threat) { endEpisode(); return null; }
   // No safe way to run (a cliff or lava on every side the flee may take): it does not take the body, nor spend its allowance.
   // The API's fast judgment (a shelter, its own flee) decides what to do instead, and is told so (`state.world.reflexes`).
-  if (fleeHeading(bot, threat.threats, episode?.heading) === null) {
+  if (fleeHeadingPlan(bot, threat.threats, episode?.heading, { blockedHeadings: episode?.blockedHeadings }) === null) {
     state.engagements.fleeRefused = (state.engagements.fleeRefused ?? 0) + 1;
     state.fleeRefusedUntil = now + FLEE_REFUSAL_CACHE_MS;
     endEpisode();
@@ -952,11 +964,12 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeS
  *    would be a wall for ever (the physics: pressing jump at the shore gets out of the water onto a bank flush with it; without, it
  *    sticks there).
  */
-export function fleeKeys(bot: FloorBody, threats: Vec3[], memory: { heading?: number }): { yaw: number; jump: boolean } | null {
+export function fleeKeys(bot: FloorBody, threats: Vec3[], memory: { heading?: number; blockedHeadings?: number[] }): { yaw: number; jump: boolean } | null {
   const body = bot.entity;
   const swimming = body?.isInWater === true;
-  if (body && body.onGround === false && !swimming && body.isInLava !== true && memory.heading !== undefined) return { yaw: memory.heading, jump: false };
-  const plan = fleeHeadingPlan(bot, threats, memory.heading);
+  if (body && body.onGround === false && !swimming && body.isInLava !== true && memory.heading !== undefined
+    && !memory.blockedHeadings?.some(heading => angleBetween(heading, memory.heading!) < Math.PI / 8)) return { yaw: memory.heading, jump: false };
+  const plan = fleeHeadingPlan(bot, threats, memory.heading, { blockedHeadings: memory.blockedHeadings });
   if (plan === null) return null;
   memory.heading = plan.yaw;
   // A jump carries the speed the body has into the air, and it is judged for a flight along the heading: it is pressed once the body runs
@@ -978,20 +991,34 @@ function runsAlong(body: FloorEntity | undefined, yaw: number): boolean {
  * from it (a retreat, lava) makes the next write fail instead of fighting it; the keys are always let go at the end. At most
  * FLEE_SEGMENT_TICKS ticks or FLEE_SEGMENT_BLOCKS blocks; the heading is chosen again each tick from every threat in range.
  */
-export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs = 50, memory: { heading?: number } = {}): Promise<{ success: boolean; result: string; moved: number; ended: 'clear' | 'blocked' | 'cap' | 'yield' }> {
+export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs = 50, memory: { heading?: number; blockedHeadings?: number[] } = {}): Promise<{ success: boolean; result: string; moved: number; ended: 'clear' | 'blocked' | 'stuck' | 'cap' | 'yield' }> {
   const origin = bot.entity!.position.clone();
-  let ticks = 0, ended: 'clear' | 'blocked' | 'cap' | 'yield' = 'cap', jumping = false;
+  let checkpoint = origin.clone();
+  let ticks = 0, ended: 'clear' | 'blocked' | 'stuck' | 'cap' | 'yield' = 'cap', jumping = false;
   try {
     for (; ticks < FLEE_SEGMENT_TICKS; ticks++) {
       const threat = fleeThreat(bot, true), body = bot.entity;
       if (!threat || !body || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) { ended = 'clear'; break; }
+      if (ticks > 0 && ticks % FLEE_STILL_TICKS === 0) {
+        if (Math.hypot(body.position.x - checkpoint.x, body.position.z - checkpoint.z) < FLEE_STILL_BLOCKS) {
+          if (memory.heading !== undefined) (memory.blockedHeadings ??= []).push(memory.heading);
+          ended = 'stuck'; break;
+        }
+        checkpoint = body.position.clone();
+      }
       if (body.position.distanceTo(origin) >= FLEE_SEGMENT_BLOCKS) break;
       // A command is waiting for the body: it has it after a fifth of a second of the run (the API decides from a fresh observation).
       if (ticks >= FLEE_YIELD_AFTER_TICKS && commandWaiting(bot)) { ended = 'yield'; break; }
       // Away from all of them, or the nearest turn that does not lead to lava or a drop (and none: it stops here). The edge guard
       // still has the final say over the keys at the physics tick.
+      const previous = memory.heading;
       const keys = fleeKeys(bot, threat.threats, memory);
       if (keys === null) { ended = 'blocked'; break; }
+      if (ticks === 0 && previous !== undefined && memory.blockedHeadings?.length && angleBetween(previous, keys.yaw) >= Math.PI / 8) {
+        const state = bot.floorReflexes;
+        if (state) state.engagements.fleeStuckTurns = (state.engagements.fleeStuckTurns ?? 0) + 1;
+        bot.reflexLedger?.note('flee', '逃げの詰まりで向きを変える');
+      }
       port.look?.(keys.yaw, 0, true);
       port.setControlState('forward', true); port.setControlState('sprint', true);
       // A whole block to climb a step or two ahead: a sprint jump (set only on a change, so level ground costs no extra write).
@@ -1003,7 +1030,7 @@ export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs =
     try { releaseKeys(port); } catch { /* ownership lost: the new owner holds the keys */ }
   }
   const moved = bot.entity ? bot.entity.position.distanceTo(origin) : 0;
-  return { success: true, result: ticks > 0 ? '低体力のため敵から離れた' : '離れる必要がなくなった（または安全な逃げ道がない）', moved, ended };
+  return { success: true, result: ended === 'stuck' ? '逃げが詰まった（6tickで0.3m未満）' : ticks > 0 ? '低体力のため敵から離れた' : '離れる必要がなくなった（または安全な逃げ道がない）', moved, ended };
 }
 
 // ===== The dragon's reach =====
@@ -1213,6 +1240,13 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
     }
   }
   // (a) A threat in arm's reach that can get at the body. A lit creeper is never hit (the blast is the danger); an unlit one may be (the knock helps).
+  const danger = creeper ? null : meleeDanger(bot);
+  if (danger && danger.health > MELEE_HIT_HEALTH && (bot.health ?? 20) <= danger.health) {
+    const readBody = bodyReader(bot as never), why: string[] = [];
+    if (footingAt(readBody, feet).count > 0) return null;
+    const up = pillarOver(readBody, feet, items, why);
+    return up ? { kind: 'melee', hand: up, detail: `${lead} ${up.detail} ${where}${fact}` } : null;
+  }
   if (!creeper && skip !== 'hit') {
     const near = reaching.filter(entry => !(entry.entity.name === 'creeper' && creeperLit(entry.entity)) && entry.distance <= LAST_STAND_RANGE)[0];
     if (near) {
@@ -1788,6 +1822,60 @@ const MELEE_CHASED_RANGE = 3;
 const MELEE_BLOWS_PER_HAND = 2;
 const MELEE_MAX_HITS = 5;
 const MELEE_PILLAR_N = 2;
+const MELEE_DAMAGE_MS = 4000;
+const MELEE_DANGER_RANGE = 3.5;
+type DamageSeen = { last: number; hits: Array<{ at: number; amount: number }> };
+const damageSeen = new WeakMap<object, DamageSeen>();
+
+/** 床と act は同じ体の直近4秒の減少を読む。回復で一撃を薄めず、死亡・再出現で前の命を忘れる。 */
+export function recentDamage(bot: FloorBody): number {
+  const host = nativeActionHost(bot) as FloorBody;
+  const health = host.health ?? 20, at = host.floorReflexes?.clock?.() ?? Date.now();
+  let seen = damageSeen.get(host);
+  if (!seen) {
+    seen = { last: health, hits: [] }; damageSeen.set(host, seen);
+  }
+  if (health <= 0) seen.hits = [];
+  else if (seen.last > health) seen.hits.push({ at, amount: seen.last - health });
+  seen.last = health;
+  seen.hits = seen.hits.filter(hit => at - hit.at <= MELEE_DAMAGE_MS).slice(-64);
+  return Math.max(0, ...seen.hits.map(hit => hit.amount));
+}
+
+/** 床は常駐し、act だけの場面ではその実行中だけ health を見る。 */
+export function watchDamage(bot: FloorBody): () => void {
+  const host = nativeActionHost(bot) as FloorBody;
+  recentDamage(host);
+  const onHealth = () => { recentDamage(host); };
+  const onSpawn = () => { damageSeen.delete(host); recentDamage(host); };
+  host.on?.('health', onHealth); host.on?.('spawn', onSpawn);
+  return () => { host.removeListener?.('health', onHealth); host.removeListener?.('spawn', onSpawn); };
+}
+
+/** accept は近くに居てよいという約束。届く近接敵の数と受けた一撃は、その約束で減らさない。 */
+export function meleeDanger(bot: FloorBody, threats?: MeleeThreat[]): { hit: number; count: number; blows: number; health: number; kind: string } {
+  const hit = recentDamage(bot);
+  const near = hit > 0 ? (threats ?? meleeThreatsNear(bot)).filter(threat => threat.distance <= MELEE_DANGER_RANGE) : [];
+  const count = near.length, blows = Math.min(count, 2);
+  return { hit, count, blows, health: count ? hit * blows + 1 : 0, kind: String(near[0]?.entity.name ?? '') };
+}
+
+function meleeDangerWords(bot: FloorBody, danger: ReturnType<typeof meleeDanger>): string {
+  return `打ち返しをやめる：${danger.kind} ${danger.count}体、一撃 ${danger.hit.toFixed(1)}、体力 ${(bot.health ?? 0).toFixed(1)}`;
+}
+
+function noteMeleeDanger(bot: FloorBody, danger: ReturnType<typeof meleeDanger>): void {
+  const state = bot.floorReflexes;
+  if (!state || state.meleeDangerNoted) return;
+  state.meleeDangerNoted = true;
+  state.engagements.meleeStopped = (state.engagements.meleeStopped ?? 0) + 1;
+  const detail = meleeDangerWords(bot, danger);
+  log.warn(`🗡️ ${detail}`);
+  try {
+    const ledger = ensureReflexLedger(bot as any);
+    ledger.end(ledger.begin('melee_none', detail, MELEE_DETAIL_MAX), 'done');
+  } catch { /* a report must not change what the reflex did */ }
+}
 /** The wait between two blows of a weapon (the game's attack speed), as primitives/attack reads it. */
 function bladeWaitMs(name: string): number {
   if (name.endsWith('_sword')) return 650;
@@ -1855,6 +1943,13 @@ export function meleeChoice(bot: FloorBody, threats: MeleeThreat[], options: { h
   const read = bodyReader(bot as never);
   const here = footingAt(read, feet);
   const rim = here.count > 0;
+  const danger = meleeDanger(bot, threats);
+  if (!rim && danger.health > MELEE_HIT_HEALTH && (bot.health ?? 20) <= danger.health) {
+    const why: string[] = [];
+    const up = pillarOver(read, feet, bot.inventory?.items() ?? [], why);
+    // 積めなければ既存の flee へ渡す。危ない体力で間を塞ぐために立ち止まらない。
+    return { hand: up, why: meleeDangerWords(bot, danger), footing: here, quiet: !up };
+  }
   if (!rim && !options.beingHit && !options.chased) return { hand: null, why: '', footing: here, quiet: true };
   const open = (x: number, y: number, z: number) => passable(read(x, y, z)) && passable(read(x, y + 1, z));
   const apart = (x: number, y: number, z: number) => Math.min(...threats.map(({ entity }) => Math.hypot(entity.position.x - x, (entity.position.y - y) * 0.5, entity.position.z - z)));
@@ -2004,12 +2099,23 @@ async function runHit(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, 
     for (let blow = 0; blow < MELEE_BLOWS_PER_HAND && !dead; blow++) {
       // Run 45 (+929: seven blows at a zombie, every other one 0.14 to 0.2 s after the one before, the first of the next hand; a blow before the
       // weapon is ready deals a fifth of its damage): the weapon's own wait is kept from the last blow, whichever hand struck it.
-      const ready = (raw.meleeBlowAt ?? 0) + bladeWaitMs(weapon.name) - Date.now();
-      if (ready > 0) await abortableDelay(motor, Math.min(ready, 1_000));
+      const readyUntil = Date.now() + Math.min(1_000, Math.max(0, (raw.meleeBlowAt ?? 0) + bladeWaitMs(weapon.name) - Date.now()));
+      let ready = readyUntil - Date.now();
+      while (ready > 0 && !actionSignal(motor)?.aborted) {
+        const danger = meleeDanger(bot);
+        if ((bot.health ?? 0) <= Math.max(MELEE_HIT_HEALTH, danger.health)) break;
+        await abortableDelay(motor, Math.min(ready, 50));
+        ready = readyUntil - Date.now();
+      }
       if (actionSignal(motor)?.aborted) { stopped = '止められた'; break; }
       const live = find();
       if (!live || !bot.entity) { stopped = '相手が見えなくなった'; break; }
-      if ((bot.health ?? 0) <= MELEE_HIT_HEALTH) { stopped = `体力が${MELEE_HIT_HEALTH}以下になった`; break; }
+      const danger = meleeDanger(bot);
+      if ((bot.health ?? 0) <= Math.max(MELEE_HIT_HEALTH, danger.health)) {
+        stopped = danger.health > MELEE_HIT_HEALTH ? meleeDangerWords(bot, danger) : `体力が${MELEE_HIT_HEALTH}以下になった`;
+        if (danger.health > MELEE_HIT_HEALTH) noteMeleeDanger(bot, danger);
+        break;
+      }
       let reachable = false;
       try { reachable = inReachOfBlow(bot, live); } catch { reachable = false; }
       if (!reachable) { stopped = '届かない所へ離れた'; break; }
@@ -2042,6 +2148,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
   const now = options.now ?? Date.now;
   const state: FloorState = bot.floorReflexes = { retreat: { engaged: false, ticks: 0, cooldown: 0, engagements: 0 }, busy: null, retryAt: 0,
     engagements: { eat: 0, armor: 0, flee: 0 }, fleeStarts: [], clock: now };
+  watchDamage(bot);
   const ledger = ensureReflexLedger(bot as any);
   // r10: what the server says hit the body. A projectile with a shooter behind it (the cause and the direct entity differ) is a shot: the
   // cover starts on the second in SHOT_WINDOW_MS. Every named hit is kept, so that a fall in health nothing named is told from these.
@@ -2106,8 +2213,14 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       stand = !hasActiveSafetyLease(bot) && !escapeRunning(bot) && (bot.health ?? 20) > 0 && now() - (state.lastStandAt ?? -Infinity) >= LAST_STAND_GAP_MS
         ? lastStandChoice(bot, recentEscapeDigs(state, now()) >= ESCAPE_DIGS_MAX ? 'dig' : state.lastStandFailed, cause) : null;
     } catch { stand = null; }
+    if (cause === 'low-health' && state.fleeStuck) {
+      const feet = feetCell(bot as never), why: string[] = [], read = bodyReader(bot as never);
+      const up = feet && footingAt(read, feet).count === 0 ? pillarOver(read, feet, bot.inventory?.items() ?? [], why) : null;
+      stand = stand && up ? { kind: 'melee', hand: up, detail: `逃げが詰まり、${up.detail}` } : null;
+    }
     if (!stand) return false;
     const chosen = stand;
+    if (chosen.kind === 'pillar' || (chosen.kind === 'melee' && chosen.hand.kind === 'pillar')) state.engagements.pillar = (state.engagements.pillar ?? 0) + 1;
     state.lastStandAt = now(); state.busy = 'flee';
     if (chosen.kind === 'dig') (state.escapeDigs ??= []).push(now());
     if (chosen.kind === 'hit' && typeof chosen.target?.id === 'number') state.handTarget = { capability: 'floor-last-stand', target: chosen.target.id, at: now() };
@@ -2219,7 +2332,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     state.meleeNextAt = t + MELEE_GAP_MS;
     const body = bot.entity; if (!body) return false;
     // The cheap looks first: an enemy within reach of a blow, then a rim or a hurt just now on a floor (the enemies' exposure is read after).
-    const fought = health > FLEE_HEALTH ? (name: string) => engagedWithAny(bot, [name]) : undefined;
+    const fought = health > Math.max(FLEE_HEALTH, meleeDanger(bot).health) ? (name: string) => engagedWithAny(bot, [name]) : undefined;
     let candidates: MeleeThreat[] = [];
     try { candidates = meleeCandidates(bot, fought); } catch { return false; }
     if (!candidates.length) return false;
@@ -2269,6 +2382,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     }
     if (!choice.hand) { told(`動ける手が無い（${choice.why}）`); return false; }
     const hand = choice.hand;
+    if (hand.kind === 'pillar') state.engagements.pillar = (state.engagements.pillar ?? 0) + 1;
     const run = state.melee = episode ?? { since: t, hands: 0, lastEnd: t };
     if (hand.kind === 'hit') run.hits = (run.hits ?? 0) + 1; else run.hands++;
     // Continue contracts (4): the enemy this hand is after (the blow's own, else the nearest one), for a handover to an act for the same enemy.
@@ -2405,6 +2519,12 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     return true;
   };
   bot.on('physicsTick', () => {
+    recentDamage(bot);
+    if (config.flee && !isHeadCombatRunning(bot)) {
+      const danger = meleeDanger(bot);
+      if (danger.health > MELEE_HIT_HEALTH && (bot.health ?? 20) <= danger.health) noteMeleeDanger(bot, danger);
+      else state.meleeDangerNoted = false;
+    }
     // r7: the health seen tick by tick (the cover goes on while it falls).
     const health = bot.health ?? 20, seen = state.healthSeen;
     if (!seen) state.healthSeen = { last: health, fellAt: -Infinity };
@@ -2460,9 +2580,10 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       if (threat) {
         // A new episode is one ledger entry and one of the two in 20 s; its later segments (`continuing`) are part of it.
         if (!threat.continuing) {
+          state.fleeStuck = false;
           state.engagements.flee = (state.engagements.flee ?? 0) + 1; (state.fleeStarts ??= []).push(now());
           const handle = ledger.begin('flee', '低体力のため敵から離れた');
-          state.fleeEpisode = { startedAt: now(), origin: bot.entity!.position.clone(), segments: 0, stalls: 0, outcome: 'done', end: outcome => { ledger.end(handle, outcome); } };
+          state.fleeEpisode = { startedAt: now(), origin: bot.entity!.position.clone(), healthLimit: Math.max(FLEE_HEALTH, meleeDanger(bot).health), segments: 0, stalls: 0, outcome: 'done', end: outcome => { ledger.end(handle, outcome); } };
           log.warn(`🏃 低体力（${bot.health}）で敵が近い（${threat.threats.length}体、最寄り${threat.nearest.toFixed(1)}m）: 離れる`);
         }
         const episode = state.fleeEpisode!;
@@ -2475,6 +2596,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
             // Taken away by a stronger reflex, or failed: the episode ends now, and says how.
             if (!done?.success) { episode.outcome = done?.failureType === 'interrupted' ? 'cut' : 'failed'; finish(episode.outcome); return; }
             episode.stalls = (done.moved ?? 0) < FLEE_MIN_HEADWAY ? episode.stalls + 1 : 0;
+            state.fleeStuck = done.ended === 'stuck';
             if (done.ended === 'clear') finish('done');
             else if (done.ended === 'yield') { finish('done'); state.fleeRestUntil = now() + FLEE_REST_MS; }
           }, () => finish('failed'))

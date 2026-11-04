@@ -167,16 +167,17 @@ describe('hurt and fall stop any act', () => {
     expect(result.success).toBe(true);
   });
 
-  it('the loss while a kind she accepted is within 6 m is not counted', async () => {
+  it.each([14, 10])('accepted hurt keeps going only above the losing estimate (health %s)', async health => {
     const { bot } = body();
     bot.entities = { 5: { id: 5, name: 'zombie', type: 'hostile', position: new Vec3(3.5, 64, 0.5), height: 1.9 } };
-    setTimeout(() => { bot.health = 10; }, 60);
+    setTimeout(() => { bot.health = health; }, 60);
     const result = await runAct(bot, hands([{ do: 'wait', seconds: 0.5 }]), undefined, undefined, { tickMs: 20, accept: ['zombie'] });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(health === 14);
+    if (health === 10) expect(parse(result).stoppedWhy).toBe('受け切れない: zombie の一撃 10.0 ×1、残り 10.0');
     // The same loss with no accept stops it.
     const other = body();
     other.bot.entities = bot.entities;
-    setTimeout(() => { other.bot.health = 10; }, 60);
+    setTimeout(() => { other.bot.health = health; }, 60);
     const stopped = await runAct(other.bot, hands([{ do: 'wait', seconds: 0.5 }]), undefined, undefined, { tickMs: 20 });
     expect(stopped.failureType).toBe('damage_taken');
   });

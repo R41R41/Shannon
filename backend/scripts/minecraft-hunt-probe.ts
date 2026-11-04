@@ -7,7 +7,7 @@
 // pre-generated; places in <key>.sites.json). Env (set by scripts/lab/run-hunt-lab.sh):
 //   MINECRAFT_HUNT_NO_LLM=true  MINECRAFT_HUNT_PORT=<25570..25599>  MINECRAFT_HUNT_WORLD_DIRECTORY=/home/azureuser/minecraft/progressive-lab-XXXX
 //   MINECRAFT_HUNT_SITES=<file>        the places of the world (x, y, z; the Nether's are the Nether's)
-//   MINECRAFT_HUNT_SCENES=blaze_hold,barter    names or prefixes (default: all); =blaze_raid is that name only
+//   MINECRAFT_HUNT_SCENES=blaze_hold,barter    names or prefixes (default: all except wither_trio); =blaze_raid is that name only
 //   MINECRAFT_HUNT_SECONDS=<n>         the length of the timed scenes (blaze camps: default 240)
 //   MINECRAFT_HUNT_REPORT=<file>       the whole report as JSON
 import fs from 'node:fs';
@@ -156,8 +156,8 @@ async function placeActor(dimension: 'overworld' | 'the_nether', x: number, y: n
 
 interface Result { name: string; title: string; ms: number; data: Record<string, unknown>; notes: string[]; deaths: number }
 const results: Result[] = [];
-const scenes: Array<{ name: string; title: string; run: (note: (text: string) => void) => Promise<Record<string, unknown>> }> = [];
-const scene = (name: string, title: string, run: (note: (text: string) => void) => Promise<Record<string, unknown>>) => scenes.push({ name, title, run });
+const scenes: Array<{ name: string; title: string; run: (note: (text: string) => void) => Promise<Record<string, unknown>>; explicitOnly: boolean }> = [];
+const scene = (name: string, title: string, run: (note: (text: string) => void) => Promise<Record<string, unknown>>, explicitOnly = false) => scenes.push({ name, title, run, explicitOnly });
 const lineHas = (run: ActRun, pattern: RegExp) => run.lines.some(line => pattern.test(line));
 
 // ===== the blaze camp ======================================================================================================================
@@ -2438,6 +2438,54 @@ scene('tool_broke','a pickaxe with three uses left breaks in the middle of a go 
   const pickaxes = (actor.inventory.items() as any[]).filter(item => /pickaxe/u.test(String(item.name))).map(item => String(item.name));
   return { ok: run.ok, stoppedBy: run.stoppedBy ?? null, stoppedWhy: String(run.stoppedWhy ?? '').slice(0, 200), line: (run.lines[0] ?? '').slice(0, 320), pickaxesLeft: pickaxes };
 });
+// run62: 回収の go は敵の向こうを指定する。止まった後は次の頭を出さず、床が離れる所まで見る。
+async function witherTrio(armored: boolean, note: (text: string) => void): Promise<Record<string, unknown>> {
+  const stand = (sites.netherArrival ?? sites.blazeStand) as number[] | undefined;
+  if (!stand) throw new Error('no netherArrival or blazeStand in the sites');
+  const [x, , z] = stand, y = 100, nether = 'execute in minecraft:the_nether run';
+  await ask('difficulty peaceful');
+  await ask(`${nether} forceload add ${x - 24} ${z - 24} ${x + 24} ${z + 24}`); await sleep(3000);
+  await ask(`${nether} fill ${x - 13} ${y - 1} ${z - 2} ${x + 17} ${y + 3} ${z + 2} minecraft:nether_bricks`);
+  await ask(`${nether} fill ${x - 12} ${y} ${z - 1} ${x + 16} ${y + 2} ${z + 1} minecraft:air`);
+  // 前の場面の鎧・盾を残さない。積む石と食料は両方に同じだけ持たせる。
+  await equip({ [armored ? 'iron_sword' : 'wooden_sword']: 1, cobblestone: 32, cooked_beef: 8 }, { armor: 'none', shield: false });
+  for (const slot of ['armor.head', 'armor.chest', 'armor.legs', 'armor.feet', 'weapon.offhand']) await ask(`item replace entity ${ACTOR} ${slot} with minecraft:air`);
+  if (armored) {
+    for (const [slot, piece] of [['head', 'helmet'], ['chest', 'chestplate'], ['legs', 'leggings'], ['feet', 'boots']]) await ask(`item replace entity ${ACTOR} armor.${slot} with minecraft:iron_${piece}`);
+    await ask(`item replace entity ${ACTOR} weapon.offhand with minecraft:shield`);
+  }
+  await ask(`item replace entity ${ACTOR} weapon.mainhand with minecraft:${armored ? 'iron_sword' : 'wooden_sword'}`);
+  await placeActor('the_nether', x, y, z, 24);
+  const started = Date.now(), deaths0 = deaths, counts0 = { ...actor.floorReflexes?.engagements };
+  let lowestHp = Number(actor.health), kills = 0;
+  const sample = () => { lowestHp = Math.min(lowestHp, Number(actor.health)); };
+  const onDeath = () => { lowestHp = 0; };
+  const onKilled = (entity: any) => {
+    if (entity?.name === 'wither_skeleton' && entity.position && Math.abs(entity.position.x - x) < 18 && Math.abs(entity.position.z - z) < 3 && Math.abs(entity.position.y - y) < 4) kills++;
+  };
+  actor.on('health', sample); actor.on('death', onDeath); actor.on('entityDead', onKilled);
+  let run: ActRun;
+  try {
+    await ask('difficulty normal');
+    for (const dz of [0, 0.5, 1]) await ask(`${nether} summon minecraft:wither_skeleton ${x + 4} ${y} ${z + dz} {PersistenceRequired:1b,Tags:["hunt_wither_trio"]}`);
+    run = await act('回収: 敵の向こうへ', [{ do: 'go', to: { x: x + 12, y, z }, range: 0.8, seconds: 25 }], 40, { accept: ['wither_skeleton'] });
+    const until = started + (timedSeconds || 30) * 1000;
+    while (Date.now() < until && deaths === deaths0 && !disconnected) { sample(); await sleep(50); }
+  } finally {
+    sample();
+    actor.removeListener('health', sample); actor.removeListener('death', onDeath); actor.removeListener('entityDead', onKilled);
+    await ask(`${nether} kill @e[tag=hunt_wither_trio]`);
+  }
+  const counts = actor.floorReflexes?.engagements ?? {};
+  const data = { died: deaths > deaths0, lowestHp: r1(lowestHp), stoppedBy: run!.stoppedBy ?? null, stoppedWhy: run!.stoppedWhy ?? null, lines: run!.lines,
+    meleeStopped: (counts.meleeStopped ?? 0) - (counts0.meleeStopped ?? 0), fleeStuckTurns: (counts.fleeStuckTurns ?? 0) - (counts0.fleeStuckTurns ?? 0),
+    pillars: (counts.pillar ?? 0) - (counts0.pillar ?? 0), kills, seconds: r1((Date.now() - started) / 1000) };
+  note(`wither_trio ${armored ? 'armored' : 'naked'}: ${JSON.stringify(data)}`);
+  return data;
+}
+scene('wither_trio_naked', 'nether bricks corridor, three wither skeletons, a wooden sword and no armour: one go accepting wither_skeleton', note => witherTrio(false, note), true);
+scene('wither_trio_armored', 'the same corridor and go, iron armour, iron sword and a shield', note => witherTrio(true, note), true);
+
 scene('nether_stuck_c4', 'c4 only: the fortress leg from (155,78,60), where a leg ended on search_timeout twice running (t53)', note => netherWalk(note, ['fortress'], [155, 78, 60]));
 scene('nether_leg2','the walk in the Nether from the fortress\'s stand to the warped forest by go hops (the second leg of nether_walk alone)', note => netherWalk(note, ['warped'], sites.blazeStand as number[]));
 
@@ -2474,7 +2522,7 @@ scene('probe_kinds', 'probe kind=camp at the blaze spawner and kind=frames at th
 
 // ---- run -----------------------------------------------------------------------------------------------------------------------------------
 const wanted = (process.env.MINECRAFT_HUNT_SCENES ?? '').split(',').map(name => name.trim()).filter(Boolean);
-const chosen = scenes.filter(entry => !wanted.length || wanted.some(name => name.startsWith('=') ? entry.name === name.slice(1) : entry.name === name || entry.name.startsWith(name)));
+const chosen = scenes.filter(entry => wanted.length ? wanted.some(name => name.startsWith('=') ? entry.name === name.slice(1) : entry.name === name || entry.name.startsWith(name)) : !entry.explicitOnly);
 const startedAll = Date.now();
 let fatal: string | undefined;
 try {
