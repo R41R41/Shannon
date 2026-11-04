@@ -7,7 +7,7 @@ import { dig } from '../../src/services/minebot/utils/primitives/dig.js';
 import { pillarUp, shortFloor } from '../../src/services/minebot/utils/primitives/pillarUp.js';
 import { fallsOntoBody } from '../../src/services/minebot/utils/fallingAbove.js';
 import { chokes, inWall, wallCells } from '../../src/services/minebot/utils/wallReflex.js';
-import { closedWord } from '../../src/services/minebot/utils/actReport.js';
+import { closedWord, stoppedLine } from '../../src/services/minebot/utils/actReport.js';
 import { feetCell } from '../../src/services/minebot/utils/localMap.js';
 import type { StepContext, StepOutcome } from '../../src/services/minebot/utils/primitives/common.js';
 
@@ -127,6 +127,9 @@ describe('run 41: nothing is dug out from under a block that falls onto the body
     expect(over.reason).toBe('falling_above');
     expect(over.text).toMatch(/\(0,66,0\).*の上 \(0,67,0\) が gravel。掘ると落ちてきて足と頭を埋める（窒息する）/u);
     expect(closedWord('falling_above')).toBe('上から落ちる');
+    expect(over.text).toContain('別の列');
+    expect(over.text).toContain('別向きの vertical か go');
+    expect(stoppedLine(over.reason, over.text, 'stone')).toContain('別向きの vertical か go');
     expect(sim.bot.dugBlocks).toEqual([]);
     expect(fallsOntoBody(sim.bot, { x: 1, y: FLOOR + 1, z: 0 }, cell => sim.bot.blockAt(new Vec3(cell.x, cell.y, cell.z)))).toBeNull();
   });

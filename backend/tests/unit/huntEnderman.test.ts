@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { describe, expect, it } from 'vitest';
-import { ENDERMAN_EYE, ENDERMAN_FEET, endermanLine, endermanView, looksAtEyes, planRoof, roofBlockFor, roofSites, type Cell3, type RoofPlan, type RoofWorld } from '../../src/services/minebot/utils/huntEnderman.js';
+import { ENDERMAN_EYE, ENDERMAN_FEET, atRoofCentre, endermanLine, endermanStrikePoint, endermanView, looksAtEyes, planRoof, roofBlockFor, roofExitCandidates, roofExitStep, roofSites, type Cell3, type RoofPlan, type RoofWorld } from '../../src/services/minebot/utils/huntEnderman.js';
 import type { BlockReader } from '../../src/services/minebot/utils/localMap.js';
 
 // The roof over an enderman hunt (S2, 2026-11-02): a plan that leaves no cell round the body where an enderman (2.9 tall, 0.6 wide) can stand lower than the roof
@@ -43,6 +43,17 @@ function check(base: RoofWorld, plan: RoofPlan) {
 }
 
 describe('planRoof: the 3x3 over the body', () => {
+  it('the live nine-cap plan includes a cap above existing walls, and identifies only its own temporary supports', () => {
+    const wall = planRoof(world({ solids: [[1, 0, 0], [1, 1, 0]] }), { x: 0, y: 0, z: 0 }, undefined, undefined, true);
+    expect(wall.caps).toBe(9);
+    expect(wall.placements).toContainEqual({ x: 1, y: 2, z: 0 });
+    expect(wall.supports).toEqual([]);
+    const flat = planRoof(world(), { x: 0, y: 0, z: 0 }, undefined, undefined, true);
+    expect(flat.supports).toHaveLength(2);
+    expect(flat.supports.every(c => c.y >= 0 && c.y < 2)).toBe(true);
+    expect(atRoofCentre({ x: 0.7, y: 0, z: 0.3 }, flat.cell)).toBe(true);
+    expect(atRoofCentre({ x: 0.701, y: 0, z: 0.5 }, flat.cell)).toBe(false);
+  });
   it('on flat ground: the support column, then the nine caps (11 blocks), each laid against one standing', () => {
     const w = world();
     const plan = planRoof(w, { x: 0, y: 0, z: 0 });
@@ -195,12 +206,49 @@ describe('the working lines after the roof is placed', () => {
     return { name, solid: !['air', 'fire', 'lava'].includes(name) };
   };
 
+  it('plans a straight exit beyond the roof, toward the elevated target, without requiring another protected centre', () => {
+    const anchor = { x: 0, y: 0, z: 0 }, target = { x: 12.5, y: 4, z: 0.5 }, read = roofRead();
+    expect(endermanLine(read, from, target, ENDERMAN_EYE).clear).toBe(false);
+    expect(roofExitStep(read, anchor, { x: 2, y: 0, z: 0 })).toBe(true);
+    expect(roofExitCandidates(read, anchor, target)[0]).toEqual({ x: 2, y: 0, z: 0 });
+    expect(roofExitCandidates(read, anchor, { x: -12.5, y: 4, z: 0.5 })[0]).toEqual({ x: -2, y: 0, z: 0 });
+    for (const to of [{ x: 1, y: 0, z: 0 }, { x: 2, y: 1, z: 0 }, { x: 2, y: 0, z: 1 }, { x: 3, y: 0, z: 0 }]) expect(roofExitStep(read, anchor, to)).toBe(false);
+  });
+
+  it.each(['air', 'water', 'lava', 'magma_block', 'stone_slab', 'oak_stairs'])('rejects %s under the exit and tries another edge', name => {
+    const read = roofRead({ '2,-1,0': name }), anchor = { x: 0, y: 0, z: 0 };
+    expect(roofExitStep(read, anchor, { x: 2, y: 0, z: 0 })).toBe(false);
+    const candidates = roofExitCandidates(read, anchor, { x: 12.5, y: 4, z: 0.5 });
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates).not.toContainEqual({ x: 2, y: 0, z: 0 });
+  });
+
+  it('requires known safe floor, feet and head in every column of the swept path, and an open eye ray at the exit', () => {
+    const anchor = { x: 0, y: 0, z: 0 }, to = { x: 2, y: 0, z: 0 }, base = roofRead();
+    for (const x of [0, 1, 2]) for (const y of [-1, 0, 1]) {
+      const unknown: BlockReader = (a, b, c) => a === x && b === y && c === 0 ? null : base(a, b, c);
+      expect(roofExitStep(unknown, anchor, to)).toBe(false);
+    }
+    for (const name of ['stone', 'water', 'lava', 'fire', 'cobweb']) for (const x of [1, 2]) for (const y of [0, 1]) {
+      expect(roofExitStep(roofRead({ [key(x, y, 0)]: name }), anchor, to)).toBe(false);
+    }
+    for (const name of ['snow', 'white_carpet']) {
+      const uneven: BlockReader = (x, y, z) => x === 1 && y === 0 && z === 0 ? { name, solid: true, top: 0.125 } : base(x, y, z);
+      expect(roofExitStep(uneven, anchor, to)).toBe(false);
+    }
+    const wall = roofRead({ '3,1,0': 'stone', '3,2,0': 'stone', '3,3,0': 'stone' });
+    expect(roofExitCandidates(wall, anchor, { x: 12.5, y: 4, z: 0.5 })).not.toContainEqual(to);
+  });
+
   it('a close enderman has its eyes hidden by the roof but its lower body is clear and within striking distance', () => {
     const target = { x: 2.5, y: 0, z: 0.5 }, view = endermanView(roofRead(), from, target);
     expect(view.eyes.clear).toBe(false);
     expect(view.eyes.between[0].name).toBe('cobblestone');
     expect(view.feet.clear).toBe(true);
     expect(view.approach.clear).toBe(true);
+    expect(endermanStrikePoint(roofRead(), from, target)).not.toBeNull();
+    expect(endermanStrikePoint(roofRead({ '1,1,0': 'stone' }), from, target)).toBeNull();
+    expect(endermanStrikePoint(roofRead(), from, { x: 8.5, y: 0, z: 0.5 })).toBeNull();
   });
 
   it('a clear eye ray does not prove an approach: a two-high passage has no route for a three-high enderman', () => {

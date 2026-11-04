@@ -14,7 +14,7 @@ import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, is
   type StepContext, type StepOutcome } from './common.js';
 import { pickup } from './pickup.js';
 import { withProgress } from './progressUnits.js';
-import { assessBreathingDig, assessBreathingWork } from '../breathingWork.js';
+import { assessBreathingDig, assessBreathingWork, breathingWorkWords } from '../breathingWork.js';
 
 /**
  * dig: the cells in order (design mb-llm-centric 2.3). The tool is the one asked for, else the quickest carried that makes the block
@@ -126,8 +126,6 @@ interface DigTally { dug: number; open: number; /** The cell being dug now (clea
 /** A body that has gone this far (m) beyond DIG_REACH of the block it is digging is clearly not digging it any more (the server breaks a block only within ~5.5 m of its face; the run saw 7.8 m): checked this often. */
 export const DIG_DRIFT_MARGIN = 1;
 export const DIG_DRIFT_CHECK_MS = 200;
-/** The dig must be this long past the time the block takes before a body out of reach ends it (a dig that finishes in its time is let finish: the simulated server does not look at the reach). */
-export const DIG_DRIFT_OVERDUE_MS = 3000;
 
 async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promise<StepOutcome> {
   const bot = ctx.bot;
@@ -161,7 +159,7 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     const falls = fallsOntoBody(bot, cell, at => blockAt(bot, at));
     if (falls) {
       return result(stopped(bot, 'falling_above', `${placeText(bot, cell)} の上 ${cellText(falls.at)} が ${falls.name}。掘ると落ちてきて足と頭を埋める（窒息する）。`
-        + `横へ 1 マスずれてから掘るか、先に横から ${falls.name} を掘り落とす`, cell));
+        + '次の候補: 横の安全な別の列へ移り、別向きの vertical か go で別の上り口へ（向きだけでは同じ頭上）', cell));
     }
     const fall = footingDrop(bot, cell);
     if (fall !== null) return result(stopped(bot, 'footing', `${placeText(bot, cell)} は足の下の柱。掘ると${Number.isFinite(fall) ? `${fall}段落ちる` : '下に着く所が無いか溶岩'}（先に横へ動くか、下を確かめる）`, cell));
@@ -193,8 +191,8 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     const workMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : NaN;
     // Other hands use this dig too: changing mine to dig cannot spend the return breath.
     const breath = assessBreathingWork(bot, Number.isFinite(workMs) ? workMs / 1000 : Infinity, cell);
-    if (!breath.allowed) return result(stopped(bot, 'breathing_work',
-      `水中の掘削を始めない: ${breath.reason}（残り息 ${breath.airSeconds ?? '未確認'}秒・呼吸先まで ${breath.returnSeconds ?? '未確認'}秒）。掘削と帰還の両方を賄えない`, cell));
+    if (!breath.allowed) return stopped(bot, 'breathing_work',
+      `水中掘削を始めない: ${breathingWorkWords(breath)}${done.length ? `。済: ${done.join('、')}` : ''}`, cell);
     const guardState = bot.exposureDigGuard as { allowAt?: string } | undefined;
     if (exposing && guardState) guardState.allowAt = cellKey(cell);
     const started = Date.now();
@@ -213,10 +211,10 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
         // reach this dig's catch, and a watcher that cannot read for three ticks in a row is blind: the dig then ends as an unknown breath.
         let current: ReturnType<typeof assessBreathingWork> | undefined;
         try { current = assessBreathingDig(bot, block, cell, digStarted); readFailures = 0; } catch { readFailures++; }
-        if (readFailures >= 3) current = { allowed: false, airSeconds: null, returnSeconds: null, reason: 'air_unknown', escapeWork: false };
+        if (readFailures >= 3) current = { allowed: false, airSeconds: null, returnSeconds: null, workSeconds: null, neededSeconds: null, reason: 'air_unknown', escapeWork: false };
         if (current && !current.allowed) { breathStopped = current; clearInterval(timer); resolve('breathing_work'); return; }
-        // only a dig that is overdue (water over the block slows it fivefold; a body washed away never finishes it) and whose body is out of reach
-        if (Date.now() - digStarted > expected + DIG_DRIFT_OVERDUE_MS && eyeDistance(bot, cell) > DIG_REACH + DIG_DRIFT_MARGIN) { drifted = true; clearInterval(timer); resolve('drifted'); }
+        // Reach is a precondition, even before the dig timer expires. A body washed down a shaft must not wait out a long underwater dig.
+        if (eyeDistance(bot, cell) > DIG_REACH + DIG_DRIFT_MARGIN) { drifted = true; clearInterval(timer); resolve('drifted'); }
       }, DIG_DRIFT_CHECK_MS);
       stopWatching = () => clearInterval(timer);
     });
@@ -227,7 +225,7 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       stopWatching();
       if (breathStopped) {
         letGo(bot);
-        return result(stopped(bot, 'breathing_work', `掘削中に呼吸の余裕が失われたため中止: ${breathStopped.reason}（残り息 ${breathStopped.airSeconds ?? '未確認'}秒・呼吸先まで ${breathStopped.returnSeconds ?? '未確認'}秒）。現在の呼吸先を再確認する`, cell));
+        return stopped(bot, 'breathing_work', `掘削中止: ${breathingWorkWords(breathStopped, true)}${done.length ? `。済: ${done.join('、')}` : ''}`, cell);
       }
       if (drifted) {
         letGo(bot);

@@ -4,6 +4,8 @@ import { dig } from '../../src/services/minebot/utils/primitives/dig.js';
 import type { StepContext } from '../../src/services/minebot/utils/primitives/common.js';
 import { ServerDigUnconfirmedError } from '../../src/services/minebot/utils/digBlockVerified.js';
 import { Vec3 } from 'vec3';
+import { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.js';
+import { recentStopLines } from '../../src/services/minebot/utils/localMap.js';
 
 // Run 46 (hold 6): the water poured over the lava carried the body 7 m away while it dug obsidian; the dig waited for its guard (49 s) and the hand stood still.
 // A body that has left the reach of the block it digs stops the dig at once (out_of_reach), so that the hand can stand again.
@@ -32,6 +34,9 @@ describe('dig: a body carried out of reach while it digs', () => {
       }
     });
     expect(value).toMatchObject({ ok: false, reason: 'breathing_work' });
+    expect(value.text).toContain('掘削中止:');
+    expect(value.text).toContain('残り掘削');
+    expect(value.text).toContain('不足');
     expect(elapsed).toBeLessThan(2000);
     expect(stop).toHaveBeenCalled();
     expect(sim.world.nameAt(3, FLOOR, 0)).toBe('obsidian');
@@ -46,9 +51,38 @@ describe('dig: a body carried out of reach while it digs', () => {
     expect(value.ok).toBe(false);
     expect(value.reason).toBe('out_of_reach');
     expect(value.text).toContain('流されて届かなくなった');
-    expect(elapsed).toBeGreaterThan(12_000);
-    expect(elapsed).toBeLessThan(14_000);   // the block's own time (9.4 s) and three seconds over, not the guard of 31 s (the lab's was 49)
+    expect(elapsed).toBeLessThan(1500);   // the next reach check, even before the block's own dig time (9.4 s)
     expect(sim.world.nameAt(3, FLOOR, 0)).toBe('obsidian');
+  });
+
+  it('stops a long underwater dig promptly when a flow takes the body down its shaft, without swimming or digging another cell', async () => {
+    const water: Ground = (x, y, z) => x === 0 && z === 0 && y >= FLOOR - 30 && y <= FLOOR + 1 ? 'water' : ground(x, y, z);
+    const sim = makeHandsSim(water, { items: [{ name: 'diamond_pickaxe', count: 1 }] });
+    sim.bot.oxygenLevel = 20;
+    sim.bot.entity.isInWater = true;
+    sim.bot.digTime = () => 5000;
+    const native = vi.fn(() => new Promise<void>(() => undefined));
+    sim.bot.unconfirmedDig = native;
+    sim.bot.stopDigging = vi.fn();
+    const controls = vi.spyOn(sim.bot, 'setControlState');
+    const { value, elapsed } = await drive(sim, dig(ctxOf(sim), { at: [{ x: 3, y: FLOOR, z: 0 }, { x: 3, y: FLOOR - 1, z: 0 }], collect: false }), time => {
+      if (time === 500) sim.bot.entity.position.y = FLOOR - 7;
+    });
+    expect(value).toMatchObject({ ok: false, reason: 'out_of_reach', progress: { done: 0, left: 2 } });
+    expect(elapsed).toBeLessThan(1000);
+    expect(native).toHaveBeenCalledTimes(1);
+    expect(sim.bot.stopDigging).toHaveBeenCalled();
+    expect(controls.mock.calls.some(([, pressed]) => pressed)).toBe(false);
+    expect(sim.world.nameAt(3, FLOOR, 0)).toBe('obsidian');
+  });
+
+  it('lets a dig finish while a small displacement stays within reach', async () => {
+    const sim = makeHandsSim(ground, { items: [{ name: 'diamond_pickaxe', count: 1 }] });
+    const { value } = await drive(sim, dig(ctxOf(sim), { at: [{ x: 3, y: FLOOR, z: 0 }], collect: false }), time => {
+      if (time === 1000) sim.bot.entity.position.x = 1.5;
+    });
+    expect(value.ok).toBe(true);
+    expect(sim.world.nameAt(3, FLOOR, 0)).toBe('air');
   });
 
   it('a body that stays where it is digs as before', async () => {
@@ -69,6 +103,33 @@ describe('dig: a body carried out of reach while it digs', () => {
     expect(value.text).toContain('採掘中に射程外へ移動した');
     expect(value.text).toContain('足場と視線を確かめる');
     expect(sim.world.nameAt(3, FLOOR, 0)).toBe('obsidian');
+  });
+});
+
+describe('dig: the breathing refusal reaches the head', () => {
+  it('keeps the budget and smaller-job advice in the act line and a breathing headline in recentStops', async () => {
+    const sim = makeHandsSim(ground, { items: [{ name: 'diamond_pickaxe', count: 1 }] });
+    sim.world.set(0, FLOOR, 0, 'water');
+    sim.world.set(0, FLOOR + 1, 0, 'water');
+    sim.bot.oxygenLevel = 20;
+    sim.bot.digTime = () => 20_000;
+    const native = vi.spyOn(sim.bot, 'dig');
+    const { value } = await drive(sim, runAct(sim.bot, ACT_HANDS.parse([{ do: 'dig', at: [
+      { x: 0, y: FLOOR, z: 0 }, { x: 1, y: FLOOR, z: 0 }, { x: 2, y: FLOOR, z: 0 }, { x: 3, y: FLOOR, z: 0 },
+    ], collect: false }])));
+    expect(value.success).toBe(false);
+    const line = JSON.parse(value.result).lines[0].line as string;
+    expect(line).toMatch(/^呼吸不足:/u);
+    expect(line).toContain('必要');
+    expect(line).toContain('掘削20秒×1マス＋帰還');
+    expect(line).toContain('余裕3秒');
+    expect(line).toContain('残り息15秒');
+    expect(line).toContain('不足');
+    expect(line).toContain('1〜2マス単位で再判定');
+    expect(line).toContain('1マスでも不足なら水外から掘る');
+    expect(line.length).toBeLessThanOrEqual(160);
+    expect(recentStopLines(sim.bot).join('\n')).toContain('呼吸不足');
+    expect(native).not.toHaveBeenCalled();
   });
 });
 

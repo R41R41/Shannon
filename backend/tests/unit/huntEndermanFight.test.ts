@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 import minecraftData from 'minecraft-data';
 import blockLoader from 'prismarine-block';
@@ -9,8 +9,9 @@ import { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.
 import { createMotorPort, executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 import { cooldownMs } from '../../src/services/minebot/utils/primitives/attack.js';
 import { installGazeGuard } from '../../src/services/minebot/utils/gazeGuard.js';
-import { ENDERMAN_EYE, endermanView, looksAtEyes, roofInteriorStep } from '../../src/services/minebot/utils/huntEnderman.js';
-import { endermanCampObservation } from '../../src/services/minebot/utils/huntEndermanCamp.js';
+import { ENDERMAN_EYE, ENDERMAN_LEGS, ENDERMAN_STARE_MS, atRoofCentre, endermanView, looksAtEyes, roofInteriorStep } from '../../src/services/minebot/utils/huntEnderman.js';
+import { EndermanCamp, endermanCampObservation } from '../../src/services/minebot/utils/huntEndermanCamp.js';
+import type { StepContext } from '../../src/services/minebot/utils/primitives/common.js';
 import { bodyReader } from '../../src/services/minebot/utils/localMap.js';
 
 // The enderman hunt on a practice field (S2, 2026-11-02): the body lays a 3x3 roof over itself, stares the enderman in the eye from under it (the gaze guard is let go
@@ -47,6 +48,7 @@ function makeField(options: Options) {
   const slots: any[] = new Array(46).fill(null);
   slots[36] = itemOf('iron_sword', 1, 36);
   slots[9] = itemOf('cobblestone', options.blocks ?? 64, 9);
+  slots[10] = itemOf('stone_pickaxe', 1, 10);
   if (options.shield !== false) slots[45] = itemOf('shield', 1, 45);
   if (options.pumpkin) slots[5] = itemOf('carved_pumpkin', 1, 5);
   const stats = { swings: 0, hits: 0, hitsOnBot: 0, blocked: 0, teleports: 0, laid: [] as string[], guardOffWhileStaring: 0, stareTicks: 0, angryAtMs: 0, reachedBodyAtMs: 0, minGap: 99, keys: [] as string[] };
@@ -59,6 +61,15 @@ function makeField(options: Options) {
     inventory: { slots, items: () => slots.slice(9, 45).filter(Boolean) }, quickBarSlot: 0, usingHeldItem: false,
     executingSkill: false, interruptExecution: false, stopDigging: () => undefined,
     blockAt: world.blockAt, getControlState: (name: string) => control[name],
+    // The new temporary-column removal uses the same server-confirmed dig as a real hand; local air alone is insufficient.
+    _client: new EventEmitter(), digTime: () => 100,
+    dig: async (block: any) => {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const key = `${block.position.x},${block.position.y},${block.position.z}`;
+      if (!placed.has(key)) throw new Error('only a block placed by the fixture may be removed');
+      placed.delete(key);
+      bot._client.emit('block_change', { location: block.position, type: mcData.blocksByName.air.minStateId });
+    },
     setControlState: (name: string, value: boolean) => { if (control[name] !== value) stats.keys.push(`${Date.now() - start}ms ${name}=${value} @${bot.entity.position.x.toFixed(1)}`); control[name] = value; },
     clearControlStates: () => { for (const key of Object.keys(control)) control[key] = false; },
     getEquipmentDestSlot: (destination: string) => ({ 'off-hand': 45, hand: 36, head: 5, torso: 6, legs: 7, feet: 8 } as Record<string, number>)[destination],
@@ -200,6 +211,9 @@ describe('fight an enderman from a roofed hole', () => {
     // the roof is where the plan says: nine caps at the body's feet + 2
     const caps = field.stats.laid.filter(key => Number(key.split(',')[1]) === FLOOR + 2);
     expect(caps).toHaveLength(9);
+    expect([...field.placed.keys()].filter(key => Number(key.split(',')[1]) < FLOOR + 2)).toEqual([]);
+    expect(endermanCampObservation(field.bot)?.supportsRemoved).toBe(2);
+    expect(endermanCampObservation(field.bot)?.verifiedCaps).toBe(9);
     // it was angered by the stare (the guard was let go for it), it never reached the body, and it was never looked in the eye within four blocks
     expect(field.stats.angryAtMs).toBeGreaterThan(0);
     expect(field.stats.stareTicks).toBeGreaterThanOrEqual(5);
@@ -245,14 +259,14 @@ describe('fight an enderman from a roofed hole', () => {
     expect(field.stats.laid).toHaveLength(0);
   }, 60_000);
 
-  it('one already angry and coming: the hand builds while it comes, stops to fight when it is on it, and survives with the shield', async () => {
+  it('stops support_unsafe when an already angry target approaches before the temporary supports are removed', async () => {
     const field = makeField({ at: new Vec3(9.5, FLOOR, 0.5), angry: true });
     const { json } = await act(field, [{ do: 'fight', target: 'enderman', seconds: 40 }]);
     field.stop();
     console.log('[ender 5]', lineOf(json), JSON.stringify({ ...field.stats, laid: field.stats.laid.length }), 'hp', field.bot.health);
     expect(field.bot.health).toBeGreaterThan(0);
-    expect(field.mob.health).toBeLessThanOrEqual(0);
-    expect(json.ok).toBe(true);
+    expect(field.stats.hits).toBe(0);
+    expect(json.ok).toBe(false); expect(lineOf(json)).toContain('support_unsafe');
   }, 90_000);
 
   it('a roof that already stands (a second enderman at the same hole) is not laid again', async () => {
@@ -360,4 +374,278 @@ describe('fight an enderman from a roofed hole', () => {
       expect(field.stats.hitsOnBot).toBe(0);
     } finally { field.stop(); }
   }, 60_000);
+});
+
+describe('roof centre and short eye contact', () => {
+  const roofWalls = (): Array<[number, number, number]> => {
+    const walls: Array<[number, number, number]> = [];
+    for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) walls.push([x, FLOOR + 2, z]);
+    return walls;
+  };
+  const contextFor = (bot: any): StepContext => ({ bot, stop: new AbortController().signal, deadline: Date.now() + 20_000,
+    facing: 'north', base: { x: 0, y: FLOOR, z: 0 } });
+
+  it('corrects an off-centre position within the same cell before staring (real player physics)', async () => {
+    const field = makeField({ at: new Vec3(12.5, FLOOR, 0.5), walls: roofWalls() });
+    field.bot.entity.position.x = 0.86;
+    const ctx = contextFor(field.bot), camp = new EndermanCamp(ctx, field.mob);
+    try {
+      for (let i = 0; i < 25 && !endermanCampObservation(field.bot)?.stareAt; i++) {
+        const step = await camp.advance(field.mob, Date.now(), 12, false);
+        expect(step.kind).not.toBe('stop');
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      expect(endermanCampObservation(field.bot)?.stareAt).not.toBeNull();
+      expect(atRoofCentre(field.bot.entity.position, { x: 0, y: FLOOR, z: 0 })).toBe(true);
+      expect(field.bot.getControlState('forward')).toBe(false);
+    } finally { camp.release(); field.stop(); }
+  });
+
+  it('immediately aims at legs on anger even at 48m; a reset flag does not restart the stare', async () => {
+    const field = makeField({ at: new Vec3(48.5, FLOOR, 0.5), walls: roofWalls() }); field.stop();
+    const camp = new EndermanCamp(contextFor(field.bot), field.mob), look = vi.spyOn(field.bot, 'lookAt');
+    try {
+      const now = Date.now();
+      expect((await camp.advance(field.mob, now, 48, false)).kind).toBe('wait');
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(field.mob.position.offset(0, ENDERMAN_EYE, 0));
+      expect((await camp.advance(field.mob, now + 250, 48, true)).kind).toBe('fight');
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(field.mob.position.offset(0, ENDERMAN_LEGS, 0));
+      expect(field.bot.gazeGuard.enabled).toBe(true);
+      expect(looksAtEyes(field.bot.entity.position.offset(0, 1.62, 0), field.bot.entity.yaw, field.bot.entity.pitch, field.mob.position)).toBe(false);
+      await camp.advance(field.mob, now + 300, 48, false);
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(field.mob.position.offset(0, ENDERMAN_LEGS, 0));
+    } finally { camp.release(); }
+  });
+
+  it('ends eye contact at 0.5s and waits for metadata looking at legs, without another stare', async () => {
+    const field = makeField({ at: new Vec3(12.5, FLOOR, 0.5), walls: roofWalls() }); field.stop();
+    const camp = new EndermanCamp(contextFor(field.bot), field.mob), look = vi.spyOn(field.bot, 'lookAt');
+    try {
+      const now = Date.now(); await camp.advance(field.mob, now, 12, false);
+      expect((await camp.advance(field.mob, now + ENDERMAN_STARE_MS, 12, false)).kind).toBe('wait');
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(field.mob.position.offset(0, ENDERMAN_LEGS, 0));
+      const step = await camp.advance(field.mob, now + ENDERMAN_STARE_MS + 501, 12, false);
+      expect(step.kind).toBe('stop');
+      if (step.kind === 'stop') expect(step.outcome.code).toBe('enderman_not_angry');
+    } finally { camp.release(); }
+  });
+
+  it('refuses combat after a push outside ±0.2m, even while still in the centre block', async () => {
+    const field = makeField({ at: new Vec3(2.5, FLOOR, 0.5), walls: roofWalls(), angry: true }); field.stop();
+    const camp = new EndermanCamp(contextFor(field.bot), field.mob);
+    try {
+      await camp.advance(field.mob, Date.now(), 2, true);
+      field.bot.entity.position.x = 0.75;
+      const step = await camp.advance(field.mob, Date.now() + 50, 2, true);
+      expect(step.kind).toBe('stop');
+      expect(field.control.forward).toBe(false);
+    } finally { camp.release(); }
+  });
+
+  const exitField = () => {
+    const field = makeField({ at: new Vec3(12.5, FLOOR + 4, 0.5), walls: roofWalls() }); field.stop();
+    const ctx = contextFor(field.bot), camp = new EndermanCamp(ctx, field.mob), began = Date.now();
+    const step = (ms: number, angry = false) => camp.advance(field.mob, began + ms, 12, angry);
+    const observation = () => endermanCampObservation(field.bot)!;
+    return { ...field, ctx, camp, step, observation, outside: () => { field.bot.entity.position = new Vec3(2.5, FLOOR, 0.5); },
+      centre: () => { field.bot.entity.position = new Vec3(0.68, FLOOR, 0.5); } };
+  };
+
+  it('steps out, stares for only 0.5s and returns to the original centre before waiting for anger', async () => {
+    const f = exitField(), look = vi.spyOn(f.bot, 'lookAt'), path = vi.spyOn(f.bot.pathfinder, 'setGoal');
+    try {
+      expect((await f.step(0)).kind).toBe('wait');
+      expect(f.observation().exits[0]).toMatchObject({ to: { x: 2, y: FLOOR, z: 0 }, result: 'moving' });
+      expect(f.control).toMatchObject({ forward: true, sneak: true, jump: false, sprint: false });
+      expect(f.observation().recovery).toEqual([]);
+      f.outside(); await f.step(100);
+      expect(f.observation().exits[0].result).toBe('staring');
+      expect(f.control.forward).toBe(false);
+      expect(f.bot.gazeGuard.enabled).toBe(false);
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(f.mob.position.offset(0, ENDERMAN_EYE, 0));
+      await f.step(599);
+      expect(f.observation().stareEndedAt).toBeNull();
+      await f.step(600);
+      expect(f.observation().stareEndedAt! - f.observation().stareAt!).toBe(ENDERMAN_STARE_MS);
+      expect(f.observation().exits[0]).toMatchObject({ result: 'returning', reason: 'stared' });
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(new Vec3(0.5, FLOOR + 1.62, 0.5));
+      expect(f.bot.gazeGuard.enabled).toBe(true);
+      f.centre(); expect((await f.step(700)).kind).toBe('wait');
+      expect(atRoofCentre(f.bot.entity.position, f.observation().roofCell)).toBe(true);
+      expect(f.observation().exits[0].result).toBe('returned');
+      expect(f.control.forward).toBe(false);
+      const result = await f.step(1_101);
+      expect(result.kind).toBe('stop');
+      if (result.kind === 'stop') expect(result.outcome.code).toBe('enderman_not_angry');
+      expect(f.observation().exits).toHaveLength(1);
+      expect(path).not.toHaveBeenCalled();
+    } finally { f.camp.release(); }
+  });
+
+  it.each(['out', 'stare'])('turns back immediately on anger during %s and withholds combat until atRoofCentre', async stage => {
+    const f = exitField(), look = vi.spyOn(f.bot, 'lookAt');
+    try {
+      await f.step(0);
+      if (stage === 'stare') { f.outside(); await f.step(100); }
+      else f.bot.entity.position.x = 1.1;
+      expect((await f.step(200, true)).kind).toBe('wait');
+      expect(f.observation().exits[0]).toMatchObject({ result: 'returning', reason: 'angry' });
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(new Vec3(0.5, FLOOR + 1.62, 0.5));
+      expect(f.bot.gazeGuard.enabled).toBe(true);
+      f.centre(); expect((await f.step(300, true)).kind).toBe('fight');
+      expect(f.observation().exits[0].result).toBe('returned');
+      expect(f.control.forward).toBe(false);
+      expect((await f.step(400, false)).kind).toBe('fight');
+      expect(f.observation().exits).toHaveLength(1);
+    } finally { f.camp.release(); }
+  });
+
+  it('never leaves the centre for an already angry target with hidden eyes, including after its flag resets', async () => {
+    const f = exitField();
+    try {
+      expect((await f.step(0, true)).kind).toBe('fight');
+      expect((await f.step(100, false)).kind).toBe('fight');
+      expect(f.observation().exits).toEqual([]);
+      expect(f.control.forward).toBe(false);
+    } finally { f.camp.release(); }
+  });
+
+  it('rechecks anger after turning and never presses forward if metadata changes during the turn', async () => {
+    const f = exitField(), original = f.bot.lookAt;
+    f.bot.lookAt = async (point: Vec3) => { await original(point); f.mob.metadata[CREEPY] = true; };
+    try {
+      await f.step(0);
+      expect(f.control.forward).toBe(false);
+      expect(f.observation().exits[0]).toMatchObject({ result: 'returning', reason: 'angry' });
+      expect((await f.step(100)).kind).toBe('fight');
+      expect(f.observation().exits[0].result).toBe('returned');
+    } finally { f.camp.release(); }
+  });
+
+  it.each(['lava', 'water', 'air', 'unloaded', 'occupied'])('skips the nearer edge when its floor is %s or its cell occupied', async hazard => {
+    const f = exitField(), original = f.bot.blockAt;
+    if (hazard === 'occupied') f.bot.entities[201] = { id: 201, name: 'pig', position: new Vec3(1.5, FLOOR, 0.5), height: 0.9, width: 0.9 };
+    else f.bot.blockAt = (p: Vec3) => p.x === 2 && p.y === FLOOR - 1 && p.z === 0
+      ? hazard === 'unloaded' ? null : { name: hazard, boundingBox: 'empty' } : original(p);
+    try {
+      await f.step(0);
+      expect(f.observation().exits).toHaveLength(1);
+      expect(f.observation().exits[0].to).not.toEqual({ x: 2, y: FLOOR, z: 0 });
+    } finally { f.camp.release(); }
+  });
+
+  it('keeps the existing not_visible stop when every exterior corridor is unsafe', async () => {
+    const f = exitField(), original = f.bot.blockAt;
+    f.bot.blockAt = (p: Vec3) => p.y === FLOOR - 1 && (Math.abs(p.x) === 2 || Math.abs(p.z) === 2) ? null : original(p);
+    try {
+      await f.step(0);
+      const result = await f.step(8_001);
+      expect(result.kind).toBe('stop');
+      if (result.kind === 'stop') expect(result.outcome).toMatchObject({ code: 'enderman_not_visible', reason: 'not_visible' });
+      expect(f.observation().exits).toEqual([]);
+      expect(f.control.forward).toBe(false);
+    } finally { f.camp.release(); }
+  });
+
+  it('returns when the outside stare loses sight, retries it only once, then stops not_visible with at most two exits', async () => {
+    const f = exitField(), blocker = `3,${FLOOR + 1},0`;
+    try {
+      await f.step(0); f.outside(); await f.step(100);
+      f.placed.set(blocker, 'stone'); await f.step(200);
+      expect(f.observation().exits[0]).toMatchObject({ result: 'returning', reason: 'not_visible' });
+      f.placed.delete(blocker); f.centre(); await f.step(300);
+      expect(f.observation().exits).toHaveLength(2);
+      f.outside(); await f.step(400);
+      f.placed.set(blocker, 'stone'); await f.step(500);
+      f.placed.delete(blocker); f.centre(); await f.step(600);
+      await f.step(700);
+      expect(f.observation().exits).toHaveLength(2);
+      expect(f.observation().exits.every(e => e.result === 'returned')).toBe(true);
+      const result = await f.step(8_001);
+      expect(result.kind).toBe('stop');
+      if (result.kind === 'stop') {
+        expect(result.outcome.code).toBe('enderman_not_visible');
+        expect(result.outcome.text).toContain('屋根外の注視 2/2');
+      }
+    } finally { f.camp.release(); }
+  });
+
+  it('permits no second exit for the same stare if the target moves before any outside eye contact', async () => {
+    const f = exitField();
+    try {
+      await f.step(0); f.outside(); f.mob.position.x = -12.5; await f.step(100);
+      expect(f.observation().exits[0].reason).toBe('not_visible');
+      f.centre(); await f.step(200); await f.step(300);
+      expect(f.observation().exits).toHaveLength(1);
+      expect(f.observation().stareAt).toBeNull();
+    } finally { f.camp.release(); }
+  });
+
+  it.each(['floor', 'pushed', 'timeout', 'turn_failed'])('fails roof_failed/moved if the return cannot finish: %s', async cause => {
+    const f = exitField(), original = f.bot.blockAt;
+    try {
+      await f.step(0); f.outside(); await f.step(100); await f.step(600);
+      if (cause === 'floor') f.bot.blockAt = (p: Vec3) => p.x === 1 && p.y === FLOOR - 1 && p.z === 0 ? null : original(p);
+      if (cause === 'pushed') f.bot.entity.position.z += 0.3;
+      if (cause === 'turn_failed') f.bot.lookAt = async () => { throw new Error('turn failed'); };
+      const result = await f.step(cause === 'timeout' ? 4_201 : 700);
+      expect(result.kind).toBe('stop');
+      if (result.kind === 'stop') expect(result.outcome).toMatchObject({ code: 'roof_failed', reason: 'moved' });
+      expect(f.observation().exits[0].result).toBe('stopped');
+      expect(f.control).toMatchObject({ forward: false, sneak: false });
+      expect(f.bot.gazeGuard.enabled).toBe(true);
+    } finally { f.camp.release(); }
+  });
+
+  it('turns back from a stalled outbound step instead of waiting outside or trying another exit for the same stare', async () => {
+    const f = exitField(), look = vi.spyOn(f.bot, 'lookAt');
+    try {
+      await f.step(0); f.bot.entity.position.x = 1.1;
+      expect((await f.step(3_601)).kind).toBe('wait');
+      expect(f.observation().exits[0]).toMatchObject({ result: 'returning', reason: 'not_visible' });
+      expect(look.mock.calls.at(-1)?.[0]).toEqual(new Vec3(0.5, FLOOR + 1.62, 0.5));
+      f.centre(); await f.step(3_701);
+      expect(f.observation().exits).toHaveLength(1);
+      expect(f.observation().exits[0].result).toBe('returned');
+      expect(f.control.forward).toBe(false);
+    } finally { f.camp.release(); }
+  });
+
+  it.each(['cancelled', 'target_lost', 'released'])('releases exterior movement and restores the gaze guard when %s', async cause => {
+    const f = exitField();
+    try {
+      await f.step(0); f.outside(); await f.step(100);
+      expect(f.bot.gazeGuard.enabled).toBe(false);
+      if (cause === 'released') f.camp.release();
+      else if (cause === 'target_lost') {
+        const result = await f.camp.advance({ ...f.mob, id: 201 }, Date.now(), 12, false);
+        expect(result.kind).toBe('stop');
+        if (result.kind === 'stop') expect(result.outcome.code).toBe('target_lost');
+      } else {
+        const stop = new AbortController(); f.ctx.stop = stop.signal; stop.abort();
+        expect((await f.step(200)).kind).toBe('stop');
+      }
+      expect(f.observation().exits[0].result).toBe('stopped');
+      expect(f.control).toMatchObject({ forward: false, sneak: false });
+      expect(f.bot.gazeGuard.enabled).toBe(true);
+    } finally { f.camp.release(); }
+  });
+
+  it('walks out and back with real player physics and provokes the same elevated target', async () => {
+    const field = makeField({ at: new Vec3(12.5, FLOOR + 4, 0.5), walls: roofWalls() });
+    const camp = new EndermanCamp(contextFor(field.bot), field.mob), path = vi.spyOn(field.bot.pathfinder, 'setGoal');
+    let result: Awaited<ReturnType<EndermanCamp['advance']>> = { kind: 'wait' };
+    try {
+      const until = Date.now() + 7_000;
+      while (Date.now() < until && result.kind === 'wait') {
+        result = await camp.advance(field.mob, Date.now(), 12, field.mob.metadata[CREEPY] === true);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      expect(result.kind, JSON.stringify({ result, position: field.bot.entity.position, exits: endermanCampObservation(field.bot)?.exits, keys: field.stats.keys })).toBe('fight');
+      expect(field.stats.stareTicks).toBeGreaterThan(0);
+      expect(atRoofCentre(field.bot.entity.position, { x: 0, y: FLOOR, z: 0 })).toBe(true);
+      expect(endermanCampObservation(field.bot)?.exits[0]).toMatchObject({ result: 'returned', reason: 'angry' });
+      expect(path).not.toHaveBeenCalled();
+    } finally { camp.release(); field.stop(); }
+  });
 });
