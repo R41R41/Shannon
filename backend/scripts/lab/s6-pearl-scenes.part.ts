@@ -58,7 +58,7 @@ scene('s6_pearls_kind', '自然湧き: fight target=enderman（体が選ぶ）�
         continue;
       }
       // The body says none is to be had here (none seen, eyes hidden, no roof site): walk about 10 m along the next compass direction (the stand-in's explore).
-      if (!angryNear() && /target_not_found|enderman_not_visible|no_site|roof_failed|enderman_not_angry|lost/u.test(String(code)) ) {
+      if (!angryNear() && /target_not_found|enderman_not_visible|enderman_did_not_arrive|no_site|roof_failed|enderman_not_angry|lost/u.test(String(code)) ) {
         emptyInRow++;
         if (emptyInRow < 2 && /enderman_not_visible|enderman_not_angry/u.test(String(code))) continue;   // another one may be in sight now
         emptyInRow = 0;
