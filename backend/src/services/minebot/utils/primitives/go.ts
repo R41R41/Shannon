@@ -1116,10 +1116,11 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
    * over that at the feet's height (bridgeSideCells), laid at once from where the body stands, before the route walks on. Within maxPlace and what the pack holds;
    * a wall that is not laid is noted and the go goes on (the floor is what the route needs).
    */
-  let walls = 0, wallsSkipped = 0;
+  /** Walls laid, walls left, and the places of walls the server refused (two refused: no more walls in this go, each refusal costs the place's wait). */
+  let walls = 0, wallsSkipped = 0, wallsRefused = 0;
   const wallTheBridge = async (laid: Cell): Promise<void> => {
     try {
-      if (!isNether(host)) return;
+      if (!isNether(host) || wallsRefused >= 2) return;
       const feet = feetCell(host);
       const reader = (x: number, y: number, z: number) => nameAt(host, x, y, z);
       if (!feet || laid.y !== feet.y - 1 || !overLava(reader, { x: laid.x, y: laid.y - 1, z: laid.z })) return;
@@ -1134,7 +1135,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
           const began = Date.now();
           try { await originalPlace.call(host, reference, face); } catch { /* looked at below */ }
           timing.placeMs += Date.now() - began; timing.places++;
-          if (isAirLike(host.blockAt?.(new Vec3(cell.x, cell.y, cell.z), false)) || host.blockAt?.(new Vec3(cell.x, cell.y, cell.z), false)?.name === 'lava') { wallsSkipped++; break; }
+          if (isAirLike(host.blockAt?.(new Vec3(cell.x, cell.y, cell.z), false)) || host.blockAt?.(new Vec3(cell.x, cell.y, cell.z), false)?.name === 'lava') { wallsSkipped++; wallsRefused++; break; }
           state.placed++; state.laidCells.add(keyOf(cell)); lastWork = Date.now();
           if (cell === side.wall) walls++;
         }
@@ -1592,7 +1593,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       timing.metres = p && startPosition ? round1(Math.hypot(p.x - startPosition.x, p.y - startPosition.y, p.z - startPosition.z)) : 0;
       timing.relays = relays; timing.walls = walls;
       goTimings.set(host, { ...timing });
-      blackBoxOf(host)?.note('go_time', { ...timing, wallsSkipped });
+      blackBoxOf(host)?.note('go_time', { ...timing, wallsSkipped, wallsRefused });
     } catch { /* a measure is never the stop */ }
     bot.removeListener?.('physicsTick', onTick);
     // Put back by identity on the host; a wrapper another module put over ours meanwhile stays (it reaches ours, which then counts nothing).
