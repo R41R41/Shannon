@@ -370,7 +370,7 @@ describe('takeoff evacuation destinations and time reserve', () => {
   });
 });
 
-function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; limit?: number; damage?: number; headDelayMs?: number; beds?: number; obsidian?: number; cobblestone?: number; destroySupports?: boolean } = {}) {
+function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; limit?: number; damage?: number; headDelayMs?: number; beds?: number; obsidian?: number; cobblestone?: number; destroySupports?: boolean; cpuStepMs?: number } = {}) {
   const t = terrain();
   const actor: any = new EventEmitter(); actor._client = new EventEmitter(); actor.health = 20; actor.food = 20;
   actor.game = { dimension: 'the_end' };
@@ -389,7 +389,10 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
   const clouds: any[] = [];
   actor.entities = { 77: d };
   const deps = { ...geometry, ...headModel, ...burst, ...landingModel, boxesOverlap, dragonPhaseOf: (_bot: any, dragon: any) => dragon?.phase ?? null, hasActiveSafetyLease: () => false, activeActionCapabilities: () => [] as string[], knockGeometry, dragonEntity: () => d, Vec3, partBox, boxDistance, dragonHazards, isPerched, bedHalves, actor, actorDeaths: 0, disconnected, scenes, KILL_LIMIT_MS: options.limit ?? 10_000,
-    END: 'execute in minecraft:the_end run',
+    // These are fake-timer protocol/behaviour tests. A deterministic CPU clock makes
+    // their cadence independent of host load; the separate budget suite uses real time.
+    bedTickBudget: (clock: () => number) => { let cpu = 0; return geometry.bedTickBudget(clock, () => cpu += options.cpuStepMs ?? .0001); },
+    END: 'execute in minecraft:the_end run', log: vi.fn(),
     trackEndKnocks: (tick: () => number, bedTrials: () => Array<{ detonationTick: number | null }>) => recordEndKnocks(actor, { enabled: false, tick, bedTrials, dragon: () => d, clouds: () => [] }),
     chainDistance: (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z),
     killCell: (v: P3) => p(Math.floor(v.x), Math.floor(v.y), Math.floor(v.z)), killPlaced: new Map(), killBlasts: [],
@@ -1410,6 +1413,57 @@ describe('M2 raw observation adapter', () => {
 });
 
 describe('M2 through the real probe loop with packet observations', () => {
+  it.each([
+    ['end_bed_kill', false, false, false], ['end_bed_crystals', true, false, false],
+    ['end_bed_kill_raw', false, true, false], ['end_bed_crystals_raw', true, true, false],
+    ['end_bed_crystals_p3', true, true, true],
+  ] as const)('keeps ticking through a flying 0 -> 1 -> 2 without landing packets: %s', async (scene, keep, raw, phase3) => {
+    vi.useFakeTimers(); const r = rig({ limit: 1200 });
+    r.deps.ask.mockResolvedValue('Test passed, count: 10');
+    r.d.phase = 0; r.d.position = new Vec3(r.perch.x + 53, r.perch.y + 12, r.perch.z + 23);
+    // Start an outer waiting go. Native/service internals are deliberately mocked:
+    // this tests the real probe's admission, phase-change abort and event-loop yielding.
+    r.actor.entity.position.x += 9;
+    r.setHandler(async (hands, signal) => {
+      if (hands.some(h => h.do === 'go')) {
+        await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+        return false;
+      }
+    });
+    setTimeout(() => { r.d.phase = 1; }, 350);
+    setTimeout(() => { r.d.phase = 2; }, 450);
+    const running = r.run(keep, raw, phase3);
+    await vi.advanceTimersByTimeAsync(1500); const out = await running;
+    expect(out.error).toBeUndefined(); expect(out.endTick).toBeGreaterThan(20);
+    expect(out.transitions.map((p: any) => p.phase)).toEqual([0, 1, 2]);
+    expect(out.actions.some((a: any) => a.label.startsWith('open_wait'))).toBe(true);
+    if (phase3) {
+      expect(out.landingPackets.packets).toEqual([]); expect(out.landingPreparation).toEqual([]);
+      expect(out.actions.filter((a: any) => a.label.startsWith('open_wait'))).toHaveLength(1);
+      const abort = out.abortTiming.find((a: any) => a.reason === 'observation_changed');
+      expect(abort).toMatchObject({ phase: 2, label: 'open_wait_return' });
+      expect(abort.ms).toBeLessThan(10);
+      console.log('r247 phase-2 go cancellation with native service mocked (ms)', abort.ms);
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['phase', 'block', 'stop'] as const)('discards an in-progress preparation search on %s before constructing or firing', async change => {
+    vi.useFakeTimers(); const r = landingRig({ limit: 2000, cpuStepMs: 1 });
+    // One yield per slice makes the interleaving reproducible, rather than depending on CPU speed.
+    setTimeout(() => {
+      if (change === 'phase') r.d.phase = 3;
+      if (change === 'block') r.actor.emit('blockUpdate', null, { name: 'fire', position: p(103, 71, -40) });
+      if (change === 'stop') r.disconnect();
+    }, 760);
+    const running = r.run(); await vi.advanceTimersByTimeAsync(2500); const out = await running;
+    expect(out.error).toBeUndefined();
+    expect(out.landingPreparation[0]?.reason).toBe('landing_search_invalidated');
+    expect(r.calls.flatMap(c => c.hands).some(h => h.do === 'place')).toBe(false);
+    expect(r.rawWrites.filter(w => w.name === 'block_place')).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('retains completed preparation through r245-style receipt-age-four gaps until the phase-3 entry', async () => {
     vi.useFakeTimers(); const r = landingRig({ packetEveryAfterEquip: 5, phase3DelayMs: 1500 });
     const running = r.run(); await vi.advanceTimersByTimeAsync(19_000); const out = await running;

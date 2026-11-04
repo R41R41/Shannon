@@ -1519,6 +1519,8 @@ node tests/unit/checkEndBedKill.cjs は変更した4 TS root（**scripts/minecra
 
 ## M2：結晶10本を残す phase 3 のベッド連打（2026-11-05、r245/r246 後のオフライン修正）
 
+頼み33／r247（23597ad）の155秒停止は根因未確定。末尾はtick318でphase 2へ移った実行中の`open_wait_return`の中断で、`landingPackets.packets`と`landingPreparation`はともに0件、12 tickの履歴を要する`prepareLanding`の候補探索にはまだ入れない。最後の`contractKey <- cancel <- cancelled <- runAbort`だけで内部の停止原因を断定しない。別に確認できた同期負荷は`landingBedLayouts`で、同じ飛行方位を使った平行移動した泉／耐爆棚のモックにおける修正前1回はphase 2入力327.335 ms、phase 3入力250.974 ms（probeはphase 2でだけ呼ぶ）。格子・支持列は有限だが、23597adは領域枠を使い切ったheadでも内側の安全／露出計算を続けていた。領域上限で早期終了し、候補・施工和集合・45-ray露出をgeneratorへ分割する方式(c)を採用。phase 2で一度開始し、探索1 sliceを2 ms、再開は次のphysicsTick以降、準備／発射の全callbackで合計5 ms/tickを共用する。phase・目標・地形・体力・材料の失効で破棄し、未完の発射検査は`landing_computation_budget`で拒否、slotを後から埋めない。完成した計画だけを当該着地に保持し、phase 2の未準備時も外待機goへ落とさずsleepする。Node v24.21.0の実時間モック計測（予測・待機／探索／発射検査を含む）最大はphase 0/1/2/3各1.502／0.134／3.936／5.682 ms/tickで全て10 ms未満。7ファイル288試験と、変更4 TS root（probe全体を含む）の通常semantic検査は診断0件。5種類のbed場面の0→1→2、探索中のphase／地形変更／停止、既存連打・反射拒否を確認した。nativeをmockしたgo中断は0.016 msで155秒停止を再現しておらず、実native処理をこの計測の対象に含めたとは扱わない。S1の次回ラボ用に`BED_ABORT begin/end`と`abortTiming`、`landingPreparation[].search`のslice数／最大・累計msを残す。native中断の停止有無、実地形で準備が間に合うか、予算拒否で連打slotを失わないか、M2押し上げ効果は未確認。ラボ実行・禁止ファイル・env・hand・座標／seed固定・commitの変更はない。
+
 ### 成立に必要な条件
 
 頭の足元から枕中心までの予測距離に、予測誤差の余裕を加えて、4発なら2.07 m、5発なら3.22 m以内であること。E=1、200 HP、10 tickごとに最大1 HP回復という資料の条件で、それぞれ最初から最後まで30／40 server tickの命中窓が必要になる。現実のphase 3がその長さ続くことも、爆風で延びることも、今回のモック検証だけでは確定しない。

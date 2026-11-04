@@ -4,10 +4,8 @@
   "include": [],
   "files": [
     "../../scripts/minecraft-end-fight-probe.ts",
-    "../../src/services/minebot/utils/dragonLandingPath.ts",
     "../../src/services/minebot/utils/dragonBedGeometry.ts",
-    "minecraftDragonLandingPath.test.ts",
-    "minecraftLandingReplay.test.ts",
+    "minecraftEndFightBudget.test.ts",
     "minecraftEndBedKill.test.ts"
   ]
 }

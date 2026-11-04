@@ -7,6 +7,32 @@ import { landingDragonBoxes, type LandingPoint } from './dragonLandingPath.js';
 
 type BedBlock = { name: string; boundingBox?: string; shapes?: number[][] } | null;
 export type BedBlockReader = (p: P3) => BedBlock;
+export type BedSearch<T> = Generator<void, T, void>;
+/** One cooperative slice. Yield sites include every exposure ray, not just whole layouts.
+ * Preparation resumes once per receipt tick; the synchronous API retains its complete result. */
+export function advanceBedSearch<T>(search: BedSearch<T>, milliseconds = 2, now = () => performance.now()): IteratorResult<void, T> {
+  const until = now() + Math.min(5, Math.max(0, milliseconds));
+  let result: IteratorResult<void, T>;
+  do { result = search.next(); } while (!result.done && now() < until);
+  return result;
+}
+/** Shared by preparation AND all move/ready/check callbacks. Repeated calls during
+ * one tick cannot multiply the budget. A firing check that cannot finish is a veto. */
+export function bedTickBudget(clock: () => number, now = () => performance.now()) {
+  let tick = NaN, spent = 0;
+  return <T>(search: BedSearch<T>, sliceMs = 5): IteratorResult<void, T> => {
+    if (tick !== clock()) { tick = clock(); spent = 0; }
+    if (spent >= 5) return { done: false, value: undefined };
+    const start = now();
+    try { return advanceBedSearch(search, Math.min(sliceMs, 5 - spent), now); }
+    finally { spent += now() - start; }
+  };
+}
+function finishBedSearch<T>(search: BedSearch<T>): T {
+  let result = search.next();
+  while (!result.done) result = search.next();
+  return result.value;
+}
 const air = (b: BedBlock) => !!b && /^(air|cave_air|void_air)$/u.test(b.name);
 const key = (p: P3) => `${p.x},${p.y},${p.z}`;
 const faces = [[0, -1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0], [0, 1, 0]];
@@ -132,8 +158,8 @@ function intersects(a: P3, b: P3, box: Box): boolean {
   for (const axis of ['X', 'Y', 'Z'] as const) {
     const k = axis.toLowerCase() as keyof P3, d = b[k] - a[k];
     if (Math.abs(d) < 1e-12) { if (a[k] < box[`min${axis}`] || a[k] > box[`max${axis}`]) return false; continue; }
-    const t = [(box[`min${axis}`] - a[k]) / d, (box[`max${axis}`] - a[k]) / d].sort((x, y) => x - y);
-    lo = Math.max(lo, t[0]); hi = Math.min(hi, t[1]);
+    const first = (box[`min${axis}`] - a[k]) / d, second = (box[`max${axis}`] - a[k]) / d;
+    lo = Math.max(lo, Math.min(first, second)); hi = Math.min(hi, Math.max(first, second));
     if (lo > hi) return false;
   }
   return hi > 1e-7 && lo < 1 - 1e-7;
@@ -142,6 +168,9 @@ function intersects(a: P3, b: P3, box: Box): boolean {
 /** Vanilla's sample grid for the actual target AABB; ray tests use observed collision shapes.
  * Unknown/unloaded shapes provide no shielding. Both bed halves are removed before tracing. */
 export function bedExposure(read: BedBlockReader, centre: P3, box: Box, ignore: P3[] = []): number {
+  return finishBedSearch(bedExposureSearch(read, centre, box, ignore));
+}
+export function* bedExposureSearch(read: BedBlockReader, centre: P3, box: Box, ignore: P3[] = []): BedSearch<number> {
   const w = box.maxX - box.minX, h = box.maxY - box.minY, d = box.maxZ - box.minZ;
   if (![...Object.values(box), ...Object.values(centre)].every(Number.isFinite) || Math.min(w, h, d) <= 0) return NaN;
   const sx = 1 / (w * 2 + 1), sy = 1 / (h * 2 + 1), sz = 1 / (d * 2 + 1);
@@ -150,6 +179,7 @@ export function bedExposure(read: BedBlockReader, centre: P3, box: Box, ignore: 
   const cache = new Map<string, Box[]>();
   let seen = 0, total = 0;
   for (let x = 0; x <= 1 + 1e-9; x += sx) for (let y = 0; y <= 1 + 1e-9; y += sy) for (let z = 0; z <= 1 + 1e-9; z += sz) {
+    yield;
     const to = { x: box.minX + w * x + ox, y: box.minY + h * y, z: box.minZ + d * z + oz };
     let blocked = false;
     // Every cell intersecting the segment's bounds, with exact slab intersection (no ray-step holes).
@@ -177,11 +207,14 @@ export const bedBodyBox = (p: P3, width = 0.6, height = 1.8): Box =>
   ({ minX: p.x - width / 2, minY: p.y, minZ: p.z - width / 2, maxX: p.x + width / 2, maxY: p.y + height, maxZ: p.z + width / 2 });
 
 export function bedSelfEstimate(read: BedBlockReader, head: P3, foot: P3, feet: P3, dimensions: { width?: number; height?: number } = {}) {
+  return finishBedSearch(bedSelfEstimateSearch(read, head, foot, feet, dimensions));
+}
+function* bedSelfEstimateSearch(read: BedBlockReader, head: P3, foot: P3, feet: P3, dimensions: { width?: number; height?: number } = {}) {
   const box = bedBodyBox(feet, dimensions.width, dimensions.height);
   // Cheap supports may be destroyed. Never depend on their shielding for SELF, including
   // observed columns left by an earlier blast. Dragon damage still traces their real shapes.
   const selfRead: BedBlockReader = p => { const b = read(p); return b?.name === 'cobblestone' ? { ...b, shapes: [] } : b; };
-  const centre = bedCentre(head), exposure = bedExposure(selfRead, centre, box, [head, foot]);
+  const centre = bedCentre(head), exposure = yield* bedExposureSearch(selfRead, centre, box, [head, foot]);
   const distance = Math.hypot(feet.x - centre.x, feet.y - centre.y, feet.z - centre.z);
   return { distance, exposure, shielded: 1 - exposure, box, expected: bedDamage(distance, exposure), model: 'normal_before_armour' };
 }
@@ -189,8 +222,11 @@ export function bedSelfEstimate(read: BedBlockReader, head: P3, foot: P3, feet: 
 /** Only permanent blast-resistant collision shapes count for M2. In particular an
  * end-stone wall must not certify the second explosion. This also preserves the +1 damage. */
 export function landingBedSelf(read: BedBlockReader, head: P3, foot: P3, feet: P3, dimensions: { width?: number; height?: number } = {}) {
+  return finishBedSearch(landingBedSelfSearch(read, head, foot, feet, dimensions));
+}
+export function* landingBedSelfSearch(read: BedBlockReader, head: P3, foot: P3, feet: P3, dimensions: { width?: number; height?: number } = {}) {
   const durable: BedBlockReader = p => { const b = read(p); return b && ['obsidian', 'bedrock'].includes(b.name) ? b : { name: 'air', shapes: [] }; };
-  return bedSelfEstimate(durable, head, foot, feet, { width: Math.max(0.6, dimensions.width ?? 0.6), height: Math.max(1.8, dimensions.height ?? 1.8) });
+  return yield* bedSelfEstimateSearch(durable, head, foot, feet, { width: Math.max(0.6, dimensions.width ?? 0.6), height: Math.max(1.8, dimensions.height ?? 1.8) });
 }
 
 export function landingBedFireClear(read: BedBlockReader, stand: P3): boolean {
@@ -211,6 +247,10 @@ export interface LandingBedLayout {
  * at the actor's REAL position. A nominal stand tolerance alone cannot prove zero exposure. */
 export function landingBedRefusal(layout: LandingBedLayout, feet: P3, path: readonly LandingPoint[], read: BedBlockReader,
   health: number, error = 0.5, dimensions: { width?: number; height?: number } = {}): string | null {
+  return finishBedSearch(landingBedRefusalSearch(layout, feet, path, read, health, error, dimensions));
+}
+export function* landingBedRefusalSearch(layout: LandingBedLayout, feet: P3, path: readonly LandingPoint[], read: BedBlockReader,
+  health: number, error = 0.5, dimensions: { width?: number; height?: number } = {}): BedSearch<string | null> {
   if (!Number.isFinite(health) || !Object.values(feet).every(Number.isFinite)) return 'landing_estimate_unknown';
   if (!path.length || !Number.isFinite(error) || error < 0) return 'landing_prediction_missing';
   if ([layout.head, layout.foot].some(p => !air(read(p)))) return 'landing_bed_cells_not_air';
@@ -226,7 +266,7 @@ export function landingBedRefusal(layout: LandingBedLayout, feet: P3, path: read
   // Include new/existing supports: an arm intersecting a part is not an admissible layout.
   const occupied = [layout.head, layout.foot, ...layout.supports, ...layout.screen].map(p => cellBox(p));
   if (path.some(p => landingDragonBoxes(p).slice(0, 3).some((box, i) => occupied.some(cell => boxesOverlap(cell, i < 2 ? inflate(box, -1.1) : box))))) return 'landing_build_in_dragon';
-  const self = landingBedSelf(read, layout.head, layout.foot, feet, dimensions);
+  const self = yield* landingBedSelfSearch(read, layout.head, layout.foot, feet, dimensions);
   if (!Number.isFinite(self.expected) || self.expected > 6 || self.expected + 4 >= health) return 'self_damage';
   if (self.exposure !== 0) return 'landing_exposure_not_zero';
   return null;
@@ -238,10 +278,15 @@ export function landingBedRefusal(layout: LandingBedLayout, feet: P3, path: read
  * Return a row of pillows sharing a stand/build, so repeats require no walking/construction. */
 export function landingBedLayouts(target: P3, corridor: readonly LandingPoint[], read: BedBlockReader,
   budget: number, health = 20, endHead?: P3): LandingBedLayout[] {
+  return finishBedSearch(landingBedLayoutSearch(target, corridor, read, budget, health, endHead));
+}
+export function* landingBedLayoutSearch(target: P3, corridor: readonly LandingPoint[], read: BedBlockReader,
+  budget: number, health = 20, endHead?: P3): BedSearch<LandingBedLayout[]> {
   if (!corridor.length || !Object.values(target).every(Number.isFinite) || !Number.isInteger(budget) || budget < 0) return [];
   const durable = (p: P3) => ['bedrock', 'obsidian'].includes(read(p)?.name ?? '');
   const pillows = new Map<string, P3>();
   for (const p of corridor) for (const dx of [-1, 0, 1]) for (const dz of [-1, 0, 1]) for (const dy of endHead ? [-1, 0] : [-1]) {
+    yield;
     const head = { x: Math.floor(p.head.x) + dx, y: Math.floor(p.head.y) + dy, z: Math.floor(p.head.z) + dz };
     if (Math.hypot(head.x + 0.5 - target.x, head.z + 0.5 - target.z) <= (endHead ? 8 : 4)
       && head.y >= target.y - (endHead ? 1 : 0) && head.y <= target.y + 3 && air(read(head))) pillows.set(key(head), head);
@@ -256,15 +301,19 @@ export function landingBedLayouts(target: P3, corridor: readonly LandingPoint[],
   // Reserve capacity for every region: central candidates must not exhaust the cap
   // before the terminal pillows are even inspected. Safety conditions are identical.
   for (const head of [...pillows.values()].sort((a, b) => distance(bedCentre(a), target) - distance(bedCentre(b), target))) {
+    yield;
     const family = region(head);
     if (found.filter(c => c.region === family).length >= limit) continue;
     const near = corridor.filter(p => distance(p.head, bedCentre(head)) <= 2);
     if (!near.length) continue;
-    for (const [dx, dz] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
+    orientations: for (const [dx, dz] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
       const foot = { x: head.x + dx, y: head.y, z: head.z + dz };
       if (!air(read(foot))) continue;
       const supports = [head, foot].map(p => ({ ...p, y: p.y - 1 }));
       for (const along of [1, 2, 3]) for (const side of [-1, 0, 1]) for (let y = Math.floor(target.y) - 4; y < target.y; y++) {
+        yield;
+        // The family cap used to be checked only after all safety/exposure work.
+        if (found.filter(c => c.region === family).length >= limit) break orientations;
         const stand = { x: head.x + dx * along + dz * side + 0.5, y, z: head.z + dz * along - dx * side + 0.5 };
         const cell = { x: Math.floor(stand.x), y, z: Math.floor(stand.z) };
         if (Math.hypot(stand.x - target.x, stand.z - target.z) > (endHead ? 8 : 4) || !durable({ ...cell, y: y - 1 })
@@ -280,10 +329,13 @@ export function landingBedLayouts(target: P3, corridor: readonly LandingPoint[],
           const projected: BedBlockReader = p => screen.some(c => key(c) === key(p))
             ? { name: 'obsidian', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : read(p);
           const candidate = { head, foot, stand, supports, screen, selfExposure: 0, headDistance: 0, headDamage: 0, score: 0 };
-          if (landingBedRefusal(candidate, stand, near, projected, health)) continue;
-          const best = near.map(p => ({ distance: distance(p.head, bedCentre(head)),
-            damage: bedDamage(distance(p.head, bedCentre(head)), bedExposure(projected, bedCentre(head), p.headBox, [head, foot])) }))
-            .sort((a, b) => b.damage - a.damage)[0];
+          if (yield* landingBedRefusalSearch(candidate, stand, near, projected, health)) continue;
+          let best = { distance: Infinity, damage: -Infinity };
+          for (const p of near) {
+            const d = distance(p.head, bedCentre(head));
+            const damage = bedDamage(d, yield* bedExposureSearch(projected, bedCentre(head), p.headBox, [head, foot]));
+            if (damage > best.damage) best = { distance: d, damage };
+          }
           if (best.damage < 50.75) continue;
           if (found.filter(c => c.region === family).length >= limit) break;
           found.push({ ...candidate, region: family, headDistance: best.distance, headDamage: best.damage, score: best.distance + screen.length * 0.05 });
