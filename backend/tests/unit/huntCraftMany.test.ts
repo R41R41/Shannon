@@ -62,3 +62,27 @@ describe('craft in the hand, many rounds', () => {
     expect(result.text).toContain('ender_pearl');
   });
 });
+
+describe('a shortfall says what the pack makes now and how the short ingredient is made (S5 rig, c1: eleven powder and three rods, craft ender_eye 12 refused)', () => {
+  it('names the eyes the pack makes now and the craft of the powder from a rod', async () => {
+    const ROD = 1123;
+    const stock: Record<string, number> = { ender_pearl: 14, blaze_powder: 11, blaze_rod: 3, ender_eye: 0 };
+    const eye = { requiresTable: false, result: { id: EYE, count: 1 }, delta: [{ id: PEARL, count: -1 }, { id: POWDER, count: -1 }, { id: EYE, count: 1 }] };
+    const powder = { requiresTable: false, result: { id: POWDER, count: 2 }, delta: [{ id: ROD, count: -1 }, { id: POWDER, count: 2 }] };
+    const bot: any = {
+      entity: { position: { x: 0.5, y: 64, z: 0.5, offset: () => ({ x: 0.5, y: 65.6, z: 0.5 }) } },
+      registry: { itemsByName: { ender_eye: { id: EYE }, blaze_powder: { id: POWDER }, blaze_rod: { id: ROD } }, items: { ...NAMES, [ROD]: { name: 'blaze_rod' } } },
+      inventory: { items: () => Object.entries(stock).filter(([, count]) => count > 0).map(([name, count]) => ({ name, count })), slots: [] },
+      recipesAll: (id: number, _meta: unknown, table: unknown) => (table !== null ? [] : id === EYE ? [eye] : id === POWDER ? [powder] : []),
+      blockAt: () => null, world: { getColumns: () => [] },
+      craft: async () => { throw new Error('not reached'); },
+    };
+    const result = await craft(ctx(bot), { item: 'ender_eye', count: 12 });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('missing_material');
+    expect(result.text).toContain('blaze_powder 1（持っている 11／要る 12）');
+    expect(result.text).toContain('今作れるのは 11 個');
+    expect(result.text).toContain('blaze_powder は blaze_rod×1 から 2 個ずつ作れる（持ち物で 6 個まで');
+    expect(result.text).toContain('craft item=blaze_powder count=2');
+  });
+});
