@@ -48,6 +48,16 @@ describe('run52: a cover dig must lower the body, not just remove a block',()=>{
     expect(result.success).toBe(false);
     expect(sim.bot.dugBlocks).toEqual([]);
   });
+  it('S2 (lab c1): a fireball knocks the body 1.2 off the dug column during the dig; it walks back over the hole and drops',async()=>{
+    const sim=makeSim((_x,y,_z)=>y<64?'dirt':'air',{start:[0.5,64,0.5],digMs:100});
+    const dig=sim.bot.dig;
+    sim.bot.dig=async(block:any)=>{await dig(block);sim.bot.entity.position.x=1.7;};
+    const result=await drive(sim,runCover(sim.bot,sim.bot,{kind:'dig',cell:{x:0,y:63,z:0},detail:'cover dig'}));
+    expect(result.success,result.result).toBe(true);
+    expect(sim.bot.entity.position.y).toBeCloseTo(63,1);
+    expect(Math.floor(sim.bot.entity.position.x)).toBe(0);
+    expect(sim.bot.controlState.forward).not.toBe(true);
+  });
   it('does not claim a descent if the server leaves the supporting floor in place',async()=>{
     const sim=makeSim((_x,y,_z)=>y<64?'dirt':'air',{start:[0.5,64,0.5],digMs:100,ghost:(_x,y,_z)=>y===63?'dirt':undefined});
     const result=await drive(sim,runCover(sim.bot,sim.bot,{kind:'dig',cell:{x:0,y:63,z:0},detail:'cover dig'}));

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { executeAction, physicalActionBusy } from '../../src/services/minebot/execution/ActionExecution.js';
-import { coverChoice, creeperLit, floorEatChoice, floorRetreatTick, retreatThreat, shootersInReach, type FloorBody, type RetreatState } from '../../src/services/minebot/utils/floorReflexes.js';
+import { coverChoice, supportCells, creeperLit, floorEatChoice, floorRetreatTick, retreatThreat, shootersInReach, type FloorBody, type RetreatState } from '../../src/services/minebot/utils/floorReflexes.js';
 
 function body(patch: Partial<FloorBody> & { items?: { name: string }[]; slots?: ({ name: string } | null)[] } = {}) {
   const keys: Record<string, boolean> = {}, looks: number[] = [];
@@ -65,6 +65,25 @@ describe('cover digging preserves footing and a way back', () => {
     expect(choice.cover, choice.why).toMatchObject({ kind: 'dig', cell: { x: 0, y: 63, z: 0 } });
     expect(choice.cover?.detail).toContain('見える線 2→1');
     expect(coverChoice(f.bot, shootersInReach(f.bot, f.bot.entity!.position), 3).cover).toBeNull();
+  });
+  it('S2: burning with the shooter far, still the dig; within 6 m, a run first; after a dig that did not lower the body, never the dig', () => {
+    const f = field();
+    expect(f.choose({ burning: true }).cover).toMatchObject({ kind: 'dig' });
+    f.bot.entities![2].position = new Vec3(4.5, 64, 0.5);
+    expect(f.choose({ burning: true }).cover).toMatchObject({ kind: 'run', ids: [2] });
+    f.bot.entities![2].position = new Vec3(20.5, 64, 0.5);
+    expect(f.choose({ noDig: true }).cover).toMatchObject({ kind: 'run', detail: expect.stringContaining('掘っても下がれなかった') });
+    // No safe heading (lava all round the floor): no dig either, and why.
+    for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) if (x !== 0 || z !== 0) f.blocks.set(`${x},63,${z}`, 'lava');
+    const none = f.choose({ noDig: true });
+    expect(none.cover).toBeNull();
+    expect(none.why).toContain('もう掘らない');
+  });
+  it('S2: counts the cells under the body that hold it up', () => {
+    const f = field();
+    expect(supportCells(f.bot, 64)).toEqual([{ x: 0, y: 63, z: 0 }]);
+    f.bot.entity!.position = new Vec3(0.9, 64, 0.5);
+    expect(supportCells(f.bot, 64)).toEqual([{ x: 0, y: 63, z: 0 }, { x: 1, y: 63, z: 0 }]);
   });
 });
 

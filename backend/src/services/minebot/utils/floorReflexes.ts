@@ -202,7 +202,7 @@ export interface FloorState {
   /** Cooldowns, the allowance and the stuck latch of the arrow step-aside, the meal and the armour change (`floorBudget.ts`); absent when denied. */
   budget?: FloorBudget;
   /** r7, the cover: the episode (its digs, when its last hand ended), the next look, the last "no hand" note, and the health seen. */
-  cover?: { since: number; digs: number; lastEnd: number; /** r10: the blocks put on a shooter's line in this episode. */ lines?: number };
+  cover?: { since: number; digs: number; lastEnd: number; /** r10: the blocks put on a shooter's line in this episode. */ lines?: number; /** A dig of the episode did not lower the body: no dig again. */ digFailed?: boolean };
   coverNextAt?: number;
   coverNotedAt?: number;
   healthSeen?: { last: number; fellAt: number };
@@ -1423,7 +1423,8 @@ export async function runLastStand(bot: FloorBody, port: FloorBody, stand: LastS
  * keeps losing health and is still seen:
  *   (a) a step of one or two cells (walked as the walk walks) to a cell no shooter in reach sees;
  *   (b) a block over the head, when the body stands in a hole and that block is what the lines come through (a full block carried);
- *   (c) the cell under the feet dug, when the landing holds the body, a safe climb back exists, fewer sight lines remain and no lava runs in (at most three in a row).
+ *   (c) the cell under the feet dug, when the landing holds the body, a safe climb back exists, fewer sight lines remain and no lava runs in (at most three in a row);
+ *   (r) S2: burning with a shooter within COVER_RUN_NEAR, or after a dig that did not lower the body, a run away along the flee's safe heading (before the dig).
  * No way round, no place chosen further than two cells. The act running stops (its lease is taken), and the ledger says what the body did
  * and whether the line is cut, with the shooters still seeing it.
  */
@@ -1437,8 +1438,19 @@ const COVER_EPISODE_MS = 4000;
 const COVER_MAX_DIGS = 3;
 /** "No hand to make" is told at most this often. */
 const COVER_NOTE_GAP_MS = 5000;
-const COVER_TIMEOUT_MS: Record<Cover['kind'], number> = { step: 3000, seal: 3000, line: 3000, dig: 5000 };
+const COVER_TIMEOUT_MS: Record<Cover['kind'], number> = { step: 3000, seal: 3000, line: 3000, dig: 5000, run: 3500 };
 const COVER_DETAIL_MAX = 160;
+/**
+ * S2 (2026-11-04, lab c1 blaze_raid): burning among three blazes 0.5 to 5 m off, the cover dug the floor; a fireball threw the body 1.3 cells off
+ * the dug column, the drop was not there (did_not_drop), and the next hand dug again beside it. 12.8 to 0 in 4.6 s. Blazes that near hover over
+ * a pit and look into it. Burning with a shooter within COVER_RUN_NEAR, or once a dig of the episode did not lower the body, the hand is a run
+ * (the flee's safe heading, away from every shooter in reach) of COVER_RUN_BLOCKS at most, until no shooter sees the body; a dig is not made
+ * again in that episode. A dig that leaves the body beside its hole steps it back in (COVER_STEP_IN_REACH at most).
+ */
+const COVER_RUN_NEAR = 6;
+const COVER_RUN_BLOCKS = 10;
+const COVER_RUN_TICKS = 60;
+const COVER_STEP_IN_REACH = 1.6;
 /**
  * r10 (run 34, +488 to +502): a piglin with a crossbow stood 5.9 to 7 m off, in sight of a body in a rock tunnel, and hit it six times in 14 s
  * (health 20 to 11.3). The cover moved only for a burning body, the melee hand only for an enemy within 4 m; the line was cut 29 s after the
@@ -1464,7 +1476,9 @@ export type Cover =
   | { kind: 'seal'; cell: { x: number; y: number; z: number }; block: string; detail: string }
   /** r10: a block in a cell on the shooters' line, a cell or two from the body (shot at from afar). */
   | { kind: 'line'; cell: { x: number; y: number; z: number }; block: string; detail: string }
-  | { kind: 'dig'; cell: { x: number; y: number; z: number }; detail: string };
+  | { kind: 'dig'; cell: { x: number; y: number; z: number }; detail: string }
+  /** S2 (lab c1): burning with a shooter within COVER_RUN_NEAR, or after a dig that did not lower the body: a sprint away along the flee's safe heading. */
+  | { kind: 'run'; ids: number[]; detail: string };
 
 const centreOf = (cell: { x: number; y: number; z: number }) => new Vec3(cell.x + 0.5, cell.y, cell.z + 0.5);
 const cellWords = (cell: { x: number; y: number; z: number }) => `(${cell.x},${cell.y},${cell.z})`;
@@ -1545,7 +1559,7 @@ export function recentShots(bot: FloorBody, state: FloorState, feet: Vec3, t: nu
  * feet not to be dug. `digs` is how many the episode has made. With `options.line` (the body is being shot at from afar), a block on the
  * line that closes every open sight line is taken before the dig; one that closes some, only when no dig can be made.
  */
-export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, options: { line?: boolean; lines?: number } = {}): { cover: Cover | null; why: string } {
+export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, options: { line?: boolean; lines?: number; burning?: boolean; noDig?: boolean } = {}): { cover: Cover | null; why: string } {
   const feet = feetCell(bot as never);
   if (!feet || !shooters.length) return { cover: null, why: '射手がいない' };
   const read = bodyReader(bot as never);
@@ -1615,13 +1629,31 @@ export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, 
       if (!found) lineWhy = '線上の 1 マスでは見える線が減らない（当てる面が無いか、すでに塞がっている）';
     }
   }
+  // (r) S2: burning with a shooter that near (it hovers over a pit and looks in), or a dig of the episode that did not lower the body: away
+  // along the flee's safe heading (no lava, no drop), before any dig.
+  let runWhy = '';
+  const nearest = watching[0];
+  if (options.burning || options.noDig) {
+    if (!options.noDig && nearest.distance > COVER_RUN_NEAR) runWhy = `一番近い射手まで ${nearest.distance.toFixed(1)}m（走らない）`;
+    else {
+      let plan: { yaw: number; jump: boolean } | null = null;
+      try { plan = fleeHeadingPlan(bot, watching.map(({ entity }) => entity.position)); } catch { plan = null; }
+      if (plan) {
+        const ids = watching.map(({ entity }) => entity.id).filter((id): id is number => typeof id === 'number');
+        const reason = options.noDig ? '掘っても下がれなかったので' : `燃えて射手が ${nearest.distance.toFixed(1)}m にいるので`;
+        return { cover: { kind: 'run', ids, detail: `${reason}走って離れた ${cellWords(feet)}から` }, why: '' };
+      }
+      runWhy = '走って離れる安全な向きが無い';
+    }
+  }
   // (c) One step down, judged with that floor removed: a loaded, safe landing, a one-step climb back to the original height, and fewer
   // open sight lines. No lava may run in, and at most COVER_MAX_DIGS in an episode. Other escape/last-stand digs keep their own rules.
   const terrain = bot as unknown as TerrainBody;
   const under = terrain.blockAt?.(new Vec3(feet.x, feet.y - 1, feet.z)) as (FleeBlock & { diggable?: boolean }) | null | undefined;
   const below = terrain.blockAt?.(new Vec3(feet.x, feet.y - 2, feet.z));
   let digWhy = '';
-  if (digs >= COVER_MAX_DIGS) digWhy = `足元はもう ${digs} 段掘った`;
+  if (options.noDig) digWhy = 'この間に掘ったが下がれなかった（もう掘らない）';
+  else if (digs >= COVER_MAX_DIGS) digWhy = `足元はもう ${digs} 段掘った`;
   else if (!(under && under.boundingBox === 'block' && under.diggable !== false && !isFluid(under.name) && !isHazardousToStandOn(under.name)
     && !['bedrock', 'barrier', 'end_portal_frame', 'reinforced_deepslate'].includes(String(under.name)) && !PROTECTED_UTILITY_BLOCKS.has(String(under.name)))) {
     digWhy = `足元 ${cellWords({ ...feet, y: feet.y - 1 })} は ${under?.name ?? '未ロード'}（掘らない）`;
@@ -1649,7 +1681,12 @@ export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, 
           const count = (at: Vec3, solidAt: typeof closed) => watching.reduce((sum, { entity }) => sum + openSightLines(bot as any, entity as any, at, solidAt), 0);
           const before = count(centreOf(feet), closed), left = count(centreOf(down), afterClosed);
           if (left >= before) digWhy = `下がっても見える線が減らない（${before}→${left}）`;
-          else return { cover: { kind: 'dig', cell: down, detail: `足元を掘って下がった ${cellWords(feet)}（見える線 ${before}→${left}）` }, why: '' };
+          else {
+            // Standing across two cells, the other one holds the body up after the dig: the hand centres it in the dug column first (runCover).
+            const holds = supportCells(bot, feet.y, closed).length;
+            const across = holds > 1 ? `・${holds} マスにまたがって立っていたので真ん中に寄ってから` : '';
+            return { cover: { kind: 'dig', cell: down, detail: `足元を掘って下がった ${cellWords(feet)}（見える線 ${before}→${left}${across}）` }, why: '' };
+          }
         }
       }
     }
@@ -1657,7 +1694,19 @@ export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, 
   if (partial && block) {
     return { cover: { kind: 'line', cell: partial.cell, block: block.name, detail: `線上の ${cellWords(partial.cell)} を ${block.name} で塞いだ（見える線 ${partial.before}→${partial.left}）` }, why: '' };
   }
-  return { cover: null, why: `周り 2 マスに見えない立つ所が無い・${sealWhy}${lineWhy && lineWhy !== sealWhy ? `・${lineWhy}` : ''}・${digWhy}` };
+  return { cover: null, why: `周り 2 マスに見えない立つ所が無い・${sealWhy}${lineWhy && lineWhy !== sealWhy ? `・${lineWhy}` : ''}${runWhy ? `・${runWhy}` : ''}・${digWhy}` };
+}
+
+/** The solid cells one level under `feetY` that the body's box (half-width 0.3) stands on: what holds it up when its own floor is dug. */
+export function supportCells(bot: FloorBody, feetY: number, closed = solidReader(bot)): Array<{ x: number; y: number; z: number }> {
+  const at = bot.entity?.position;
+  if (!at) return [];
+  const out: Array<{ x: number; y: number; z: number }> = [];
+  for (const dx of [-0.299, 0.299]) for (const dz of [-0.299, 0.299]) {
+    const x = Math.floor(at.x + dx), z = Math.floor(at.z + dz);
+    if (!out.some(cell => cell.x === x && cell.z === z) && closed(x, feetY - 1, z)) out.push({ x, y: feetY - 1, z });
+  }
+  return out;
 }
 
 /**
@@ -1705,7 +1754,8 @@ function lineChoice(bot: FloorBody, read: ReturnType<typeof bodyReader>, closed:
 }
 
 /** Runs one hand of the cover as the work of a safety-lease action (`port` is the body's motor port). */
-export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, timeoutMs = COVER_TIMEOUT_MS[cover.kind]): Promise<{ success: boolean; result: string }> {
+export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, timeoutMs = COVER_TIMEOUT_MS[cover.kind], tickMs = 50): Promise<{ success: boolean; result: string }> {
+  if (cover.kind === 'run') return runCoverRun(bot, port, cover, tickMs);
   const base = feetCell(bot as never) ?? { x: 0, y: 0, z: 0 };
   const ctx = { bot: port, stop: new AbortController().signal, deadline: Date.now() + timeoutMs, facing: 'north' as const, base };
   if (cover.kind === 'step') {
@@ -1724,16 +1774,80 @@ export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, ti
   if (cover.cell.x !== base.x || cover.cell.z !== base.z || cover.cell.y !== base.y - 1) {
     return { success: false, result: '足元を掘る前に体が別のマスへ移った（掘らない）' };
   }
-  const { centreInColumn, waitDropOne } = await import('./tunnelWalk.js');
+  const { centreInColumn } = await import('./tunnelWalk.js');
   const feet = new Vec3(base.x, base.y, base.z);
   const centred = await centreInColumn(port as never, feet);
   if (centred) return { success: false, result: `足元の真ん中に立てない（${centred}。掘らない）` };
+  // Every cell that holds the body up: one other than the dug one leaves it standing on the rim.
+  const rim = supportCells(bot, base.y).filter(cell => cell.x !== cover.cell.x || cell.z !== cover.cell.z);
+  if (rim.length) return { success: false, result: `足元の隣 ${rim.map(cellWords).join('・')} にも乗っている（掘らない）` };
   const outcome = await dig(ctx as never, { at: [cover.cell], collect: false, exposeOk: true });
   if (outcome.ok) {
-    const dropped = await waitDropOne(port as never, feet);
+    const dropped = await dropIntoHole(bot, port, feet);
     if (dropped) return { success: false, result: `足元を掘ったが一段下がっていない（${dropped}）` };
   }
   return { success: outcome.ok, result: outcome.text };
+}
+
+/**
+ * S2 (lab c1): waits (1.5 s at most) for the body to drop into the dug column under `feet`; a body thrown off it (a fireball's knock) but still
+ * on the old level within COVER_STEP_IN_REACH walks back over it (no sneak, which would hold it on the rim). Null when it dropped, else why not.
+ */
+async function dropIntoHole(bot: FloorBody, port: FloorBody, feet: Vec3): Promise<string | null> {
+  const centre = feet.offset(0.5, 0, 0.5);
+  const deadline = Date.now() + 1500;
+  let walking = false, stepped = false;
+  try {
+    while (Date.now() < deadline) {
+      const body = bot.entity;
+      if (!body || actionSignal(port as never)?.aborted) break;
+      const at = body.position;
+      if (Math.floor(at.y) < feet.y && body.onGround !== false) break;
+      const dx = centre.x - at.x, dz = centre.z - at.z;
+      const want = Math.max(Math.abs(dx), Math.abs(dz)) > 0.15 && Math.floor(at.y) === feet.y && Math.hypot(dx, dz) <= COVER_STEP_IN_REACH;
+      if (want) { port.look?.(Math.atan2(-dx, -dz), 0, true); stepped = true; }
+      if (want !== walking) { walking = want; port.setControlState('forward', want); }
+      await abortableDelay(port, 50);
+    }
+  } finally {
+    if (walking) { try { port.setControlState('forward', false); } catch { /* ownership lost: the new owner holds the keys */ } }
+  }
+  const y = bot.entity ? Math.floor(bot.entity.position.y) : feet.y;
+  return y === feet.y - 1 ? null : stepped ? 'did_not_drop・穴へ戻れなかった' : 'did_not_drop';
+}
+
+/**
+ * S2: the cover's run, a sprint along the flee's safe heading away from the shooters it was chosen against (their ids; those gone are left
+ * out), until none of them sees the body, at most COVER_RUN_BLOCKS blocks or COVER_RUN_TICKS ticks, or no safe heading is left.
+ */
+async function runCoverRun(bot: FloorBody, port: FloorBody, cover: Extract<Cover, { kind: 'run' }>, tickMs: number): Promise<{ success: boolean; result: string }> {
+  const origin = bot.entity?.position.clone();
+  if (!origin) return { success: false, result: '体が無い' };
+  const memory: { heading?: number } = {};
+  let ticks = 0, jumping = false, ended = '走れる時間いっぱい';
+  try {
+    for (; ticks < COVER_RUN_TICKS; ticks++) {
+      const body = bot.entity;
+      if (!body || actionSignal(port as never)?.aborted || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) { ended = '止められた'; break; }
+      if (body.position.distanceTo(origin) >= COVER_RUN_BLOCKS) { ended = `${COVER_RUN_BLOCKS} ブロック離れた`; break; }
+      const from: CoverShooter[] = [];
+      for (const id of cover.ids) {
+        const entity = bot.entities?.[id];
+        if (entity?.position && entity !== body) from.push({ entity, distance: entity.position.distanceTo(body.position) });
+      }
+      if (!from.length || (ticks > 0 && !shootersSeeing(bot, from, body.position).length)) { ended = '射線が切れた'; break; }
+      const keys = fleeKeys(bot, from.map(({ entity }) => entity.position), memory);
+      if (keys === null) { ended = '安全な向きが無くなった'; break; }
+      port.look?.(keys.yaw, 0, true);
+      port.setControlState('forward', true); port.setControlState('sprint', true);
+      if (keys.jump !== jumping) { jumping = keys.jump; port.setControlState('jump', jumping); }
+      await abortableDelay(port, tickMs);
+    }
+  } finally {
+    try { releaseKeys(port); } catch { /* ownership lost: the new owner holds the keys */ }
+  }
+  const moved = bot.entity ? bot.entity.position.distanceTo(origin) : 0;
+  return { success: moved >= 1.5 || ended === '射線が切れた', result: `${moved.toFixed(1)} ブロック走った（${ended}）` };
 }
 
 // ===== r8: a melee enemy near, and the rim of a drop at the feet =====
@@ -2154,7 +2268,12 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     } catch { return false; }
     if (!seeing.length) return false;
     let choice: ReturnType<typeof coverChoice>;
-    try { choice = coverChoice(bot, shooters, Math.max(episode?.digs ?? 0, recentEscapeDigs(state, t)), shot ? { line: true, lines: episode?.lines ?? 0 } : {}); } catch { return false; }
+    // S2: a dig of this episode that did not lower the body is not made again; a block on the line or a run is taken instead.
+    const noDig = episode?.digFailed === true;
+    try {
+      choice = coverChoice(bot, shooters, Math.max(episode?.digs ?? 0, recentEscapeDigs(state, t)),
+        { ...(shot || noDig ? { line: true, lines: episode?.lines ?? 0 } : {}), burning, noDig });
+    } catch { return false; }
     const lead = burning ? '燃えて射手から見えている:' : shot ? `${shooterWords(body.position, seeing)} に${SHOT_WINDOW_MS / 1000}秒で${shot.hits}回撃たれた:` : '体力が減り続け射手から見えている:';
     if (!choice.cover) {
       if (t - (state.coverNotedAt ?? -Infinity) >= COVER_NOTE_GAP_MS) {
@@ -2171,8 +2290,9 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     state.busy = 'flee';
     log.warn(`🔥 ${lead} ${cover.kind}（${shooterWords(body.position, seeing)}）`);
     const handle = ledger.begin('cover', `${lead} ${cover.detail}`, COVER_DETAIL_MAX);
-    void take('floor-cover', FLOOR_FLEE_PRIORITY, COVER_TIMEOUT_MS[cover.kind] + 500, () => runCover(bot, createMotorPort(bot), cover))
+    void take('floor-cover', FLOOR_FLEE_PRIORITY, COVER_TIMEOUT_MS[cover.kind] + 500, () => runCover(bot, createMotorPort(bot), cover, COVER_TIMEOUT_MS[cover.kind], options.fleeTickMs))
       .then(result => {
+        if (cover.kind === 'dig' && !(result as { success?: boolean } | undefined)?.success) run.digFailed = true;
         // What it did, and whether the line is cut now (read after the hand: the shooters move too).
         const after = bot.entity?.position;
         let still: CoverShooter[] = [];
@@ -2187,7 +2307,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         const failed = done ? '' : `（できなかった: ${String((result as { result?: string } | undefined)?.result ?? '').slice(0, 50)}）`;
         handle.detail = `${lead} ${cover.detail}${failed}。${still.length ? `まだ見えている: ${shooterWords(after!, still)}` : '射線が切れた'} 体力${Math.round((bot.health ?? 0) * 10) / 10}`.slice(0, COVER_DETAIL_MAX);
         ledger.end(handle, done ? 'done' : (result as { failureType?: string } | undefined)?.failureType === 'interrupted' ? 'cut' : 'failed');
-      }, () => { ledger.end(handle, 'failed'); })
+      }, () => { if (cover.kind === 'dig') run.digFailed = true; ledger.end(handle, 'failed'); })
       .catch(() => undefined)
       .finally(() => {
         state.busy = null;
