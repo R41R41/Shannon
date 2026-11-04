@@ -18,7 +18,7 @@ import { eat } from './body.js';
 import { findEntity, isDying } from './use.js';
 import { findItem, guard, letGo, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
 import { swimControls, swimPulse } from './swim.js';
-import { HOVERING_SHOOTERS, ShooterWatch, StrikeGate, hoversAboveReach, strikeHold } from '../huntBlaze.js';
+import { HOVERING_SHOOTERS, SHOT_HOLD_TICKS, ShooterWatch, StrikeGate, hoversAboveReach, nextShotTicks, strikeHold } from '../huntBlaze.js';
 import { itemIds, itemsSince } from '../huntBarter.js';
 import { itemFacts } from './pickup.js';
 import { EndermanCamp, moveToRoofSite } from '../huntEndermanCamp.js';
@@ -39,9 +39,12 @@ const { goals } = pathfinder;
  * fall, no sprint and a swing at full strength; the jump is timed from the weapon's own wait), keeps the shield on the arm, and, below `retreatHp`,
  * gets out of reach, eats what can help and goes back in, or leaves.
  *
- * A blaze (a creature that hovers and shoots, utils/huntBlaze) is not followed off the spot: the body keeps within LEASH of where the fight began
- * (the camp beside the spawner, put there by the planner), holds no key, and strikes what comes within reach and in sight; one that hovers more than a blow's
- * reach above the eye is waited for under the shield (its height is drawn again every five seconds). A blow is held back while a shot is about to land or a
+ * A blaze (a creature that hovers and shoots, utils/huntBlaze) is fought from where the fight began (the camp beside the spawner, put there by the planner):
+ * the body holds no key there and strikes what comes within reach and in sight; one that hovers more than a blow's reach above the eye is waited for under the
+ * shield (its height is drawn again every five seconds). A blaze that sees its target does not come to it (S2, 2026-11-04, the 1.21.11 AI), so one at the body's
+ * height but out of reach is gone out to (a sortie): only while no blaze that sees the body has its flame on and no shot is on its way, and no further than SORTIE_M
+ * (level) from the camp. The body goes back to the camp when a blaze that sees it has been charged SORTIE_CHARGE_MS (its shots come at three seconds), when a shot
+ * comes, when the target rises out of reach or past SORTIE_M, when it cannot get nearer, or after SORTIE_MS out. A blow is held back while a shot is about to land or a
  * blaze that sees the body has been charged long enough to shoot (utils/huntBlaze StrikeGate: 1.5 s in all within each 8 s). Its drop is told in the line it dies in.
  *
  * An enderman is fought from a hole it cannot enter (utils/huntEnderman, huntEndermanCamp): the body lays a 3x3 roof over itself at feet+2 from what building
@@ -102,8 +105,15 @@ const CAMP_RETREAT_HP = 12, REST_ABOVE = 6, REST_MIN_BACK = 18, REST_MAX_MS = 40
 const backAt = (retreatHp: number) => Math.min(19, Math.max(REST_MIN_BACK, retreatHp + REST_ABOVE));
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple', 'rotten_flesh']);
 const CUT = /Action interrupted|Motor owner expired/u;
-/** A hovering shooter is fought from within this many blocks of where the fight began (level), never beyond. */
-const LEASH = 3.5;
+/** A hovering shooter is fought from where the fight began: this many blocks from it (level) and the body is out on a sortie (back within HOME_M, below, it is home). */
+const OUT_M = 2.0;
+/**
+ * A sortie (S2, 2026-11-04): the farthest a blaze may be from the camp (level) to be gone out to, the longest out, how long a blaze that sees the body may have been
+ * charged before the body turns back (the first shot is at about three seconds), and the longest walk back before the hand says it cannot.
+ */
+const SORTIE_M = 8, SORTIE_MS = 8_000, SORTIE_CHARGE_MS = 1_000, HOME_MS = 8_000;
+/** Back at the camp within this (level); the next sortie no sooner than SORTIE_GAP_MS after a turn back, SORTIE_REST_MS after one that ran out of time or gained nothing. */
+const HOME_M = 1.6, SORTIE_GAP_MS = 1_500, SORTIE_REST_MS = 5_000;
 const r1 = (value: number) => Math.round(value * 10) / 10;
 
 /** Thrown when something above the hand ended it (a reflex's lease, the act's stop): the act reports a stop in the hand, and this tells the counts. */
@@ -186,11 +196,12 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   }
   if (target.type === 'player' || target.username) return none('invalid_input', `${labelOf(target)} は人。fight は生き物（敵）にだけ使う`);
   const label = labelOf(target);
-  // A hovering shooter (a blaze) is fought from the spot the planner put the body at, under the shield, and is not followed (utils/huntBlaze).
+  // A hovering shooter (a blaze) is fought from the spot the planner put the body at, under the shield; one in reach of a walk is gone out to between its volleys (a sortie, above).
   const hovering = HOVERING_SHOOTERS.has(String(target.name ?? '').toLowerCase());
   /** The planner's limit, or for a hovering shooter the camp's own (it cannot be left in a turn: a head that forgot the limit does not fight to the death). */
   const retreatHp = askedRetreatHp ?? (stance === 'fight' && hovering ? CAMP_RETREAT_HP : null);
   const camp = bot.entity.position.clone();
+  const fromCamp = (at: { x: number; z: number }) => Math.hypot(at.x - camp.x, at.z - camp.z);
   const ender = stance === 'fight' && String(target.name ?? '').toLowerCase() === 'enderman';
   /** A camp holds no key and follows nothing: the body stands where the planner put it. */
   const stand = hovering || ender;
@@ -255,7 +266,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   let ending = '', siteNote = '';
   /** How long the hand stood and waited for the shield reflex that was meeting a shot (no blow goes out meanwhile): told when it is a second or more. */
   let shotWaitMs = 0;
-  const counts = () => `与えた打撃 ${landed}（振り ${blows}）・受けた体力 ${r1(lost)}・食べた ${meals}${wear()}${gate.count ? `・見送り ${gate.count}` : ''}${shotWaitMs >= 1000 ? `・盾の間 ${r1(shotWaitMs / 1000)}秒` : ''}${endermanCamp ? `・${endermanCamp.describe(endermanAngry(bot.registry, bot.entities?.[target.id]))}` : ''}${siteNote ? `・${siteNote}` : ''}${ending}`;
+  const counts = () => `与えた打撃 ${landed}（振り ${blows}）・受けた体力 ${r1(lost)}・食べた ${meals}${wear()}${gate.count ? `・見送り ${gate.count}` : ''}${shotWaitMs >= 1000 ? `・盾の間 ${r1(shotWaitMs / 1000)}秒` : ''}${sortiesOut ? `・出撃 ${sortiesOut}${fromCamp(bot.entity.position) >= OUT_M ? `（野営マスから ${r1(fromCamp(bot.entity.position))}m の所で終えた）` : ''}` : ''}${endermanCamp ? `・${endermanCamp.describe(endermanAngry(bot.registry, bot.entities?.[target.id]))}` : ''}${siteNote ? `・${siteNote}` : ''}${ending}`;
   /** Continue contracts (1): the blows that landed (the target was hurt within the swing's time), of the blows swung. */
   const struck = (): Progress => ({ unit: 'blow', done: landed, left: null });
   const holder = (reflex?: string | null) => reflex ? `体: 反射 ${reflex}` : '体: fight（反射なし）';
@@ -276,6 +287,19 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   const unfollow = () => {
     if (!following) return;
     following = false;
+    try { navigator?.setGoal(null); } catch { /* stopped */ }
+  };
+  /** A sortie's way back to the camp: since when (0 when not on it). The sorties gone out, since when the body is out, why it last turned back and when it may go again. */
+  let homeSince = 0, sortiesOut = 0, outSince = 0, backWhy = '', sortieAfter = 0;
+  const goHome = (now: number) => {
+    if (homeSince || !navigator) return;
+    unfollow();
+    homeSince = now;
+    navigator.setGoal(new goals.GoalNear(camp.x, camp.y, camp.z, 1), false);
+  };
+  const atHome = () => {
+    if (!homeSince) return;
+    homeSince = 0;
     try { navigator?.setGoal(null); } catch { /* stopped */ }
   };
   const keys: Record<string, boolean> = {};
@@ -508,7 +532,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
 
       // Low health: out of reach, a meal that can help, and back in; else leave.
       if (retreatHp !== null && Number(bot.health ?? 20) < retreatHp) {
-        unfollow(); releaseKeys();
+        unfollow(); atHome(); releaseKeys();
         const verdict = await retreat();
         if (verdict) return verdict;
         continue;
@@ -527,6 +551,30 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
         continue;
       }
       if (meetingShot()) { releaseKeys(); shotWaitMs += TICK_MS; await wait(ctx, TICK_MS); continue; }
+      // A sortie (hovering shooters): the window is open while no blaze that sees the body has its flame on and no shot is on its way; only then is a blaze walked to. Beyond
+      // the leash, the body turns back to the camp when the window shuts for good (SORTIE_CHARGE_MS), when the target rises or drifts out of the sortie's reach, or after
+      // SORTIE_MS; on the way back it only walks.
+      let window = true;
+      if (watch) {
+        const off = fromCamp(bot.entity.position);
+        if (off < OUT_M) outSince = 0;
+        else if (!outSince) { outSince = now; sortiesOut++; }
+        const charged = watch.charged(now)[0];
+        const shot = nextShotTicks(bot, SHOT_HOLD_TICKS) !== null;
+        window = !charged && !shot;
+        const why = off < OUT_M || homeSince ? null
+          : shot ? '火の玉が来る'
+            : charged && charged.ms >= SORTIE_CHARGE_MS ? `blaze #${charged.entity.id} が溜めている`
+              : hoversAboveReach(bot.entity.position, live) ? '届かない高さへ上がった'
+                : fromCamp(live.position) > SORTIE_M ? `野営マスから ${SORTIE_M}m より遠くへ行った`
+                  : now - outSince > SORTIE_MS ? `${SORTIE_MS / 1000}秒出た` : null;
+        if (why) { backWhy = why; sortieAfter = now + (/秒出た/u.test(why) ? SORTIE_REST_MS : SORTIE_GAP_MS); releaseKeys(); goHome(now); }
+        if (homeSince) {
+          if (off < HOME_M) atHome();
+          else if (now - homeSince > HOME_MS) { atHome(); releaseKeys(); return fail('unreachable', `に出たが野営マスへ ${HOME_MS / 1000}秒で戻れない（${r1(off)}m 離れている・戻る訳: ${backWhy}）。go で野営マスへ`, lastAt); }
+          else { await wait(ctx, TICK_MS); continue; }
+        }
+      }
       if (endermanCamp) {
         const step = await endermanCamp.advance(live, now, box, endermanAngry(bot.registry, live));
         if (step.kind === 'stop') { unfollow(); releaseKeys(); return { ...fail(step.outcome.reason ?? 'failed', step.outcome.text, step.outcome.at), ...(step.outcome.code ? { code: step.outcome.code } : {}) }; }
@@ -539,9 +587,11 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       if (box > (following ? ZONE_OUT : ZONE_IN)) {
         releaseKeys();
         jump = 'idle';
-        // A hovering shooter is not followed beyond the camp's leash, nor up into the air: the body keeps its place under the shield, turned to what is charged (else to
-        // the creature), and waits; the blaze's height is drawn again every five seconds, and it comes within reach by itself. Nothing is "cannot be reached" in a wait.
-        if (ender || (hovering && (hoversAboveReach(bot.entity.position, live) || Math.hypot(bot.entity.position.x - camp.x, bot.entity.position.z - camp.z) >= LEASH))) {
+        // A hovering shooter is not followed up into the air, nor past SORTIE_M, nor at all while the window is shut (nor past the leash in the rest after a sortie): the body
+        // keeps its place under the shield, turned to what is charged (else to the creature), and waits; the blaze's height is drawn again every five seconds. Nothing is
+        // "cannot be reached" in a wait.
+        if (ender || (hovering && (hoversAboveReach(bot.entity.position, live) || fromCamp(live.position) > SORTIE_M || !window
+          || now < sortieAfter))) {
           unfollow();
           bestBox = box; bestAt = now;
           const winding = watch?.charged(now)[0];
@@ -550,6 +600,10 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
           continue;
         }
         if (box < bestBox - NO_GAIN_M || box > radius) { bestBox = box; bestAt = now; }
+        // A sortie that gains nothing goes back to the camp and waits a while (a gap, a fence between): the fight is the camp's, not this walk's.
+        if (hovering && now - bestAt > NO_GAIN_MS && fromCamp(bot.entity.position) >= OUT_M) {
+          backWhy = `${NO_GAIN_MS / 1000}秒近づけない`; sortieAfter = now + SORTIE_REST_MS; bestAt = now; goHome(now); await wait(ctx, TICK_MS); continue;
+        }
         if (now - bestAt > NO_GAIN_MS) { unfollow(); return fail('unreachable', `に近づけない（${r1(box)}m、${NO_GAIN_MS / 1000}秒縮まらない）`, lastAt); }
         const swimming = swimControls(bot, live.position);
         if (swimming) {
@@ -624,6 +678,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     endEngagement();
     endOwner();
     unfollow();
+    atHome();
     letGo(bot);
     try { if (previousMovements && navigator) navigator.setMovements(previousMovements); } catch { /* kept */ }
   }

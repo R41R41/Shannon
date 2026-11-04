@@ -114,6 +114,10 @@ function makeCamp(options: { shield?: boolean; held?: string; blazes: BlazeSpec[
       const to = goal.entity.position.minus(e.position);
       if (Math.hypot(to.x, to.z) > Math.sqrt(goal.rangeSq ?? 4)) { e.yaw = Math.atan2(-to.x, -to.z); control.forward = true; }
       else control.forward = false;
+    } else if (goal && typeof goal.x === 'number') {                    // a GoalNear: to the middle of its cell
+      const to = new Vec3(goal.x + 0.5 - e.position.x, 0, goal.z + 0.5 - e.position.z);
+      if (Math.hypot(to.x, to.z) > Math.min(0.5, Math.sqrt(goal.rangeSq ?? 1))) { e.yaw = Math.atan2(-to.x, -to.z); control.forward = true; }
+      else control.forward = false;
     }
     physics.simulatePlayer(new PlayerState(bot, control), world).apply(bot);
     stats.minX = Math.min(stats.minX, e.position.x); stats.maxX = Math.max(stats.maxX, e.position.x);
@@ -193,7 +197,7 @@ describe('fight on a blaze: the camp', () => {
     expect(isEngaged(camp.bot)).toBe(false);
   }, 60_000);
 
-  it('a blaze at eye level a few blocks off is approached only as far as the camp\'s leash, then waited for', async () => {
+  it('a blaze at eye level beyond a sortie\'s reach (9 blocks from the camp) is not gone out to: the body waits at the camp', async () => {
     const camp = makeCamp({ shield: false, blazes: [{ at: new Vec3(9.5, 65.5, 0.5) }], held: 'iron_sword' });
     const { json } = await act(camp, [{ do: 'fight', target: 'blaze', range: 12, seconds: 6 }]);
     camp.stop();
@@ -204,6 +208,42 @@ describe('fight on a blaze: the camp', () => {
     expect(camp.stats.maxX - 0.5).toBeLessThan(4.6);
     expect(camp.stats.swings).toBe(0);
     expect(camp.bot.pathfinder.goal).toBeNull();
+  }, 60_000);
+
+  // The sortie (S2, 2026-11-04): a blaze within SORTIE_M of the camp is walked to while none that sees the body is charged, struck, and the body comes back when one is.
+  it('a sortie: a blaze at eye level 6.5 blocks off, its flame out, is walked to (more than 2 blocks out) and killed; the line tells the sortie and where it ended', async () => {
+    const camp = makeCamp({ shield: true, blazes: [{ at: new Vec3(7.0, 64.5, 0.5) }] });
+    const { json } = await act(camp, [{ do: 'fight', target: 'blaze', range: 12, seconds: 20 }]);
+    camp.stop();
+    console.log('[sortie A]', lineOf(json), JSON.stringify(camp.stats));
+    expect(json.ok).toBe(true);
+    expect(lineOf(json)).toMatch(/死んだ.*出撃 1（野営マスから [\d.]+m の所で終えた）/u);
+    expect(camp.stats.maxX - 0.5).toBeGreaterThan(2.5);
+    expect(camp.mobs[0].health).toBeLessThanOrEqual(0);
+  }, 60_000);
+
+  it('a sortie waits for the window: the same blaze with its flame on from the start is not walked to', async () => {
+    const camp = makeCamp({ shield: true, blazes: [{ at: new Vec3(7.0, 64.5, 0.5), charged: () => true }] });
+    const { json } = await act(camp, [{ do: 'fight', target: 'blaze', range: 12, seconds: 5 }]);
+    camp.stop();
+    console.log('[sortie B]', lineOf(json), JSON.stringify(camp.stats));
+    expect(json.ok).toBe(false);
+    expect(lineOf(json)).toMatch(/limit_time/u);
+    expect(camp.stats.maxX - 0.5).toBeLessThan(1);
+    expect(camp.stats.swings).toBe(0);
+  }, 60_000);
+
+  it('a sortie turns back: a blaze that lights its flame while the body is out (and stays lit a second) sends it home to the camp', async () => {
+    const camp = makeCamp({ shield: true, blazes: [{ at: new Vec3(7.0, 64.5, 0.5), health: 400, charged: ms => ms > 2500 }] });
+    const { json } = await act(camp, [{ do: 'fight', target: 'blaze', range: 12, seconds: 8 }]);
+    camp.stop();
+    console.log('[sortie C]', lineOf(json), JSON.stringify(camp.stats), camp.bot.entity.position);
+    expect(json.ok).toBe(false);
+    expect(lineOf(json)).toMatch(/limit_time.*出撃 1/u);
+    expect(lineOf(json)).not.toMatch(/の所で終えた/u);
+    expect(camp.stats.maxX - 0.5).toBeGreaterThan(2.5);
+    expect(Math.abs(camp.bot.entity.position.x - 0.5)).toBeLessThan(1.6);
+    expect(camp.mobs[0].health).toBeGreaterThan(0);
   }, 60_000);
 
   it('a blow waits for a blaze that is about to shoot (charged for more than 2.2 s and in sight), for the patience at most, and is struck; the held blow is counted', async () => {
