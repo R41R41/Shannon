@@ -150,8 +150,9 @@ describe('fill shared standability and bounded extinguishing', () => {
     else f.blocks.set(fire, 'fire');
     vi.mocked(dig).mockResolvedValue({ ok: false, text: '届かない', reason: 'out_of_reach' });
     const out = await fill(f.ctx, f.args);
-    expect(out.fill).toMatchObject({ code: 'NO_STAND', placed: where === 'return' ? 2 : 0, safe: where === 'stand' });
-    expect(out.text).toContain('fire_near'); expect(out.text).toContain(where === 'stand' ? '立ち位置 1,64,0' : '帰還先 0,64,0');
+    expect(out.fill).toMatchObject({ code: where === 'stand' ? null : 'NO_STAND', placed: where === 'return' ? 2 : 0, safe: where === 'stand' });
+    if (where === 'stand') expect(out.fill.reasons).toEqual({ no_stand_fire_near: 2 });
+    else { expect(out.text).toContain('fire_near'); expect(out.text).toContain('帰還先 0,64,0'); }
     expect(dig).toHaveBeenCalledTimes(2);
     expect(go).toHaveBeenCalledTimes(where === 'home' ? 0 : 1);
     expect(vi.getTimerCount()).toBe(0);
@@ -203,19 +204,18 @@ describe('fill shared standability and bounded extinguishing', () => {
     expect(dig).not.toHaveBeenCalled(); expect(go).not.toHaveBeenCalled(); expect(place).not.toHaveBeenCalled();
   });
 
-  it('checks a blocked group before go and returns NO_STAND with its shared reason', async () => {
+  it('defers a blocked group before go and counts its shared standability reason', async () => {
     const f = field(); f.blocks.set('1,65,0', 'stone');
     const out = await fill(f.ctx, f.args);
-    expect(out.fill).toMatchObject({ code: 'NO_STAND', placed: 0, safe: true });
-    expect(out.text).toContain('no_head_room'); expect(out.text).toContain('立ち位置 1,64,0');
+    expect(out.fill).toMatchObject({ status: 'partial', code: null, placed: 0, safe: true, reasons: { no_stand_no_head_room: 2 } });
     expect(vi.mocked(go).mock.calls.map(([, a]) => a.goals[0])).toEqual([f.args.retreatTo]);
     expect(place).not.toHaveBeenCalled(); expect(dig).not.toHaveBeenCalled();
   });
 
-  it('reports NO_STAND if the dig throws while the fire is still present', async () => {
+  it('defers the group if the dig throws while the fire is still present', async () => {
     const f = field(); f.blocks.set('2,64,0', 'fire');
     vi.mocked(dig).mockRejectedValue(new Error('dig failed'));
-    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ code: 'NO_STAND', placed: 0, safe: true });
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ code: null, placed: 0, safe: true, reasons: { no_stand_fire_near: 2 } });
     expect(place).not.toHaveBeenCalled(); expect(dig).toHaveBeenCalledTimes(1);
   });
 
@@ -248,28 +248,108 @@ describe('fill shared standability and bounded extinguishing', () => {
 describe('fill ordered work and retreat', () => {
   it('places 60 cells in one hand, returns, and leaves the resident shield alone', async () => {
     const f = field();
-    f.args.groups = Array.from({ length: 10 }, (_, z) => ({ stand: { x: 1, y: 64, z }, at: Array.from({ length: 6 }, (_, x) => ({ x: x + 2, y: 65, z })) }));
+    f.args.seconds = 60;
+    f.args.retreatTo = { x: 1, y: 64, z: -3 };
+    f.args.groups = Array.from({ length: 10 }, (_, i) => ({ stand: { x: 1, y: 64, z: i * 3 },
+      at: [0, 2].flatMap(x => [-1, 0, 1].map(dz => ({ x, y: 64, z: i * 3 + dz }))) }));
     const delegate = vi.spyOn(actions, 'delegateShield');
     const r = await fill(f.ctx, f.args);
     expect(r.ok).toBe(true); expect(r.fill).toMatchObject({ status: 'done', placed: 60, remaining: [], safe: true, code: null, hpMin: 20 });
-    expect(place).toHaveBeenCalledTimes(60); expect(go).toHaveBeenCalledTimes(11);
+    expect(place).toHaveBeenCalledTimes(60);
     for (const [, a] of vi.mocked(place).mock.calls) expect(a.at).toHaveLength(1);
     for (const [, a] of vi.mocked(go).mock.calls) expect(a).toMatchObject({ range: 0.8, maxDig: 0, maxPlace: 0, maxDrop: 0 });
     expect(vi.mocked(go).mock.calls.at(-1)![1].goals).toEqual([f.args.retreatTo]);
     expect(delegate).not.toHaveBeenCalled(); expect(f.bot.shieldBlock).toEqual({ enabled: true, up: true }); expect(f.bot.activateItem).not.toHaveBeenCalled();
     expect(f.bot.listenerCount('health')).toBe(0); expect(f.bot.listenerCount('physicsTick')).toBe(0); expect(vi.getTimerCount()).toBe(0);
   });
-  it('retries skipped cells only once after all groups, returning to their original stands', async () => {
-    const f = field(), first = f.args.groups[0].at[0], second = f.args.groups[0].at[1], last = { x: 4, y: 64, z: 0 };
-    f.args.groups.push({ stand: { x: 2, y: 64, z: 1 }, at: [last] });
-    let firstTries = 0;
-    vi.mocked(place).mockImplementation(async (c, a) => key(a.at[0]) === key(first) && firstTries++ === 0 ? { ok: false, reason: 'creature_in_cell', text: '生き物' }
-      : key(a.at[0]) === key(last) ? { ok: false, reason: 'out_of_reach', text: '届かない' } : f.lay(c, a));
+  it('continues progress passes through a three-stage support chain', async () => {
+    const f = field();
+    const bottom = { x: 2, y: 65, z: 0 }, middle = { x: 2, y: 66, z: 0 }, top = { x: 2, y: 67, z: 0 };
+    f.args.groups[0].at = [bottom, middle, top]; f.blocks.set('2,68,0', 'stone');
     const r = await fill(f.ctx, f.args);
-    expect(r.fill).toMatchObject({ status: 'partial', placed: 2, remaining: [last], safe: true, skippedBy: { creature: 1, reach: 2, hazard: 0, other: 0 } });
-    expect(r.ok).toBe(false);
-    expect(vi.mocked(place).mock.calls.map(([, a]) => a.at[0])).toEqual([first, second, last, first, last]);
-    expect(vi.mocked(go).mock.calls.map(([, a]) => a.goals[0])).toEqual([f.args.groups[0].stand, f.args.groups[1].stand, f.args.groups[0].stand, f.args.groups[1].stand, f.args.retreatTo]);
+    expect(r.fill).toMatchObject({ status: 'done', placed: 3, remaining: [], safe: true, reasons: { no_support: 3 } });
+    expect(vi.mocked(place).mock.calls.map(([, a]) => a.at[0])).toEqual([top, middle, bottom]);
+    expect(vi.mocked(go).mock.calls.map(([, a]) => a.goals[0])).toEqual([f.args.groups[0].stand, f.args.groups[0].stand, f.args.groups[0].stand, f.args.retreatTo]);
+  });
+  it('defers an overlapping blaze box without calling place, then places after it leaves on a later pass', async () => {
+    const f = field(), blocked = f.args.groups[0].at[0], clear = { x: 0, y: 64, z: 2 };
+    f.args.groups[0].at = [blocked, clear];
+    f.bot.entities[2] = { name: 'blaze', position: new Vec3(2.95, 63.8, 0.5), width: 0.6, height: 1.8 };
+    vi.mocked(place).mockImplementation(async (c, a) => {
+      expect(f.bot.entities[2]).toBeUndefined();
+      return f.lay(c, a);
+    });
+    // The first cell is blocked, but the clear cell supplies this pass's progress.
+    vi.mocked(place).mockImplementationOnce(async (c, a) => {
+      expect(a.at).toEqual([clear]); delete f.bot.entities[2]; return f.lay(c, a);
+    });
+    const r = await fill(f.ctx, f.args);
+    expect(r.fill).toMatchObject({ status: 'done', placed: 2, reasons: { creature_in_cell: 1 } });
+    expect(vi.mocked(place).mock.calls.map(([, a]) => a.at[0])).toEqual([clear, blocked]);
+    expect(go).toHaveBeenCalledTimes(3);
+  });
+  it('continues later groups when one stand has no floor', async () => {
+    const f = field(), later = { x: 0, y: 64, z: 3 };
+    f.blocks.set('1,63,0', 'air');
+    f.args.groups.push({ stand: { x: 0, y: 64, z: 1 }, at: [later] });
+    const r = await fill(f.ctx, f.args);
+    expect(r.fill.code).toBeNull(); expect(r.fill.safe).toBe(true);
+    expect(r.fill.reasons?.no_stand_no_floor).toBeGreaterThan(0);
+    expect(vi.mocked(go).mock.calls.some(([, a]) => key(a.goals[0]) === '0,64,1')).toBe(true);
+    expect(vi.mocked(place).mock.calls.some(([, a]) => key(a.at[0]) === key(later))).toBe(true);
+    expect(vi.mocked(go).mock.calls.every(([, a]) => key(a.goals[0]) !== '1,64,0')).toBe(true);
+  });
+  it.each(['no_support', 'creature_in_cell', 'hazard', 'out_of_reach', 'out_of_sight', 'body_in_cell', 'occupied', 'unloaded'])('never calls place on a cell deferred for %s', async reason => {
+    const f = field(); let target = { x: 2, y: 64, z: 0 };
+    if (reason === 'no_support') target.y = 67;
+    if (reason === 'creature_in_cell') f.bot.entities[2] = { name: 'blaze', position: new Vec3(2.95, 63.8, 0.5) };
+    if (reason === 'hazard') f.blocks.set('3,64,0', 'lava');
+    if (reason === 'out_of_reach') target.x = 8;
+    if (reason === 'out_of_sight') {
+      target.x = 4;
+      for (const y of [64, 65, 66]) for (const z of [-1, 0, 1]) f.blocks.set(`3,${y},${z}`, 'stone');
+    }
+    if (reason === 'body_in_cell') target.x = 1;
+    if (reason === 'occupied') f.blocks.set(key(target), 'stone');
+    if (reason === 'unloaded') { target.x = 3; f.blocks.set(key(target), null); }
+    f.args.groups[0].at = [target];
+    const r = await fill(f.ctx, f.args);
+    // reached, not safe: the blaze in the cell sees the body at the end point (safe is reached and unseen, 031070e).
+    expect(r.fill).toMatchObject({ status: 'partial', placed: 0, remaining: [target], reached: true, reasons: { [reason]: 1 } });
+    expect(place).not.toHaveBeenCalled(); expect(go).toHaveBeenCalledTimes(2);
+  });
+  it('ignores drops, experience and projectiles when checking creature boxes', async () => {
+    const f = field();
+    f.bot.entities = Object.fromEntries(['item', 'experience_orb', 'small_fireball'].map((name, id) => [id + 2,
+      { name, position: new Vec3(2.5, 64, 0.5), ...(name === 'small_fireball' ? { type: 'projectile' } : {}) }]));
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'done', placed: 2 });
+  });
+  it.each([4.499999, 4.500001])('checks eye-to-centre reach at %sm from the actual fractional stop', async distance => {
+    const f = field(), target = { x: 5, y: 65, z: 0 };
+    f.args.groups[0].at = [target]; f.blocks.set('5,66,0', 'stone');
+    vi.mocked(go).mockImplementation(async (c, a) => {
+      const out = await f.walk(c, a);
+      if (key(a.goals[0]) !== key(f.args.retreatTo)) f.bot.entity.position.x = 5.5 - Math.sqrt(distance ** 2 - 0.12 ** 2);
+      return out;
+    });
+    const r = await fill(f.ctx, f.args);
+    expect(r.fill).toMatchObject({ status: distance < 4.5 ? 'done' : 'partial', placed: distance < 4.5 ? 1 : 0, safe: true });
+    expect(place).toHaveBeenCalledTimes(distance < 4.5 ? 1 : 0);
+  });
+  it('stops after six passes even if every pass still places one cell and no time elapses', async () => {
+    const f = field();
+    f.args.retreatTo = { x: 1, y: 64, z: -3 };
+    f.args.groups[0].at = [0, 1, 2].flatMap(x => [-1, 0, 1].filter(z => x !== 1 || z !== 0).map(z => ({ x, y: 65, z })));
+    for (const p of f.args.groups[0].at) f.blocks.set(key({ ...p, y: 66 }), 'stone');
+    let laidThisVisit = false;
+    vi.mocked(go).mockImplementation(async (c, a) => { laidThisVisit = false; return f.walk(c, a); });
+    vi.mocked(place).mockImplementation(async (c, a) => {
+      if (laidThisVisit) return { ok: false, reason: 'not_placed', text: '拒否' };
+      laidThisVisit = true; return f.lay(c, a);
+    });
+    const r = await fill(f.ctx, f.args);
+    expect(r.fill).toMatchObject({ status: 'partial', placed: 6, safe: true, elapsedMs: 0 });
+    expect(r.fill.remaining).toHaveLength(2); expect(go).toHaveBeenCalledTimes(7);
   });
   it('skips fire-adjacent cells before place and retries after the rest', async () => {
     const f = field(); f.args.groups[0].at[1] = { x: -2, y: 64, z: 0 }; f.blocks.set('3,64,0', 'fire');
@@ -283,12 +363,23 @@ describe('fill ordered work and retreat', () => {
     vi.mocked(place).mockResolvedValue({ ok: true, text: '既設', goal: 'already', progress: { unit: 'block', done: 0, left: 0 } });
     expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'done', placed: 0, remaining: [], safe: true });
   });
-  it('defers an unreachable group once and returns without trying its cells from another stand', async () => {
+  it('places reachable pending cells from the actual stop after a failed go, across groups and nearest first', async () => {
     const f = field();
-    vi.mocked(go).mockImplementation((c, a) => key(a.goals[0]) === key(f.args.retreatTo) ? f.walk(c, a) : Promise.resolve({ ok: false, reason: 'dead_end', text: '道がない' }));
+    const near = { x: 0, y: 64, z: 2 }, far = { x: 0, y: 64, z: 3 }, unreachable = { x: 20, y: 64, z: 0 };
+    f.args.groups = [{ stand: { x: 3, y: 64, z: 0 }, at: [unreachable, far] }, { stand: { x: 3, y: 64, z: 1 }, at: [near] }];
+    vi.mocked(go).mockImplementation(async (c, a) => {
+      if (key(a.goals[0]) === key(f.args.retreatTo)) return f.walk(c, a);
+      f.bot.entity.position = new Vec3(1.5, 64, 0.5);
+      return { ok: false, reason: 'dead_end', text: '途中で止まった' };
+    });
+    vi.mocked(place).mockImplementation(async (c, a) => {
+      expect(f.bot.entity.position).toEqual(new Vec3(1.5, 64, 0.5));
+      return f.lay(c, a);
+    });
     const r = await fill(f.ctx, f.args);
-    expect(r.fill).toMatchObject({ status: 'partial', placed: 0, remaining: f.args.groups[0].at, safe: true, skippedBy: { reach: 4 } });
-    expect(go).toHaveBeenCalledTimes(3); expect(place).not.toHaveBeenCalled();
+    expect(r.fill).toMatchObject({ status: 'partial', placed: 2, remaining: [unreachable], safe: true });
+    expect(vi.mocked(place).mock.calls.map(([, a]) => a.at[0])).toEqual([near, far]);
+    expect(vi.mocked(go).mock.calls.map(([, a]) => a.goals[0])).toEqual([f.args.groups[0].stand, f.args.groups[0].stand, f.args.retreatTo]);
   });
   it('interrupts the outward go at the HP floor and uses a fresh child signal for return', async () => {
     const f = field();
@@ -421,11 +512,14 @@ describe('fill ordered work and retreat', () => {
     expect(r.ok).toBe(false); expect(r.fill).toMatchObject({ status: 'failed', code: 'RETREAT_BLOCKED', placed: 2, safe: false });
   });
   it('bounds remaining at 40 and keeps the full progress count', async () => {
-    const f = field(); f.args.groups = Array.from({ length: 12 }, (_, z) => ({ stand: { x: 1, y: 64, z }, at: Array.from({ length: 8 }, (_, x) => ({ x: x + 2, y: 65, z })) }));
+    const f = field(); f.args.groups = Array.from({ length: 12 }, (_, z) => ({ stand: { x: 1, y: 64, z }, at: Array.from({ length: 8 }, (_, x) => ({ x: x + 2, y: 64, z })) }));
     vi.mocked(place).mockResolvedValue({ ok: false, reason: 'not_placed', text: '拒否' });
     const r = await fill(f.ctx, f.args);
-    expect(r.fill.remaining).toHaveLength(40); expect(r.progress?.left).toBe(96); expect(place).toHaveBeenCalledTimes(192);
-    expect(r.fill.skippedBy.other).toBe(192);
+    expect(r.fill.remaining).toHaveLength(40); expect(r.progress?.left).toBe(96);
+    // With no placements in the first pass there is no automatic second pass. Only reachable, supported cells call place.
+    expect(go).toHaveBeenCalledTimes(13);
+    expect(place).toHaveBeenCalled();
+    expect(r.fill.reasons?.not_placed).toBe(vi.mocked(place).mock.calls.length);
   });
 });
 
