@@ -1,5 +1,7 @@
 import { boxesOverlap, inflate, partBox, type Box, type P3 } from './dragonParts.js';
 import { seatedDragonHead } from './dragonHeadModel.js';
+import { Vec3 } from 'vec3';
+import { dragonHazards } from './dragonDanger.js';
 
 type BedBlock = { name: string; boundingBox?: string; shapes?: number[][] } | null;
 export type BedBlockReader = (p: P3) => BedBlock;
@@ -156,6 +158,35 @@ export function descentBedLayouts(perch: P3, yaw: number, read: BedBlockReader, 
 export type SeatedBedPose = { position: P3; yaw: number; phase: number | null };
 export type BedCloud = { x: number; y: number; z: number; radius: number; dangerRadius?: number };
 const distance = (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+const cellBox = (p: P3): Box => ({ minX: p.x, minY: p.y, minZ: p.z, maxX: p.x + 1, maxY: p.y + 1, maxZ: p.z + 1 });
+const dragonPlacementBoxes = (dragon: SeatedBedPose): Box[] => {
+  const pose = seatedDragonHead(dragon);
+  return pose ? [pose.box, partBox(dragon, 'neck'), partBox(dragon, 'body')].map(box => inflate(box, 0.15)) : [];
+};
+/** Full placement voxel, with 0.15 m round the observed seated parts. Unknown pose fails closed. */
+export function bedCellInDragon(dragon: SeatedBedPose, cell: P3): boolean {
+  const boxes = dragonPlacementBoxes(dragon);
+  return !boxes.length || boxes.some(box => boxesOverlap(cellBox(cell), box));
+}
+export function bedLayoutDragonRefusal(dragon: SeatedBedPose, layout: Pick<SeatedBedLayout, 'head' | 'foot' | 'screen'>): string | null {
+  if (bedCellInDragon(dragon, layout.head)) return 'head_in_dragon';
+  if (bedCellInDragon(dragon, layout.foot)) return 'foot_in_dragon';
+  const supports = [layout.head, layout.foot].map(p => ({ ...p, y: p.y - 1 }));
+  if (supports.some(p => bedCellInDragon(dragon, p))) return 'support_in_dragon';
+  for (const cell of layout.screen) if (bedCellInDragon(dragon, cell)) {
+    return supports.some(p => p.x === cell.x && p.z === cell.z && cell.y <= p.y) ? 'support_in_dragon' : 'screen_in_dragon';
+  }
+  return null;
+}
+
+/** Pose-only searches adapt their supplied observation to the existing reflex reader. Live callers
+ * pass their real bot, preserving clouds, fireball landings and phase clocks. No danger formula here. */
+function seatedDangerReader(dragon: SeatedBedPose, read: BedBlockReader) {
+  const position = new Vec3(dragon.position.x, dragon.position.y, dragon.position.z);
+  return { game: { dimension: 'the_end' }, entity: { position },
+    entities: { 1: { id: 1, name: 'ender_dragon', position, yaw: dragon.yaw, metadata: { 16: dragon.phase } } },
+    blockAt: (p: P3) => read(p) };
+}
 
 /** Keep the entire player's horizontal box outside the future radius-five flame, throughout 7+5.
  * Plan with the UNCHANGED reflex's seven-metre minimum too, so it need not eject us mid-build.
@@ -175,7 +206,7 @@ export interface SeatedBedLayout extends DescentBedLayout { headDistance: number
  * The foot faces FROM the operating point TOWARD the pillow, matching placeBlock's look at its
  * bottom support. Supports and an optional two-high screen share the actual obsidian budget.
  * This offers destinations; go and the unchanged reflexes still decide whether a walk is possible. */
-export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, budget: number, health = 20, diag?: Record<string, number>): SeatedBedLayout[] {
+export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, budget: number, health = 20, diag?: Record<string, number>, reflexBot?: any): SeatedBedLayout[] {
   // Counts are a search tree, not a Cartesian product: every visited node is rejected,
   // expanded into the next stage, or accepted. Thus candidates = rejected + expanded + accepted.
   const add = (name: string) => { if (diag) diag[name] = (diag[name] ?? 0) + 1; };
@@ -185,10 +216,14 @@ export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, bu
   if (diag) for (const name of ['candidates', 'rejected', 'expanded', 'accepted', 'head_candidates', 'head_passed',
     'foot_candidates', 'foot_passed', 'stand_candidates', 'stand_passed', 'screen_candidates', 'head_not_air', 'head_far_or_weak',
     'foot_not_air', 'stand_not_open', 'stand_no_floor', 'stand_not_clear', 'stand_out_of_reach', 'screen_unsupported',
-    'screen_over_budget', 'screen_conflict', 'screen_out_of_reach', 'self_damage_too_high', 'head_damage_low']) diag[name] ??= 0;
+    'screen_over_budget', 'screen_conflict', 'screen_out_of_reach', 'self_damage_too_high', 'head_damage_low',
+    'head_in_dragon', 'foot_in_dragon', 'support_in_dragon', 'screen_in_dragon', 'stand_in_reflex_zone']) diag[name] ??= 0;
   const pose = seatedDragonHead(dragon);
   if (!pose || !Number.isInteger(budget) || budget < 0 || !Number.isFinite(health)) { add('invalid_input'); return []; }
   const found: SeatedBedLayout[] = [];
+  const boxes = dragonPlacementBoxes(dragon), inDragon = (cell: P3) => boxes.some(box => boxesOverlap(cellBox(cell), box));
+  const dangerBot = reflexBot ?? seatedDangerReader(dragon, read);
+  const standDanger = new Map<string, boolean>();
   const project = (cells: P3[]): BedBlockReader => p => cells.some(c => key(c) === key(p))
     ? { name: 'obsidian', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : read(p);
   for (let x = Math.floor(pose.feet.x) - 2; x <= Math.floor(pose.feet.x) + 2; x++)
@@ -197,12 +232,14 @@ export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, bu
         visit('head');
         const head = { x, y, z }, headDistance = distance(bedCentre(head), pose.feet);
         if (!air(read(head))) { reject('head_not_air'); continue; }
+        if (inDragon(head)) { reject('head_in_dragon'); continue; }
         if (headDistance > 2.2 || bedDamage(headDistance, 1) < 50) { reject('head_far_or_weak'); continue; }
         pass('head');
         for (const [dx, dz] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
           visit('foot');
           const foot = { x: x + dx, y, z: z + dz };
           if (!air(read(foot))) { reject('foot_not_air'); continue; }
+          if (inDragon(foot)) { reject('foot_in_dragon'); continue; }
           pass('foot');
           const supports = [head, foot].map(p => ({ ...p, y: y - 1 }));
           // Cover the integer cells within eye reach, including shelves level with/above the
@@ -213,6 +250,9 @@ export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, bu
             const cell = { x: Math.floor(stand.x), y: sy, z: Math.floor(stand.z) };
             if (!air(read(cell)) || !air(read({ ...cell, y: sy + 1 }))) { reject('stand_not_open'); continue; }
             if (read({ ...cell, y: sy - 1 })?.boundingBox !== 'block') { reject('stand_no_floor'); continue; }
+            const standKey = key(stand);
+            if (!standDanger.has(standKey)) standDanger.set(standKey, dragonHazards(dangerBot, { along: [stand] }).length > 0);
+            if (standDanger.get(standKey)) { reject('stand_in_reflex_zone'); continue; }
             if (!bedOperationClear(dragon, stand)) { reject('stand_not_clear'); continue; }
             if ([head, foot].some(p => bedEyeReach(stand, p) > 4.5)) { reject('stand_out_of_reach'); continue; }
             pass('stand');
@@ -221,6 +261,8 @@ export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, bu
               visit('screen');
               const screen = supportedBedCells(targets, read, 3);
               if (!screen) { reject('screen_unsupported'); continue; }
+              if (supports.some(inDragon) || screen.some(p => inDragon(p) && supports.some(s => s.x === p.x && s.z === p.z && p.y <= s.y))) { reject('support_in_dragon'); continue; }
+              if (screen.some(inDragon)) { reject('screen_in_dragon'); continue; }
               if (screen.length > budget) {
                 reject('screen_over_budget'); add(`screen_over_budget_required_${screen.length}`);
                 if (diag) {

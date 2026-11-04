@@ -898,3 +898,42 @@ phase 6の見回しが終わり、**phase 7へ入った最初の生の本体位�
 頭は既存の着座partBoxモデル、20 tick/s、クライアント受信tickを前提とする。歩行できること、反射の後に戻り切れること、実地で置ける／起爆できる窓が増えることは単体試験では保証しない。S1で新しい `layoutDiag` と距離記録を取り、134窓の内訳・実資材不足・雲による全滅・復帰の成否と死亡率を確認する。この作業は指定コピーだけ、HEAD `770264e` のまま未コミット。ラボ／VM／本体／DB／LLM／外部資料更新は行わず、`.codex-material/`、反射、FALL_CLUTCH_ENABLED、fallClutch、floorReflexes、dragonDanger、gazeGuard、dragonStrike、hand一覧、環境変数設定は変更しない。
 
 最終検証：Node v24.21.0でベッド72＋head model22＋比較66＋nook10＋full chain125＋knock39＝**6ファイル334件成功**。試験子プロセスに既存の隔離フラグとオフライン用ダミーを渡して実行。`node tests/unit/checkEndBedKill.cjs` は変更3 TS root（probe全体を含む）の対象診断0件。`git diff --check` 成功。許可範囲の6ファイルだけを未コミットで変更した。
+
+## end_bed_kill の竜との重なり除外・同じ座りでの連続設置（2026-11-04、頼み21）
+
+`lab-evidence/r212-report.json` と対応ログでは、座り6で黒曜石4個の施工後に `(5,67,1) に ender_dragon がいて置けない` と設置が止まった。座り1〜5の接近には反射／`observation_changed` による中断があり、座り7〜10は黒曜石0で `screen_over_budget`。資材は作業開始時HEAD `6673d40` ですでにベッド8・黒曜石16へ増えている。今回の重なり除外で実地の候補が何件消え、頭被害50以上の候補が何件残るかは **S1のラボ待ち**。架空地形では、以前採用していた平坦な棚の候補は消える一方、別の低い足場では重ならない頭被害50以上の候補が残る。
+
+### 配置計算と再確認
+
+`seatedBedLayouts` は頭の `seatedDragonHead.pose.box`、首・体の `partBox` を各方向0.15m広げ、枕・足の1マス全体との重なりを除く。直接の下支持と、支持探索で追加した黒曜石の列、壁の施工セルも検査する。ベッド自体の高さだけで空きと見なさず、placeが使うマス全体を検査する。
+
+立ち位置は `dragonDanger.ts` の **実 `dragonHazards(bot, { along: [stand] })`** で判定する。台本から実actorを第6引数へ渡し、現在の息・火の玉・消えた火の玉の着弾記憶・phaseの時計と止まり木の接触域を使う。poseだけの単体計算では、その入力poseとreadを同関数の読取り形式へ変換する。危険の式は複製せず、反射の実装は変更しない。将来の息を避ける従来の `bedOperationClear` も維持する。
+
+`diag` に `head_in_dragon`／`foot_in_dragon`／`support_in_dragon`／`screen_in_dragon`／`stand_in_reflex_zone` を追加した。支持列の重なりはscreen段で `support_in_dragon`、それ以外の施工セルは `screen_in_dragon` と数える。各訪問は先に当たった1理由だけを数え、**`candidates = rejected + expanded + accepted`** と各段の収支を維持する。`accepted` は頭被害50以上と自傷条件を満たす候補数。最初の12座りに各1回、成功時も `layoutDiag` を残す。`pendingRejected` は既存pendingと両半分の位置が一致しなかった候補だけを数える。
+
+### 同じ配置での連続操作
+
+台本は1座り最大3個、全体では準備した8個まで。起爆packetで前trialの `detonationTick` が付いた後のtickだけ、同じ `layout` を使う。次の設置前と4 tick／200msの観測待ち後の設置直前に、両マスが観測済み空気であること、支持が残っていること、現在の生position・yawからの竜との重なり、実位置からの自傷・体力・reach・反射域を再確認する。黒曜石は観測して再利用し、前のベッドが消えたという仮定で空気を捏造しない。
+
+毎回独立した `pending`／`bedTrials[]` と増加する `n` を作る。前のuseだけ成功して起爆未確認なら退避し、2個目へ進まない。窓は引き続き `tick - perch.startTick < 240`、接近100／施工160／設置200 tick未満、起爆間隔11 tick以上。phase 4／座りの終わり／窓期限の `leaveNeeded` を維持し、遅延中に別の座りへ移っても古い操作を送らない。**`selfDamage <= 6` かつ `selfDamage + 4 < health`、頭被害50以上の条件は変更しない。**
+
+### 追加した記録
+
+| 欄 | 意味 |
+| --- | --- |
+| `perches[].bedsPlaced` | 向きが一致する両半分を観測した個数。hand成功とは別で、同じtrialの再確認では増えない |
+| `perches[].bedsDetonated` | 当該trialに対応する起爆packetを確認した個数 |
+| `bedTrials[].placementCheck` | 設置直前のtick・phase、前trial番号／起爆tick、枕・足の観測名、実位置の自傷見積もり、体力、拒否理由 |
+| `steps[].approachObserved`／`approachEnd` | 接近の観測時／hand終了時の状態。中断時点と区別する |
+| `steps[].allowedFalseTick`／`interruption` | `allowed()` が初めて偽になったtickと、その時のphase・立ち位置・身体position・`standChanged`・距離・危険。退避後の終了位置で上書きしない |
+| `steps[].reflexInterruption`／`reflexPreempts`／`reflexEntries` | 反射の中断を最初に観測したtickと状態、ledgerの中断理由・反射kind／detail。`cancelled=observation_changed` と同時に起きても両方を残す |
+
+`interruption.reason` はcontrollerの理由、反射の中断理由、handの停止行、例外の順に利用できる記録を使う。反射だけで止まり `allowed()` が偽になっていなければ `allowedFalseTick=null`。距離 `standToParts` は立ち位置の足の点から頭・首・体それぞれの生AABBまで、`standToDragon` はその最小値（m）。`standChanged` は接近を決めた観測のstandとの比較。`standHazards` と `bodyHazards` で目的地と道中の身体を区別する。反射の記録tickはクライアントがledgerを最初に観測したtickで、サーバーの発生tickではない。
+
+### 検証と仮定・残課題
+
+Node v24.21.0でベッド93件、関連のhead model22＋比較66＋nook10＋full chain125＋knock39件が成功（6ファイル計355件）。重なり／余裕幅／非重複候補、実反射関数での雲・火の玉の除外、診断の全体／各段の収支、同一配置の3起爆、3・3・2個で8個を使う別座り、起爆未確認・自傷／体力・支持消失・占有・姿勢変更・phase／240 tickでの停止、設置直前の再照合、中断／例外の距離と反射記録をモックで検査した。型検査は `node tests/unit/checkEndBedKill.cjs` で変更3 TS root（**probe全体**・geometry・ベッド試験）の対象診断0件。依存先自身のsemantic診断／全backend型検査は対象外。`git diff --check` 成功。試験子プロセスだけに既存の隔離フラグとオフライン用ダミーを渡し、設定ファイルや共有.envを変更しない。
+
+頭・首・体の座りモデルとクライアント受信tick、20 tick/sを前提とする。0.15mの余裕を含む全マス判定は保守的で、斜めの向きや高い床で候補が空になることがある。立ち位置が安全でも経路全体の到達を保証せず、道中の反射は引き続きgoを止める。実際に2〜3個を置ける座りが続くか、強い1発で早期離陸しないか、実地での除外数・被害・中断原因・死亡率はS1が新しい診断で確認する。
+
+変更は指定コピーのprobe（end_bed_kill）・geometry・関係試験・本資料の4ファイルだけで未コミット。`.codex-material/` は読まず触らず、ラボ／VM／本体／DB／LLM／外部資料更新は行わない。FALL_CLUTCH_ENABLED／fallClutch／floorReflexes／dragonDanger／gazeGuard／dragonStrike／hand一覧／環境変数設定は変更しない。
