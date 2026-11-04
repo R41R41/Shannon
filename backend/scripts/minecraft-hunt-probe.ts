@@ -896,8 +896,8 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const mark = (label: string) => note(`T+${r1((Date.now() - t0) / 1000)} s [${label}] hp ${r1(hp())} blazes known ${blazesKnown()} cobble ${packClient().cobblestone ?? 0} torch ${packClient().torch ?? 0}`);
   mark('start');
   // the stand of the sites file may hold no floor (the staged c1 stand has air under it and the body stands a cell east): the nearest cell with a floor and room, within two, becomes the stand
-  if (options.ambush) {
-    await sleep(2000);
+  // (the cover reflex digs the floor under the body when it burns: s2-thin1 lost the n1 stand's floor in the 60 s warm; the check is run again after the way back from the clearing-away)
+  const fixStand = async () => {
     const solidAt = (x: number, y: number, z: number) => actor.blockAt(new Vec3(x, y, z))?.boundingBox === 'block';
     const roomAt = (x: number, y: number, z: number) => !solidAt(x, y, z) && !solidAt(x, y + 1, z);
     if (!(solidAt(stand[0], stand[1] - 1, stand[2]) && roomAt(stand[0], stand[1], stand[2]))) {
@@ -911,7 +911,8 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
       if (best) { note(`the stand ${stand.join(',')} has no floor: the stand is ${best.join(',')}`); stand[0] = best[0]; stand[1] = best[1]; stand[2] = best[2]; await placeActor('the_nether', stand[0], stand[1], stand[2], 24); await sleep(2000); }
       else note(`the stand ${stand.join(',')} has no floor and no cell with a floor within two`);
     }
-  }
+  };
+  if (options.ambush) { await sleep(2000); await fixStand(); }
   // settle: the head's turn between steps at the cover: what came back is fought from the cover (attack hold 15 s) and the health is waited for (eat when low), up to a budget; the seconds are told
   let settledMs = 0;
   const settle = async (why: string, budgetMs = 90_000) => {
@@ -962,6 +963,7 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     await sleep((options.awaySeconds ?? 150) * 1000);
     await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
     await sleep(5000);   // (the blocks under the body arrive after the move: a fill read at once said there was no floor)
+    if (options.ambush) await fixStand();
     // (a body put down before the blocks under it had arrived falls to the floor below: it is put on the stand again, up to three times)
     for (let again = 0; again < 3 && !disconnected && Math.abs(actor.entity.position.y - stand[1]) > 0.7; again++) {
       note(`the body stands at y ${r1(actor.entity.position.y)}, not on the stand (y ${stand[1]}): put back (${again + 1})`);
@@ -1038,6 +1040,12 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
       note(`torches#${i / 6 + 1} hp ${r1(hp())}: ${run.lines.join(' ').slice(0, 220)}`);
     }
     mark('torches done');
+  }
+  // (a burning body at the cover digs down under its feet (the cover reflex's last way out, floorReflexes (c)): the body is taken up again by the go hand, which sets the floor it climbs on; once, then the lane is read from the stand)
+  if (options.ambush && !disconnected && hp() > 0 && Math.abs(actor.entity.position.y - stand[1]) > 0.7) {
+    note(`the body stands at y ${r1(actor.entity.position.y)}, not on the stand (y ${stand[1]}): the go hand takes it up (it may set cobblestone)`);
+    const up = await act('back up to the stand', [{ do: 'go', to: { x: stand[0], y: stand[1], z: stand[2] }, range: 0.6, seconds: 25, canPlace: ['cobblestone'], maxPlace: 12 }], 40, { accept: ['blaze'] });
+    note(`back up to the stand: ${up.lines.join(' ').slice(0, 220)}`);
   }
   let json = await readLane();
   // (right after the return the spawner's chunk may not be loaded yet: no report at all; read again every 8 s, up to four times)
@@ -1274,7 +1282,9 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
     for (const row of plan.routes) note(`thin planned cell/stand/route out (reverse to return): ${JSON.stringify(row)}`);
     thinReport = { ...compact, routes: plan.routes, cellsBefore: plan.cells };
     if (options.thin) {
-      if (plan.blockedReason || !plan.reached || plan.pMax - plan.pMin > 1e-10) {
+      // (plan.reached means "at or under the 2.7/min target"; the accepted band is 1.5..3, so a plan that ends at 2.78/min is still good: s2-thin4 was aborted by this check)
+      const plannedRate = blazeSpawnRate(Math.min(1, final ? final.pMax : plan.pMax)).perMinute;
+      if (plan.blockedReason || plannedRate > 3 || plannedRate < 1.5 || plan.pMax - plan.pMin > 1e-10) {
         sampleThin();
         return { thin: { ...thinReport, placed: 0, failed: 0, notPlaced: plan.steps.length, aborted: 'unreachable target or unknown geometry; no thin blocks placed' }, measurements: thinMeasures(), lowestHp: Math.min(...track, 20) };
       }
@@ -1287,14 +1297,18 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
           failed++; placementResults.push({ at: row.at, ok: false, why: 'stance or retreat changed' }); continue;
         }
         const before = actor.blockAt(new Vec3(row.at.x, row.at.y, row.at.z))?.name;
-        const run = await act(`thin#${placementResults.length + 1}`, [{ do: 'fill', block: 'cobblestone', groups: [{ stand: row.stand, at: [row.at] }],
-          retreatHp: 10, retreatTo: holdCell, seconds: 60 }], 90, { accept: ['blaze'] });
-        const f = ((run.json?.lines ?? []) as any[]).map(l => l.fill).find(Boolean);
+        // (the fill hand refuses to start without a sheltered home; the cover here is exposed, so the script walks to the stand, places, and walks back itself, watching hp)
+        const run = await act(`thin#${placementResults.length + 1}`, [
+          { do: 'go', to: { x: row.stand.x, y: row.stand.y, z: row.stand.z }, range: 0.6, seconds: 15, onFail: 'continue' },
+          { do: 'place', at: [row.at], block: 'cobblestone', onFail: 'continue' },
+          { do: 'go', to: { x: holdCell.x, y: holdCell.y, z: holdCell.z }, range: 0.6, seconds: 15, onFail: 'continue' }], 50, { accept: ['blaze'] });
         const ok = before !== 'cobblestone' && actor.blockAt(new Vec3(row.at.x, row.at.y, row.at.z))?.name === 'cobblestone';
         if (ok) placed++; else failed++;
-        placementResults.push({ at: row.at, ok, code: f?.code, reasons: f?.reasons, safe: f?.safe, hp: hp() });
+        const homeDist = r1(actor.entity.position.distanceTo(new Vec3(holdCell.x + 0.5, holdCell.y, holdCell.z + 0.5)));
+        placementResults.push({ at: row.at, ok, hp: hp(), homeDist, text: run.lines.join(' ').slice(0, 160) });
         note(`thin placed ${placed}, failed ${failed}: ${JSON.stringify(placementResults.at(-1))}`);
-        if (!f?.safe || f?.code) { stopped = `fill stopped: ${f?.code ?? 'return not confirmed safe'}`; break; }
+        if (hp() < 10) { stopped = `hp ${hp()} below 10 during thin`; break; }
+        if (homeDist > 2.5) { stopped = `not back at the cover (${homeDist} m)`; break; }
       }
       const actual = spawnCells((x, y, z) => actor.blockAt(new Vec3(x, y, z)), spawnerCell), rate = blazeSpawnRate(Math.min(1, actual.pMax)).perMinute;
       thinReport = { ...thinReport, placed, failed, notPlaced: plan.steps.length - placed, notAttempted: plan.steps.length - placementResults.length, stopped,
