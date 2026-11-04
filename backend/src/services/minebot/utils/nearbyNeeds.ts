@@ -30,6 +30,7 @@ const RANGE = 24;
 const PER_NEED = 2;
 const MAX_NEEDS = 12;
 const FOOD_ENOUGH = 6;
+const BED_TARGET = 10;
 const WOOD_ENOUGH = 12;
 /** A smelt of eight takes one coal: about thirty iron and a few meals. */
 const FUEL_ENOUGH = 8;
@@ -110,8 +111,20 @@ function readNeeds(bot: NeedsBody, at: Vec3, now: number): NearbyNeed[] {
 
   // bed_wool and food: animals within reach of the eye.
   const kit = (() => { try { return descentKit(bot as any); } catch { return null; } })();
-  const woolColor = (() => { try { return bedWool(bot as any)?.color; } catch { return undefined; } })();
-  const wantBed = !!kit && !kit.bed;
+  const bedStock = (() => {
+    const beds = items.filter(item => item.name.endsWith('_bed'));
+    const wool = new Map<string, number>();
+    for (const item of items) if (item.name.endsWith('_wool')) wool.set(item.name.slice(0, -5), (wool.get(item.name.slice(0, -5)) ?? 0) + item.count);
+    const bedCount = beds.reduce((sum, item) => sum + item.count, 0);
+    // One bed takes three wool of one colour: the colour carried most, or with none the carried bed's own.
+    let color: string | undefined; let most = 0;
+    for (const [c, n] of wool) if (n > most) { color = c; most = n; }
+    if (!color && beds.length) color = beds[0].name.slice(0, -4);
+    return { bedCount, color, total: bedCount + Math.floor(most / 3) };
+  })();
+  const woolColor = (() => { try { return bedWool(bot as any)?.color; } catch { return undefined; } })() ?? (bedStock.bedCount ? bedStock.color : undefined);
+  // Beds past the first are for the dragon fight: sheep stay a need until carried beds plus wool for more reach BED_TARGET.
+  const wantBed = !!kit && (!kit.bed || (bedStock.bedCount > 0 && bedStock.total < BED_TARGET));
   const wantFood = items.filter(item => isPreparedFood(item.name)).reduce((sum, item) => sum + item.count, 0) < FOOD_ENOUGH;
   if (wantBed || wantFood) {
     const animals = Object.values(bot.entities ?? {})
@@ -130,7 +143,7 @@ function readNeeds(bot: NeedsBody, at: Vec3, now: number): NearbyNeed[] {
     }
     if (wantFood) out.push(...animals.slice(0, PER_NEED).map(({ entity, distance }) => animalNeed(bot, at, 'food', entity, distance)));
   }
-  if (wantBed) out.unshift(...standingBeds(bot, now));
+  if (wantBed && !kit?.bed) out.unshift(...standingBeds(bot, now));
 
   // iron, fuel and wood: blocks in the loaded chunks.
   const carried = [...items, ...worn.map(item => ({ name: item.name, count: 1 }))];

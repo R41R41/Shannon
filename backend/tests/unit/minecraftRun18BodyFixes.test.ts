@@ -149,14 +149,22 @@ describe('the observation says what an unmet need wants nearby (the owner: run 1
   it('says nothing of a need already met: a bed, six cooked, iron armour and ingots for the rest, planks, coal', () => {
     scanned.hits = [{ name: 'iron_ore', position: new Vec3(3, 60, 3), distance: 5.8 }, { name: 'coal_ore', position: new Vec3(2, 62, 2), distance: 3 }];
     // Still to make (run 19's count): two pickaxes 6, the helmet 5, the boots 4 = 15; a bucket is had. 15 ingots cover it.
-    const met = body([{ name: 'white_bed', count: 1 }, { name: 'cooked_beef', count: 6 }, { name: 'iron_chestplate', count: 1 },
+    const met = body([{ name: 'white_bed', count: 10 }, { name: 'cooked_beef', count: 6 }, { name: 'iron_chestplate', count: 1 },
       { name: 'iron_leggings', count: 1 }, { name: 'bucket', count: 1 }, { name: 'iron_ingot', count: 15 }, { name: 'oak_planks', count: 12 },
       { name: 'coal', count: 8 }]);
     expect(nearbyNeeds(met, 1_000)).toEqual([]);
   });
+  it('with one bed carried, sheep of its colour stay a need until beds plus wool reach ten (the dragon fight)', () => {
+    scanned.hits = [];
+    const base = [{ name: 'cooked_beef', count: 6 }, { name: 'oak_planks', count: 12 }];
+    const wool = (bot: any) => nearbyNeeds(bot, Date.now()).filter(need => need.need === 'bed_wool');
+    expect(wool(body([{ name: 'white_bed', count: 1 }, ...base])).length).toBeGreaterThan(0);
+    expect(wool(body([{ name: 'white_bed', count: 4 }, { name: 'white_wool', count: 18 }, ...base]))).toEqual([]);
+    expect(wool(body([{ name: 'white_bed', count: 4 }, { name: 'white_wool', count: 15 }, ...base])).length).toBeGreaterThan(0);
+  });
   it('an ore mine-block failed to reach is said, and why', () => {
     scanned.hits = [{ name: 'iron_ore', position: new Vec3(58, 57, 16), distance: 6 }];
-    const bot = body([{ name: 'white_bed', count: 1 }, { name: 'cooked_beef', count: 6 }, { name: 'oak_planks', count: 12 }]);
+    const bot = body([{ name: 'white_bed', count: 10 }, { name: 'cooked_beef', count: 6 }, { name: 'oak_planks', count: 12 }]);
     noteUnreachable(bot, { x: 58, y: 57, z: 16 });
     expect(nearbyNeeds(bot, Date.now())).toEqual([expect.objectContaining({ need: 'iron', canReach: false, why: 'failed_recently' })]);
   });
@@ -164,7 +172,7 @@ describe('the observation says what an unmet need wants nearby (the owner: run 1
     scanned.hits = [{ name: 'iron_ore', position: new Vec3(3, 60, 3), distance: 5.8 }];
     // Rock everywhere but the body's two cells and a strip of air from x 0 to 4; the pig at z 8 is behind the rock.
     const solid = (p: Vec3) => !(p.z === 0 && p.y >= 64 && p.y <= 65 && p.x >= 0 && p.x <= 4);
-    const bot = body([{ name: 'white_bed', count: 1 }, { name: 'oak_planks', count: 12 }],
+    const bot = body([{ name: 'white_bed', count: 10 }, { name: 'oak_planks', count: 12 }],
       { blockAt: (p: Vec3) => solid(p) ? { name: 'stone', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' } });
     const needs = nearbyNeeds(bot, 1_000);
     expect(needs.find(need => need.need === 'iron')).toMatchObject({ canReach: true, exposed: false });
@@ -173,7 +181,7 @@ describe('the observation says what an unmet need wants nearby (the owner: run 1
 
   it('is read again only every few seconds, or when the body has moved', () => {
     scanned.hits = [];
-    const bot = body([{ name: 'white_bed', count: 1 }, { name: 'cooked_beef', count: 6 }, { name: 'oak_planks', count: 12 }]);
+    const bot = body([{ name: 'white_bed', count: 10 }, { name: 'cooked_beef', count: 6 }, { name: 'oak_planks', count: 12 }]);
     expect(nearbyNeeds(bot, 1_000)).toEqual([]);
     scanned.hits = [{ name: 'iron_ore', position: new Vec3(3, 60, 3), distance: 5.8 }];
     expect(nearbyNeeds(bot, 2_000)).toEqual([]);
