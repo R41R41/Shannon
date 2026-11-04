@@ -228,19 +228,21 @@ scene('blaze_fight', 'blaze camp: fight hand, no fire resistance', note => blaze
 // The protocol a head can script from the body's own words (S2, 2026-11-02): at the camp cell `probe kind=camp` names, fight (or hold) with accept blaze and stopIf hpBelow 12; when the act stops
 // on the health, go to the hideout the same probe names (a footing no blaze of the spawner can see), eat, wait until the health is back, and return. The head's time to read and decide is a
 // pause between acts (`thinkMs`). A pickaxe is in the pack (a real run has them: the floor's cover reflex digs with it).
-async function blazeProtocol(kind: 'hold' | 'fight', note: (text: string) => void, options: { thinkMs?: number; stopHp?: number; backHp?: number; retreat?: boolean; body?: boolean } = {}): Promise<Record<string, unknown>> {
+async function blazeProtocol(kind: 'hold' | 'fight', note: (text: string) => void, options: { thinkMs?: number; stopHp?: number; backHp?: number; retreat?: boolean; body?: boolean; toRods?: number; r59?: boolean; seconds?: number } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const thinkMs = options.thinkMs ?? 5000, stopHp = options.stopHp ?? 12, backHp = options.backHp ?? 18, retreatOn = options.retreat !== false, bodyMode = options.body === true;
-  const seconds = timedSeconds || 300;
+  const seconds = options.seconds ?? (timedSeconds || 300);
   await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
   await ask('execute in minecraft:the_nether run kill @e[type=minecraft:blaze]');
-  await equip({ diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64 }, { armor: 'iron', shield: true });
+  await equip(options.r59 ? { stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 } : { diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64 }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
   const start = Date.now();
   const rods0 = await countServer('blaze_rod');
   const shield0 = shieldUsed();
-  const m = { acts: 0, okActs: 0, kills: 0, retreats: 0, recovered: 0, noHideout: 0, hpLostInActs: 0, hpLostOnTheWayOut: 0, hpLostWhileThinking: 0, hpLostOnTheWayBack: 0, lowestHp: 20, secondsBelow10: 0, secondsAway: 0, eats: 0, boxes: 0 };
+  // toRods: the seconds until that many rods are held (S2, 2026-11-04: the sortie's measure, "how long to 7 rods"); the run ends there.
+  let secondsToRods: number | null = null;
+  const m = { acts: 0, okActs: 0, kills: 0, sorties: 0, retreats: 0, recovered: 0, noHideout: 0, hpLostInActs: 0, hpLostOnTheWayOut: 0, hpLostWhileThinking: 0, hpLostOnTheWayBack: 0, lowestHp: 20, secondsBelow10: 0, secondsAway: 0, eats: 0, boxes: 0 };
   let boxesLeft = 4;
   const track: number[] = [];
   const sampler = setInterval(() => { const hp = Number(actor.health); if (Number.isFinite(hp)) { track.push(r1(hp)); m.lowestHp = Math.min(m.lowestHp, hp); if (hp < 10) m.secondsBelow10++; } }, 1000);
@@ -260,7 +262,9 @@ async function blazeProtocol(kind: 'hold' | 'fight', note: (text: string) => voi
       m.acts++; if (run.ok) m.okActs++;
       const text = run.lines.join(' ');
       m.kills += (text.match(/倒した (\d+)/gu) ?? []).reduce((sum, hit) => sum + Number(hit.replace(/\D+/gu, '')), 0) + (text.match(/fight 済 blaze/gu) ?? []).length;
+      m.sorties += (text.match(/出撃 (\d+)/gu) ?? []).reduce((sum, hit) => sum + Number(hit.replace(/\D+/gu, '')), 0);
       m.hpLostInActs += Math.max(0, before - hp());
+      if (options.toRods && (await countServer('blaze_rod')) - rods0 >= options.toRods) { secondsToRods = r1((Date.now() - start) / 1000); note(`${options.toRods} rods at ${secondsToRods} s`); break; }
       if (bodyMode && /退いた先/u.test(text)) { m.retreats++; if (hp() >= backHp) m.recovered++; }
       if (!run.ok && run.stoppedBy !== 'stopIf' && !(bodyMode && /退いた先/u.test(text))) { failStreak++; await sleep(2000); if (failStreak >= 5) { note(`${failStreak} acts in a row failed: the camp is lost (${(run.lines[0] ?? '').slice(0, 160)})`); break; } } else failStreak = 0;
       if (hp() <= 0) break;
@@ -306,11 +310,14 @@ async function blazeProtocol(kind: 'hold' | 'fight', note: (text: string) => voi
   const minutes = (Date.now() - start) / 60_000;
   const lowSeconds = track.filter(value => value < 12).length;
   return { seconds: r1((Date.now() - start) / 1000), rods, rodsPerMinute: r1(rods / Math.max(minutes, 0.1)), ...m, secondsAway: r1(m.secondsAway), secondsBelow12: lowSeconds, shieldWear: shieldUsed() - shield0, deathsHere: deaths,
-    hpTrack: track.filter((_, index) => index % 5 === 0).join(' '), kind, thinkMs, stopHp, backHp, retreatOn, bodyMode };
+    hpTrack: track.filter((_, index) => index % 5 === 0).join(' '), kind, thinkMs, stopHp, backHp, retreatOn, bodyMode, ...(options.toRods ? { toRods: options.toRods, secondsToRods } : {}) };
 }
 scene('blaze_proto_fight', 'the head\'s protocol at the c1 camp (fight, accept blaze, stopIf hpBelow 12 → hideout → eat → back), 5 s of thinking between acts', note => blazeProtocol('fight', note));
 scene('blaze_proto_body', 'the body\x27s own retreat (fight with no retreatHp and no stopIf: below 10 hearts to a hideout, eat, rest to 18, the hand ends), 40 s fights, 5 s of thinking between acts', note => blazeProtocol('fight', note, { body: true }));
 scene('blaze_proto_body_b', 'the same again (a second sample)', note => blazeProtocol('fight', note, { body: true }));
+// The sortie inside the fight hand (S2, 2026-11-04): the same body protocol, measured as the seconds until 7 rods are held (600 s at most); the lines' 出撃 counts are summed.
+scene('blaze_raid', 'the body protocol with the fight hand\x27s sortie (walk to an eye-level blaze in the window, back when one is charged), iron pack, until 7 rods (600 s at most)', note => blazeProtocol('fight', note, { body: true, toRods: 7, seconds: 600 }));
+scene('blaze_raid_r59', 'the same with the run59 pack (stone sword, one shield, 7 pork, 173 cobblestone)', note => blazeProtocol('fight', note, { body: true, toRods: 7, seconds: 600, r59: true }));
 scene('blaze_proto_hold', 'the same protocol with attack hold in place of fight', note => blazeProtocol('hold', note));
 // The sortie protocol (S2, 2026-11-02): the body rests at the hideout, where nothing sees it, and goes out for one short act at a time: [go to the camp cell, fight a few seconds, pick up, go back to the
 // hideout]. The head's thinking time is spent at the hideout, not in the blazes' sight. The next sortie starts when the health is back (backHp).
