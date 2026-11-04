@@ -500,6 +500,57 @@ describe('roof centre and short eye contact', () => {
     } finally { f.camp.release(); }
   });
 
+  // Codex's pre-deploy review 5 (11/5): out from under the roof only with room to come back, back at once when it comes near, and a blocked way back walked round once.
+  it('does not step out for a target nearer than 10 m to the exit cell', async () => {
+    const field = makeField({ at: new Vec3(8.5, FLOOR + 4, 0.5), walls: roofWalls() }); field.stop();
+    const camp = new EndermanCamp(contextFor(field.bot), field.mob);
+    try {
+      await camp.advance(field.mob, Date.now(), 8, false);
+      expect(endermanCampObservation(field.bot)!.exits).toEqual([]);
+      expect(field.control.forward).toBe(false);
+    } finally { camp.release(); }
+  });
+
+  it('turns back at once when the target comes within 7 m while the body is out, angry or not', async () => {
+    const f = exitField();
+    try {
+      await f.step(0);
+      f.outside(); await f.step(100);
+      expect(f.observation().exits[0].result).toBe('staring');
+      f.mob.position = new Vec3(7.5, FLOOR, 0.5);
+      await f.step(200);
+      expect(f.observation().exits[0]).toMatchObject({ result: 'returning', reason: 'near' });
+    } finally { f.camp.release(); }
+  });
+
+  it('walks round to the roof centre when the straight way back is pushed off, and goes on from there', async () => {
+    const f = exitField(), path = vi.fn(async (_goal: any) => { f.bot.entity.position = new Vec3(0.5, FLOOR, 0.5); });
+    (f.bot.pathfinder as any).goto = path;
+    try {
+      await f.step(0);
+      f.outside(); await f.step(100); await f.step(600);
+      expect(f.observation().exits[0]).toMatchObject({ result: 'returning', reason: 'stared' });
+      f.bot.entity.position = new Vec3(1.6, FLOOR, 0.95);       // pushed off the straight corridor
+      const step = await f.step(700);
+      if (step.kind === 'stop') throw new Error(step.outcome.text);
+      expect(path.mock.calls.some(([goal]) => goal && goal.x === 0 && goal.z === 0)).toBe(true);
+      expect(f.observation().exits[0]).toMatchObject({ result: 'returned', homeWalk: 'arrived' });
+    } finally { f.camp.release(); }
+  });
+
+  it('stops roof_failed only after the walk round could not reach the centre either', async () => {
+    const f = exitField();
+    try {
+      await f.step(0);
+      f.outside(); await f.step(100); await f.step(600);
+      f.bot.entity.position = new Vec3(1.6, FLOOR, 0.95);
+      const step = await f.step(700);
+      expect(step.kind).toBe('stop');
+      if (step.kind === 'stop') expect(step.outcome.text).toContain('歩いても戻れなかった');
+      expect(f.observation().exits[0].homeWalk).toBe('failed');
+    } finally { f.camp.release(); }
+  }, 15_000);
+
   it('never leaves the centre for an already angry target with hidden eyes, including after its flag resets', async () => {
     const f = exitField();
     try {
