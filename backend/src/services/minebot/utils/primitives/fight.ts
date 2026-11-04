@@ -22,6 +22,7 @@ import { HOVERING_SHOOTERS, ShooterWatch, StrikeGate, hoversAboveReach, strikeHo
 import { itemIds, itemsSince } from '../huntBarter.js';
 import { itemFacts } from './pickup.js';
 import { EndermanCamp, moveToRoofSite } from '../huntEndermanCamp.js';
+import { huntCandidates } from '../huntEndermanProbe.js';
 import { endermanAngry } from '../huntEnderman.js';
 import { hideoutsFrom } from '../huntCamp.js';
 import { scanLoadedBlocks } from '../loadedBlockScan.js';
@@ -115,6 +116,27 @@ export class HandCut extends StepStopped {
   constructor(why: string, readonly summary: string) { super(why); }
 }
 
+/** How far an enderman named by its kind is looked for (its gaze reaches 64 m; the roof hunts of 11/4 killed 7 of 34 that began 33-48 m off). */
+const ENDERMAN_PICK_RANGE = 48;
+/**
+ * `fight target=enderman` (the kind, not an id): which one. One already angry comes first (it is coming whatever is done). Else the nearest one whose
+ * EYES the body sees, in the band the roof hunts were won in (8-48 m, those within 30 m first: utils/huntEndermanProbe's order, the same eye line the
+ * camp stares along). The old pick (the nearest within 32 m, seen as a body) left out a third of the hunts' targets and chose ones whose eyes a trunk
+ * hid, which the camp then stared at for its 8 s and gave up (S6, 11/4: roof-e3 32 of 66 fights ended so). Null: none of these; the caller's own pick.
+ */
+export function pickEnderman(bot: any): any {
+  const at = bot.entity?.position;
+  if (!at) return null;
+  const near = (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity && entity !== bot.entity && entity.position && entity.isValid !== false
+    && String(entity.name ?? '').toLowerCase() === 'enderman' && entity.position.distanceTo(at) <= ENDERMAN_PICK_RANGE && !isDying(bot, entity))
+    .sort((a, b) => a.position.distanceTo(at) - b.position.distanceTo(at));
+  const angry = near.find(entity => { try { return endermanAngry(bot.registry, entity); } catch { return false; } });
+  if (angry) return angry;
+  let band: Array<{ id: number }> = [];
+  try { band = huntCandidates(bodyReader(bot), at, near, null); } catch { band = []; }
+  return band.length ? bot.entities?.[band[0].id] ?? null : null;
+}
+
 /** The distance from a point (the eye) to a creature's box. */
 function boxDistance(eye: { x: number; y: number; z: number }, entity: any): number {
   const half = (entity.width ?? 0.6) / 2, height = entity.height ?? 1.8, p = entity.position;
@@ -167,6 +189,10 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
    * or an enderman behind a hill, is not the one to fight while another stands in sight (lab: three acts in a row stopped on a blaze 1.8 m off behind the wall).
    */
   const pickTarget = (): any => {
+    if (typeof wanted === 'string' && stance === 'fight' && /^(minecraft:)?enderman$/u.test(wanted.trim().toLowerCase())) {
+      const chosen = pickEnderman(bot);
+      if (chosen) return chosen;
+    }
     const first = findEntity(bot, wanted, 32);
     if (!first || typeof wanted === 'number') return first;
     const kind = String(first.name ?? '').toLowerCase();
