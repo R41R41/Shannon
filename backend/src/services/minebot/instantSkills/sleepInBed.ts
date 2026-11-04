@@ -156,7 +156,26 @@ class SleepInBed extends InstantSkill {
     return null;
   }
 
-  async runImpl(wakeUp?: boolean, isTakeBed?: boolean) {
+  /**
+   * Still asleep when the wait for morning ended (another player on the server is awake, so the night goes on): with `leaveIfNight` the body
+   * gets up, so that it is not left lying in a bed it cannot act from (the act's sleep hand, utils/primitives/sleep). True when it is up.
+   */
+  private async getUpIfNight(leaveIfNight: boolean): Promise<boolean> {
+    if (!leaveIfNight || !this.bot.isSleeping) return !this.bot.isSleeping;
+    const woke = new Promise<void>(resolve => {
+      const timer = setTimeout(() => { this.bot.removeListener('wake', done); resolve(); }, 2000);
+      const done = () => { clearTimeout(timer); resolve(); };
+      this.bot.once('wake', done);
+    });
+    try { await this.bot.wake(); await woke; } catch (error: any) { log.warn(`起き上がれません: ${error?.message ?? error}`); }
+    return !this.bot.isSleeping;
+  }
+
+  /**
+   * `options.noDig` (the act's sleep hand): no spot is made by digging, and the walks to a bed or a spot cut no tunnel (rockTravel off). Where
+   * there is no spot it says so (`no_bed_spot`); whether to dig one is the head's.
+   */
+  async runImpl(wakeUp?: boolean, isTakeBed?: boolean, options: { leaveIfNight?: boolean; noDig?: boolean } = {}) {
     try {
       // ベッドから起きる場合
       if (wakeUp) {
@@ -205,6 +224,7 @@ class SleepInBed extends InstantSkill {
         return {
           success: false,
           result: `近くに敵がいるため寝られません（${mob.name}が${dist}m先にいます）`,
+          failureType: 'hostile_near', recoverable: true,
         };
       }
 
@@ -220,7 +240,7 @@ class SleepInBed extends InstantSkill {
           const distance = this.bot.entity.position.distanceTo(bed.position);
           if (distance > 3) {
             this.bot.pathfinder.stop();
-            await gotoSafe(this.bot, new goals.GoalNear(bed.position.x, bed.position.y, bed.position.z, 2), { rockTravel: true, timeoutMs: 15_000 });
+            await gotoSafe(this.bot, new goals.GoalNear(bed.position.x, bed.position.y, bed.position.z, 2), { rockTravel: !options.noDig, timeoutMs: 15_000 });
           }
 
           // ベッドで寝ている村人を探す
@@ -261,11 +281,13 @@ class SleepInBed extends InstantSkill {
           await this.bot.sleep(bed);
 
           // 起床を待つ
-          return new Promise<{ success: boolean; result: string }>((resolve) => {
+          const rested = await new Promise<{ success: boolean; result: string; nightPassed: boolean }>((resolve) => {
             const timeout = setTimeout(() => {
+              this.bot.removeListener('wake', onWake);
               resolve({
                 success: true,
                 result: '既存のベッドで眠りました',
+                nightPassed: false,
               });
             }, 10000);
 
@@ -275,11 +297,16 @@ class SleepInBed extends InstantSkill {
               resolve({
                 success: true,
                 result: '既存のベッドで眠り、朝になりました',
+                nightPassed: true,
               });
             };
 
             this.bot.once('wake', onWake);
           });
+          if (!rested.nightPassed && options.leaveIfNight && await this.getUpIfNight(true)) {
+            return { ...rested, result: `${rested.result}が、夜は明けませんでした（ほかに起きているプレイヤーがいます）。起き上がりました` };
+          }
+          return rested;
         } catch (error: any) {
           // エラーを詳細化して返す
           let errorDetail = error.message;
@@ -315,6 +342,10 @@ class SleepInBed extends InstantSkill {
       let placePos = this.findPlaceForBed();
       // Nothing within three blocks (run 21: a rock passage one block wide): a spot a few steps' walk off, then one made by digging.
       if (!placePos) placePos = this.findWiderPlaceForBed();
+      if (!placePos && options.noDig) {
+        return { success: false, failureType: 'no_bed_spot', recoverable: true,
+          result: 'ベッドを置ける2×1の床（上が空き）が、周り3マスにも10歩で行ける8マス内にも無い（掘って作ることはしない）' };
+      }
       if (!placePos) {
         const prepared = await this.prepareBedSpot();
         if ('failure' in prepared) return { success: false, result: prepared.failure, failureType: prepared.failureType, recoverable: true };
@@ -328,7 +359,7 @@ class SleepInBed extends InstantSkill {
       const distToPlace = this.bot.entity.position.distanceTo(placePos);
       if (distToPlace > 3) {
         this.bot.pathfinder.stop();
-        await gotoSafe(this.bot, new goals.GoalNear(placePos.x, placePos.y, placePos.z, 2), { rockTravel: true, timeoutMs: 15_000 });
+        await gotoSafe(this.bot, new goals.GoalNear(placePos.x, placePos.y, placePos.z, 2), { rockTravel: !options.noDig, timeoutMs: 15_000 });
         // From where it stands now the bed would lie another way (its head is away from the body): the spot is read again.
         // (A spot that was just made is kept: the cells were cleared for it.)
         if (!this.plannedHead) placePos = this.findPlaceForBed() ?? placePos;
@@ -386,9 +417,12 @@ class SleepInBed extends InstantSkill {
       // Woken: the bed this call set down goes back into the pack (run 17 left its only bed where it slept and came to the next
       // night without one). Not while still asleep: that would wake the body.
       const at = placedBed.position;
-      if (!slept.woke || this.bot.isSleeping) return { success: slept.success, result: `${slept.result}。置いたベッドは(${at.x}, ${at.y}, ${at.z})にあります（起きたら dig-block-at takeEquipment=true で拾えます）` };
+      const nightPassed = slept.woke;
+      // The night did not pass (another player is awake): with `leaveIfNight` the body gets up and takes its bed back all the same.
+      if (!slept.woke && options.leaveIfNight && await this.getUpIfNight(true)) slept.result += 'が、夜は明けませんでした（ほかに起きているプレイヤーがいます）。起き上がりました';
+      else if (!slept.woke || this.bot.isSleeping) return { success: slept.success, nightPassed, result: `${slept.result}。置いたベッドは(${at.x}, ${at.y}, ${at.z})にあります（起きたら dig-block-at takeEquipment=true で拾えます）` };
       if (hostileNear(this.bot as any, PICKUP_SAFE_RANGE)) {
-        return { success: true, result: `${slept.result}。敵が近いので、ベッド(${at.x}, ${at.y}, ${at.z})はそのままにしました（後で dig-block-at takeEquipment=true で拾えます）` };
+        return { success: true, nightPassed, bedLeft: true, result: `${slept.result}。敵が近いので、ベッド(${at.x}, ${at.y}, ${at.z})はそのままにしました（後で dig-block-at takeEquipment=true で拾えます）` };
       }
       const bedName = this.bot.blockAt(at)?.name ?? placedBed.name;
       const bedsHeld = () => this.bot.inventory.items().filter(item => item.name === bedName).reduce((sum, item) => sum + item.count, 0);
@@ -408,7 +442,7 @@ class SleepInBed extends InstantSkill {
       const notTaken = (taken as { failureType?: string }).failureType === 'drop_not_collected'
         ? `ベッドは掘りましたが持ち物に入っていません（(${at.x}, ${at.y}, ${at.z}) の近くに落ちていれば pickup-nearest-item で拾えます）`
         : `ベッド(${at.x}, ${at.y}, ${at.z})を拾えませんでした（dig-block-at takeEquipment=true で拾えます）`;
-      return { success: true, result: `${slept.result}。${taken.success ? 'ベッドは拾い直しました' : notTaken}` };
+      return { success: true, nightPassed, bedLeft: !taken.success, result: `${slept.result}。${taken.success ? 'ベッドは拾い直しました' : notTaken}` };
     } catch (error: any) {
       return { success: false, result: `${error.message}` };
     }

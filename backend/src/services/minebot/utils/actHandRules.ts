@@ -44,6 +44,9 @@ export const HAND_RULES: Readonly<Record<string, HandRule>> = {
       ?? (hand.items.some((entry: { count?: number }) => !Number.isInteger(entry.count) || (entry.count as number) < 1) ? 'items には 1 以上の整数の個数が要る' : null)
       ?? (hand.furnaces !== undefined && (!Number.isInteger(hand.furnaces) || hand.furnaces < 1 || hand.furnaces > 4) ? 'furnaces は 1〜4' : null)
       ?? (hand.at !== undefined && hand.at.length > 4 ? 'at は 4 つまで' : null) },
+  // 2026-11-05: when and where she sleeps is the head's; the body sets the bed, sleeps and takes it back (utils/primitives/sleep).
+  sleep: { needs: [], may: ['item', 'seconds'],
+    check: hand => seconds(hand, 10, 60) ?? (hand.item !== undefined && !/^[a-z_]+_bed$/u.test(hand.item) ? 'item はベッドの id（例 white_bed）' : null) },
 };
 
 /** The fields a kind takes (needed, then optional, then the common ones), for a refusal that names them. */
