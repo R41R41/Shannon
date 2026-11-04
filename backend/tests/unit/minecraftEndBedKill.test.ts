@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { Vec3 } from 'vec3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as geometry from '../../src/services/minebot/utils/dragonBedGeometry.js';
+import * as burst from '../../src/services/minebot/utils/bedBurst.js';
 import * as headModel from '../../src/services/minebot/utils/dragonHeadModel.js';
 import { partBox, boxDistance, boxesOverlap, inflate, isPerched, type P3 } from '../../src/services/minebot/utils/dragonParts.js';
 import { dragonHazards } from '../../src/services/minebot/utils/dragonDanger.js';
@@ -377,7 +378,7 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
   let handler: ((hands: any[], signal: AbortSignal) => Promise<void | boolean | { ok: boolean; lines: string[]; ms?: number }>) | undefined;
   const clouds: any[] = [];
   actor.entities = { 77: d };
-  const deps = { ...geometry, ...headModel, knockGeometry, dragonEntity: () => d, Vec3, partBox, boxDistance, dragonHazards, isPerched, bedHalves, actor, actorDeaths: 0, disconnected, scenes, KILL_LIMIT_MS: options.limit ?? 10_000,
+  const deps = { ...geometry, ...headModel, ...burst, hasActiveSafetyLease: () => false, activeActionCapabilities: () => [] as string[], knockGeometry, dragonEntity: () => d, Vec3, partBox, boxDistance, dragonHazards, isPerched, bedHalves, actor, actorDeaths: 0, disconnected, scenes, KILL_LIMIT_MS: options.limit ?? 10_000,
     trackEndKnocks: (tick: () => number, bedTrials: () => Array<{ detonationTick: number | null }>) => recordEndKnocks(actor, { enabled: false, tick, bedTrials, dragon: () => d, clouds: () => [] }),
     chainDistance: (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z),
     killCell: (v: P3) => p(Math.floor(v.x), Math.floor(v.y), Math.floor(v.z)), killPlaced: new Map(), killBlasts: [],
@@ -400,6 +401,7 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
       if (reply && typeof reply === 'object') return { ms: 0, ...reply };
       if (signal.aborted) return { ok: false, lines: ['aborted'], ms: 0 };
       for (const hand of hands) {
+        if (hand.do === 'equip') actor.heldItem = { name: hand.item };
         if (hand.do === 'go') actor.entity.position = new Vec3(hand.to.x + 0.5, hand.to.y, hand.to.z + 0.5);
         if (hand.do === 'dig') for (const cell of hand.at) t.blocks.set(key(cell), air());
         if (hand.do === 'place') {
@@ -440,8 +442,39 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
   };
   const api = new Function(...Object.keys(deps), `${compiled}\nreturn { run: endBedKill, disconnect() { disconnected = 'mock'; }, die() { actorDeaths++; actor.health = 0; actor.emit('death'); } };`)(...Object.values(deps));
   const pump = setInterval(() => actor.emit('physicsTick'), 50);
-  const run = async () => { try { return await api.run(); } finally { clearInterval(pump); } };
-  return { run, actor, d, deps, calls, commands, clouds, ...t, materials: () => ({ cobblestone, obsidian }), disconnect: api.disconnect, die: api.die, setHandler: (f: typeof handler) => { handler = f; }, counts, preempts, entries };
+  const run = async (keepCrystals = false, raw = false) => { try { return await api.run(keepCrystals, raw); } finally { clearInterval(pump); } };
+  const rawWrites: Array<{ name: string; data: any; at: number }> = [];
+  const enableRaw = (wrongFacing = false) => {
+    let serverYaw = 0;
+    actor.look = async (yaw: number, pitch: number) => { actor.entity.yaw = yaw; actor.entity.pitch = pitch; };
+    actor.setControlState = vi.fn();
+    actor._client.write = (name: string, data: any) => {
+      rawWrites.push({ name, data, at: Date.now() });
+      if (name === 'look') serverYaw = data.yaw;
+      if (name !== 'block_place') return;
+      const yawAtWrite = serverYaw;
+      setTimeout(() => {
+        const existing = bedHalves(t.read(data.location), data.location);
+        if (existing && options.explode !== false) {
+          actor._client.emit('explosion', { center: geometry.bedCentre(existing.head) });
+          t.blocks.delete(key(existing.foot)); t.blocks.delete(key(existing.head));
+          d.health = Math.max(0, d.health - (options.damage ?? 45));
+          if (d.health === 0) actor.emit('entityDead', { id: 77 });
+        } else if (data.cursorY === 1) {
+          const cell = { ...data.location, y: data.location.y + 1 };
+          const facing = ['south', 'west', 'north', 'east'][((Math.round(yawAtWrite / 90) + (wrongFacing ? 1 : 0)) % 4 + 4) % 4];
+          const [dx, dz] = ({ north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] } as Record<string, number[]>)[facing];
+          const pillow = { ...cell, x: cell.x + dx, z: cell.z + dz };
+          for (const [part, v] of [['foot', cell], ['head', pillow]] as const) {
+            const block = { name: 'white_bed', position: v, getProperties: () => ({ part, facing }), shapes: [[0, 0, 0, 1, 0.5625, 1]] };
+            t.blocks.set(key(v), block); actor.emit('blockUpdate', null, block);
+          }
+          beds--; actor.heldItem = null;
+        }
+      }, 0);
+    };
+  };
+  return { run, enableRaw, rawWrites, actor, d, deps, calls, commands, clouds, ...t, materials: () => ({ cobblestone, obsidian }), disconnect: api.disconnect, die: api.die, setHandler: (f: typeof handler) => { handler = f; }, counts, preempts, entries };
 }
 
 describe('bed fire geometry and approach decisions', () => {
@@ -1299,10 +1332,78 @@ describe('end_bed_kill scene with mocked I/O', () => {
     expect(source).toContain("const killEntries = ['end_bed_kill',");
     const selection = source.slice(source.indexOf('const invalidKillSelection ='), source.indexOf('for (const name of invalidKillSelection'));
     const choose = new Function('wanted', 'killEntries', 'report', 'exitCode', ts.transpileModule(`${selection}\nreturn invalidKillSelection;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText);
-    const entries = ['end_bed_kill', 'dragon_kill_bed'];
+    const entries = ['end_bed_kill', 'dragon_kill_bed', 'end_bed_crystals_raw', 'end_bed_kill_raw'];
     for (const wanted of [['end_bed_kill'], ['enter', 'end_bed_kill']]) expect(choose(wanted, entries, { errors: [] }, 0)).toBe(false);
     for (const wanted of [['enter', 'end_bed_kill', 'bed'], ['end_bed_kill', 'dragon_kill_bed']]) expect(choose(wanted, entries, { errors: [] }, 0)).toBe(true);
+    for (const name of ['end_bed_kill_raw', 'end_bed_crystals_raw']) {
+      expect(choose([name], entries, { errors: [] }, 0)).toBe(false);
+      expect(choose(['enter', name], entries, { errors: [] }, 0)).toBe(false);
+      expect(choose([name, 'bed'], entries, { errors: [] }, 0)).toBe(true);
+    }
     expect(source).toContain("wanted.some(name => killEntries.includes(name)) ? path.join(worldDirectory, 'report.json')");
     expect(ts.transpileModule(source, { reportDiagnostics: true, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).diagnostics).toEqual([]);
+  });
+});
+
+describe('raw bed scenes through the actual endBedKill loop', () => {
+  it.each([false, true])('uses synchronous raw pairs with detonation+10 repeats (keepCrystals=%s)', async keepCrystals => {
+    vi.useFakeTimers(); const r = rig({ limit: 8000 }); r.enableRaw();
+    const originalWrite = r.actor._client.write, before = r.actor._client.listenerCount('position');
+    const running = r.run(keepCrystals, true); await vi.advanceTimersByTimeAsync(8500); const out = await running;
+    expect(out.error).toBeUndefined();
+    expect(r.deps.prepareKillRun).toHaveBeenCalledWith(...(keepCrystals ? [true, true, true] : [true, true]));
+    expect(out.style).toBe(keepCrystals ? 'end_bed_crystals_raw' : 'end_bed_kill_raw');
+    const trials = out.bedTrials.filter((t: any) => t.burst?.useTick !== null);
+    expect(trials).toHaveLength(3);
+    for (const t of trials) {
+      expect(t.burst.classification).toMatchObject({ used: 'explosion_confirmed', orientation: 'confirmed', reasons: [] });
+      expect(t.placeRequestTick).toBe(t.useTick); expect(t.burst.placeToUseTicks).toBe(0);
+      expect(t.burst.sent.map((s: any) => s.stage)).toEqual(['unsneak', 'look', 'place', 'use']);
+      expect(t.latestEstimate.self.expected).toBeLessThanOrEqual(6);
+    }
+    for (let i = 1; i < trials.length; i++) expect(trials[i].useTick - trials[i - 1].detonationTick).toBe(10);
+    expect(out.orientationMismatches).toBe(0); expect(out.burstFailures).toEqual({});
+    expect(r.calls.flatMap(c => c.hands).some(h => h.do === 'use' || h.block === 'white_bed')).toBe(false);
+    expect(r.actor._client.write).toBe(originalWrite); expect(r.actor._client.listenerCount('position')).toBe(before);
+  });
+  it('counts wrong facing from block updates despite immediate explosion/removal, then leaves', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 6500 }); r.enableRaw(true);
+    const running = r.run(false, true); await vi.advanceTimersByTimeAsync(7000); const out = await running;
+    expect(out.error).toBeUndefined(); expect(out.orientationMismatches).toBe(1);
+    expect(out.burstFailures.orientation_mismatch).toBe(1);
+    expect(out.bedTrials).toHaveLength(1); expect(out.perches[0].leave.startTick).not.toBeNull();
+  });
+  it('classifies placement without explosion, refuses a repeat, and leaves the bed behind', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 6500, explode: false }); r.enableRaw();
+    const running = r.run(false, true); await vi.advanceTimersByTimeAsync(7000); const out = await running;
+    expect(out.error).toBeUndefined(); expect(out.bedTrials).toHaveLength(1);
+    expect(out.burstFailures.use_without_explosion).toBe(1);
+    expect(out.bedTrials[0].unusedBedLeft).toBe(true);
+  });
+  it('gives existing reflex/action owners all packet authority', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 6500 }); r.enableRaw();
+    r.actor.floorReflexes = { busy: true };
+    const running = r.run(false, true); await vi.advanceTimersByTimeAsync(7000); const out = await running;
+    expect(out.error).toBeUndefined(); expect(r.rawWrites.filter(w => w.name === 'block_place')).toEqual([]);
+    expect(out.burstFailures.reflex_or_action_owns_body).toBe(1);
+  });
+  it('does not change look if a reflex takes the body while equip is finishing', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 6500 }); r.enableRaw(); const look = vi.spyOn(r.actor, 'look');
+    r.setHandler(async hands => { if (hands.some(h => h.do === 'equip' && h.item === 'white_bed')) r.actor.floorReflexes = { busy: true }; });
+    const running = r.run(false, true); await vi.advanceTimersByTimeAsync(7000); const out = await running;
+    expect(look).not.toHaveBeenCalled(); expect(r.rawWrites.filter(w => w.name === 'block_place')).toEqual([]);
+    expect(out.burstFailures.reflex_or_action_owns_body).toBe(1);
+  });
+  it.each(['low_health', 'screen_removed'])('rechecks the unchanged self-damage bounds at dispatch: %s', async change => {
+    vi.useFakeTimers(); const r = rig({ limit: 6500 }); r.enableRaw();
+    r.setHandler(async hands => {
+      if (hands.some(h => h.do === 'equip' && h.item === 'white_bed')) {
+        if (change === 'low_health') r.actor.health = 5; // self=1, +4 == health must refuse
+        else for (const [cell, block] of r.blocks) if (block.name === 'obsidian') r.blocks.delete(cell);
+      }
+    });
+    const running = r.run(false, true); await vi.advanceTimersByTimeAsync(7000); const out = await running;
+    expect(out.error).toBeUndefined(); expect(r.rawWrites.filter(w => w.name === 'block_place')).toEqual([]);
+    expect(out.burstFailures.self_damage).toBe(1);
   });
 });

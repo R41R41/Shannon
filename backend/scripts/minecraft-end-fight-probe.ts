@@ -28,6 +28,7 @@ import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
 import { feetCentre, standing, walkGround } from '../src/services/minebot/utils/dragonWalk.js';
 import { bodyReader } from '../src/services/minebot/utils/localMap.js';
 import { bedHalves } from '../src/services/minebot/utils/bedRules.js';
+import { bedBurstPackets, bedBurstDue, bedBurstReach, classifyBedBurst, emptyBedBurst, type BedBurstEvidence, type BedBurstSend } from '../src/services/minebot/utils/bedBurst.js';
 import { perchBedFoot, bedWallCells, bedCellSupported, supportedBedCells, seatedBedLayouts, bedLayoutDragonRefusal, bedOperationClear, bedOperationHazards, bedApproachGate, bedApproachRetryTicks, bedNextLayout, bedIsFire, bedUnsafeFire, bedRecordFireFailure, bedFireStandExcluded, bedFireTargets, bedFireWorkCell, bedOpenWaitCells, BED_LEAVE_DISTANCE, bedLeaveState, bedLeaveCell, bedLeaveSeconds, bedSelfEstimate, bedExposure, bedDamage, bedCentre, bedEyeReach, type BedFireFailure, type SeatedBedLayout, type BedBlockReader, type BedCloud } from '../src/services/minebot/utils/dragonBedGeometry.js';
 import { approachClear } from '../src/services/minebot/utils/dragonApproach.js';
 import { dragonNook, insideDragonNook, nookCellSupported, type DragonNook } from '../src/services/minebot/utils/dragonNook.js';
@@ -2656,7 +2657,7 @@ for (const [name, policy] of Object.entries(cageComparePolicies)) scenes[name] =
 type KillStyle = 'sword_stage' | 'bed' | 'bow';
 type KillNookBuilder = 'operator' | 'body';
 const KILL_LIMIT_MS = 25 * 60 * 1000;
-const killEntries = ['end_bed_kill', 'end_bed_crystals', 'dragon_head_model', 'dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_far', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain', 'cage_descent_compare', 'cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'];
+const killEntries = ['end_bed_kill', 'end_bed_crystals', 'end_bed_kill_raw', 'end_bed_crystals_raw', 'dragon_head_model', 'dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_far', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain', 'cage_descent_compare', 'cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'];
 const killCell = (p: P3): P3 => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
 const packCount = (name: string): number => actor.inventory.items().filter((item: any) => item.name === name).reduce((n: number, item: any) => n + item.count, 0);
 let killArena: { ground: P3; perch: P3; yaw: number } | null = null;
@@ -3439,6 +3440,159 @@ scenes.dragon_kill_compare = async () => {
 // ===== end dragon_kill_compare =====
 
 // ===== end_bed_kill: lab stand-in HEAD, not a body combat policy =====
+/** Observe completed writes, including Mineflayer's own prediction sequences and teleport replies.
+ * The pending flag is a CLIENT proxy; the server does not expose awaitingPositionFromClient. */
+function observeBedBurstProtocol(bot: any, clock: () => number) {
+  const client = bot._client, original = client.write;
+  let sequence = 0, pendingTeleport: number | null = null, acknowledged = false, disposed = false;
+  const state = { awaitingPosition: false, settledTick: -1,
+    movement: null as { tick: number; name: string; position: P3 } | null,
+    corrections: [] as Array<{ tick: number; teleportId: number; acknowledgedTick: number | null; positionTick: number | null }> };
+  const incoming = (packet: any) => {
+    pendingTeleport = packet.teleportId; acknowledged = false; state.awaitingPosition = true;
+    state.corrections.push({ tick: clock(), teleportId: packet.teleportId, acknowledgedTick: null, positionTick: null });
+    if (state.corrections.length > 32) state.corrections.shift();
+  };
+  client.prependListener('position', incoming); // before physics.js synchronously writes its confirm + position_look
+  const write = function (this: unknown, name: string, data: any, ...rest: any[]) {
+    const result = original.call(this, name, data, ...rest);
+    if (disposed) return result;
+    if (Number.isInteger(data?.sequence)) sequence = Math.max(sequence, data.sequence);
+    if (name === 'teleport_confirm' && data.teleportId === pendingTeleport) {
+      acknowledged = true; state.corrections.at(-1)!.acknowledgedTick = clock();
+    }
+    if (name === 'position' || name === 'position_look') {
+      state.movement = { tick: clock(), name, position: { x: data.x, y: data.y, z: data.z } };
+      if (pendingTeleport !== null && acknowledged) {
+        state.awaitingPosition = false; state.settledTick = clock();
+        state.corrections.at(-1)!.positionTick = clock(); pendingTeleport = null;
+      }
+    }
+    return result;
+  };
+  client.write = write;
+  return { state, nextSequence: () => { const next = sequence + 1; sequence += 2; return next; },
+    stop: () => { disposed = true; client.removeListener('position', incoming); if (client.write === write) client.write = original; } };
+}
+
+/** Probe-only operation. Every click is synchronous in ONE post-position move callback.
+ * No block update, promise, timer, or physics event can split look/place/use. */
+async function bedBurstOnMove(bot: any, protocol: ReturnType<typeof observeBedBurstProtocol>, options: {
+  tick: () => number; previousDetonationTick: number | null; foot: P3; head: P3;
+  check: () => string | null; before: (stage: BedBurstSend['stage']) => void;
+  onEvidence: (evidence: BedBurstEvidence) => void; evidence?: BedBurstEvidence; signal?: AbortSignal;
+}): Promise<BedBurstEvidence> {
+  const { foot, head } = options, client = bot._client;
+  const yaw = Math.atan2(-(head.x - foot.x), -(head.z - foot.z));
+  const aim = { x: foot.x + 0.5, y: foot.y, z: foot.z + 0.5 }, here = bot.entity.position;
+  const pitch = Math.atan2(aim.y - here.y - 1.62, Math.hypot(aim.x - here.x, aim.z - here.z));
+  const e = options.evidence ?? emptyBedBurst(options.previousDetonationTick);
+  options.onEvidence(e);
+  // force updates Mineflayer's look bookkeeping only. The completed raw look write below is the send fence.
+  await bot.look(yaw, pitch, true);
+  return new Promise(resolve => {
+    let done = false, sending = false, sentTick: number | null = null;
+    const finish = (failure?: string) => {
+      if (done) return;
+      done = true; if (failure) e.failure = failure;
+      clearTimeout(timer);
+      bot.removeListener('move', onMove); bot.removeListener('physicsTick', onTick);
+      bot.removeListener('blockUpdate', onBlock); bot.removeListener('end', ended); bot.removeListener('death', died);
+      client.removeListener('explosion', onExplosion);
+      options.signal?.removeEventListener('abort', aborted);
+      e.completedTick = options.tick();
+      e.useToDetonationTicks = e.useTick !== null && e.detonationTick !== null ? e.detonationTick - e.useTick : null;
+      const placed = e.sent.find(p => p.stage === 'place' && p.written);
+      e.placeToUseTicks = placed && e.useTick !== null ? e.useTick - placed.tick : null;
+      e.detonationToBurstTicks = placed && e.previousDetonationTick !== null ? placed.tick - e.previousDetonationTick : null;
+      e.classification = classifyBedBurst(e); resolve(e);
+    };
+    const ended = () => finish('disconnected');
+    const died = () => finish('actor_dead');
+    const aborted = () => { e.observationInterrupted = String(options.signal?.reason ?? 'aborted'); finish(); };
+    const onBlock = (_old: any, block: any) => {
+      if (sentTick === null || !block?.position || options.tick() - sentTick > 3) return;
+      const cell = block.position;
+      if (![foot, head].some(p => p.x === cell.x && p.y === cell.y && p.z === cell.z)) return;
+      const halves = String(block.name).endsWith('_bed') ? bedHalves(block, cell) : null;
+      e.blockUpdates.push({ tick: options.tick(), cell: { x: cell.x, y: cell.y, z: cell.z }, name: block.name, halves });
+      if (halves) {
+        e.placeSeen = true;
+        const matches = ['x', 'y', 'z'].every(k => halves.foot[k as keyof P3] === foot[k as keyof P3] && halves.head[k as keyof P3] === head[k as keyof P3]);
+        e.orientationMismatch ||= !matches;
+        if (matches) e.orientationMatches = true;
+      }
+    };
+    const onExplosion = (packet: any) => {
+      if (e.useTick === null || e.detonationTick !== null || options.tick() - e.useTick > 3) return;
+      const p = packet?.center ?? packet;
+      // Foot clicks also explode a wrongly oriented bed. Attribute that receipt without hiding the mismatch.
+      const observedHeads = e.blockUpdates.flatMap(b => b.halves ? [b.halves.head] : []);
+      if ([head, ...observedHeads].some(h => Number.isFinite(p?.x) && Math.hypot(p.x - h.x - 0.5, p.y - h.y - 0.5, p.z - h.z - 0.5) <= 0.75)) e.detonationTick = options.tick();
+    };
+    const onMove = () => {
+      if (done || sending || sentTick !== null || !bedBurstDue(options.tick(), options.previousDetonationTick)) return;
+      const reason = options.check();
+      e.reach = bedBurstReach(bot.entity.position, foot);
+      e.awaitingPosition ||= protocol.state.awaitingPosition;
+      if (reason) { e.dragonOverlap = reason.endsWith('_in_dragon') ? reason : null; finish(reason); return; }
+      if (protocol.state.awaitingPosition || options.tick() <= protocol.state.settledTick) return;
+      sending = true;
+      try {
+        // A natural move can follow LOOK only. Ensure the current P(N) was actually written first.
+        const p = bot.entity.position, movement = protocol.state.movement;
+        if (movement?.tick !== options.tick() || ['x', 'y', 'z'].some(k => movement.position[k as keyof P3] !== p[k])) {
+          client.write('position', { x: p.x, y: p.y, z: p.z, flags: { onGround: !!bot.entity.onGround, hasHorizontalCollision: false } });
+        }
+        bot.setControlState('sneak', false);
+        sentTick = options.tick();
+        for (const packet of bedBurstPackets(foot, head, yaw, pitch, !!bot.entity.onGround, protocol.nextSequence())) {
+          options.before(packet.stage);
+          const receipt: BedBurstSend = { ...packet, tick: options.tick(), position: { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z },
+            yaw: bot.entity.yaw, pitch: bot.entity.pitch, written: false };
+          e.sent.push(receipt);
+          client.write(packet.name, packet.data);
+          receipt.written = true; // if look throws, neither click can be reached
+          if (packet.stage === 'use') e.useTick = receipt.tick;
+        }
+      } catch (error) { finish(`packet_write_failed:${String(error)}`); }
+      finally { sending = false; }
+    };
+    const onTick = () => {
+      if (done) return;
+      if (sentTick !== null) {
+        // Close after the WHOLE third receipt tick (network updates can follow its move).
+        if (options.tick() - sentTick > 3) finish();
+        else e.samples.push({ tick: options.tick(), foot: bot.blockAt(new Vec3(foot.x, foot.y, foot.z))?.name ?? null,
+          head: bot.blockAt(new Vec3(head.x, head.y, head.z))?.name ?? null });
+        return;
+      }
+      e.reach = bedBurstReach(bot.entity.position, foot);
+      e.awaitingPosition ||= protocol.state.awaitingPosition;
+      const reason = options.check();
+      if (reason) { e.dragonOverlap = reason.endsWith('_in_dragon') ? reason : null; finish(reason); return; }
+      // physicsTick -> updatePosition -> microtask. At rest Mineflayer may emit NO move for 20 ticks.
+      // Supply a real position write followed by move, so a stationary body can meet detonation+10.
+      queueMicrotask(() => {
+        if (done || sentTick !== null || !bedBurstDue(options.tick(), options.previousDetonationTick)) return;
+        const refusal = options.check(); if (refusal) { finish(refusal); return; }
+        if (protocol.state.awaitingPosition || options.tick() <= protocol.state.settledTick) { e.awaitingPosition ||= protocol.state.awaitingPosition; return; }
+        try {
+          const p = bot.entity.position;
+          client.write('position', { x: p.x, y: p.y, z: p.z, flags: { onGround: !!bot.entity.onGround, hasHorizontalCollision: false } });
+          bot.emit('move', new Vec3(p.x, p.y, p.z));
+        } catch (error) { finish(`position_write_failed:${String(error)}`); }
+      });
+    };
+    // Stalled physics bounds observation; this timer never authorizes or schedules clicks.
+    const timer = setTimeout(() => finish('physics_stalled_or_burst_timeout'), 4000);
+    bot.on('move', onMove); bot.on('physicsTick', onTick); bot.on('blockUpdate', onBlock);
+    bot.on('end', ended); bot.on('death', died); client.on('explosion', onExplosion);
+    options.signal?.addEventListener('abort', aborted, { once: true });
+    if (options.signal?.aborted) aborted();
+  });
+}
+
 /** Lab's human-operation gate. The newest observation may veto, never accelerate, a delayed action. */
 function bedUseRefusal(input: { phase: number | null; now: number; observed: number; placed: number | null; lastBlast: number | null;
   used: number; reach: number; damage: number; health: number; headDamage: number; headDistance: number }): string | null {
@@ -3511,7 +3665,7 @@ function bedWaitPlan(anchor: P3 | null, here: P3, centre: P3 | null, fallback: P
   return to ? { kind: 'move' as const, to } : null;
 }
 
-async function endBedKill(keepCrystals = false) {
+async function endBedKill(keepCrystals = false, raw = false) {
   const initial = keepCrystals ? await prepareKillRun(true, true, true) : await prepareKillRun(true, true);
   const t0 = Date.now(), deadline = t0 + KILL_LIMIT_MS, deaths0 = actorDeaths;
   const counts0 = actor.reflexLedger.counts(), lowest = trackMinHealth();
@@ -3528,6 +3682,12 @@ async function endBedKill(keepCrystals = false) {
     leaveFailures: 0, leaveDistanceMetric: 'horizontal_metres_from_perch.body.position; phase4 captured on first observed tick',
     bedsUsed: 0, detonations: 0, placementAttempts: 0, explosionsHit: 0, meleeHitWindows: 0, windows: [], reflexKinds: {}, boss: null, bossVerified: false, killSeconds: null, dragonHealthAt25Minutes: null };
   let tick = 0, terminal: string | null = null, active: { controller: AbortController; allowed: () => boolean; observe?: () => void } | null = null;
+  const rawProtocol = raw ? observeBedBurstProtocol(actor, () => tick) : null;
+  if (raw) {
+    out.style = keepCrystals ? 'end_bed_crystals_raw' : 'end_bed_kill_raw';
+    Object.assign(out.operationBudget, { observationDelayTicks: 0, placeToUseTicks: 0, blastGapTicks: 10, receiptTicks: 3 });
+    out.rawProtocol = rawProtocol!.state;
+  }
   let layout: SeatedBedLayout | null = null, pending: Record<string, any> | null = null, lastBlast: number | null = null;
   let phase: number | null = null, phaseStart = 0, phaseStartSeconds = 0, lastHp = Number(actor.health), lastBeds = packCount('white_bed');
   let view = endView(), sampleBusy = false, samplePending: Promise<void> = Promise.resolve(), nextSample = 0;
@@ -3655,11 +3815,16 @@ async function endBedKill(keepCrystals = false) {
   };
   const onExplosion = (packet: any) => {
     const p = packet?.center ?? packet;
-    if (!pending?.useRequested || !layout || !Number.isFinite(p?.x) || chainDistance(p, bedCentre(layout.head)) > 1) return;
+    const observedHeads = raw ? (pending?.burst?.blockUpdates ?? []).flatMap((b: any) => b.halves ? [b.halves.head] : []) : [];
+    if (!pending?.useRequested || !layout || !Number.isFinite(p?.x)
+      || ![layout.head, ...observedHeads].some(h => chainDistance(p, bedCentre(h)) <= (raw ? 0.75 : 1))) return;
     if (pending.detonationTick !== null) return;
     pending.detonationTick = tick; pending.explosion = { x: p.x, y: p.y, z: p.z };
+    pending.useToDetonationTicks = tick - pending.useTick;
+    if (raw && pending.burst) pending.burst.detonationTick = tick;
     pending.headAtExplosion = headOf(view?.dragon); pending.phaseAtExplosion = view?.dragon?.phase ?? null;
-    lastBlast = tick; lastBedBlast = bedCentre(layout.head); out.detonations++; killBlasts.push(bedCentre(layout.head));
+    const blastCentre = raw ? { x: p.x, y: p.y, z: p.z } : bedCentre(layout.head);
+    lastBlast = tick; lastBedBlast = blastCentre; out.detonations++; killBlasts.push(blastCentre);
     const owner = out.perches.find((p: any) => p.n === pending!.perch);
     if (owner) owner.bedsDetonated++;
   };
@@ -3999,6 +4164,80 @@ async function endBedKill(keepCrystals = false) {
     if (!allowed) refuse('self_or_reach_changed_during_use', { self });
     return allowed;
   };
+  const rawBurst = async () => {
+    const trial = pending!, target = layout!, owner = perch!;
+    trial.burst = emptyBedBurst(lastBlast);
+    const controller = new AbortController();
+    const allowed = () => !controller.signal.aborted && bedWindow() && perch === owner && layout === target;
+    const row: Record<string, any> = { label: 'raw_seated_head_bed', tick, perch: owner.n, hands: [], raw: true };
+    const bodyOwned = () => hasActiveSafetyLease(actor) || activeActionCapabilities(actor).length > 0 || actor.floorReflexes?.busy
+      || actor.floorReflexes?.retreat?.engaged || actor.shieldBlock?.up;
+    const check = (): string | null => {
+      if (!allowed() || tick - owner.startTick >= 200) return 'seated_window_ended';
+      // Raw lab packets have no body hand. Yield entirely to any action/reflex owner instead of acquiring over it.
+      if (bodyOwned()) return 'reflex_or_action_owns_body';
+      if (!atStand() || !clearNow(actor.entity.position)) return 'breath_or_contact_at_operation';
+      if (!placementCheck(true)) return trial.notDetonatedReason ?? 'placement_refused';
+      const current = poseNow();
+      if (!current) return 'head_observation_missing';
+      const centre = bedCentre(target.head), headDistance = chainDistance(centre, current.feet);
+      const exposure = bedExposure(read, centre, current.box, [target.foot, target.head]), headDamage = bedDamage(headDistance, exposure);
+      const self = bedSelfEstimate(read, target.head, target.foot, actor.entity.position, actor.entity);
+      trial.latestEstimate = { tick, headDistance, exposure, headDamage, self, latestHead: current.centre };
+      if (![headDistance, headDamage, self.expected, Number(actor.health)].every(Number.isFinite)) return 'estimate_unknown';
+      if (self.expected > 6 || self.expected + 4 >= Number(actor.health)) return 'self_damage';
+      if (headDistance > 2.2 || headDamage < 50) return 'head_not_at_pillow';
+      if (bedBurstReach(actor.entity.position, target.foot) > 5.5) return 'out_of_reach';
+      if (actor.heldItem?.name !== 'white_bed') return 'bed_not_in_hand';
+      return null;
+    };
+    try {
+      // Equip before arming the tick scheduler. No placeBlock or health command can delay the pair.
+      if (bodyOwned()) { refuse('reflex_or_action_owns_body'); return false; }
+      active = { controller, allowed };
+      if (actor.heldItem?.name !== 'white_bed') {
+        const equipped = await act([{ do: 'equip', item: 'white_bed', onFail: 'stop' }], 16, {}, controller.signal);
+        row.equip = { ok: equipped.ok, ms: equipped.ms, lines: equipped.lines };
+        if (!equipped.ok || !allowed()) { refuse('raw_bed_equip_failed_or_interrupted'); return false; }
+      }
+      const beforeLook = check();
+      if (beforeLook) { refuse(beforeLook); return false; }
+      const burst = await bedBurstOnMove(actor, rawProtocol!, { tick: () => tick, previousDetonationTick: lastBlast,
+        foot: target.foot, head: target.head, check, evidence: trial.burst, signal: controller.signal,
+        onEvidence: e => { trial.burst = e; },
+        before: stage => {
+          if (stage === 'place') {
+            trial.placeRequestTick = tick; trial.headAtPlace = headOf(view?.dragon); trial.phaseAtPlace = view?.dragon?.phase;
+          }
+          if (stage === 'use') {
+            trial.useRequested = true; trial.useTick = tick; trial.phaseAtUse = view?.dragon?.phase;
+            trial.headAtUse = headOf(view?.dragon); trial.prediction = trial.latestEstimate;
+            trial.healthBefore = Number(actor.health); trial.dragonBefore = view?.dragon?.health ?? null;
+            trial.positionAtUse = { ...actor.entity.position };
+            trial.supportsAtUse = target.supportBlocks.map(cell => ({ cell, name: read(cell)?.name ?? null }));
+            trial.screenAtUse = target.screen.map(cell => ({ cell, name: read(cell)?.name ?? null }));
+            delete trial.notDetonatedReason;
+          }
+        } });
+      row.ok = burst.classification?.used === 'explosion_confirmed';
+      if (!row.ok) refuse(burst.classification?.reasons.join(',') || 'raw_burst_unconfirmed');
+      trial.healthAfter = Number(actor.health); trial.dragonAfter = view?.dragon?.health ?? null;
+      trial.selfDamage = trial.healthBefore === null ? null : Math.max(0, trial.healthBefore - trial.healthAfter);
+      trial.selfDamageAtWorst = trial.healthBefore === null ? null : Math.max(0, trial.healthBefore - trial.minHealth);
+      trial.observedDragonLoss = trial.dragonBefore !== null && trial.dragonAfter !== null ? trial.dragonBefore - trial.dragonAfter : null;
+      if (row.ok && trial.observedDragonLoss > 0) out.explosionsHit++;
+      // Telemetry can complete after the next burst; do not serialize raw timing on an operator chat reply.
+      bedReadPending = serverHealth().then(health => { trial.dragonHealthServerAfter = health; trial.serverAfterTick = tick; })
+        .catch(error => { trial.serverAfterError = String(error); });
+      return row.ok === true && !burst.orientationMismatch;
+    } finally {
+      if (!trial.burst.classification) {
+        trial.burst.failure = trial.notDetonatedReason ?? terminal ?? 'raw_burst_interrupted';
+        trial.burst.completedTick = tick; trial.burst.classification = classifyBedBurst(trial.burst);
+      }
+      row.endTick = tick; out.actions.push(row); owner.steps.push(row); active = null;
+    }
+  };
   try {
     sample();
     while (!terminal) {
@@ -4047,7 +4286,7 @@ async function endBedKill(keepCrystals = false) {
         continue;
       }
       // A telemetry reply must not delay takeoff evacuation. Finish it before another damage-producing hand.
-      if (afterReadBusy) { await sleep(25); continue; }
+      if (!raw && afterReadBusy) { await sleep(25); continue; }
       if (bedWindow() && !bedBlocked && (packCount('white_bed') > 0 || pending)) {
         const blockBeds = (reason: string) => { refuse(reason); bedBlocked = true; perch!.bedUnavailableReason = reason; };
         if (pending && !String(read(pending.foot)?.name).endsWith('_bed')) {
@@ -4121,6 +4360,16 @@ async function endBedKill(keepCrystals = false) {
             healthBefore: null, healthAfter: null, dragonBefore: null, dragonAfter: null, dragonHealthServerBefore: null, dragonHealthServerAfter: null, dragonLoss: null, selfDamage: null };
           out.bedTrials.push(pending);
           for (const p of [layout.foot, layout.head]) killPlaced.set(`${p.x},${p.y},${p.z}`, p);
+          if (raw) {
+            const ok = await rawBurst();
+            if (!ok) {
+              blockBeds(pending.notDetonatedReason ?? 'raw_burst_failed_or_interrupted');
+              requestLeave('raw_burst_failed_or_interrupted');
+              if ([layout.foot, layout.head].some(p => String(read(p)?.name).endsWith('_bed'))) pending.unusedBedLeft = true;
+            }
+            pending = null;
+            continue;
+          }
           const placed = await perform('place_seated_head_bed', [{ do: 'place', block: 'white_bed', face: 'down', at: [layout.foot] }], () => byTick(200) && atStand() && clearNow(actor.entity.position), () => {
             if (!placementCheck(true)) return false;
             pending!.placeRequestTick = tick;
@@ -4210,11 +4459,16 @@ async function endBedKill(keepCrystals = false) {
   } catch (error) { out.error = String((error as Error)?.stack ?? error).slice(0, 1600); stop('script_error'); }
   finally {
     stop('time_limit'); clearInterval(timer); abortActive('scene_finished');
+    if (raw) {
+      out.burstFailures = {};
+      for (const trial of out.bedTrials) for (const reason of trial.burst?.classification?.reasons ?? []) out.burstFailures[reason] = (out.burstFailures[reason] ?? 0) + 1;
+      out.orientationMismatches = out.bedTrials.filter((b: any) => b.burst?.orientationMismatch).length;
+    }
     knockRecord.finish(terminal ?? 'scene_end');
     actor.removeListener('physicsTick', onTick); actor.removeListener('entityDead', onDead); actor.removeListener('death', onDeath);
     actor.removeListener('health', onHealth); actor.removeListener('blockUpdate', onBlock); actor._client.removeListener('explosion', onExplosion);
     try { await Promise.all([samplePending, bedReadPending, serverQueue]); await knockRecord.settle(); }
-    finally { knockRecord.stop(terminal ?? 'scene_end'); }
+    finally { knockRecord.stop(terminal ?? 'scene_end'); rawProtocol?.stop(); }
     out.phaseDurations.push({ phase, fromTick: phaseStart, toTick: out.endTick, ticks: out.endTick - phaseStart, seconds: out.seconds - phaseStartSeconds, partial: true });
     out.phase1Seconds = out.phaseDurations.filter((p: any) => p.phase === 1).reduce((n: number, p: any) => n + p.seconds, 0);
     for (const owner of out.perches) {
@@ -4252,6 +4506,8 @@ async function endBedKill(keepCrystals = false) {
 }
 scenes.end_bed_kill = () => endBedKill();
 scenes.end_bed_crystals = () => endBedKill(true);
+scenes.end_bed_kill_raw = () => endBedKill(false, true);
+scenes.end_bed_crystals_raw = () => endBedKill(true, true);
 // ===== end end_bed_kill =====
 
 // ===== dragon_head_model: independent measurements, no combat hands =====
@@ -4434,7 +4690,7 @@ scenes.death = async () => {
 // ===== run =====
 let exitCode = 0;
 try {
-  const invalidKillSelection = wanted.some(name => name.startsWith('dragon_kill') || name.startsWith('cage_descent_compare') || name === 'end_full_chain' || name === 'end_bed_kill' || name === 'end_bed_crystals' || name === 'dragon_head_model') && (wanted.filter(name => name !== 'enter').length !== 1 || !killEntries.includes(wanted.find(name => name !== 'enter')!));
+  const invalidKillSelection = wanted.some(name => name.startsWith('dragon_kill') || name.startsWith('cage_descent_compare') || name === 'end_full_chain' || name === 'end_bed_kill' || name === 'end_bed_crystals' || name === 'end_bed_kill_raw' || name === 'end_bed_crystals_raw' || name === 'dragon_head_model') && (wanted.filter(name => name !== 'enter').length !== 1 || !killEntries.includes(wanted.find(name => name !== 'enter')!));
   if (invalidKillSelection) { report.errors.push('choose exactly one standalone entry (dragon_kill_compare or end_full_chain, optionally after enter), without other scenes'); exitCode = 1; }
   for (const name of invalidKillSelection ? [] : Object.keys(scenes)) {
     if (killEntries.includes(name) && wanted.filter(n => n !== 'enter').join() !== name) continue;

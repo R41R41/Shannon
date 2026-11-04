@@ -4,7 +4,8 @@
   "include": [],
   "files": [
     "../../scripts/minecraft-end-fight-probe.ts",
-    "../../src/services/minebot/utils/dragonBedGeometry.ts",
-    "minecraftEndBedKill.test.ts"
+    "../../src/services/minebot/utils/bedBurst.ts",
+    "minecraftEndBedKill.test.ts",
+    "minecraftBedBurst.test.ts"
   ]
 }
