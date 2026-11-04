@@ -176,7 +176,7 @@ bash backend/scripts/lab/lab-slot.sh status                                     
 bash backend/scripts/lab/lab-slot.sh --wait 1800 --label hands-live -- bash run-hands-live.sh <label> <code.tar>
 # 作戦書の形 `flock ~/.cache/minebot-lab/slot.lock <コマンド>` と同じファイルを使うので、混ぜて使える（待つ順番は先着ではない）
 ```
-- 規則：①`$MINEBOT_LAB_SCRATCH/slot.lock`（既定 `~/.cache/minebot-lab/slot.lock`）を実行中ずっと持つ ②`/tmp/hands-live.lock` は持たず、塞がっていれば待つ／断る（`run-hands-live.sh`・`world-pristine.sh`・`run-replay.sh` が自分で取る）
+- 規則：①`$MINEBOT_LAB_SCRATCH/slot.lock`（既定 `~/.cache/minebot-lab/slot.lock`）を実行中ずっと持つ ②`/tmp/hands-live.lock` は持たない（`run-hands-live.sh`・`run-incident-lab.sh`・`run-continue-lab.sh`・`world-pristine.sh`・`run-replay.sh` が自分で取る）。枠から（`LAB_PORT` 付きで）起動されたそれらは枠のポートの `/tmp/hands-live.<port>.lock` と共有の `/tmp/hands-live.lock` を持ち、ポートとコード置き場（`…-<port>`）も枠ごとに分かれるので、枠どうしは並んで走る。手で起動したものは `/tmp/hands-live.lock` を独占し、その間だけ枠は待つ／断る（2026-11-05）
   ③**本番 shannon-home で実走中は回さない**：運用 DB に `queued/starting/running/waiting_approval` の Minecraft タスクがあれば終了 4（`--allow-run` は取りまとめの判断）。待っている間も毎回見直し、実走が始まれば抜ける
   ④25570〜25599 に知らないサーバーが居れば終了 5（残り物。`tmux -L minebot-lab ls`）⑤出力は `~/.cache/minebot-lab`（/tmp は Spot の停止で消える）。終了コード：3＝枠が塞がっている／`/tmp/hands-live.lock` が塞がっている、2＝使い方。
   ⑥**資源**（ライ氏の指示 2026-11-02：世界を無駄に作らない、圧迫を確かめる、不要な処理とデータは消す）：`$HOME` のディスクの空きが 10GB 未満（`LAB_MIN_DISK_GB`）、または PC の WSL で Windows の空きメモリが 3GB 未満（`LAB_MIN_WIN_MEM_GB`）・C: が 10GB 未満なら、

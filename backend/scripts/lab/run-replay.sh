@@ -12,7 +12,7 @@
 #       act (/setblock of the cells lab/run-ground.py found), places the body (position, pack, armour, health), sends the run's own act
 #       through the production body's road, and compares what it says with what the run's act said;
 #   (e) the server stopped, the lab world, the staged copy and the code directory removed. The logs stay in $MINEBOT_LAB_SCRATCH/replay-<label>/.
-# Never touches the production services, their env files or their ports (25565-25569, shannon-home's 25560). One lab run at a time (flock).
+# Never touches the production services, their env files or their ports (25565-25569, shannon-home's 25560). One lab run per port (the hands lock, below).
 #
 # KEY=VALUE: REPLAY_SOURCE=<world dir>, REPLAY_SEED=<seed>, REPLAY_ONLY=c1220,c135, REPLAY_TIMEOUT=<seconds, default 1800>, REPLAY_KEEP=1,
 #   REPLAY_FLOOR=default (the body's floor reflexes as production loads them, melee and flee too; default: floor, the probe's retreat/eat/armor),
@@ -27,13 +27,18 @@ SCRATCH=${MINEBOT_LAB_SCRATCH:-$HOME/.cache/minebot-lab}
 OUT=$SCRATCH/replay-$LABEL; mkdir -p "$OUT"
 STAGE=$SCRATCH/replay-world-$LABEL
 SOURCE=${REPLAY_SOURCE:-$HOME/minecraft/shannon-home/shannon_home}
-CODE=$HOME/Shannon-hands-lab-replay
+CODE=$HOME/Shannon-hands-lab-replay${LAB_PORT:+-$LAB_PORT}
 DEV=$HOME/Shannon-dev
 NODEBIN=$HOME/.nvm/versions/node/v$(cat "$DEV/.nvmrc")/bin
 SOCKET=minebot-lab
 DIR=""; SESSION=""; PORT=""; STATUS=1
-exec 9>/tmp/hands-live.lock
-flock -n 9 || { echo "another lab run holds /tmp/hands-live.lock (the VM has 2 cores: one at a time)" >&2; exit 3; }
+# The hands lock, per port (coordinator 2026-11-05; run-hands-live.sh says how): under lab-slot.sh this port's lock and the shared one.
+if [ -n "${LAB_PORT:-}" ]; then
+  exec 6>"/tmp/hands-live.$LAB_PORT.lock"; flock -n 6 || { echo "another lab run holds /tmp/hands-live.$LAB_PORT.lock" >&2; exit 3; }
+  exec 9>/tmp/hands-live.lock; flock -s -n 9 || { echo "a lab run started by hand holds /tmp/hands-live.lock" >&2; exit 3; }
+else
+  exec 9>/tmp/hands-live.lock; flock -n 9 || { echo "another lab run holds /tmp/hands-live.lock (outside lab-slot.sh: one at a time)" >&2; exit 3; }
+fi
 log() { echo "[$(date +%H:%M:%S)] run-replay: $*"; }
 cleanup() {
   trap - EXIT INT TERM
@@ -72,7 +77,8 @@ cp "$CASES" "$OUT/cases.json"
 ( cd "$CODE" && sha1sum backend/src/services/minebot/utils/primitives/go.ts backend/src/services/minebot/utils/primitives/pillarUp.ts backend/scripts/minecraft-replay-probe.ts ) | tee "$OUT/code-sums.txt"
 
 # (c) the server
-for p in $(seq 25570 25599); do ss -ltn | grep -q ":$p " || { PORT=$p; break; }; done
+PORT=${LAB_PORT:-}
+[ -n "$PORT" ] || for p in $(seq 25570 25599); do ss -ltn | grep -q ":$p " || { PORT=$p; break; }; done
 [ -n "$PORT" ] || { log "no free port"; exit 1; }
 INFO=$(cd "$CODE/backend" && env -i HOME="$HOME" PATH="$NODEBIN:/usr/bin:/bin" MINECRAFT_LAB_PORT=$PORT MINECRAFT_LAB_TERRAIN=natural MINECRAFT_LAB_SEED="$SEED" \
   MINECRAFT_LAB_WORLD_FROM="$STAGE" MINECRAFT_LAB_VIEW_DISTANCE=10 nice -n 10 node scripts/minecraft-isolated-lab.mjs 2>"$OUT/lab-start.err")

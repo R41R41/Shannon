@@ -10,7 +10,7 @@
 #   (b) start a new isolated flat-world server (scripts/minecraft-isolated-lab.mjs, the tmux socket minebot-lab, a free port in 25570-25599);
 #   (c) run the probe (no model, no paid key: `env -i` with the offline placeholders) and print its table;
 #   (d) stop the server, remove the world directory, the tmux session and the code directory.
-# Never touches the production services, their env files or their ports (25565-25569 are never used). One run at a time (flock).
+# Never touches the production services, their env files or their ports (25565-25569 are never used). One run per port (the hands lock, below).
 #
 # KEY=VALUE: HANDS_SCENES=a,b (scene names or prefixes), HANDS_SCENE_SECONDS=<n>, HANDS_REPEAT=<n> (the scenes n times over), HANDS_TIMEOUT=<seconds, default 1500>,
 #            HANDS_OVERLAY=<tar extracted over the code>, HANDS_KEEP=1 (keep the code directory), HANDS_PORT=<port>.
@@ -21,7 +21,7 @@ for pair in "$@"; do case "$pair" in HANDS_*=*) export "$pair";; *) echo "bad ar
 SCRATCH=${MINEBOT_LAB_SCRATCH:-$HOME/.cache/minebot-lab}
 OUT=$SCRATCH/hands-$LABEL
 mkdir -p "$OUT"
-CODE=${HANDS_CODE_DIR:-$HOME/Shannon-run40-lab}
+CODE=${HANDS_CODE_DIR:-$HOME/Shannon-run40-lab${LAB_PORT:+-$LAB_PORT}}
 case "$CODE" in "$HOME"/Shannon-run40-lab*|"$HOME"/Shannon-hands-lab*) ;; *) echo "code dir must be ~/Shannon-run40-lab* or ~/Shannon-hands-lab*" >&2; exit 2;; esac
 DEV=$HOME/Shannon-dev
 NODEBIN=$HOME/.nvm/versions/node/v$(cat "$DEV/.nvmrc")/bin
@@ -29,8 +29,15 @@ NODEBIN=$HOME/.nvm/versions/node/v$(cat "$DEV/.nvmrc")/bin
 SOCKET=minebot-lab
 DIR=""; SESSION=""; PORT=""; STATUS=1
 
-exec 9>/tmp/hands-live.lock
-flock -n 9 || { echo "another hands-live run holds /tmp/hands-live.lock (the VM has 2 cores: one at a time)" >&2; exit 3; }
+# The hands lock, per port (coordinator 2026-11-05, so the slots run side by side): under lab-slot.sh (LAB_PORT set) the run holds its
+# port's /tmp/hands-live.<port>.lock and /tmp/hands-live.lock shared, and uses that port and a code directory of its own; started by hand
+# it holds /tmp/hands-live.lock alone: it does not start beside a slot's run, and lab-slot.sh starts none beside it (rule 2).
+if [ -n "${LAB_PORT:-}" ]; then
+  exec 6>"/tmp/hands-live.$LAB_PORT.lock"; flock -n 6 || { echo "another lab run holds /tmp/hands-live.$LAB_PORT.lock" >&2; exit 3; }
+  exec 9>/tmp/hands-live.lock; flock -s -n 9 || { echo "a lab run started by hand holds /tmp/hands-live.lock" >&2; exit 3; }
+else
+  exec 9>/tmp/hands-live.lock; flock -n 9 || { echo "another lab run holds /tmp/hands-live.lock (outside lab-slot.sh: one at a time)" >&2; exit 3; }
+fi
 
 log() { echo "[$(date +%H:%M:%S)] run-hands-live: $*"; }
 
@@ -66,7 +73,7 @@ cp "$CODE_TAR" "$OUT/code.tar" 2>/dev/null
 ( cd "$CODE" && sha1sum backend/src/services/minebot/utils/primitives/go.ts backend/scripts/minecraft-hands-live-probe.ts ) | tee "$OUT/code-sums.txt"
 
 # (b) the server
-if [ -n "${HANDS_PORT:-}" ]; then PORT=$HANDS_PORT; else
+if [ -n "${HANDS_PORT:-}" ]; then PORT=$HANDS_PORT; elif [ -n "${LAB_PORT:-}" ]; then PORT=$LAB_PORT; else
   for p in $(seq 25570 25599); do ss -ltn | grep -q ":$p " || { PORT=$p; break; }; done
 fi
 [ -n "$PORT" ] && [ "$PORT" -ge 25570 ] && [ "$PORT" -le 25599 ] || { log "no free port in 25570-25599"; exit 1; }

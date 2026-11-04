@@ -9,8 +9,9 @@
 #   1. One lab at a time on the 2-vCPU VM: an flock on $MINEBOT_LAB_SCRATCH/slot.lock (default ~/.cache/minebot-lab/slot.lock) is held for
 #      the whole command. LAB_SLOT_COUNT=N (default 1; the WSL lab with its 24 cores asks for 3 but gets at most LAB_SLOT_MAX=2 since 2026-11-02 21:50) makes N slots slot.lock, slot.1.lock, ...;
 #      the number taken is exported as LAB_SLOT (0-based) so the caller can pick its ports (25570 + 10 * LAB_SLOT ...).
-#   2. /tmp/hands-live.lock is respected: run-hands-live.sh, world-pristine.sh and run-replay.sh take it themselves, so this script only
-#      refuses to start while it is held (it never holds it, or those scripts would find it taken).
+#   2. /tmp/hands-live.lock is respected: run-hands-live.sh, run-incident-lab.sh, run-continue-lab.sh, world-pristine.sh and run-replay.sh
+#      take it themselves (it never holds it). Started from here (LAB_PORT set) they hold it shared with their port's /tmp/hands-live.<port>.lock,
+#      so slots run side by side; started by hand they hold it alone, and only then does this script refuse to start (coordinator 2026-11-05).
 #   3. Not while a real run is going on the production shannon-home: when the production database shows a queued, starting, running or
 #      waiting Minecraft task the slot is refused. --allow-run overrides it and is the coordinator's decision, not the caller's.
 #      (No database on the machine, e.g. the WSL lab: the check is skipped, and the lab may run any time.)
@@ -121,7 +122,7 @@ status() {
       echo "slot $i: free"
     fi
   done
-  if [ -e "$HANDS_LOCK" ] && ! (exec 7>"$HANDS_LOCK"; flock -n 7); then echo "$HANDS_LOCK: HELD"; else echo "$HANDS_LOCK: free"; fi
+  if [ -e "$HANDS_LOCK" ] && ! (exec 7>"$HANDS_LOCK"; flock -s -n 7); then echo "$HANDS_LOCK: HELD by a run started by hand"; else echo "$HANDS_LOCK: free (or shared by slot runs)"; fi
   echo "labs listening (25570-25599): $(lab_listeners)"
   # the queue, oldest first (a waiter writes waiting.<pid> and removes it when it starts or gives up)
   for w in $(ls -tr "$SCRATCH"/waiting.* 2>/dev/null); do
@@ -172,8 +173,8 @@ while :; do
     if [ -n "$active" ]; then echo "lab-slot: a production run is active ($active); the lab stays off (rule 3)" >&2; exit 4; fi
     if prod_lock_held; then echo "lab-slot: prod.lock is held ($(head -c 120 "$PROD_LOCK" 2>/dev/null)); the lab stays off (rule 7)" >&2; exit 4; fi
   fi
-  if [ -e "$HANDS_LOCK" ] && ! (exec 7>"$HANDS_LOCK"; flock -n 7); then
-    why="$HANDS_LOCK is held by another lab run (rule 2)"
+  if [ -e "$HANDS_LOCK" ] && ! (exec 7>"$HANDS_LOCK"; flock -s -n 7); then
+    why="$HANDS_LOCK is held by a lab run started by hand (rule 2)"
   elif free=$(free_slots); [ "$free" -gt 0 ] && ! queue turn "$free"; then
     why="not my turn yet in $QUEUE (rule 9: first come, first served; lab-slot.sh status shows the tickets)"
   else
