@@ -52,7 +52,11 @@ export interface GoArgs {
   seconds?: number;
   maxDig?: number;
   maxPlace?: number;
-  sprint?: boolean;
+  /**
+   * true: the sprint is let on all the way; false or left out: never; 'auto' (the act's go when the planner wrote nothing, S8 2026-11-05): on where nothing hurts
+   * within two cells (lava, fire, magma) and no fall beyond the allowed drop is beside the feet, off there; no jump that needs the sprint is planned.
+   */
+  sprint?: boolean | 'auto';
   /**
    * The longest one drawing of the way may search, in the pathfinder's own milliseconds (default 5 s; the search that says why the way is shut, 2.5 s). The tests that
    * run on a faked clock give a search no time limit of its own (a slow machine would run it out and the line would say dead_end instead of the reason).
@@ -88,6 +92,10 @@ export const GO_AVOID_COST = 20;
 export const GO_REDO_COST = 60;
 /** The most times one go walks the part of a way a search found before its time ran out (each must come 2 m nearer). */
 export const GO_PARTIAL_WALKS = 12;
+/** S8: the most times one go cuts its way itself at a point on the straight line, when the same search ran out of its time twice (each must come 2 m nearer). */
+export const GO_RELAYS = 6;
+/** ... and how far on the line that point is, tried in turn. */
+const RELAY_STEPS_M = [24, 12];
 /** A search of the road is cut after this long when the caller gave no `searchMs`: the part of the way it found (nearest the goal) is walked and the search goes on from there (S2, 2026-11-03: a Nether walk of 196 m in 11 minutes was 5 s searches each ending as search_timeout; S4's lab: the best part found in the first seconds is as good as the one at five). */
 const SEARCH_SLICE_MS = 1500;
 /**
@@ -237,6 +245,111 @@ export function hazardAtFeetWith(read: (x: number, y: number, z: number) => stri
   return null;
 }
 
+// ---- the Nether's pace (S8, 2026-11-05) --------------------------------------------------------------------------------------------------
+
+/**
+ * S8 (2026-11-05, the lab's Nether walks: 0.6 to 0.7 m a second, 460 digs on 233 m, a tunnel nearly all the way): in the Nether a dig is priced at this many times
+ * its time. A tunnel step through netherrack (two blocks) then costs about as much, in the route search's steps, as the seconds it takes against a walk on the open
+ * ground beside it (a dig and its look cost ~0.3 s, a step walked ~0.2 s), so the way goes over the open netherrack and round the hills, and through them only where
+ * going round is much longer. A person runs on the netherrack and digs only what is in the way.
+ */
+export const NETHER_DIG_COST = 2.5;
+/** S8: what laying a floor over lava (lava within two under the cell laid) costs more, in steps: the way round or through the rock beside is taken when there is one. */
+export const LAVA_FLOOR_PLACE_COST = 4;
+const isNether = (bot: any) => String(bot.game?.dimension ?? '').includes('nether');
+
+/** The kinds that turn the sprint off within two cells of the feet (a slip at a run's pace ends in them). */
+const SPRINT_HAZARD = new Set(['lava', 'fire', 'soul_fire', 'magma_block', 'cactus', 'sweet_berry_bush', 'powder_snow', 'wither_rose']);
+/** Cells a body falls through (no box to stand on). */
+const OPEN_NAME = /^(?:air|cave_air|void_air|short_grass|tall_grass|grass|fern|large_fern|[a-z_]*_roots|nether_sprouts|[a-z_]*vines(?:_plant)?|vine|snow|[a-z_]*_flower|dandelion|poppy|[a-z_]*_tulip|[a-z_]*_mushroom|dead_bush|[a-z_]*torch|fire|soul_fire|light)$/u;
+/**
+ * Why the sprint is off with the feet at (x, y, z), or null (S8, 2026-11-05): a hazard of SPRINT_HAZARD within two cells across, two down and one up; or, beside the
+ * feet (the eight cells round), an open cell with no floor within `maxDrop` under it (a cliff, the void, or lava under it); or a cell not loaded there. `read` gives a
+ * block's name or null when it is not loaded.
+ */
+export function sprintHazardAt(read: (x: number, y: number, z: number) => string | null, x: number, y: number, z: number, maxDrop: number): string | null {
+  for (let dy = -2; dy <= 1; dy++) for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
+    const name = read(x + dx, y + dy, z + dz);
+    if (name && SPRINT_HAZARD.has(name)) return `${name} が近い`;
+  }
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    if (!dx && !dz) continue;
+    const beside = read(x + dx, y, z + dz);
+    if (beside === null) return '読み込まれていない所が隣';
+    if (!OPEN_NAME.test(beside) && beside !== 'water') continue;
+    let floor = false;
+    for (let down = 1; down <= maxDrop + 1 && !floor; down++) {
+      const name = read(x + dx, y - down, z + dz);
+      if (name === null) return '読み込まれていない所が隣';
+      if (name === 'lava') return '隣の下が溶岩';
+      if (name === 'water' || !OPEN_NAME.test(name)) floor = true;
+    }
+    if (!floor) return '隣が崖';
+  }
+  return null;
+}
+
+/**
+ * mineflayer-pathfinder's landing search reads down through the air until it meets a floor, however far below that is, and only then sees that the fall is too
+ * long (search-timeout-causes-20261103.md, the second cause: 69 reads down a shaft for each move; over the Nether's lava sea, 30 to 60 cells of air under every
+ * edge). With the liquid's fall bounded as any other (`infiniteLiquidDropdownDistance` false, the go's rule unless water is allowed), the reading stops at the
+ * deepest landing allowed: what is found is the same, the search reads less.
+ */
+export function installBoundedLanding(movements: any): void {
+  if (movements.__boundedLanding || typeof movements.getLandingBlock !== 'function') return;
+  movements.__boundedLanding = true;
+  const original = movements.getLandingBlock.bind(movements);
+  movements.getLandingBlock = (node: any, dir: { x: number; z: number }) => {
+    if (movements.infiniteLiquidDropdownDistance) return original(node, dir);
+    const lowest = node.y - movements.maxDropDown;
+    const minY = Number(movements.bot?.game?.minY ?? -64);
+    let block = movements.getBlock(node, dir.x, -2, dir.z);
+    while (block?.position && block.position.y > minY && block.position.y >= lowest) {
+      if (block.liquid && block.safe) return block;
+      if (block.physical) return movements.getBlock(block.position, 0, 1, 0);
+      if (!block.safe) return null;
+      block = movements.getBlock(block.position, 0, -1, 0);
+    }
+    return null;
+  };
+}
+
+/** Whether lava lies within two cells under `cell` (the cell itself included): a floor laid there is a bridge over lava. */
+export function overLava(read: (x: number, y: number, z: number) => string | null, cell: Cell): boolean {
+  for (let down = 0; down <= 2; down++) if (read(cell.x, cell.y - down, cell.z) === 'lava') return true;
+  return false;
+}
+
+/**
+ * The cells that make a floor just laid over lava a bridge with walls (S8, 2026-11-05; the head's knowledge has said "a bridge with walls, never one a block wide"
+ * since run 59, and go laid only the floor): on each side across the way (from the feet to the floor laid), a floor beside it and a wall over that at the feet's
+ * height. A cell the route walks (its feet or head cells), or one that is not open, is left; a wall over a side floor that is not there is left too. The way is the
+ * route's (the step over the floor laid and the one after or before it), else from the body (`from`, its position: it leans over the edge as it lays).
+ */
+export function bridgeSideCells(read: (x: number, y: number, z: number) => string | null, laid: Cell, from: { x: number; z: number }, route: readonly Cell[]): Array<{ floor: Cell | null; wall: Cell }> {
+  let dx = 0, dz = 0;
+  const index = route.findIndex(node => node.x === laid.x && node.y === laid.y + 1 && node.z === laid.z);
+  const other = index >= 0 ? route[index + 1] ?? route[index - 1] : undefined;
+  if (other) { dx = Math.sign(other.x - laid.x); dz = Math.sign(other.z - laid.z); if (!route[index + 1]) { dx = -dx; dz = -dz; } }
+  if ((dx === 0) === (dz === 0)) {
+    const ax = laid.x + 0.5 - from.x, az = laid.z + 0.5 - from.z;
+    if (Math.max(Math.abs(ax), Math.abs(az)) < 0.05) return [];
+    dx = Math.abs(ax) >= Math.abs(az) ? Math.sign(ax) : 0; dz = dx === 0 ? Math.sign(az) : 0;
+  }
+  const sides = dx !== 0 ? [{ x: 0, z: 1 }, { x: 0, z: -1 }] : [{ x: 1, z: 0 }, { x: -1, z: 0 }];
+  const walked = new Set<string>();
+  for (const node of route) { walked.add(`${node.x},${node.y},${node.z}`); walked.add(`${node.x},${node.y + 1},${node.z}`); }
+  const open = (cell: Cell) => { const name = read(cell.x, cell.y, cell.z); return name !== null && (OPEN_NAME.test(name) || name === 'lava'); };
+  const out: Array<{ floor: Cell | null; wall: Cell }> = [];
+  for (const side of sides) {
+    const floor = { x: laid.x + side.x, y: laid.y, z: laid.z + side.z };
+    const wall = { x: floor.x, y: floor.y + 1, z: floor.z };
+    if (walked.has(keyOf(wall)) || walked.has(keyOf(floor)) || !open(wall) || read(floor.x, floor.y, floor.z) === null) continue;
+    out.push({ floor: open(floor) ? floor : null, wall });
+  }
+  return out;
+}
+
 // ---- what the route search has read (run 41) -------------------------------------------------------------------------------------------
 
 /**
@@ -312,12 +425,24 @@ export interface GoState {
 
 // ---- the movements ---------------------------------------------------------------------------------------------------------------------
 
-export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk' | 'maxDig' | 'maxPlace'>> & { sprint: boolean }, rule: DigRule, placeHeld: string[], state: GoState, relax: Relax = {}): any {
+export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk' | 'maxDig' | 'maxPlace'>> & { sprint: boolean | 'auto' }, rule: DigRule, placeHeld: string[], state: GoState, relax: Relax = {}): any {
   const mayDigAny = rule.names.size > 0 || !!relax.permissions;
   const mayPlaceAny = placeHeld.length > 0 || !!relax.blocks || !!relax.permissions;
-  const movements = buildMovements(bot, false, args.sprint, true, true, mayDigAny, true, 1, false, args.waterOk, args.maxDrop, args.waterOk ? 4 : 10, mayPlaceAny, 2);
+  const nether = isNether(bot);
+  const movements = buildMovements(bot, false, args.sprint !== false, true, true, mayDigAny, true, nether ? NETHER_DIG_COST : 1, false, args.waterOk, args.maxDrop, args.waterOk ? 4 : 10, mayPlaceAny, 2);
   movements.maxDropDown = args.maxDrop + 1;
   movements.infiniteLiquidDropdownDistance = args.waterOk;
+  installBoundedLanding(movements);
+  (movements as any).__sprintBase = !!movements.allowSprinting;
+  // S8: with the sprint left to the body, no jump that only a sprint makes is planned (the sprint is let go of near a hazard, and such a jump would then fall short).
+  if (args.sprint === 'auto' && typeof movements.getMoveParkourForward === 'function') {
+    const parkour = movements.getMoveParkourForward.bind(movements);
+    movements.getMoveParkourForward = (node: any, dir: { x: number; z: number }, neighbors: any[]) => {
+      const found: any[] = [];
+      parkour(node, dir, found);
+      for (const move of found) if (Math.max(Math.abs(move.x - node.x), Math.abs(move.z - node.z)) <= 2) neighbors.push(move);
+    };
+  }
   installDoorRules(movements);
   const registry = bot.registry;
   // Hazards: never entered, never dug into, whatever else is allowed.
@@ -358,6 +483,10 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
     const avoided = (block: any) => (block?.position && state.avoid.has(`${block.position.x},${block.position.y},${block.position.z}`) ? GO_AVOID_COST : 0);
     movements.exclusionAreasStep = [...(movements.exclusionAreasStep ?? []), avoided];
     movements.exclusionAreasPlace = [...(movements.exclusionAreasPlace ?? []), avoided];
+  }
+  // S8: in the Nether a floor laid over lava costs more (a bridge over the lava sea is where a ghast's blast or a push ends the run): the way round first.
+  if (nether && !relax.hazards) {
+    (movements as any).exclusionAreasPlace = [...((movements as any).exclusionAreasPlace ?? []), (block: any) => (block?.position && overLava(read, block.position) ? LAVA_FLOOR_PLACE_COST : 0)];
   }
   // Run 45 (hold 3): what this go dug is not laid again, what it laid is not dug again (the way does not undo its own work).
   movements.exclusionAreasBreak = [...(movements.exclusionAreasBreak ?? []), (block: any) => redoCost(state.laidCells, block)];
@@ -682,14 +811,14 @@ export function blockedAroundPlace(bot: any, aim: Cell, rule: Pick<DigRule, 'nam
  * the route executor walking (its digs and places included); `digMs`, `placeMs`: the digs and places of the go (executor's and the hand's own);
  * `sprintMs`: the time the sprint key was down; `metres`: straight from where it began to where it ended.
  */
-export interface GoTiming { totalMs: number; searchMs: number; walkMs: number; digMs: number; placeMs: number; climbMs: number; mendMs: number; sprintMs: number; digs: number; places: number; searches: number; metres: number }
+export interface GoTiming { totalMs: number; searchMs: number; walkMs: number; digMs: number; placeMs: number; climbMs: number; mendMs: number; sprintMs: number; digs: number; places: number; searches: number; metres: number; relays: number; walls: number }
 const goTimings = new WeakMap<object, GoTiming>();
 /** The timing of the last go this body made (for the lab's measures), or null. */
 export function lastGoTiming(host: object): GoTiming | null { return goTimings.get(host) ?? null; }
 
 export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
-  const timing: GoTiming = { totalMs: 0, searchMs: 0, walkMs: 0, digMs: 0, placeMs: 0, climbMs: 0, mendMs: 0, sprintMs: 0, digs: 0, places: 0, searches: 0, metres: 0 };
+  const timing: GoTiming = { totalMs: 0, searchMs: 0, walkMs: 0, digMs: 0, placeMs: 0, climbMs: 0, mendMs: 0, sprintMs: 0, digs: 0, places: 0, searches: 0, metres: 0, relays: 0, walls: 0 };
   const timed = async <T>(key: 'searchMs' | 'walkMs' | 'climbMs' | 'mendMs', work: () => Promise<T>): Promise<T> => {
     const began = Date.now();
     try { return await work(); } finally { timing[key] += Date.now() - began; }
@@ -700,7 +829,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   if (!cells.length) return stopped(bot, 'invalid_input', 'go には to か goals が要る');
   const limits = {
     range: args.range ?? GO_DEFAULTS.range, maxDrop: args.maxDrop ?? GO_DEFAULTS.maxDrop, waterOk: args.waterOk === true, maxDig: args.maxDig ?? GO_DEFAULTS.maxDig,
-    maxPlace: args.maxPlace ?? GO_DEFAULTS.maxPlace, sprint: args.sprint === true,
+    maxPlace: args.maxPlace ?? GO_DEFAULTS.maxPlace, sprint: (args.sprint === true ? true : args.sprint === 'auto' ? 'auto' : false) as boolean | 'auto',
   };
   const startedAt = Date.now();
   const deadline = Math.min(ctx.deadline, startedAt + (args.seconds ?? GO_DEFAULTS.seconds) * 1000);
@@ -711,6 +840,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const place = placeNamesOf(bot, args.canPlace);
   const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, exposed: new Map(), avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
   const start = feetCell(bot)!;
+  /** S8: the times this go cut its way itself at a point on the line (relay). */
+  let relays = 0;
   // Continue contracts (1): the stop's progress in metres, from where the body began to where it stopped, and the last route search the go made.
   const startPosition = bot.entity?.position ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z } : null;
   let aims: Cell[] = cells;
@@ -821,11 +952,23 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     return recent.length ? Math.max(...recent) : null;
   };
   let lastTickAt = Date.now();
+  // S8: the sprint left to the body is let go of where a slip at a run's pace would hurt (read once a cell); the route executor's own choice runs before this, each tick.
+  let sprintCell = '', sprintHazard: string | null = null;
+  const sprintGuard = () => {
+    const feet = feetCell(bot);
+    if (!feet) return;
+    const key = keyOf(feet);
+    if (key !== sprintCell) { sprintCell = key; sprintHazard = sprintHazardAt((x, y, z) => nameAt(bot, x, y, z), feet.x, feet.y, feet.z, limits.maxDrop); }
+    const movements = nav.movements as { allowSprinting?: boolean; __sprintBase?: boolean } | undefined;
+    if (movements && movements.__sprintBase !== undefined) movements.allowSprinting = movements.__sprintBase && !sprintHazard;
+    if (sprintHazard && bot.controlState?.sprint) bot.setControlState?.('sprint', false);
+  };
   const onTick = () => {
     try {
       const tickAt = Date.now();
       if (bot.controlState?.sprint) timing.sprintMs += Math.min(200, tickAt - lastTickAt);
       lastTickAt = tickAt;
+      if (limits.sprint === 'auto') sprintGuard();
       const y = Number(bot.entity?.position?.y);
       if (Number.isFinite(y)) { heights.push([Date.now(), y]); if (heights.length > 40) heights.shift(); }
       const feet = feetCell(bot);
@@ -962,10 +1105,43 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       state.placed++; lastWork = Date.now(); state.refused = 0;
       const laid = placedCell(rest[0], rest[1]);
       if (laid) state.laidCells.add(keyOf(laid));
+      if (laid && !manualBusy) await wallTheBridge(laid);
       return result;
     }
     refusedPlace(facts(), placedCell(rest[0], rest[1]));
     throw new Error('The place was not taken');
+  };
+  /**
+   * S8 (2026-11-05): a floor the route laid over lava in the Nether, under the next step, is given its walls: on each side across the way a floor beside it and a block
+   * over that at the feet's height (bridgeSideCells), laid at once from where the body stands, before the route walks on. Within maxPlace and what the pack holds;
+   * a wall that is not laid is noted and the go goes on (the floor is what the route needs).
+   */
+  let walls = 0, wallsSkipped = 0;
+  const wallTheBridge = async (laid: Cell): Promise<void> => {
+    try {
+      if (!isNether(host)) return;
+      const feet = feetCell(host);
+      const reader = (x: number, y: number, z: number) => nameAt(host, x, y, z);
+      if (!feet || laid.y !== feet.y - 1 || !overLava(reader, { x: laid.x, y: laid.y - 1, z: laid.z })) return;
+      for (const side of bridgeSideCells(reader, laid, host.entity.position, lastRoute)) {
+        for (const [cell, against, face] of [...(side.floor ? [[side.floor, laid, new Vec3(side.floor.x - laid.x, 0, side.floor.z - laid.z)] as const] : []),
+          [side.wall, side.floor ?? { x: side.wall.x, y: side.wall.y - 1, z: side.wall.z }, new Vec3(0, 1, 0)] as const]) {
+          if (state.placed >= limits.maxPlace || !place.held.some(name => inventoryCount(host, name) > 0) || ctx.stop?.aborted) { wallsSkipped++; return; }
+          if (!mayLayAt(host, cell)) { wallsSkipped++; break; }
+          const reference = host.blockAt?.(new Vec3(against.x, against.y, against.z), false);
+          if (!hasFace(reference)) { wallsSkipped++; break; }
+          await blockInHand(host, place.held);
+          const began = Date.now();
+          try { await originalPlace.call(host, reference, face); } catch { /* looked at below */ }
+          timing.placeMs += Date.now() - began; timing.places++;
+          if (isAirLike(host.blockAt?.(new Vec3(cell.x, cell.y, cell.z), false)) || host.blockAt?.(new Vec3(cell.x, cell.y, cell.z), false)?.name === 'lava') { wallsSkipped++; break; }
+          state.placed++; state.laidCells.add(keyOf(cell)); lastWork = Date.now();
+          if (cell === side.wall) walls++;
+        }
+      }
+    } catch (error) {
+      blackBoxOf(host)?.note('bridge_wall_failed', { at: [laid.x, laid.y, laid.z], why: String((error as Error)?.message ?? error).slice(0, 80) });
+    }
   };
   if (typeof originalDig === 'function') host.dig = countingDig;
   if (typeof originalPlace === 'function') host.placeBlock = countingPlace;
@@ -1069,7 +1245,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const tipCell = tip ? nodeCell(tip) : null;
     const reach = tipCell ? `、${cellText(tipCell)} まで・あと ${Math.hypot(tipCell.x - aim.x, tipCell.y - aim.y, tipCell.z - aim.z).toFixed(0)}m` : '';
     return fail('search_timeout', `道探しが ${(searchSlice / 1000).toFixed(searchSlice < 1000 ? 2 : searchSlice % 1000 ? 1 : 0)} 秒で終わらない（道の有無は不明。${found.visited.toLocaleString('en-US')} マス調べた${reach}）`,
-      '10m 以内の中継点へ go か、dig と walk の階段・縦穴で');
+      relays ? `体が中継点（${relays} 回）でも進めなかった。別の行き先か、dig と walk の階段・縦穴で` : '10m 以内の中継点へ go か、dig と walk の階段・縦穴で');
   };
 
   const explain = async (goal: any): Promise<StepOutcome> => {
@@ -1207,6 +1383,34 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   };
 
   let attempt = 0, noway = 0, mends = 0, partialWalks = 0;
+  /**
+   * S8 (2026-11-05; S4's c1 lab: 144 m, one of four ended 44 m short on search_timeouts in a row; 249 m, four search_timeouts): the same search from the same place ran
+   * out of its time twice, and the part it found comes no nearer. The body cuts the way itself: a point on the straight line 24 m on (then 12 m), any height within
+   * 3 across, searched and walked, and the place is searched again from there. At most GO_RELAYS times a go, each must come 2 m nearer the place.
+   */
+  const relay = async (aim: Cell): Promise<boolean> => {
+    if (relays >= GO_RELAYS) return false;
+    const p = bot.entity?.position;
+    if (!p) return false;
+    const across = Math.hypot(aim.x + 0.5 - p.x, aim.z + 0.5 - p.z);
+    for (const step of RELAY_STEPS_M) {
+      if (across <= step + 3 || timeLeft() < 3000) continue;
+      const x = Math.floor(p.x + ((aim.x + 0.5 - p.x) / across) * step), z = Math.floor(p.z + ((aim.z + 0.5 - p.z) / across) * step);
+      const relayGoal = new goals.GoalNearXZ(x, z, 3);
+      const movements = movementsFor();
+      nav.setMovements(movements);
+      const found = await plan(movements, relayGoal, Math.min(searchSlice, timeLeft()));
+      if (found.status !== 'success') continue;
+      if (budgetOf(countOf(found), found.places)) continue;
+      const before = distanceTo(bot, aim);
+      relays++; state.redraws++;
+      blackBoxOf(host)?.note('relay', { to: [x, z], step, before: Math.round(before) });
+      await timed('walkMs', () => goWith(ctx, relayGoal, timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true }));
+      letGo(bot);
+      if (before - distanceTo(bot, aim) >= 2) return true;
+    }
+    return false;
+  };
   let swimBest = Infinity, swimBestAt = Date.now();
   // Headway is the nearest the body has come to a place; a body that is mended and walks back to the same wall has made none.
   let nearest = distanceTo(bot, near());
@@ -1246,7 +1450,11 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (drawn.status === 'timeout') {
         const here = feetCell(bot);
         const again = `${keyOf(aim)}|${leg.final ? 'f' : 'l'}|${here ? keyOf(here) : ''}`;
-        if (timedOutAt.has(again)) { letGo(bot); return searchedOutStop(drawn, aim); }
+        if (timedOutAt.has(again)) {
+          letGo(bot);
+          if (await relay(aim)) { const again2 = vetoed(); if (again2) return again2; noway = 0; continue; }
+          return searchedOutStop(drawn, aim);
+        }
         timedOutAt.add(again);
       }
       let out: GoOutcome = nowhere;
@@ -1366,6 +1574,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
             continue;
           }
         }
+        if (await relay(aim)) { const again2 = vetoed(); if (again2) return again2; noway = 0; continue; }
         return searchedOutStop(found, aim);
       }
       return await explain(finalGoal);
@@ -1381,8 +1590,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       timing.totalMs = Date.now() - startedAt;
       const p = bot.entity?.position;
       timing.metres = p && startPosition ? round1(Math.hypot(p.x - startPosition.x, p.y - startPosition.y, p.z - startPosition.z)) : 0;
+      timing.relays = relays; timing.walls = walls;
       goTimings.set(host, { ...timing });
-      blackBoxOf(host)?.note('go_time', { ...timing });
+      blackBoxOf(host)?.note('go_time', { ...timing, wallsSkipped });
     } catch { /* a measure is never the stop */ }
     bot.removeListener?.('physicsTick', onTick);
     // Put back by identity on the host; a wrapper another module put over ours meanwhile stays (it reaches ours, which then counts nothing).

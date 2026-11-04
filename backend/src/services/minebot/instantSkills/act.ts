@@ -253,7 +253,7 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       if (problem) return bad(`go: ${problem}`);
       const goals = (hand.goals ?? [hand.to]).map(spec => cellOf(ctx, hand, spec)!);
       return go(ctx, { goals, range: hand.range, canDig: hand.canDig, canPlace: hand.canPlace, maxDrop: hand.maxDrop, waterOk: hand.waterOk, seconds: hand.seconds,
-        maxDig: hand.maxDig, maxPlace: hand.maxPlace, sprint: hand.sprint });
+        maxDig: hand.maxDig, maxPlace: hand.maxPlace, sprint: hand.sprint ?? 'auto' });
     }
     case 'vertical': {
       // The direction, shape and height are the planner's; each level (dig, lay, walk) is the body's, with no route search (utils/primitives/vertical).

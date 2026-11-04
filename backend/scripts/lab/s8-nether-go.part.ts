@@ -18,7 +18,7 @@ async function s8Leg(name: string, goal: number[], limitMs: number, note: (text:
   const started = Date.now();
   const start = r1(s8Planar(goal));
   const leg = { name, startDistance: start, endDistance: start, seconds: 0, mps: 0, acts: 0, okActs: 0, stops: [] as string[], searchTimeouts: 0, hpLost: 0, lowestHp: 20,
-    digs: 0, places: 0, searchMs: 0, walkMs: 0, digMs: 0, placeMs: 0, climbMs: 0, mendMs: 0, sprintMs: 0, goMs: 0, reached: false, died: false };
+    digs: 0, places: 0, relays: 0, walls: 0, searchMs: 0, walkMs: 0, digMs: 0, placeMs: 0, climbMs: 0, mendMs: 0, sprintMs: 0, goMs: 0, reached: false, died: false };
   let sameStop = 0, lastStop = '';
   while (Date.now() - started < limitMs) {
     if (Number(actor.health) <= 0 || deaths !== deaths0 || disconnected) { leg.died = true; break; }
@@ -31,9 +31,9 @@ async function s8Leg(name: string, goal: number[], limitMs: number, note: (text:
     leg.acts++; if (run.ok) leg.okActs++;
     const timing = lastGoTiming(actor);
     if (timing) {
-      leg.digs += timing.digs; leg.places += timing.places; leg.searchMs += timing.searchMs; leg.walkMs += timing.walkMs; leg.digMs += timing.digMs; leg.placeMs += timing.placeMs;
+      leg.digs += timing.digs; leg.places += timing.places; leg.relays += timing.relays ?? 0; leg.walls += timing.walls ?? 0; leg.searchMs += timing.searchMs; leg.walkMs += timing.walkMs; leg.digMs += timing.digMs; leg.placeMs += timing.placeMs;
       leg.climbMs += timing.climbMs; leg.mendMs += timing.mendMs; leg.sprintMs += timing.sprintMs; leg.goMs += timing.totalMs;
-      note(`${name}#${leg.acts} go ${(timing.totalMs / 1000).toFixed(1)}s ${timing.metres}m search ${(timing.searchMs / 1000).toFixed(1)}s/${timing.searches} walk ${(timing.walkMs / 1000).toFixed(1)}s dig ${(timing.digMs / 1000).toFixed(1)}s/${timing.digs} place ${(timing.placeMs / 1000).toFixed(1)}s/${timing.places} sprint ${(timing.sprintMs / 1000).toFixed(1)}s`);
+      note(`${name}#${leg.acts} go ${(timing.totalMs / 1000).toFixed(1)}s ${timing.metres}m search ${(timing.searchMs / 1000).toFixed(1)}s/${timing.searches} walk ${(timing.walkMs / 1000).toFixed(1)}s dig ${(timing.digMs / 1000).toFixed(1)}s/${timing.digs} place ${(timing.placeMs / 1000).toFixed(1)}s/${timing.places} sprint ${(timing.sprintMs / 1000).toFixed(1)}s relays ${timing.relays ?? 0} walls ${timing.walls ?? 0}`);
     }
     leg.hpLost += Math.max(0, hp0 - Number(actor.health)); leg.lowestHp = Math.min(leg.lowestHp, Number(actor.health));
     if (!run.ok) {
