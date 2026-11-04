@@ -1,9 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { Vec3 } from 'vec3';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { bodyReader } from '../../src/services/minebot/utils/localMap.js';
-import { clutchWanted, groundUnder, runFallClutch, type FallBody, type FallMemory } from '../../src/services/minebot/utils/fallClutch.js';
+import { CLUTCH_REACH, clutchWanted, groundUnder, runFallClutch, type FallBody, type FallMemory } from '../../src/services/minebot/utils/fallClutch.js';
 import { actionSignal, createMotorPort, executeAction, preemptLowerPriorityActions } from '../../src/services/minebot/execution/ActionExecution.js';
 
 // Keep this test independent of the dragon's readers/providers; no live world or service.
@@ -16,15 +16,18 @@ const nextVy = (vy: number) => (vy - 0.08) * 0.98;
 const injectInventory = createRequire(import.meta.url)('mineflayer/lib/plugins/simple_inventory.js') as (bot: any) => void;
 
 /**
- * Tick model: velocity is blocks/tick, position += velocity, then gravity/drag.
- * A use is resolved with one movement's lead, as requested for the lab's packet ordering.
- * This is an explicit assumption, not a Minecraft server/latency test. The ray and 4.5m
- * reach are checked independently; an out-of-reach/misdirected use never creates water.
+ * Local simulate/apply has already set P(N) when physicsTick fires (physics.js:81-82).
+ * emit models physicsTick -> updatePosition/write position -> move, with no promise turn
+ * between them. The server ray uses ONLY the last position packet, P(N-1) during physicsTick,
+ * P(N) during move. This is an ordered packet model, not a server/latency test.
  */
-function rig(top: (x: number, z: number) => number = () => 65, name = 'end_stone', movementLead = 1) {
+function rig(top: (x: number, z: number) => number = () => 65, name = 'end_stone', waterDelayTicks = 1, rejectUse = false, positionPacket = 'position') {
   const water = new Map<string, Vec3>();
   const sends: Array<{ tick: number; eye: Vec3; source: Vec3 | null; reachable: boolean; pitch: number }> = [];
+  const wire: Array<{ tick: number; name: string; position: Vec3 }> = [];
+  const pending: Array<{ tick: number; source: Vec3 }> = [];
   let tick = 0;
+  let serverPosition = new Vec3(0.5, 100, 0.5);
   const bot = Object.assign(new EventEmitter(), {
     entity: { position: new Vec3(0.5, 100, 0.5), velocity: new Vec3(0, 0, 0), yaw: 0, pitch: 0, onGround: false, isInWater: false },
     game: { dimension: 'the_end' }, health: 20,
@@ -37,11 +40,12 @@ function rig(top: (x: number, z: number) => number = () => 65, name = 'end_stone
       const solid = c.y < top(c.x, c.z);
       return { name: wet ? 'water' : solid ? name : 'air', metadata: 0, boundingBox: solid ? 'block' : 'empty', shapes: solid ? cube : [] };
     },
-    _client: { write: (_name: string, data: { rotation?: { x: number; y: number } }) => {
+    _client: { write: (_name: string, data: { x?: number; y?: number; z?: number; rotation?: { x: number; y: number } }) => {
+      if (_name === 'position' || _name === 'position_look') serverPosition = new Vec3(data.x!, data.y!, data.z!);
+      wire.push({ tick, name: _name, position: serverPosition.clone() });
       if (_name !== 'use_item') return;
       if (bot.heldItem.name !== 'water_bucket') return; // scoop-back is covered by minecraftDragonFight; count pours only
-      const b = bot.entity, v = b.velocity;
-      const eye = b.position.offset(v.x * movementLead, nextVy(v.y) * movementLead + 1.62, v.z * movementLead);
+      const eye = serverPosition.offset(0, 1.62, 0);
       const yaw = Math.PI - (data.rotation?.x ?? 180) * Math.PI / 180;
       const pitch = -(data.rotation?.y ?? 0) * Math.PI / 180;
       const direction = new Vec3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
@@ -51,23 +55,59 @@ function rig(top: (x: number, z: number) => number = () => 65, name = 'end_stone
         if (block.boundingBox === 'block') { source = at.floored().offset(0, 1, 0); break; }
       }
       sends.push({ tick, eye, source, reachable: source !== null, pitch });
-      if (source && bot.heldItem.name === 'water_bucket') {
-        water.set(cellKey(source), source);
+      if (source && !rejectUse && bot.heldItem.name === 'water_bucket') {
         bot.heldItem = { ...bot.heldItem, name: 'bucket' };
+        if (waterDelayTicks === 0) observe(source);
+        else pending.push({ tick: tick + waterDelayTicks, source });
       }
     } },
     activateItem: () => bot._client.write('use_item', { rotation: { x: 180, y: 0 } }),
     deactivateItem: () => undefined,
   });
   const memory: FallMemory = {};
-  const emit = () => { tick++; bot.emit('physicsTick'); };
+  function observe(source: Vec3) {
+    const old = { ...bot.blockAt(source), position: source };
+    water.set(cellKey(source), source);
+    bot.emit('blockUpdate', old, { ...bot.blockAt(source), position: source });
+  }
+  const emit = () => {
+    tick++;
+    bot.emit('physicsTick');
+    for (const update of pending.filter(update => update.tick === tick)) observe(update.source);
+    const old = serverPosition.clone();
+    const p = bot.entity.position;
+    bot._client.write(positionPacket, { x: p.x, y: p.y, z: p.z });
+    bot.emit('move', old);
+  };
   const collisionTop = (p: Vec3) => {
     let highest = -Infinity;
     for (let x = Math.floor(p.x - 0.3 + 1e-6); x <= Math.floor(p.x + 0.3 - 1e-6); x++)
       for (let z = Math.floor(p.z - 0.3 + 1e-6); z <= Math.floor(p.z + 0.3 - 1e-6); z++) highest = Math.max(highest, top(x, z));
     return highest;
   };
-  return { bot, memory, sends, water, emit, collisionTop, get tick() { return tick; } };
+  return { bot, memory, sends, water, emit, collisionTop, wire, get tick() { return tick; } };
+}
+
+/** 843f814's physicsTick + predicted-eye decision, restricted to these flat, loaded full-cube fixtures.
+ * The forecast, eye and rotation formula are copied from the old targetForPour; only bucket preparation is omitted. */
+function legacyPhysicsPour(f: ReturnType<typeof rig>, floor: number) {
+  const listener = () => {
+    const b = f.bot.entity, v = b.velocity;
+    if (b.onGround || v.y > -0.75) return;
+    let feet = b.position.clone(), vy = v.y;
+    for (let tick = 0; tick < 8; tick++) {
+      vy = nextVy(vy); feet = feet.offset(v.x, vy, v.z);
+      if (feet.y > floor) continue;
+      const eye = b.position.offset(v.x, nextVy(v.y) + 1.62, v.z);
+      const aim = new Vec3(Math.floor(feet.x) + 0.5, floor, Math.floor(feet.z) + 0.5).minus(eye);
+      if (eye.y <= floor || aim.norm() > 4.4) return;
+      const yaw = Math.atan2(-aim.x, -aim.z), pitch = Math.atan2(aim.y, Math.hypot(aim.x, aim.z));
+      f.bot._client.write('use_item', { rotation: { x: (180 / Math.PI) * (Math.PI - yaw), y: -(180 / Math.PI) * pitch } });
+      f.bot.removeListener('physicsTick', listener);
+      return;
+    }
+  };
+  f.bot.on('physicsTick', listener);
 }
 
 function packedRig(full = false, clickMs = 40, floorTop = 65) {
@@ -104,7 +144,7 @@ function packedRig(full = false, clickMs = 40, floorTop = 65) {
     bot._client.write('window_click', { slot, mode: 0 } as never);
   }
   bot._client.write = ((name: string, data: any) => {
-    packets.push({ name, slot: data.slot ?? data.slotId, mode: data.mode });
+    if (['window_click', 'held_item_slot', 'use_item'].includes(name)) packets.push({ name, slot: data.slot ?? data.slotId, mode: data.mode });
     original(name, data);
     if (name === 'use_item') slots[36 + bot.quickBarSlot] = bot.heldItem;
   }) as typeof original;
@@ -115,6 +155,196 @@ function packedRig(full = false, clickMs = 40, floorTop = 65) {
 }
 
 afterEach(() => { vi.useRealTimers(); });
+
+describe('r224/r225 packet order and target water confirmation', () => {
+  const replays = [
+    { round: 224, oldTick: 2026, newTick: 2027, previousEyeHeight: 6.336308105325671, frames: [
+      [2025, -5.194960240307605, 69.71630810532567, 7.975961519272122, 0.12327883979143109, -1.6208084776877505, -0.17530631025644572],
+      [2026, -5.071681400516174, 68.09549962763792, 7.800655209015677, 0.12684056773525784, -1.6667923405743428, -0.18037119718291195],
+      [2027, -4.944840832780916, 66.42870728706357, 7.620284011832765, 0.13008174016414017, -1.711856527080276, -0.18498024428599624],
+      [2028, -4.814759092616776, 65, 7.435303767546769, 0.11837438354936757, -0.0784000015258789, -0.1683320223002566],
+    ] },
+    { round: 225, oldTick: 5882, newTick: 5883, previousEyeHeight: 8.598070386232152, frames: [
+      [5881, 1.6041737753252698, 71.97807038623215, -1.7623803404050153, 0.04765928366461286, -2.4503554728747945, -0.2703021641418133],
+      [5882, 1.6518330589898826, 69.52771491335736, -2.0326825045468286, 0.04779429835125807, -2.4797484116799993, -0.2710679071237672],
+      [5883, 1.6996273573411407, 67.04796650167737, -2.303750411670596, 0.04791716171610521, -2.508553492269726, -0.2717647332373453],
+      [5884, 1.7475445190572458, 65, -2.575515144907941, 0.04360461716165574, -0.0784000015258789, -0.24730590724598422],
+    ] },
+  ];
+
+  it.each(replays)('r$round: legacy sends from P(N-1) out of reach; move sends from the first in-reach P(N)', async replay => {
+    vi.useFakeTimers();
+    for (const legacy of [true, false]) {
+      const f = rig(), b = f.bot.entity;
+      b.position.y = replay.frames[0][2]; b.velocity.y = replay.frames[0][5];
+      let running: ReturnType<typeof runFallClutch> | undefined;
+      if (legacy) legacyPhysicsPour(f, 65);
+      else running = runFallClutch(f.bot, f.bot, f.memory);
+      for (const [index, [, x, y, z, vx, vy, vz]] of replay.frames.entries()) {
+        Object.assign(b, { position: new Vec3(x, y, z), velocity: new Vec3(vx, vy, vz), onGround: index === replay.frames.length - 1 });
+        f.emit();
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      await vi.advanceTimersByTimeAsync(3000);
+      const result = await running;
+      expect(f.sends).toHaveLength(1);
+      const send = f.sends[0], useIndex = f.wire.findIndex(p => p.name === 'use_item');
+      expect(replay.frames[send.tick - 1][0]).toBe(legacy ? replay.oldTick : replay.newTick);
+      expect(send.reachable).toBe(!legacy);
+      if (legacy) {
+        expect(send.eye.y - 65).toBeCloseTo(replay.previousEyeHeight, 10);
+        expect(f.wire[useIndex - 1].tick).toBe(send.tick - 1);
+        expect(f.wire[useIndex + 1]).toMatchObject({ name: 'position', tick: send.tick });
+        expect(f.water.size).toBe(0);
+      } else {
+        expect(send.eye.distanceTo(send.source!.offset(0.5, 0, 0.5))).toBeLessThanOrEqual(CLUTCH_REACH);
+        expect(f.wire[useIndex - 1]).toMatchObject({ name: 'position', tick: send.tick });
+        expect(f.water.size).toBe(1);
+        expect(f.memory.waterObserved).toHaveLength(1);
+        expect(result?.result).toContain('waterObserved=あり');
+      }
+    }
+  });
+
+  it.each([0, 1, 2])('retains the target blockUpdate at %s tick(s), independently of the bucket slot update', async delay => {
+    vi.useFakeTimers();
+    const f = rig(() => 65, 'end_stone', delay), b = f.bot.entity;
+    b.position.y = 67; b.velocity.y = -2.4;
+    const running = runFallClutch(f.bot, f.bot, f.memory);
+    f.emit();
+    expect(f.bot.heldItem.name).toBe('bucket'); // slot ACK alone is not water
+    if (delay > 0) {
+      expect(f.memory.waterObserved).toEqual([]);
+      f.bot.emit('blockUpdate', null, null);
+      f.bot.emit('blockUpdate', null, { name: 'water', position: new Vec3(1, 65, 0) });
+      f.bot.emit('blockUpdate', null, { name: 'air', position: new Vec3(0, 65, 0) });
+      expect(f.memory.waterObserved).toEqual([]);
+    }
+    for (let n = 0; n < delay; n++) f.emit();
+    expect(f.memory.pour).toMatchObject({ x: 0, y: 65, z: 0, ticks: delay, status: 'water_observed' });
+    expect(f.memory.waterObserved).toEqual([expect.objectContaining({ x: 0, y: 65, z: 0, ticks: delay })]);
+    b.position.y = 65; b.onGround = true;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect((await running).result).toContain(`waterObserved=あり（${delay}tick後）`);
+    for (const event of ['physicsTick', 'move', 'blockUpdate', 'end']) expect(f.bot.listenerCount(event)).toBe(0);
+  });
+
+  it.each(['position', 'position_look'])('writes use after %s and never from physicsTick alone', async packet => {
+    vi.useFakeTimers();
+    const f = rig(() => 65, 'end_stone', 1, false, packet), b = f.bot.entity;
+    b.position.y = 67; b.velocity.y = -2.4;
+    const running = runFallClutch(f.bot, f.bot, f.memory);
+    f.bot.emit('physicsTick');
+    expect(f.sends).toHaveLength(0);
+    f.emit();
+    expect(f.wire.map(p => p.name)).toEqual([packet, 'use_item']);
+    b.onGround = true; f.emit();
+    await vi.advanceTimersByTimeAsync(3000); await running;
+  });
+
+  it('accepts a target water update after the second tick position/move, before the next physicsTick', async () => {
+    vi.useFakeTimers();
+    const f = rig(() => 65, 'end_stone', 99), b = f.bot.entity;
+    b.position.y = 67; b.velocity.y = -2.4;
+    const running = runFallClutch(f.bot, f.bot, f.memory);
+    f.emit(); f.emit(); f.emit(); // pour, tick 1, tick 2; all in one JS turn
+    expect(f.memory.pour?.status).toBe('sent_unconfirmed');
+    const source = new Vec3(0, 65, 0);
+    f.water.set(cellKey(source), source);
+    f.bot.emit('blockUpdate', null, { name: 'water', position: source });
+    expect(f.memory.pour).toMatchObject({ ticks: 2, status: 'water_observed' });
+    b.position.y = 65; b.onGround = true;
+    await vi.advanceTimersByTimeAsync(3000); await running;
+  });
+
+  it.each(['two_ticks', 'stalled', 'end', 'abort'])('reports unconfirmed water and cleans up after %s', async stop => {
+    vi.useFakeTimers();
+    const f = rig(() => 65, 'end_stone', 1, true), b = f.bot.entity;
+    b.position.y = 67; b.velocity.y = -2.4;
+    const running = executeAction(f.bot as never, 'floor-clutch', 8000,
+      (() => runFallClutch(f.bot, createMotorPort(f.bot), f.memory)) as never,
+      { priority: 380, safetyLease: true, waitForQuiescence: false });
+    await vi.advanceTimersByTimeAsync(0);
+    f.emit();
+    if (stop === 'two_ticks') { f.emit(); f.emit(); f.emit(); } // next physicsTick closes the two completed tick intervals
+    if (stop === 'stalled') await vi.advanceTimersByTimeAsync(151);
+    if (stop === 'end') f.bot.emit('end');
+    if (stop === 'abort') preemptLowerPriorityActions(f.bot, 500, 'wall-escape');
+    // A late real update can exist without having been confirmed in the two-tick window.
+    f.bot.emit('blockUpdate', null, { name: 'water', position: new Vec3(0, 65, 0) });
+    b.onGround = true; b.position.y = 65;
+    await vi.advanceTimersByTimeAsync(3000);
+    const result = await running;
+    expect(result.success).toBe(false);
+    if (stop !== 'abort') expect(result.result).toContain('waterObserved=なし');
+    expect(f.memory.pour?.status).toBe('sent_unconfirmed');
+    expect(f.memory.waterObserved).toEqual([]);
+    for (const event of ['physicsTick', 'move', 'blockUpdate', 'end']) expect(f.bot.listenerCount(event)).toBe(0);
+  });
+
+  it('never pours on a grounded move even if the current eye is in reach', async () => {
+    vi.useFakeTimers();
+    const f = rig(); f.bot.entity.velocity.y = -3.9;
+    const running = runFallClutch(f.bot, f.bot, f.memory);
+    f.bot.entity.position.y = 65; f.bot.entity.onGround = true; f.emit();
+    expect(await running).toMatchObject({ success: false });
+    expect(f.sends).toHaveLength(0); expect(f.memory.pour).toBeUndefined();
+  });
+
+  it('sends nothing when a stronger owner takes the body between physicsTick and its position/move', async () => {
+    vi.useFakeTimers();
+    const f = rig(), b = f.bot.entity;
+    b.position.y = 67; b.velocity.y = -2.4;
+    const running = executeAction(f.bot as never, 'floor-clutch', 8000,
+      (() => runFallClutch(f.bot, createMotorPort(f.bot), f.memory)) as never,
+      { priority: 380, safetyLease: true, waitForQuiescence: false });
+    await vi.advanceTimersByTimeAsync(0);
+    f.bot.once('physicsTick', () => preemptLowerPriorityActions(f.bot, 500, 'wall-escape'));
+    f.emit();
+    expect(await running).toMatchObject({ success: false, failureType: 'interrupted' });
+    expect(f.sends).toHaveLength(0);
+    expect(f.memory.pour).toBeUndefined();
+    for (const event of ['physicsTick', 'move', 'blockUpdate', 'end']) expect(f.bot.listenerCount(event)).toBe(0);
+  });
+});
+
+describe('airborne reach window skipped by fast falls', () => {
+  it('quantifies uniform last-step phases for vy -2.0 .. -3.9 at 0.1 intervals (10000 phases each)', () => {
+    const samples = 10000, window = CLUTCH_REACH - 1.62;
+    const rows: Array<{ vy: number; misses: number; percent: number }> = [];
+    for (let tenth = 20; tenth <= 39; tenth++) {
+      const speed = tenth / 10;
+      let misses = 0;
+      for (let index = 0; index < samples; index++) {
+        // Constant speed over the final step, vertical aim at the cell centre, uniformly spaced midpoint phases.
+        const lastAirborneHeight = speed * (index + 0.5) / samples;
+        const inReach = [lastAirborneHeight + speed, lastAirborneHeight, 0].some(height => height > 0 && height + 1.62 <= CLUTCH_REACH);
+        if (!inReach) misses++;
+      }
+      const expected = Math.max(0, 1 - window / speed);
+      expect(Math.abs(misses / samples - expected)).toBeLessThanOrEqual(1 / samples);
+      rows.push({ vy: -speed, misses, percent: misses / samples * 100 });
+    }
+    console.info('fallClutch skipped-window simulation:', JSON.stringify(rows));
+  });
+
+  it.each([-2.0, -2.8, -3.0, -3.5, -3.9])('actual move hook at vy=%s sends only if an airborne in-reach sample exists', async vy => {
+    vi.useFakeTimers();
+    for (const clearance of [0.5, 2.5, 2.79, 3.2]) {
+      if (clearance >= -vy) continue;
+      const f = rig(), b = f.bot.entity;
+      b.position.y = 65 + clearance - vy; b.velocity.y = vy;
+      const running = runFallClutch(f.bot, f.bot, f.memory);
+      f.emit();
+      b.position.y = 65 + clearance; f.emit();
+      const canPour = clearance + 1.62 <= CLUTCH_REACH;
+      expect(f.sends).toHaveLength(canPour ? 1 : 0);
+      b.position.y = 65; b.onGround = true; f.emit();
+      await vi.advanceTimersByTimeAsync(3000); await running;
+      expect(f.water.size).toBe(canPour ? 1 : 0);
+    }
+  });
+});
 
 describe('pack bucket preparation and forecast start (r220)', () => {
   it.each([false, true])('equips a pack bucket through the motor and pours before landing; full hotbar=%s', async full => {
@@ -181,7 +411,7 @@ describe('pack bucket preparation and forecast start (r220)', () => {
     vi.useFakeTimers();
     const f = packedRig(), b = f.bot.entity;
     f.slots[40] = { name: 'water_bucket', slot: 40 };
-    b.position.y = 69; b.velocity.y = -2.4; f.memory.from = 168;
+    b.position.y = 67; b.velocity.y = -2.4; f.memory.from = 168;
     expect(clutchWanted(f.bot, f.memory, 1000)).not.toBeNull();
     const running = runFallClutch(f.bot, f.bot, f.memory);
     f.emit(); b.onGround = true; b.position.y = 65;
@@ -268,7 +498,7 @@ describe('pack bucket preparation and forecast start (r220)', () => {
     expect(8440 - 8411).toBe(29);
   });
 
-  it('equips early enough after r220 tick 8411 and pours at 8438 in the sampled landing window', async () => {
+  it('equips early enough after r220 tick 8411 and pours at 8439 after its position packet', async () => {
     vi.useFakeTimers();
     const f = packedRig(true, 40, 64), b = f.bot.entity;
     const frames = [
@@ -295,7 +525,7 @@ describe('pack bucket preparation and forecast start (r220)', () => {
       if (tick === 8414) expect(f.bot.heldItem.name).toBe('water_bucket');
     }
     await vi.advanceTimersByTimeAsync(4000); await running;
-    expect(sentTick).toBe(8438);
+    expect(sentTick).toBe(8439);
     expect(f.sends).toHaveLength(1);
     expect(f.sends[0]).toMatchObject({ reachable: true, source: { x: 9, y: 64, z: -7 } });
   });
@@ -335,7 +565,9 @@ describe('pack bucket preparation and forecast start (r220)', () => {
   });
 });
 
-describe('fall clutch at physics ticks (one movement lead model)', () => {
+describe('fall clutch after position packets (last received position model)', () => {
+  const matrix = { cases: 0, placed: 0, skippedWindow: 0, legacyUses: 0, legacyRejected: 0 };
+  afterAll(() => console.info('fallClutch height/velocity matrix:', JSON.stringify(matrix)));
   it('replays r214 fatal final ticks: centre top 64, collision top 65; the old 4.2 check has no airborne sample', async () => {
     vi.useFakeTimers();
     const f = rig((_x, z) => z >= 2 ? 65 : 64, 'bedrock');
@@ -360,17 +592,22 @@ describe('fall clutch at physics ticks (one movement lead model)', () => {
     expect(oldReach).toEqual([5.866809405237703, 4.502461394034029]);
     expect(oldReach.every(distance => distance > 4.2)).toBe(true);
     expect(f.sends).toHaveLength(1);
-    expect(f.sends[0]).toMatchObject({ tick: 1, reachable: true, source: { y: 65 } });
+    expect(f.sends[0]).toMatchObject({ tick: 2, reachable: true, source: { y: 65 } });
     expect(f.bot.listenerCount('physicsTick')).toBe(0);
   });
 
   const heights = [10, 15, 20, 30, 40, 50, 65, 80, 100, 110, 120, 150, 175, 200];
   for (const floor of [{ name: 'end_stone', top: 65 }, { name: 'bedrock', top: 68 }, { name: 'bedrock', top: -17 }]) {
-    it.each(heights)(`${floor.name} top ${floor.top}: %dm fall, upward 0/3/6m/s, three sub-block phases`, async height => {
+    it.each(heights)(`${floor.name} top ${floor.top}: %dm fall, six initial velocities and three sub-block phases`, async height => {
       vi.useFakeTimers();
-      for (const up of [0, 0.15, 0.3]) for (const fraction of [0, 0.25, 0.75]) {
+      for (const up of [0, 0.15, 0.3, -1, -2, -3.9]) for (const fraction of [0, 0.25, 0.75]) {
         const f = rig(() => floor.top, floor.name), b = f.bot.entity;
+        const old = rig(() => floor.top, floor.name);
+        legacyPhysicsPour(old, floor.top);
         b.position.y = floor.top + height + fraction; b.velocity.y = up;
+        f.memory.from = b.position.y;
+        // Both servers start knowing the configured P(0), including 10m falls with a fast initial descent.
+        for (const initial of [f, old]) initial.bot._client.write('position', { x: b.position.x, y: b.position.y, z: b.position.z });
         let running: Promise<unknown> | undefined, landingTick = -1, firstOpportunity = -1;
         for (let n = 0; n < 220 && !b.onGround; n++) {
           b.position = b.position.plus(b.velocity);
@@ -378,20 +615,35 @@ describe('fall clutch at physics ticks (one movement lead model)', () => {
           if (b.position.y <= floor.top) { b.position.y = floor.top; b.onGround = true; landingTick = f.tick + 1; }
           b.isInWater = f.water.has(cellKey(b.position));
           if (!running && clutchWanted(f.bot, f.memory, Date.now())) running = runFallClutch(f.bot, f.bot, f.memory);
-          const predictedEyeToFloor = b.position.y + nextVy(b.velocity.y) + 1.62 - floor.top;
-          if (running && firstOpportunity < 0 && !b.onGround && b.velocity.y <= -0.75 && predictedEyeToFloor <= 4.4) firstOpportunity = f.tick + 1;
+          const currentEyeToFloor = b.position.y + 1.62 - floor.top;
+          if (running && firstOpportunity < 0 && !b.onGround && b.velocity.y <= -0.75 && currentEyeToFloor <= CLUTCH_REACH) firstOpportunity = f.tick + 1;
+          Object.assign(old.bot.entity, { position: b.position.clone(), velocity: b.velocity.clone(), onGround: b.onGround });
+          old.emit();
           f.emit();
           await vi.advanceTimersByTimeAsync(50);
         }
         await vi.advanceTimersByTimeAsync(3000);
         await running;
         expect(running, `height=${height}+${fraction}, up=${up}`).toBeDefined();
-        expect(f.sends.length, `height=${height}+${fraction}, up=${up}`).toBe(1);
-        expect(f.sends[0].reachable).toBe(true);
-        expect(f.sends[0].tick).toBe(firstOpportunity);
-        expect(f.sends[0].tick).toBeLessThan(landingTick);
-        expect(f.water.has(`${0},${floor.top},${0}`)).toBe(true);
+        expect(f.sends.length, `height=${height}+${fraction}, up=${up}`).toBe(firstOpportunity < 0 ? 0 : 1);
+        if (firstOpportunity >= 0) {
+          expect(f.sends[0].reachable).toBe(true);
+          expect(f.sends[0].tick).toBe(firstOpportunity);
+          expect(f.sends[0].tick).toBeLessThan(landingTick);
+          const packet = f.wire.findIndex(p => p.name === 'use_item');
+          expect(f.wire[packet - 1]).toMatchObject({ name: 'position', tick: firstOpportunity });
+          expect(f.memory.pour?.status).toBe('water_observed');
+        }
+        expect(f.water.has(`${0},${floor.top},${0}`)).toBe(firstOpportunity >= 0);
+        expect(old.sends.every(send => !send.reachable)).toBe(true);
+        expect(old.water.size).toBe(0);
+        matrix.cases++;
+        if (firstOpportunity < 0) matrix.skippedWindow++; else matrix.placed++;
+        matrix.legacyUses += old.sends.length;
+        matrix.legacyRejected += old.sends.filter(send => !send.reachable).length;
         expect(f.bot.listenerCount('physicsTick')).toBe(0);
+        expect(f.bot.listenerCount('move')).toBe(0);
+        expect(f.bot.listenerCount('blockUpdate')).toBe(0);
       }
     });
   }
@@ -414,28 +666,29 @@ describe('fall clutch at physics ticks (one movement lead model)', () => {
     }
     await vi.advanceTimersByTimeAsync(3000); await running;
     expect(f.sends).toHaveLength(1);
-    expect(f.sends[0]).toMatchObject({ tick: 1, reachable: true, source: { x: -9, y: 65, z: 6 } });
+    expect(f.sends[0]).toMatchObject({ tick: 3, reachable: true, source: { x: -9, y: 65, z: 6 } });
     expect(f.sends[0].pitch).toBeGreaterThan(-Math.PI / 2); // diagonal aim across the cell edge
     expect(f.memory.scoop).toMatchObject({ x: -9, y: 65, z: 6 });
   });
 
-  it('aims at r212 raised bedrock top 68 and pours before the old tick 14136', async () => {
+  it('aims at r212 raised bedrock top 68 and waits until tick 14136 is sent', async () => {
     vi.useFakeTimers();
     const f = rig((x, z) => x === 0 && z === 0 ? 68 : 64, 'bedrock'), b = f.bot.entity;
     b.position = new Vec3(0.3445072988199184, 71.43550085849769, 0.9518799097836754);
     b.velocity = new Vec3(0.15232646703780214, -2.8293435153903577, -0.20614693381013469);
     const running = runFallClutch(f.bot, f.bot, f.memory);
-    f.emit(); // 14135: eye distance 5.0555; predicted 2.2043, vy <= -2
-    expect(f.sends).toHaveLength(1);
-    expect(f.sends[0]).toMatchObject({ reachable: true, source: { x: 0, y: 68, z: 0 } });
+    f.emit(); // 14135: current eye distance 5.0555, out of reach despite the prediction
+    expect(f.sends).toHaveLength(0);
     b.position = new Vec3(0.49683376585772054, 68.60615734310733, 0.7457329759735407);
     f.emit();
+    expect(f.sends).toHaveLength(1);
+    expect(f.sends[0]).toMatchObject({ tick: 2, reachable: true, source: { x: 0, y: 68, z: 0 } });
     b.onGround = true; b.position.y = 68;
     await vi.advanceTimersByTimeAsync(3000); await running;
     expect(f.sends).toHaveLength(1);
   });
 
-  it('acts inside a catch-up physics event, without waiting for promises or wall time; no duplicate use', async () => {
+  it('acts inside a catch-up move event, without waiting for promises or wall time; no duplicate use', async () => {
     vi.useFakeTimers();
     const f = rig(), b = f.bot.entity;
     b.position.y = 80; b.velocity.y = -2.2;
@@ -444,7 +697,7 @@ describe('fall clutch at physics ticks (one movement lead model)', () => {
     expect(f.sends).toHaveLength(0);
     for (const y of [77, 74, 71, 69, 67]) { b.position.y = y; f.emit(); }
     expect(f.sends).toHaveLength(1); // still the same JS turn: an await-per-tick loop would have missed it
-    expect(f.sends[0].tick).toBe(4);
+    expect(f.sends[0].tick).toBe(5);
     b.onGround = true; b.position.y = 65;
     await vi.advanceTimersByTimeAsync(3000); await running;
     expect(f.bot.listenerCount('physicsTick')).toBe(0);
@@ -479,7 +732,7 @@ describe('fall clutch at physics ticks (one movement lead model)', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(preemptLowerPriorityActions(f.bot, 380, 'floor-clutch')).toBe(true);
     expect(await fleeing).toMatchObject({ success: false, failureType: 'interrupted' });
-    b.position.y = 69; b.velocity.y = -2.4;
+    b.position.y = 67; b.velocity.y = -2.4;
     const running = executeAction(f.bot as never, 'floor-clutch', 8000,
       (() => runFallClutch(f.bot, createMotorPort(f.bot), f.memory)) as never,
       { priority: 380, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true });
@@ -491,15 +744,15 @@ describe('fall clutch at physics ticks (one movement lead model)', () => {
     await vi.advanceTimersByTimeAsync(3000); await running;
   });
 
-  it('does not claim a water landing when the server uses the current position instead of the assumed next one', async () => {
+  it('does not send from an out-of-reach current position even when the prediction is in reach', async () => {
     vi.useFakeTimers();
-    const f = rig(() => 65, 'end_stone', 0), b = f.bot.entity;
+    const f = rig(), b = f.bot.entity;
     b.position.y = 69; b.velocity.y = -2.4;
     const running = runFallClutch(f.bot, f.bot, f.memory);
     f.emit();
-    expect(f.sends).toHaveLength(1);
-    expect(f.sends[0].reachable).toBe(false); // current eye 5.62m, next eye 3.1896m
+    expect(f.sends).toHaveLength(0); // current eye 5.62m, next eye 3.1896m
     b.onGround = true; b.position.y = 65;
+    f.emit();
     await vi.advanceTimersByTimeAsync(3000);
     expect(await running).toMatchObject({ success: false });
     expect(f.water.size).toBe(0);
@@ -511,7 +764,7 @@ describe('fall clutch at physics ticks (one movement lead model)', () => {
     const f = rig(), b = f.bot.entity;
     const original = f.bot._client.write;
     f.bot.activateItem = () => { throw new Error('fixture packet failure'); };
-    b.position.y = 69; b.velocity.y = -2.4;
+    b.position.y = 67; b.velocity.y = -2.4;
     const running = runFallClutch(f.bot, f.bot, f.memory);
     const rejected = expect(running).rejects.toThrow('fixture packet failure');
     f.emit(); await rejected;
@@ -529,7 +782,7 @@ describe('fall clutch at physics ticks (one movement lead model)', () => {
     if (reason === 'end') f.bot.emit('end');
     if (reason === 'timeout') await vi.advanceTimersByTimeAsync(8100);
     if (reason === 'dead') { f.bot.health = 0; f.emit(); }
-    if (reason === 'changed_hand') { f.bot.heldItem = { name: 'diamond_sword', slot: 36 }; b.position.y = 69; f.emit(); }
+    if (reason === 'changed_hand') { f.bot.heldItem = { name: 'diamond_sword', slot: 36 }; b.position.y = 67; f.emit(); }
     expect(await running).toMatchObject({ success: false });
     b.position.y = 69; f.emit();
     expect(f.sends).toHaveLength(0);

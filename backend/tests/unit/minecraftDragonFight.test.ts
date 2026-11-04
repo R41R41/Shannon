@@ -658,6 +658,7 @@ describe('the water-bucket clutch of a fall in the End', () => {
       self.onGround = self.position.y <= 64;
       self.velocity = new Vec3(0, self.onGround ? 0 : -0.9, 0);
       bot.emit('physicsTick');
+      bot.emit('move', self.position.clone()); // mineflayer emits it after the position packet is written: the clutch pours from here
     }, 15);
     return { seen, hotbar, stop: () => clearInterval(timer) };
   }
@@ -698,7 +699,7 @@ describe('the water-bucket clutch of a fall in the End', () => {
     const { seen, stop } = withBucket(f);
     try {
       const result = await runFallClutch(f.bot, f.bot);
-      expect(result).toMatchObject({ success: true });
+      expect(result, JSON.stringify(result)).toMatchObject({ success: true });
       expect(result.result).toMatch(/落下を止めた.*汲み直した/u);
     } finally { stop(); }
     // the bucket came into the hand by its hotbar slot (one packet), not by the game's equip (clicks of the window over several ticks) ...
@@ -709,9 +710,9 @@ describe('the water-bucket clutch of a fall in the End', () => {
     expect(f.bot.heldItem.name).toBe('diamond_sword');
     expect(f.bot.look).toHaveBeenCalledWith(expect.any(Number), -Math.PI / 2, true);
     expect(seen.rotations[0]).toBeCloseTo(90, 3); // the packet carries the downward look, not the library's level one
-    const projectedReach = seen.pourY + 1.62 - 64 + (-0.9 - 0.08) * 0.98;
-    expect(projectedReach).toBeLessThanOrEqual(CLUTCH_REACH);
-    expect(projectedReach).toBeGreaterThan(CLUTCH_REACH - 0.95);
+    const currentReach = seen.pourY + 1.62 - 64; // the server judges the use at the position of the last packet, which is where the body is when move fires
+    expect(currentReach).toBeLessThanOrEqual(CLUTCH_REACH);
+    expect(currentReach).toBeGreaterThan(CLUTCH_REACH - 0.95);
     expect(seen.uses).toBe(2);
   });
   it('lets go of the body at once when a stronger reflex takes it, and sends nothing after (round 5 of the independent review: it waited on, holding the lease, and poured through the bare bot)', async () => {

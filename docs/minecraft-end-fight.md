@@ -1001,6 +1001,66 @@ knock recorderは今回変更しないので、既存の `bucket_not_in_hand_or_
 
 最終検証：Node v24.21.0、fallClutch 79件（新規22件、既存の378通りの落下モデルを維持）＋既存DragonFight 69件＝**148件成功・既存2件skip**。試験子プロセスにだけ既存の隔離フラグとオフライン用OpenAI／Mongoダミー値を渡し、共有設定は変更しない。通常のbackend TypeScript設定から今回変更した2 TS rootの構文／semantic／compiler options診断だけを収集して0件。依存先自身のsemantic診断と全backend型検査は対象外。指定3ファイルの `git diff --check` 成功。実ラボは未実施。
 
+### r224／r225：pour を position packet の後へ移す（頼み26、2026-11-04）
+
+**原因は送信順序と、use を1移動先で処理するという旧モデルの逆転だった。** インストール済み `node_modules/mineflayer/lib/plugins/physics.js` は81行でsimulate/applyしてローカルの体をP(N)へ進め、82行で `physicsTick`、86行で `updatePosition(now)` を呼ぶ。positionのみなら183行→108行の `write('position', lastSent)` →109行の `emit('move', oldPos)`、照準も変われば180行→133行の `write('position_look', lastSent)` →134行の `move` である。`updatePosition` は送信処理であり、ローカルの移動をphysicsTickの後に行う関数ではない。
+
+```text
+simulate/apply: ローカル P(N)
+  → physicsTick: ここで旧useを書くと、サーバーの最後の送信済み位置は P(N−1)
+  → updatePosition → write(position / position_look: P(N))
+  → move → 新use_item（同じ接続でpositionより後にwrite）
+```
+
+`lab-evidence/r224-report.json`／`r225-report.json` の `scenes.end_bed_kill.knocks[0]` を照合した。双方 `waterUses` は1件、`sent_unconfirmed`、`waterObserved:[]`、接地後に死亡。表の眼高は実接地面65からの垂直距離であり、横ずれ込みの射程距離の下限である。
+
+| 記録 | 旧use tick・ローカル足y | 直前の送信位置と眼高 | 新方式の最初の到達可能tick・足y・眼高 |
+| --- | --- | --- | --- |
+| r224 knock 0 | 2026・68.09550 | 2025・69.71631、眼6.33631m | 2027・66.42871、眼3.04871m（接地2028） |
+| r225 knock 0 | 5882・69.52771 | 5881・71.97807、眼8.59807m | 5883・67.04797、眼3.66797m（接地5884） |
+
+r225では旧use時点のローカル眼も6.14771mで、旧判定だけが1移動先の眼を射程内と見ていた。前tick位置の眼8.59807mからは4.5mのrayが床に届かない。r224も前tick眼6.33631mで同じ失敗を説明できる。packetのクライアント側順序はソースで確認済みで、旧判定の平面fixture用転記でも送信tickと射程外を再現した。**実サーバーの受信trace／拒否理由を直接取得したわけではない**ため、これを水が張られなかった有力な説明とし、実機での受理確認はS1へ残す。上の過去節にある「useを1移動先で処理する」成功モデルとphysicsTick pourの記述は当時の仮定であり、現在の方式は本節で置き換える。
+
+`fallClutch.ts` は同期callbackを `move` に移し、その時点の `bot.entity.position` ＋眼高（既定1.62）から、接地見込みのfull cube上面中心までの3D距離が **4.4m以下、かつonGround=false** の最初のmoveで送る。未来の眼位置で射程・yaw/pitchを計算しない。水平速度一定の最大8tick forecastは着地支持セルの選択だけに残す。未完了lookをawaitせず、useのrotationへ現在眼からの照準を入れる。physicsTickは準備／待機上限の計数に使い、そこからpourを送らない。catch-upで同じJS turnに複数tickが来ても同期で判断し、送信は1回。ActionExecutionの所有権確認と、強い反射に中断された後の無送信を保つ。
+
+送信前から `blockUpdate` を購読し、選んだセルの `newBlock.name==='water'` と座標一致だけで確認する。送信直後〜1／2tick目全体（2tick目のmove後の更新も含む）を監視し、次のphysicsTickで窓を閉じる。physicsが止まった場合は150msの中止timerで閉じる。終了・中断・送信例外でも購読を外し、確認用の追加useや自動再試行はしない。
+
+記録は `FallMemory.pour={x,y,z,at,ticks,status}`（statusは `sent_unconfirmed`／`water_observed`）、`FallMemory.waterObserved`（最新pourの一致更新だけ、最大1件）へ残す。pour.atは送信時刻、waterObserved内のatは観測時刻、ticksは送信後のphysicsTick数。結果の `result` にも `waterObserved=あり（Ntick後）`／`なし（Ntick監視、設置未確認）` を付ける。バケツのslot更新、隣セルの水、空気への更新、窓終了後の更新では確認扱いにしない。未確認の失敗を「水は残した」と断定しない。汲み直しメモが消えても観測記録は残る。既存knock recorderの `waterObserved` も同じ実blockUpdateを別途記録する経路（`endKnockRecord.ts:197–201`、体から水平2m以内）で、合成イベントや架空の成功記録は足さない。今回recorderは変更していない。
+
+#### 高速落下で送信できるtickが無い割合
+
+眼高1.62m・垂直照準・平らな床では、足の空中射程窓は `0 < clearance <= 4.4−1.62 = 2.78m`。最終1stepの速度を一定、最後の空中足高を `(0, |vy|]` 上で一様と仮定し、vy=−2.0〜−3.9を0.1刻み、各10000の等間隔中点位相（計200000）で模擬した。**実際の死亡率ではなく、射程内の空中サンプル自体が無い割合**である。式 `max(0, 1−2.78/|vy|)` と各条件0.01パーセントポイント以内で一致した。
+
+| vy（blocks/tick） | pour機会なし／10000位相 | 割合 |
+| --- | --- | --- |
+| −2.0〜−2.7（各速度） | 0 | 0.00% |
+| −2.8 | 71 | 0.71% |
+| −2.9 | 414 | 4.14% |
+| −3.0 | 733 | 7.33% |
+| −3.1 | 1032 | 10.32% |
+| −3.2 | 1312 | 13.12% |
+| −3.3 | 1576 | 15.76% |
+| −3.4 | 1824 | 18.24% |
+| −3.5 | 2057 | 20.57% |
+| −3.6 | 2278 | 22.78% |
+| −3.7 | 2486 | 24.86% |
+| −3.8 | 2684 | 26.84% |
+| −3.9 | 2872 | 28.72% |
+
+横ずれがdなら窓上端は `sqrt(4.4²−d²)−eyeHeight` に縮む。実際の重力／抗力、水平入力、段差、サーバー補正、poseによる眼高、水反映の遅延で割合は変わる。射程内で送れても、水が接地前に反映されて落下ダメージを止める保証にはならない。射程外の早撃ち、接地後のuse、移動packetの捏造で窓を補わない。
+
+#### 検証と残る仮定
+
+`minecraftFallClutch.test.ts` のrigは **simulate後のローカル位置→physicsTick→position書込み→move** を模擬し、サーバー役はuse受信時の最後のpositionだけで独立した4.5m raycastを行う。r224／r225の実測4frameでは、旧判定は2026／5882に送って水0、新しい実runは2027／5883の最初の到達可能moveで送って水1となる。server側の判定位置を未来へ動かす仮定は撤去した。
+
+高さ10／15／20／30／40／50／65／80／100／110／120／150／175／200m、初期vy=0／0.15／0.3／−1／−2／−3.9 blocks/tick、端数0／0.25／0.75、end_stone上面65／bedrock上面68／−17の **756条件** を、位置+=vy→重力0.08／抗力0.98で比較した。旧判定は756条件でuseを送り、全756件が最後の送信位置では射程外で水0。新runは684条件で最初の射程内moveに1回送信して水を確認、残る72条件では空中窓を飛び越すため送信0。72/756はこの離散fixture集合の件数で、上の一様位相モデルや実機の発生確率とは別である。r220再生も、持ち替え後のpourは8438から8439（接地8440の1tick前）へ修正された。
+
+0／1／2tickのtarget水更新、2tick目のposition/move後の更新、隣セル／空気／slotだけの変化の除外、監視期限・停止・切断・中断、physicsTickとmoveの間で所有権を取られる場合、接地時の無送信、position／position_look直後の順序、同一turnのcatch-up、既存のpack準備と中断防止も検査した。水が張られたという観測と、着水／救命の成功は別に扱う。
+
+最終検証：Node v24.21.0、`node ../node_modules/vitest/vitest.mjs run tests/unit/minecraftFallClutch.test.ts --maxWorkers=1 --minWorkers=1 --reporter=dot`（backend内）は **99件成功**。通常のbackend TypeScript設定で変更した2 TS rootだけの構文／semantic／compiler options診断0件。依存先自身／全backendの型検査は対象外。旧DragonFightのphysicsTickのみを発行するpour fixtureは今回は更新・実行していない。`git diff --check` 成功。実サーバーは順序通りに同じ接続のpacketを処理すること、useのrotationで照準すること、床が読み込まれたfull cubeであることを仮定する。実受信順序・水反映・落下被害の救命確認はS1のラボへ残す。
+
+変更は指定コピーの `fallClutch.ts`、`minecraftFallClutch.test.ts`、このfallClutch節だけ、HEAD `3cec3da` のまま未コミット。`FALL_CLUTCH_ENABLED=false` を維持し、`floorReflexes.ts` は読み取りのみ。座標／seedの実装への決め打ち、環境変数スイッチ、新しいhand、反射の緩和は追加しない。`.codex-material/` は参照・変更せず、根拠は `lab-evidence/` を読み取った。ラボ／VM／本体／DB／外部資料の更新は行わない。
+
 ## 頼み23：ベッドの柱を丸石、壁だけ黒曜石にする（2026-11-04）
 
 r216の `bed_halves_missing_or_wrong_facing` は、設置時の向き違いとは確認できない。座り8／bedTrials 2は足 `(-1,67,-5)` → 枕 `(-2,67,-5)` のwest、座り13／trial 3は足 `(4,66,2)` → 枕 `(5,66,2)` のeastで、どちらも計画と設置handの成功文が一致する。枕は50ms後に届き、両半分を確認した `placedTick` は5400／8251。その後、use直前の5411／8262に `observedHalves:null` となり、`useTick:null`／`useRequested:false` のまま拒否されている。失敗箇所は **設置の後、use送信前の足側state読取り** まで絞れる。
