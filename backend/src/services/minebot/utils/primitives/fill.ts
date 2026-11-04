@@ -15,14 +15,14 @@ export interface FillResult {
   skippedBy: { creature: number; reach: number; hazard: number; other: number };
   /** The place hand's own reasons for the cells it skipped, counted (what `other` was). */
   reasons?: Record<string, number>;
-  hpMin: number; hpEnd: number; elapsedMs: number; at: Cell; safe: boolean;
+  hpMin: number; hpEnd: number; elapsedMs: number; at: Cell; safe: boolean; seen: number;
 }
 export interface FillOutcome extends StepOutcome { fill: FillResult }
-export const FILL_DESCRIPTION = 'fill: block（持っているブロック）・groups（1〜12組、各 {stand:{x,y,z},at:[{x,y,z},…1〜8マス]}）・retreatHp(1〜19)・retreatTo({x,y,z}、必須の遮蔽の足)・seconds(5〜60、帰還込み)を全て指定。'
+export const FILL_DESCRIPTION = 'fill: block（持っているブロック）・groups（1〜12組、各 {stand:{x,y,z},at:[{x,y,z},…1〜8マス]}）・retreatHp(1〜19)・retreatTo({x,y,z}、必須の帰還先の足)・seconds(5〜60、帰還込み)を全て指定。'
   + '座標は絶対座標。probe kind=lane の standAt と group を元に、置くマスと順序は頭が選ぶ。体は順に歩き1マスずつ置き、置けない所を飛ばして最後に1周だけ再試行し、必ず指定先へ帰還を試みる。足場を妨げる火だけ最大2回消し、道に置かず、盾と飛来弾の反射はresidentに任せる。'
   + '開始時に帰還先の足場・全マス分の手持ち・体力を確認し、不足なら動かず置かずfailed。毎マスと移動中にHP下限・帰還予約時間・反射を確認する。'
-  + '行のfill: status(done/partial/retreated/failed/cut)、code(HP_FLOOR/TIME_LIMIT/NO_STAND/NO_BLOCKS/RETREAT_BLOCKED/REFLEX/DEAD/null)、placed(実際に置いた数)、remaining(未完の座標、最大40)、skippedBy(creature/reach/hazard/other、再試行を含む失敗回数)、hpMin/hpEnd、elapsedMs、at(終了位置)、safe。'
-  + 'doneは全マスが済み安全に帰還、partialは未完ありで帰還、retreatedはHP/時間で中止して帰還。safeは指定先へ到着し見える射手も炎も無い時だけtrue。safe:falseを成功と読まない。REFLEX/cutとDEADはact全体を止める。反射・死亡・外部取消で体の所有権を失った時は帰還を強行しない。';
+  + '行のfill: status(done/partial/retreated/failed/cut)、code(HP_FLOOR/TIME_LIMIT/NO_STAND/NO_BLOCKS/RETREAT_BLOCKED/REFLEX/DEAD/null)、placed(実際に置いた数)、remaining(未完の座標、最大40)、skippedBy(creature/reach/hazard/other、再試行を含む失敗回数)、hpMin/hpEnd、elapsedMs、at(終了位置)、safe、seen(終了位置で見える射手数)。'
+  + 'doneは全マスが済み安全に帰還、partialは未完ありで帰還、retreatedはHP/時間で中止して帰還。safeは指定先へ到着して立てており、燃焼も溶岩も無く、見える射手が無い時にtrue。見られていても体力がretreatHp以上ならsafe=trueとし、露出はseenに残す。safe:falseを成功と読まない。REFLEX/cutとDEADはact全体を止める。反射・死亡・外部取消で体の所有権を失った時は帰還を強行しない。';
 
 /** The same boundary check is used by act and by the head's proposed contract. */
 export function fillProblem(a: Record<string, any>): string | null {
@@ -31,7 +31,7 @@ export function fillProblem(a: Record<string, any>): string | null {
   const range = (n: any, min: number, max: number) => Number.isFinite(n) && n >= min && n <= max;
   if (typeof a.block !== 'string' || !/^[a-z][a-z0-9_]{0,39}$/u.test(a.block)) return 'block は持っているブロックの id';
   if (!range(a.seconds, 5, 60) || !range(a.retreatHp, 1, 19)) return 'seconds は5〜60、retreatHp は1〜19';
-  if (!pos(a.retreatTo)) return 'retreatTo は遮蔽の足の絶対座標 {x,y,z}（必須）';
+  if (!pos(a.retreatTo)) return 'retreatTo は帰還先の足の絶対座標 {x,y,z}（必須）';
   if (!Array.isArray(a.groups) || a.groups.length < 1 || a.groups.length > 12) return 'groups は1〜12組';
   for (const g of a.groups) {
     if (!object(g) || Object.keys(g).some(k => !['stand', 'at'].includes(k)) || !pos(g.stand)
@@ -47,7 +47,7 @@ const same = (a: Cell | null, b: Cell) => !!a && a.x === b.x && a.y === b.y && a
 const HAZARD = /^(fire|soul_fire|lava|magma_block|cactus|campfire|soul_campfire|wither_rose|sweet_berry_bush|powder_snow)$/u;
 const WORDS: Record<FillCode, string> = {
   HP_FLOOR: '体力の下限で設置をやめた', TIME_LIMIT: '帰還の時間を残して設置をやめた', NO_STAND: '帰還先または立ち位置に立てる足場がない',
-  NO_BLOCKS: '全マス分のブロックを持っていない', RETREAT_BLOCKED: '指定先への帰還と遮蔽を確認できない', REFLEX: '反射に体を譲った', DEAD: '体が死んだ',
+  NO_BLOCKS: '全マス分のブロックを持っていない', RETREAT_BLOCKED: '指定先への安全な帰還を確認できない', REFLEX: '反射に体を譲った', DEAD: '体が死んだ',
 };
 
 /** One ordered build, one retry pass, then the planner's shelter. No choice of cells, fight, shield takeover or automatic resumption. */
@@ -60,7 +60,7 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
   const cells = groups.flatMap(g => g.cells), skippedBy = { creature: 0, reach: 0, hazard: 0, other: 0 };
   const read = (x: number, y: number, z: number) => blockAt(bot, { x, y, z });
   const hp = () => Number(bot.health ?? 0);
-  let debug = '', hpMin = hp(), placed = 0, code: FillCode | null = null, cut = false, safe = false, preflight = true;
+  let debug = '', hpMin = hp(), placed = 0, code: FillCode | null = null, cut = false, safe = false, homeReached = false, preflight = true;
   const sample = () => { hpMin = Math.min(hpMin, hp()); };
   const returnBudget = (from: Cell = bot.entity?.position ?? ctx.base) => Math.hypot(from.x - home.x, from.y - home.y, from.z - home.z) * 1800 + 2000;
   const stopped = (work: boolean): boolean => {
@@ -131,14 +131,19 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
     else if (/hazard|fire|lava|magma|cactus/u.test(reason ?? '')) skippedBy.hazard++;
     else skippedBy.other++;
   };
+  const seenNow = () => {
+    const p = bot.entity?.position;
+    // Use loaded blocks directly, including partial shapes, as the cover check (no map-memory fallback).
+    return p ? shootersSeeing(bot, shootersInReach(bot, p), p, (x, y, z) => {
+      const b = blockAt(bot, { x, y, z });
+      return !b || b.boundingBox === 'block' || !!b.shapes?.length;
+    }).length : 0;
+  };
   const safeAtHome = () => {
     const p = bot.entity?.position;
     if (!p || !same(feetCell(bot), home) || !standableAt(read, home).ok || bot.entity.isInLava || (Number(bot.entity.metadata?.[0] ?? 0) & 1) !== 0) return false;
-    // Use loaded blocks directly, including partial shapes, as the cover check (no map-memory fallback).
-    return !shootersSeeing(bot, shootersInReach(bot, p), p, (x, y, z) => {
-      const b = blockAt(bot, { x, y, z });
-      return !b || b.boundingBox === 'block' || !!b.shapes?.length;
-    }).length;
+    homeReached = true;
+    return seenNow() === 0 || hp() >= args.retreatHp;
   };
   bot.on('health', sample);
   try {
@@ -198,16 +203,24 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
         let state = standableAt(read, home);
         if (state.why === 'fire_near') state = await clearFires(home, false);
         if (stopped(false)) return finish();
-        if (!state.ok) { noStand(home, '帰還先', state); return finish(); }
+        if (!state.ok) {
+          noStand(home, '帰還先', state);
+          if (state.why !== 'fire_near') code = 'RETREAT_BLOCKED';
+          return finish();
+        }
         const out = await move(home, false);
         if (out.ok && same(feetCell(bot), home) && !stopped(false)) {
           state = standableAt(read, home);
           if (state.why === 'fire_near') state = await clearFires(home, false);
-          if (!stopped(false) && !state.ok) { noStand(home, '帰還先', state); return finish(); }
+          if (!stopped(false) && !state.ok) {
+            noStand(home, '帰還先', state);
+            if (state.why !== 'fire_near') code = 'RETREAT_BLOCKED';
+            return finish();
+          }
         }
         if (!stopped(false)) {
           safe = out.ok && Date.now() <= until && safeAtHome();
-          if (!safe) code = 'RETREAT_BLOCKED';
+          if (!safe) code = homeReached && hp() < args.retreatHp ? 'HP_FLOOR' : 'RETREAT_BLOCKED';
         }
       } catch {
         if (!stopped(false)) code = 'RETREAT_BLOCKED';
@@ -221,10 +234,10 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
     const remaining = cells.filter(c => !c.done).map(c => ({ ...c.at })), at = { ...(bot.entity?.position ?? ctx.base) };
     // Copy only xyz even when the native position has more enumerable fields.
     const position: Cell = { x: at.x, y: at.y, z: at.z };
-    if (!preflight && !safe && !cut && code !== 'DEAD' && code !== 'NO_STAND') code = 'RETREAT_BLOCKED';
+    if (!preflight && !safe && !cut && code !== 'DEAD' && code !== 'NO_STAND' && !(homeReached && code === 'HP_FLOOR')) code = 'RETREAT_BLOCKED';
     const status: FillResult['status'] = code === 'DEAD' ? 'failed' : cut ? 'cut' : preflight || !safe || code === 'RETREAT_BLOCKED' ? 'failed'
       : code === 'HP_FLOOR' || code === 'TIME_LIMIT' ? 'retreated' : remaining.length ? 'partial' : 'done';
-    const result: FillResult = { status, code, placed, remaining: remaining.slice(0, 40), skippedBy, reasons, hpMin, hpEnd: hp(), elapsedMs: Date.now() - started, at: position, safe };
+    const result: FillResult = { status, code, placed, remaining: remaining.slice(0, 40), skippedBy, reasons, hpMin, hpEnd: hp(), elapsedMs: Date.now() - started, at: position, safe, seen: seenNow() };
     const ok = status === 'done' && safe;
     return { ok, ...(code ? { code, reason: code === 'REFLEX' ? 'reflex' : code === 'DEAD' ? 'died' : code } : !ok ? { reason: 'partial' } : {}),
       text: `まとめ置き ${code ?? status}: ${code ? WORDS[code] : status === 'done' ? '指定のマスを済ませ指定先へ戻った' : '未完のマスを残して指定先へ戻った'}${debug}。設置${placed}・未完${remaining.length}・最低体力${hpMin}・安全${safe ? '確認' : '未確認'}`,

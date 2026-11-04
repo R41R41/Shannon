@@ -125,6 +125,12 @@ export function strikeHold(bot: BlazeBody, watch: ShooterWatch, now = Date.now()
   return null;
 }
 
+/** Why a blow is held back while any blaze that sees the body has its flame on (it is charging: its shots come within three seconds), or null: the shield is the only thing that is up then. */
+export function chargeHold(watch: ShooterWatch, now = Date.now()): string | null {
+  const charging = watch.charged(now)[0];
+  return charging ? `blaze #${charging.entity.id} が ${(charging.ms / 1000).toFixed(1)} 秒溜めている（盾だけ構える）` : null;
+}
+
 /**
  * Holds a blow back while `strikeHold` says why, but only for GATE_PATIENCE_MS in all within each GATE_WINDOW_MS: a blaze that stays charged (or fireballs that never stop) would
  * otherwise defer every blow by the whole patience. Once the window's patience is used the blows go, until the window is over.

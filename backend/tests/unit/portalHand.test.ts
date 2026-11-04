@@ -143,6 +143,23 @@ describe('portal: what it refuses', () => {
     expect(outcome.reason).toBe('no_obsidian');
     expect(outcome.text).toContain('7 個しか持っていない（枠に足りないのは 8 個');
   });
+  it('does not take crying obsidian for a frame: not as the block, not in the count of what is held, not as a frame cell already there', async () => {
+    // Vanilla lights a portal only in obsidian: a frame of crying obsidian takes no fire.
+    const cried = makeHandsSim(flat, { items: stacks({ name: 'crying_obsidian', count: 10 }, FLINT, COBBLE()) });
+    const asBlock = await drive(cried, run(cried, { block: 'crying_obsidian' }));
+    expect(asBlock.ok).toBe(false);
+    expect(asBlock.reason).toBe('invalid_input');
+    expect(cried.bot.placedBlocks).toEqual([]);
+    const mixed = makeHandsSim(flat, { items: stacks(OBSIDIAN(9), { name: 'crying_obsidian', count: 5 }, FLINT, COBBLE()) });
+    const short = await drive(mixed, run(mixed, {}));
+    expect(short.reason).toBe('no_obsidian');
+    expect(short.text).toContain('obsidian を 9 個しか持っていない');
+    const standing: Layer = (x, y, z) => (z === 10 && y === 64 && x === 10 ? 'crying_obsidian' : undefined);
+    const inFrame = makeHandsSim(over(flat, standing), { items: stacks(OBSIDIAN(), FLINT, COBBLE()) });
+    const blocked = await drive(inFrame, run(inFrame, {}));
+    expect(blocked.reason).toBe('blocked');
+    expect(blocked.text).toContain('crying_obsidian');
+  });
   it('says no_flint before it lays a block', async () => {
     const sim = makeHandsSim(flat, { items: stacks(OBSIDIAN(), COBBLE()) });
     const outcome = await drive(sim, run(sim, {}));

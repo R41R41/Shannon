@@ -146,17 +146,32 @@ describe('the observation says what an unmet need wants nearby (the owner: run 1
     expect(needs.find(need => need.need === 'wood')).toMatchObject({ need: 'wood' });
     expect(needs.some(need => need.name === 'cow')).toBe(false);
   });
-  it('says nothing of a need already met: a bed, six cooked, iron armour and ingots for the rest, planks, coal', () => {
+  it('says nothing of a need already met: ten beds, six cooked, iron armour and ingots for the rest, planks, coal', () => {
     scanned.hits = [{ name: 'iron_ore', position: new Vec3(3, 60, 3), distance: 5.8 }, { name: 'coal_ore', position: new Vec3(2, 62, 2), distance: 3 }];
     // Still to make (run 19's count): two pickaxes 6, the helmet 5, the boots 4 = 15; a bucket is had. 15 ingots cover it.
-    const met = body([{ name: 'white_bed', count: 1 }, { name: 'cooked_beef', count: 6 }, { name: 'iron_chestplate', count: 1 },
+    const met = body([{ name: 'white_bed', count: 10 }, { name: 'cooked_beef', count: 6 }, { name: 'iron_chestplate', count: 1 },
       { name: 'iron_leggings', count: 1 }, { name: 'bucket', count: 1 }, { name: 'iron_ingot', count: 15 }, { name: 'oak_planks', count: 12 },
       { name: 'coal', count: 8 }]);
     expect(nearbyNeeds(met, 1_000)).toEqual([]);
   });
+  it('a bed carried still leaves the sheep as a need until the wool makes ten beds, a colour with wool over first, shears named', () => {
+    scanned.hits = [];
+    const fed = [{ name: 'cooked_beef', count: 6 }, { name: 'oak_planks', count: 12 }, { name: 'coal', count: 8 }, { name: 'iron_chestplate', count: 1 },
+      { name: 'iron_leggings', count: 1 }, { name: 'bucket', count: 1 }, { name: 'iron_ingot', count: 15 }];
+    const sheep = (items: any[]) => nearbyNeeds(body([...fed, ...items]), 1_000).filter(need => need.need === 'bed_wool');
+    // One bed: still wanted, any colour (no wool over).
+    expect(sheep([{ name: 'white_bed', count: 1 }]).map(need => need.color)).toEqual(['white', 'brown']);
+    // Two white wool over: the white sheep only.
+    expect(sheep([{ name: 'white_bed', count: 1 }, { name: 'white_wool', count: 2 }]).map(need => need.color)).toEqual(['white']);
+    // Seven beds and nine wool of three colours makes ten: nothing more wanted.
+    expect(sheep([{ name: 'white_bed', count: 7 }, { name: 'white_wool', count: 3 }, { name: 'red_wool', count: 3 }, { name: 'blue_wool', count: 3 }])).toEqual([]);
+    // Shears carried are said on the need; none carried, not.
+    expect(sheep([{ name: 'white_bed', count: 1 }, { name: 'shears', count: 1 }])[0]).toMatchObject({ tool: 'shears' });
+    expect(sheep([{ name: 'white_bed', count: 1 }])[0]).not.toHaveProperty('tool');
+  });
   it('an ore mine-block failed to reach is said, and why', () => {
     scanned.hits = [{ name: 'iron_ore', position: new Vec3(58, 57, 16), distance: 6 }];
-    const bot = body([{ name: 'white_bed', count: 1 }, { name: 'cooked_beef', count: 6 }, { name: 'oak_planks', count: 12 }]);
+    const bot = body([{ name: 'white_bed', count: 10 }, { name: 'cooked_beef', count: 6 }, { name: 'oak_planks', count: 12 }]);
     noteUnreachable(bot, { x: 58, y: 57, z: 16 });
     expect(nearbyNeeds(bot, Date.now())).toEqual([expect.objectContaining({ need: 'iron', canReach: false, why: 'failed_recently' })]);
   });
@@ -173,7 +188,7 @@ describe('the observation says what an unmet need wants nearby (the owner: run 1
 
   it('is read again only every few seconds, or when the body has moved', () => {
     scanned.hits = [];
-    const bot = body([{ name: 'white_bed', count: 1 }, { name: 'cooked_beef', count: 6 }, { name: 'oak_planks', count: 12 }]);
+    const bot = body([{ name: 'white_bed', count: 10 }, { name: 'cooked_beef', count: 6 }, { name: 'oak_planks', count: 12 }]);
     expect(nearbyNeeds(bot, 1_000)).toEqual([]);
     scanned.hits = [{ name: 'iron_ore', position: new Vec3(3, 60, 3), distance: 5.8 }];
     expect(nearbyNeeds(bot, 2_000)).toEqual([]);

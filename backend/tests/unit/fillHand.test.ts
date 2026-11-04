@@ -361,15 +361,49 @@ describe('fill ordered work and retreat', () => {
     expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'cut', code: 'REFLEX', placed: 1, safe: false });
     expect(go).toHaveBeenCalledTimes(1); expect(place).toHaveBeenCalledTimes(1); expect(f.bot.clearControlStates).not.toHaveBeenCalled();
   });
-  it.each(['blocked', 'wrong_cell', 'burning', 'visible_shooter'])('fails if the return is %s', async why => {
+  it.each([20, 10])('accepts an exposed home at HP %s, recording the visible blaze and allowing the next fill', async health => {
     const f = field();
+    vi.mocked(go).mockImplementation(async (c, a) => {
+      const r = await f.walk(c, a);
+      if (key(a.goals[0]) === key(f.args.retreatTo)) {
+        f.bot.health = health;
+        f.bot.entities[41] = { id: 41, name: 'blaze', position: new Vec3(4.5, 64, 0.5), width: 0.6, height: 1.8, type: 'hostile' };
+      }
+      return r;
+    });
+    const r = await fill(f.ctx, f.args);
+    expect(r.ok).toBe(true); expect(r.fill).toMatchObject({ status: 'done', code: null, placed: 2, safe: true, seen: 1 });
+    // The work HP floor remains inclusive; recover above it before starting another build.
+    f.bot.health = 20;
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'done', code: null, safe: true, seen: 1 });
+  });
+  it('keeps HP_FLOOR when a visible blaze remains at home below the HP threshold', async () => {
+    const f = field();
+    f.bot.entities[41] = { id: 41, name: 'blaze', position: new Vec3(4.5, 64, 0.5), width: 0.6, height: 1.8, type: 'hostile' };
+    vi.mocked(place).mockImplementationOnce(async (c, a) => { const r = await f.lay(c, a); f.bot.health = 9; f.bot.emit('health'); return r; });
+    const r = await fill(f.ctx, f.args);
+    expect(r.ok).toBe(false);
+    expect(r.fill).toMatchObject({ code: 'HP_FLOOR', placed: 1, safe: false, seen: 1, at: { x: 0.5, y: 64, z: 0.5 } });
+    expect(place).toHaveBeenCalledTimes(1);
+  });
+  it('still treats a covered home as safe below the HP threshold', async () => {
+    const f = field(); f.blocks.set('2,65,0', 'stone');
+    f.bot.entities[41] = { id: 41, name: 'blaze', position: new Vec3(4.5, 64, 0.5), width: 0.6, height: 1.8, type: 'hostile' };
+    vi.mocked(place).mockImplementationOnce(async (c, a) => { const r = await f.lay(c, a); f.bot.health = 9; f.bot.emit('health'); return r; });
+    expect((await fill(f.ctx, f.args)).fill).toMatchObject({ status: 'retreated', code: 'HP_FLOOR', placed: 1, safe: true, seen: 0 });
+    expect(place).toHaveBeenCalledTimes(1);
+  });
+  it.each(['blocked', 'wrong_cell', 'burning', 'lava', 'lost_floor'])('fails if the return is %s even at full HP with a visible blaze', async why => {
+    const f = field();
+    f.bot.entities[41] = { id: 41, name: 'blaze', position: new Vec3(4.5, 64, 0.5), width: 0.6, height: 1.8, type: 'hostile' };
     vi.mocked(go).mockImplementation(async (c, a) => {
       if (key(a.goals[0]) !== key(f.args.retreatTo)) return f.walk(c, a);
       if (why === 'blocked') return { ok: false, reason: 'dead_end', text: '通れない' };
       if (why === 'wrong_cell') return { ok: true, text: '着いたと言うが位置が違う' };
       const r = await f.walk(c, a);
       if (why === 'burning') f.bot.entity.metadata[0] = 1;
-      if (why === 'visible_shooter') f.bot.entities[41] = { id: 41, name: 'blaze', position: new Vec3(4.5, 64, 0.5), width: 0.6, height: 1.8, type: 'hostile' };
+      if (why === 'lava') f.bot.entity.isInLava = true;
+      if (why === 'lost_floor') f.blocks.set('0,63,0', 'air');
       return r;
     });
     const r = await fill(f.ctx, f.args);

@@ -308,6 +308,19 @@ describe('laneReport: read-only lane geometry and counts', () => {
     for (const p of target) expect(p.standAt === null ? p.noStand === 'hazard' || p.noStand === 'out_of_reach' : p.standAt.x <= 0).toBe(true);
   });
 
+  it('keeps a wide room within the 16,000 characters the receipt keeps: the build rows of the plans after the first are left out', () => {
+    // an open floor: nine by nine columns of lid cells in every direction (about seventy placements a plan)
+    const report = laneReport(flat(), SPAWNER, EAST_FROM);
+    expect(report.candidates.length).toBe(4);
+    expect(report.candidates.every(c => c.build.length > 50)).toBe(true);
+    const wire = laneProbeFields(report) as any;
+    expect(JSON.stringify(wire).length).toBeLessThanOrEqual(16_000);
+    expect(wire.candidates[0].build.length).toBe(report.candidates[0].build.length);
+    expect(wire.candidates[1]).toMatchObject({ build: [], buildOmitted: report.candidates[1].build.length });
+    // every row of the first plan still points at cells that exist
+    for (const row of wire.candidates[0].build) expect(wire.cells[wire.facts[row[0]][0]]).toBeTruthy();
+  });
+
   it('does not let stone two cells down cancel lava one cell down beside the footing', () => {
     // the bridge of the previous test, with lava at y 19 and stone at y 18 on both sides of it
     const bridge: CampReader = (x, y, z) => {
@@ -388,11 +401,14 @@ describe('laneReport: read-only lane geometry and counts', () => {
     }
   });
 
-  it('retains all four build orders and the appended columns, including large coordinates', () => {
+  it('retains the best build order in full, the others in full or told as left out, and the appended columns, including large coordinates', () => {
     const r = laneReport((x, y, z) => key({ x, y, z }) === key(SPAWNER) ? { name: 'spawner', solid: true } : { name: 'air', solid: false }, SPAWNER, FROM);
     const wire = laneProbeFields(r);
     const roundTrip = JSON.parse(JSON.stringify({ v: 1, kind: 'lane', found: true, ...wire }));
-    expect(roundTrip.candidates.map((c: { build: unknown[][] }) => c.build.length)).toEqual(r.candidates.map(c => c.build.length));
+    // (a wire past the receipt's 16,000 characters leaves the build rows of the plans after the first out, and says how many: buildOmitted)
+    expect(roundTrip.candidates.map((c: { build: unknown[][]; buildOmitted?: number }) => c.build.length + (c.buildOmitted ?? 0))).toEqual(r.candidates.map(c => c.build.length));
+    expect(roundTrip.candidates[0].build.length).toBe(r.candidates[0].build.length);
+    expect(JSON.stringify(roundTrip).length).toBeLessThanOrEqual(16_000);
     for (const [i, c] of wire.candidates.entries()) for (const [j, row] of c.build.entries()) {
       const fact = wire.facts[row[0] as number];
       const p = wire.cells[fact[0]];
@@ -407,9 +423,8 @@ describe('laneReport: read-only lane geometry and counts', () => {
     const shifted = { x: -12_345_678, y: 100, z: 12_345_678 };
     const distant = laneReport((x, y, z) => key({ x, y, z }) === key(shifted) ? { name: 'spawner', solid: true } : { name: 'air', solid: false }, shifted, shifted);
     const decoded = JSON.parse(JSON.stringify(laneProbeFields(distant)));
-    expect(decoded.candidates.map((c: { build: unknown[][] }) => c.build.length)).toEqual(distant.candidates.map(c => c.build.length));
-    // The receiver's 16k truncation lives outside this read-only change. Preserve all columns and all plans;
-    // do not make an oversized receipt pass by silently dropping footings, directions or null cells.
+    expect(decoded.candidates.map((c: { build: unknown[][]; buildOmitted?: number }) => c.build.length + (c.buildOmitted ?? 0))).toEqual(distant.candidates.map(c => c.build.length));
+    // All columns of the rows that are kept; the plans left out are told, never silently dropped.
     expect(decoded.candidates.every((c: { build: unknown[][] }) => c.build.every(row => row.length === 7))).toBe(true);
     expect(distant.candidates.map(c => c.required)).toEqual(r.candidates.map(c => c.required));
   });
