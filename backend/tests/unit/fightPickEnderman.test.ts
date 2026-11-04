@@ -66,4 +66,13 @@ describe('fight picks the enderman of a roof hunt', () => {
     expect(words).not.toContain('#11');
     expect(endermenFarther(body({}, [enderman(11, 20.5)]))).toBe('');
   });
+
+  it('under a roof already laid, takes one whose eyes only the cap hides (the camp steps to the edge for it), and does not call that none in sight', () => {
+    const cap: Record<string, string> = {};
+    for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) cap[x + ',66,' + z] = 'cobblestone';
+    const high = { ...enderman(12, 12.5), position: new Vec3(12.5, 68, 0.5) };
+    const bot = body(cap, [high]);
+    expect(pickEnderman(bot)?.id).toBe(12);
+    expect(endermenWithoutSight(bot)).toBeNull();
+  });
 });

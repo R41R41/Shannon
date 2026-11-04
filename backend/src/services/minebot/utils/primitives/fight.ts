@@ -127,12 +127,22 @@ export function endermenWithoutSight(bot: any): string | null {
     .sort((a, b) => a.position.distanceTo(at) - b.position.distanceTo(at));
   if (!near.length) return null;
   // One in sight at any distance (a near one too, under the hunts' 8 m band) is the caller's to pick.
-  const read = bodyReader(bot);
-  if (near.some(entity => { try { return endermanLine(read, at, entity.position, ENDERMAN_EYE).clear; } catch { return true; } })) return null;
+  const read = bodyReader(bot), roof = roofOver(bot, read);
+  const capOnly = (between: Array<{ at: { x: number; y: number; z: number } }>) => !!roof && between.every(b => b.at.y === roof.y + 2 && Math.abs(b.at.x - roof.x) <= 1 && Math.abs(b.at.z - roof.z) <= 1);
+  if (near.some(entity => { try { const line = endermanLine(read, at, entity.position, ENDERMAN_EYE); return line.clear || capOnly(line.between); } catch { return true; } })) return null;
+  try { if (roof && huntCandidates(read, at, near, roof).length) return null; } catch { return null; }
   const first = near[0];
   let hide = '';
   try { const line = endermanLine(bodyReader(bot), at, first.position, ENDERMAN_EYE); const b = line.between[0]; if (b) hide = `、間に (${b.at.x},${b.at.y},${b.at.z}) ${b.name}`; } catch { hide = ''; }
   return `${ENDERMAN_PICK_RANGE}m 内のエンダーマン ${near.length} 体はどれも目が見えない（最寄り #${first.id} ${first.position.distanceTo(at).toFixed(1)}m${hide}）`;
+}
+/** The feet cell when the nine cells over the 3x3 round it at feet+2 are all solid (a roof the camp laid, or one like it), else null. */
+function roofOver(bot: any, read: ReturnType<typeof bodyReader>): { x: number; y: number; z: number } | null {
+  const p = bot.entity?.position;
+  if (!p) return null;
+  const f = { x: Math.floor(p.x), y: Math.floor(p.y + 0.001), z: Math.floor(p.z) };
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) if (read(f.x + dx, f.y + 2, f.z + dz)?.solid !== true) return null;
+  return f;
 }
 /** The nearest endermen beyond ENDERMAN_PICK_RANGE the body is told of (up to three): id, distance, cell and the way from here. Empty when none. */
 export function endermenFarther(bot: any): string {
@@ -161,7 +171,8 @@ export function pickEnderman(bot: any): any {
   const angry = near.find(entity => { try { return endermanAngry(bot.registry, entity); } catch { return false; } });
   if (angry) return angry;
   let band: Array<{ id: number }> = [];
-  try { band = huntCandidates(bodyReader(bot), at, near, null); } catch { band = []; }
+  // Under a roof already laid (the cap over the 3x3 at feet+2), one whose eyes only the cap hides is seen from the roof's edge step: the camp's exit takes it.
+  try { const read = bodyReader(bot); band = huntCandidates(read, at, near, roofOver(bot, read)); } catch { band = []; }
   return band.length ? bot.entities?.[band[0].id] ?? null : null;
 }
 
