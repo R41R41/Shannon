@@ -53,7 +53,9 @@ describe('damage with no attacker is described by what the body can tell is hurt
     expect(message).not.toContain('チャット');
     const unknown = CombatEventHandler.buildEmergencyMessage({ eventType: 'damage', timestamp: 0, damage: 4, damagePercent: 20, currentHealth: 9,
       consecutiveCount: 1 } as any)!;
-    expect(unknown).toContain('身体からは分かりません');
+    // run62 #12: never "unknown": a closed cause is always named (environment when the state shows nothing).
+    expect(unknown).toContain('原因: environment');
+    expect(unknown).toContain('一度きりのこともある');
   });
 });
 

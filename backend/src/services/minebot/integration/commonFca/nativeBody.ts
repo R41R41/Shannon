@@ -50,6 +50,7 @@ import { feetCell } from '../../utils/localMap.js';
 import { installPackTap, setReflexEventPrefix } from '../../utils/packEvents.js';
 import { utilitiesOf } from '../../utils/utilitiesScan.js';
 import { installHitRecord, recentHitsOf } from '../../utils/hitRecord.js';
+import { harmCause } from '../../utils/harm.js';
 import { endObservation } from '../../utils/dragonState.js';
 
 /** The body process's start-up id: a new one at each start. A command made for another start is not run (continue contracts, 2). */
@@ -306,6 +307,9 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       // r10: the reflex that holds the body now (`floor-flee`, `floor-last-stand`, `floor-cover` ...), also in the gap between two of its hands, or
       // null. An act that comes now waits for it (see `afterReflex`); the head need not send one until this is null.
       reflexHeld: reflexHeld(this.bot),
+      // run62 #12: what is wearing the body down now, read from its own state (`hot_floor@x,y,z`, `lava`, `in_fire`, `on_fire`, `wither`,
+      // `poison`, `starve`, `drown`, `suffocation`), or null when nothing is. Never 'unknown'.
+      hurtBy: (() => { try { const cause = harmCause(this.bot as any); return cause === 'environment' ? null : cause; } catch { return null; } })(),
       // What the floor's budget is holding back right now (arrow, eat, armor, budget), or null: why no reflex came.
       floorSilenced: floorSilenced(this.bot),
       // Who holds the body in a fight: `head` (the planner's fight skill runs, or began within 20 s with its target near: the floor does

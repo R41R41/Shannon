@@ -1,3 +1,4 @@
+import { harmCause } from './harm.js';
 import { lifeOf } from './life.js';
 
 /**
@@ -35,7 +36,11 @@ export class HitRecord {
     const id = cause > 0 ? cause - 1 : direct > 0 ? direct - 1 : null;
     const t = this.now();
     const entity = id === null ? undefined : this.bot.entities?.[id];
-    const hit: RecentHit = { at: new Date(t).toISOString(), attackerId: id, attackerType: String(entity?.name ?? entity?.type ?? 'unknown'), damage: 0, life: lifeOf(this.bot)?.number ?? 0 };
+    // No attacker named: what the body's own state says hurt it (hot_floor@x,y,z, on_fire, wither…), never 'unknown' (run62).
+    // An id no longer in the entity table (an arrow that landed, a mob that died) is `entity_gone`; the head adds ` #id` itself.
+    const attackerType = entity ? String(entity.name ?? entity.type ?? 'entity_gone')
+      : id !== null ? 'entity_gone' : harmCause(this.bot as any);
+    const hit: RecentHit = { at: new Date(t).toISOString(), attackerId: id, attackerType, damage: 0, life: lifeOf(this.bot)?.number ?? 0 };
     this.hits.push({ hit, at: t });
     this.pending.push({ hit, at: t });
     this.trim(t);

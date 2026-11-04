@@ -155,13 +155,19 @@ export function standsInFire(body: LavaBody): boolean {
  * from a fresh world at 39 minutes).
  */
 export function standsOnMagma(body: LavaBody): boolean {
+  return magmaUnderFeet(body) !== null;
+}
+
+/** The magma block under the body's width (its centre's cell first), or null. */
+export function magmaUnderFeet(body: LavaBody): Vec3 | null {
   const position = body.entity?.position;
-  if (!position) return false;
+  if (!position) return null;
   const y = Math.floor(position.y - 0.01);
-  for (const [dx, dz] of [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]) {
-    try { if (body.blockAt(new Vec3(Math.floor(position.x + dx), y, Math.floor(position.z + dz)))?.name === 'magma_block') return true; } catch { /* unloaded */ }
+  for (const [dx, dz] of [[0, 0], [-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]) {
+    const cell = new Vec3(Math.floor(position.x + dx), y, Math.floor(position.z + dz));
+    try { if (body.blockAt(cell)?.name === 'magma_block') return cell; } catch { /* unloaded */ }
   }
-  return false;
+  return null;
 }
 
 /**

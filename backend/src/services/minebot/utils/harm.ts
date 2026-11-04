@@ -1,12 +1,43 @@
-import { isBurning, standsOnMagma } from './lavaSafety.js';
+import { Vec3 } from 'vec3';
+import { isBurning, magmaUnderFeet, standsInFire, standsOnMagma } from './lavaSafety.js';
 
 interface HarmBody {
-  entity?: { isInLava?: boolean; metadata?: unknown[]; effects?: Record<string, { id?: number }>; position?: unknown };
+  entity?: { isInLava?: boolean; isInWater?: boolean; metadata?: unknown[]; effects?: Record<string, { id?: number }>; position?: unknown };
   blockAt?(position: unknown): { name?: string } | null;
   food?: number;
+  oxygenLevel?: number;
   game?: { dimension?: unknown };
   registry?: { effects?: Record<string, { name?: string } | undefined> };
 }
+
+/**
+ * What hurt the body when the server named no attacker, as one closed code read from the body's own state:
+ * `lava`, `in_fire`, `hot_floor@x,y,z` (the magma cell under it), `on_fire`, `wither`, `poison`, `starve`,
+ * `drown`, `suffocation`, and `environment` when none of those holds (a fall, a cactus, a berry bush: the
+ * body cannot tell which). Never 'unknown': run62 sent the head `unknown` nine times while the body stood on
+ * magma, and the head kept digging.
+ */
+export function harmCause(bot: HarmBody): string {
+  const safe = <T>(read: () => T, fallback: T): T => { try { return read(); } catch { return fallback; } };
+  if (bot.entity?.isInLava === true) return 'lava';
+  if (safe(() => standsInFire(bot as any), false)) return 'in_fire';
+  const magma = safe(() => magmaUnderFeet(bot as any), null);
+  if (magma) return `hot_floor@${magma.x},${magma.y},${magma.z}`;
+  if (safe(() => isBurning(bot as any), false)) return 'on_fire';
+  const effects = Object.entries(bot.entity?.effects ?? {})
+    .map(([id, effect]) => String(bot.registry?.effects?.[String(effect?.id ?? id)]?.name ?? '').toLowerCase());
+  if (effects.some(name => name.includes('wither'))) return 'wither';
+  if (effects.some(name => name.includes('poison'))) return 'poison';
+  if (typeof bot.food === 'number' && bot.food <= 0) return 'starve';
+  if (bot.entity?.isInWater === true && typeof bot.oxygenLevel === 'number' && bot.oxygenLevel <= 0) return 'drown';
+  const head = safe(() => {
+    const p = bot.entity?.position as { x: number; y: number; z: number } | undefined;
+    return p ? bot.blockAt?.(new Vec3(Math.floor(p.x), Math.floor(p.y + 1.62), Math.floor(p.z))) : null;
+  }, null);
+  if (head?.name && SUFFOCATING.has(head.name)) return 'suffocation';
+  return 'environment';
+}
+const SUFFOCATING = new Set(['sand', 'red_sand', 'gravel', 'stone', 'dirt', 'netherrack', 'deepslate', 'cobblestone', 'blackstone', 'basalt', 'soul_sand', 'soul_soil', 'obsidian']);
 
 /**
  * What the body can tell is wearing its health down when no attacker is named: read from its own state, not
