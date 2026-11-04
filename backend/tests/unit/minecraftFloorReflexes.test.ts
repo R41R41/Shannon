@@ -60,6 +60,13 @@ describe('cover digging preserves footing and a way back', () => {
     f.bot.inventory!.items = () => [{ name: 'cobblestone', count: 8 }] as any;
     expect(f.choose({ line: true }).cover).toMatchObject({ kind: 'line', block: 'cobblestone' });
   });
+  it('S2 raid2: standing across two cells, the line never picks the other cell the body is in (the place hand refuses it)', () => {
+    const f = field(); f.blocks.set('0,62,0', 'air');
+    f.bot.inventory!.items = () => [{ name: 'cobblestone', count: 8 }] as any;
+    f.bot.entity!.position = new Vec3(0.95, 64, 0.5);
+    const choice = f.choose({ line: true });
+    expect(choice.cover, choice.why).toMatchObject({ kind: 'line', cell: { x: 2, y: 64, z: 0 } });
+  });
   it('still digs one step when it can land, climb back and reduce exposure', () => {
     const f = field(), choice = f.choose();
     expect(choice.cover, choice.why).toMatchObject({ kind: 'dig', cell: { x: 0, y: 63, z: 0 } });
