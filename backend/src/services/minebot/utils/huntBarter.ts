@@ -196,3 +196,84 @@ export async function barterWithPiglin(ctx: StepContext, piglin: any): Promise<S
   }
   return { ok: true, at, text: `${base}${left.length ? `。拾えず落ちている ${left.join(' ')}` : ''}${got && !gained.length ? `。${got}` : ''}${names.length ? `（出た物 ${names.join(' ')}）` : ''}` };
 }
+
+/** At most this many piglins are given an ingot in one round (they look at it at once: three in six seconds, not one). */
+export const BARTER_AT_ONCE = 3;
+/** A round's piglins: adult, calm, not looking at gold already, within reach of the eye; the nearest first. Pure, for the tests. */
+export function barterRound(bot: any, already: ReadonlySet<number> = new Set()): any[] {
+  const eye = eyeOf(bot);
+  return (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity?.name === 'piglin' && entity.position && entity.isValid !== false && !already.has(entity.id)
+    && isAdultPiglin(bot.registry, entity) !== false && isAngryPiglin(bot.registry, entity) !== true && !holdsIngot(entity) && reachTo(eye, entity) <= BARTER_REACH)
+    .sort((a, b) => reachTo(eye, a) - reachTo(eye, b)).slice(0, BARTER_AT_ONCE);
+}
+
+/**
+ * `use item=gold_ingot target=piglin count=N` (S6, 2026-11-04): up to N ingots in one hand. Each round gives one ingot to each calm adult piglin within reach
+ * (up to BARTER_AT_ONCE; the named one is walked up to first when none is in reach), waits until all of them let go (six seconds, all at once), and takes by
+ * id what was thrown back. Rounds go on until N are given, the gold is out, no piglin takes one, the body is hurt, or the time is up.
+ * Why: the seed's barter sequence is fixed (loot table random_sequence; on c1 the first 24 ingots give 9 pearls, 44 give 13), and one ingot per act put a
+ * head's turn and a six-second wait between every two of them. The single exchange (barterWithPiglin) is unchanged and is what count=1 does.
+ */
+export async function barterMany(ctx: StepContext, first: any, count: number): Promise<StepOutcome> {
+  const bot = ctx.bot;
+  const wanted = Math.max(1, Math.min(64, Math.floor(count)));
+  if (wanted === 1) return barterWithPiglin(ctx, first);
+  if (inventoryCount(bot, 'gold_ingot') < 1) return stopped(bot, 'missing_item', '金のインゴットを持っていない（金を用意してから）');
+  const goldAtStart = inventoryCount(bot, 'gold_ingot');
+  const packBefore = new Map<string, number>();
+  for (const item of bot.inventory?.items?.() ?? []) packBefore.set(item.name, (packBefore.get(item.name) ?? 0) + item.count);
+  const hpAtStart = Number(bot.health ?? 20);
+  let given = 0, rounds = 0, refused = 0, why = '';
+  const left: string[] = [];
+  const at = { x: Math.floor(first.position.x), y: Math.floor(first.position.y), z: Math.floor(first.position.z) };
+  while (given < wanted) {
+    if (Date.now() + BARTER_ANSWER_MS + 2_000 > ctx.deadline) { why = '時間切れ'; break; }
+    if (inventoryCount(bot, 'gold_ingot') < 1) { why = '金が尽きた'; break; }
+    if (Number(bot.health ?? 20) < hpAtStart - 2) { why = `体力が減った（${hpAtStart}→${Number(bot.health ?? 20).toFixed(1)}）`; break; }
+    let round = barterRound(bot);
+    if (!round.length) {
+      // None in reach: the named one (or the nearest calm adult) within BARTER_APPROACH is walked up to, once per round.
+      const near = (bot.entities?.[first.id] && isAngryPiglin(bot.registry, bot.entities[first.id]) !== true ? bot.entities[first.id] : null)
+        ?? (Object.values(bot.entities ?? {}) as any[]).filter(e => e?.name === 'piglin' && e.position && isAdultPiglin(bot.registry, e) !== false && isAngryPiglin(bot.registry, e) !== true)
+          .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0];
+      if (near && near.position.distanceTo(bot.entity.position) <= BARTER_APPROACH) { await stepUp(ctx, near); round = barterRound(bot); }
+      if (!round.length) {
+        // One still looking at gold is waited for (it takes another when it is done).
+        const busy = (Object.values(bot.entities ?? {}) as any[]).some(e => e?.name === 'piglin' && holdsIngot(e) && reachTo(eyeOf(bot), e) <= BARTER_REACH + 1);
+        if (busy) { await waitUntil(ctx, () => barterRound(bot).length > 0, BARTER_ANSWER_MS, 100); round = barterRound(bot); }
+      }
+      if (!round.length) { why = `届く所（${BARTER_REACH}m）に金を受け取れるピグリンがいない（${BARTER_APPROACH}m 内の大人で怒っていない個体を探した）。go で寄るか、別の群れへ`; break; }
+    }
+    rounds++;
+    const baseline = itemIds(bot);
+    const taking: any[] = [];
+    for (const piglin of round.slice(0, wanted - given)) {
+      const before = inventoryCount(bot, 'gold_ingot');
+      if (before < 1) break;
+      await guard(ctx, Promise.resolve(bot.lookAt(piglin.position.offset(0, (piglin.height ?? 1.9) * 0.8, 0), true)), 1000);
+      try { await guard(ctx, Promise.resolve(bot.activateEntity(piglin)), 2000); } catch (error) {
+        if (/Action interrupted/u.test(String((error as Error)?.message))) throw error;
+      }
+      if (await waitUntil(ctx, () => inventoryCount(bot, 'gold_ingot') < before, BARTER_ACK_MS, 50)) { given++; taking.push(piglin); }
+      else refused++;
+    }
+    if (!taking.length) { if (refused >= 3) { why = 'ピグリンが金を受け取らなかった（3 回）。子どもか、怒っているか、前の金を見ている'; break; } continue; }
+    // All of them look at once: over when none of them holds the ingot (or it is gone), or the answer's time is up.
+    const began = Date.now();
+    await waitUntil(ctx, () => taking.every(p => !bot.entities?.[p.id] || !holdsIngot(bot.entities[p.id])) && Date.now() - began >= 1_000, BARTER_ANSWER_MS, 100);
+    await wait(ctx, RETURN_WAIT_MS);
+    const drops = itemsSince(bot, baseline, bot.entity.position, 10);
+    if (drops.length) await pickup(ctx, { ids: drops.map(entity => entity.id) });
+    for (const entity of drops) if (bot.entities?.[entity.id]) left.push(stackName(entity));
+  }
+  const packAfter = new Map<string, number>();
+  for (const item of bot.inventory?.items?.() ?? []) packAfter.set(item.name, (packAfter.get(item.name) ?? 0) + item.count);
+  const gained: string[] = [];
+  for (const [name, count] of packAfter) { const more = count - (packBefore.get(name) ?? 0); if (more > 0 && name !== 'gold_ingot') gained.push(`${name}+${more}`); }
+  const pearls = Math.max(0, inventoryCount(bot, 'ender_pearl') - (packBefore.get('ender_pearl') ?? 0));
+  const text = `ピグリンに金を ${given}/${wanted} 個渡した（${rounds} 回に分けて、一度に最大 ${BARTER_AT_ONCE} 体。金 ${goldAtStart}→${inventoryCount(bot, 'gold_ingot')}）: `
+    + `受け取った ${gained.join(' ') || 'なし'}（パール +${pearls}）${left.length ? `。拾えず落ちている ${left.slice(0, 6).join(' ')}` : ''}${why ? `。止めた理由: ${why}` : ''}`;
+  const progress = { unit: 'item' as const, done: given, left: Math.max(0, wanted - given) };
+  if (!given) return { ...stopped(bot, why.startsWith('届く所') ? 'out_of_reach' : 'not_accepted', text, at), progress };
+  return { ok: true, at, text, progress };
+}

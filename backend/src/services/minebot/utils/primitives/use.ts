@@ -8,7 +8,7 @@ import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, find
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { BED_HALF_WAIT_MS } from './place.js';
 import { compassOf, eyeReportOf, EYE_FATE_MS, EYE_WATCH_MS, watchEyeFlight } from '../huntEyeFlight.js';
-import { barterWithPiglin } from '../huntBarter.js';
+import { barterMany, barterWithPiglin } from '../huntBarter.js';
 import { blastAt } from '../crystalBlast.js';
 import { entityHealth } from '../mapMarks.js';
 import { boxDistance, partBox } from '../dragonParts.js';
@@ -28,7 +28,7 @@ import { endDragonOf } from '../dragonState.js';
  *     anything else on a creature (`entity`), or in the air.
  * The item is the one asked for (`item`), else what the hand holds. What came of it is read back from the world.
  */
-export interface UseArgs { item?: string; at?: Cell; against?: string; entity?: string }
+export interface UseArgs { item?: string; at?: Cell; against?: string; entity?: string; /** Gold to piglins only: up to this many ingots in the one hand (utils/huntBarter barterMany). */ count?: number }
 
 const BEDS = /_bed$/u;
 const WORKED = /(_door|_trapdoor|_fence_gate|^lever|_button)$/u;
@@ -225,7 +225,7 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
     const target = findEntity(bot, args.entity);
     if (!target) return stopped(bot, 'target_not_found', `${args.entity} が近く（16m）にいない`);
     // Gold to a piglin is an exchange, one whole: the offer, the six seconds of looking, and what comes back taken (utils/huntBarter).
-    if (name === 'gold_ingot' && target.name === 'piglin') return barterWithPiglin(ctx, target);
+    if (name === 'gold_ingot' && target.name === 'piglin') return (args.count ?? 1) > 1 ? barterMany(ctx, target, args.count!) : barterWithPiglin(ctx, target);
     if (target.position.distanceTo(bot.entity.position) > 4) return stopped(bot, 'out_of_reach', `${target.name}（${cellText(cellOf(target.position))}）に届かない（${target.position.distanceTo(bot.entity.position).toFixed(1)}m）`, cellOf(target.position));
     await guard(ctx, Promise.resolve(bot.lookAt(target.position.offset(0, (target.height ?? 1) * 0.6, 0), true)), 1000);
     bot.useOn(target);

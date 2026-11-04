@@ -288,7 +288,7 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       const block = hand.block ?? [...PILLAR_BLOCKS].sort((a, b) => inventoryCount(bot, b) - inventoryCount(bot, a))[0];
       return pillarUp(ctx, { n: hand.n ?? 1, block });
     }
-    case 'use': return use(ctx, { item: hand.item, at: one, against: hand.face, entity: target !== undefined ? String(target) : undefined });
+    case 'use': return use(ctx, { item: hand.item, at: one, against: hand.face, entity: target !== undefined ? String(target) : undefined, count: hand.count });
     case 'look': {
       const to = hand.to ? cellOf(ctx, hand, hand.to) : null;
       // The contract's pitch is the game's (-90 up, 90 down); look takes it up positive.

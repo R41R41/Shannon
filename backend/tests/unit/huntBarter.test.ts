@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BARTER_APPROACH, barterWithPiglin, isAdultPiglin, isAngryPiglin, reachTo, wearsGoldArmour } from '../../src/services/minebot/utils/huntBarter.js';
+import { BARTER_APPROACH, BARTER_AT_ONCE, barterMany, barterRound, barterWithPiglin, isAdultPiglin, isAngryPiglin, reachTo, wearsGoldArmour } from '../../src/services/minebot/utils/huntBarter.js';
 import { use } from '../../src/services/minebot/utils/primitives/use.js';
 import type { StepContext } from '../../src/services/minebot/utils/primitives/common.js';
 
@@ -222,5 +222,46 @@ describe('use item=gold_ingot on a piglin (the hand)', () => {
     const result = await use(context(bot), { item: 'wheat', entity: 'piglin' });
     expect(result.ok).toBe(true);
     expect(used).toBe(1);
+  });
+});
+
+// S6 (11/5): count=N is up to N ingots in the one hand. The seed's barter sequence is fixed (c1: 24 ingots, 9 pearls), and one ingot per act put a head's turn between each two.
+describe('use item=gold_ingot target=piglin count=N (barterMany)', () => {
+  it('gives the ingots one round after another to the piglin in reach and takes every answer', async () => {
+    const { bot } = world({ gives: [{ name: 'ender_pearl', count: 2 }] }, { gold: 5 });
+    const result = await use(context(bot), { item: 'gold_ingot', entity: 'piglin', count: 3 });
+    expect(result.ok).toBe(true);
+    expect(bot._gold).toBe(2);
+    expect(bot._pack.get('ender_pearl')).toBe(6);
+    expect(result.text).toContain('3/3');
+    expect(result.text).toContain('パール +6');
+  }, 20_000);
+
+  it('stops when the gold is out, saying so, with what was given', async () => {
+    const { bot, piglin } = world({}, { gold: 2 });
+    const result = await barterMany(context(bot), piglin, 5);
+    expect(result.ok).toBe(true);
+    expect(result.text).toContain('2/5');
+    expect(result.text).toContain('金が尽きた');
+  }, 20_000);
+
+  it('an angry piglin is given nothing: not_accepted or out_of_reach, the gold kept', async () => {
+    const { bot, piglin } = world({ angry: true }, { gold: 4 });
+    const result = await barterMany(context(bot), piglin, 4);
+    expect(result.ok).toBe(false);
+    expect(bot._gold).toBe(4);
+  }, 20_000);
+
+  it('a round takes the calm adults in reach, nearest first, at most three, none already looking at gold', () => {
+    const { bot } = world();
+    const mk = (id: number, x: number, extra: Record<string, unknown> = {}) => {
+      const p: any = { ...bot.entities[30], id, position: new Vec3(x, 70, 100.5), equipment: [null, null, null, null, null, null], metadata: [...bot.entities[30].metadata], ...extra };
+      bot.entities[id] = p; return p;
+    };
+    mk(31, 102.0); mk(32, 99.0); mk(33, 102.4); mk(34, 101.0, { equipment: [null, { name: 'gold_ingot' }, null, null, null, null] }); mk(35, 110.5);
+    const round = barterRound(bot);
+    expect(round.length).toBe(BARTER_AT_ONCE);
+    expect(round.map((p: any) => p.id)).not.toContain(34);
+    expect(round.map((p: any) => p.id)).not.toContain(35);
   });
 });
