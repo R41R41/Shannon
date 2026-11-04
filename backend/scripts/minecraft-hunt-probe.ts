@@ -240,6 +240,7 @@ async function blazeProtocol(kind: 'hold' | 'fight', note: (text: string) => voi
   const start = Date.now();
   const rods0 = await countServer('blaze_rod');
   const shield0 = shieldUsed();
+  const shieldCounts0 = { caught: (actor as any).shieldBlock?.shieldCaught ?? 0, missed: (actor as any).shieldBlock?.shieldMissed ?? 0 };
   // toRods: the seconds until that many rods are held (S2, 2026-11-04: the sortie's measure, "how long to 7 rods"); the run ends there.
   let secondsToRods: number | null = null;
   const m = { acts: 0, okActs: 0, kills: 0, sorties: 0, retreats: 0, recovered: 0, noHideout: 0, hpLostInActs: 0, hpLostOnTheWayOut: 0, hpLostWhileThinking: 0, hpLostOnTheWayBack: 0, lowestHp: 20, secondsBelow10: 0, secondsAway: 0, eats: 0, boxes: 0 };
@@ -343,6 +344,7 @@ async function blazeProtocol(kind: 'hold' | 'fight', note: (text: string) => voi
   const minutes = (Date.now() - start) / 60_000;
   const lowSeconds = track.filter(value => value < 12).length;
   return { seconds: r1((Date.now() - start) / 1000), rods, rodsPerMinute: r1(rods / Math.max(minutes, 0.1)), ...m, secondsAway: r1(m.secondsAway), secondsBelow12: lowSeconds, shieldWear: shieldUsed() - shield0, deathsHere: deaths,
+    shieldCaught: ((actor as any).shieldBlock?.shieldCaught ?? 0) - shieldCounts0.caught, shieldMissed: ((actor as any).shieldBlock?.shieldMissed ?? 0) - shieldCounts0.missed,
     hpTrack: track.filter((_, index) => index % 5 === 0).join(' '), kind, thinkMs, stopHp, backHp, retreatOn, bodyMode, ...(options.toRods ? { toRods: options.toRods, secondsToRods } : {}) };
 }
 scene('blaze_proto_fight', 'the head\'s protocol at the c1 camp (fight, accept blaze, stopIf hpBelow 12 → hideout → eat → back), 5 s of thinking between acts', note => blazeProtocol('fight', note));
@@ -665,6 +667,96 @@ scene('blaze_r59_corner_lure', 'run59 pack: the away-side corner; steps out to t
 scene('blaze_r59_corner_calm_fight', 'run59 pack: the away-side corner built while the spawner is quiet, then fight 20 s acts, 600 s (the shield-up blow rule)', note => blazeNook(note, { r59: true, corner: 'away', fight: true, calm: true, seconds: 600 }));
 scene('blaze_r59_corner_calm_hold', 'run59 pack: the away-side corner built while the spawner is quiet, then attack hold, 600 s', note => blazeNook(note, { r59: true, corner: 'away', calm: true, seconds: 600 }));
 scene('blaze_r59_corner_calm_rest_fight', 'run59 pack: the away-side corner built while the spawner is quiet; fight 20 s acts, back to the corner, eat and wait to 18 hearts, again; 600 s', note => blazeNook(note, { r59: true, corner: 'away', fight: true, calm: true, rest: true, seconds: 600 }));
+// The room (S2, 2026-11-05, plan A of the outside answer, 【仮】 until the lab says so): the body stands ONCE on a floor cell face to face with the spawner (its feet at the spawner's
+// height), and from there, not moving, closes the three other sides two high and the roof with cobblestone (about 7); the one cell left open is the head cell over the spawner.
+// The roof is for blazes that hover over the eye (raid5's came from above); building from one stand is for the lane that was never finished (placed while walking). The body then
+// holds (attack hold: strikes what is in reach and in sight, walks nowhere). The head's rule is the raid's (blazeProtocol): below stopHp to the hideout, eat to 18, wait to over
+// stopHp, back into the room (its cells put back if gone). Measured as the raid is: kills, deaths, seconds to 7 rods, and the cells placed.
+async function blazeRoom(note: (text: string) => void, options: { seconds?: number; toRods?: number; stopHp?: number } = {}): Promise<Record<string, unknown>> {
+  const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
+  if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
+  const seconds = options.seconds ?? (timedSeconds || 600), toRods = options.toRods ?? 7, stopHp = options.stopHp ?? 12;
+  await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
+  await ask('execute in minecraft:the_nether run kill @e[type=minecraft:blaze]');
+  await equip({ diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  const solidAt = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y, z)); return !!b && b.boundingBox === 'block'; };
+  const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+  // the room's cells for a floor cell beside the spawner: the three sides away from it, feet and head, and the roof; what is solid already is not placed
+  const cellsOf = (x: number, y: number, z: number) => [...sides.filter(([dx, dz]) => x + dx !== spawner[0] || z + dz !== spawner[2]).flatMap(([dx, dz]) => [[x + dx, y, z + dz], [x + dx, y + 1, z + dz]]), [x, y + 2, z]];
+  const rooms = sides.map(([dx, dz]) => ({ x: spawner[0] + dx, y: spawner[1], z: spawner[2] + dz }))
+    .filter(c => solidAt(c.x, c.y - 1, c.z) && !solidAt(c.x, c.y, c.z) && !solidAt(c.x, c.y + 1, c.z))
+    .map(c => ({ ...c, place: cellsOf(c.x, c.y, c.z).filter(([x, y, z]) => !solidAt(x, y, z)).map(([x, y, z]) => ({ x, y, z })) }))
+    .sort((a, b) => a.place.length - b.place.length || Math.hypot(a.x - stand[0], a.z - stand[2]) - Math.hypot(b.x - stand[0], b.z - stand[2]));
+  const room = rooms[0];
+  if (!room) throw new Error(`no floor cell face to face with the spawner ${spawner.join(',')} (each side has no floor, or no room for the feet and the head)`);
+  note(`room cell ${room.x},${room.y},${room.z} (of ${rooms.length}), to place ${room.place.length}: ${JSON.stringify(room.place.map(p => [p.x, p.y, p.z]))}`);
+  const canPlace = ['cobblestone', 'netherrack'];
+  const start = Date.now();
+  const rods0 = await countServer('blaze_rod'), shield0 = shieldUsed();
+  const shieldCounts0 = { caught: (actor as any).shieldBlock?.shieldCaught ?? 0, missed: (actor as any).shieldBlock?.shieldMissed ?? 0 };
+  let secondsToRods: number | null = null, kills = 0;
+  const onDead = (entity: any) => { if (String(entity?.name ?? '') === 'blaze') kills++; };
+  actor.on('entityDead', onDead);
+  const m = { builds: 0, planned: room.place.length, placed: 0, placedFirst: 0, holds: 0, retreats: 0, recovered: 0, noHideout: 0, lowestHp: 20, secondsBelow10: 0, secondsAway: 0, eats: 0, secondsToRoom: 0 };
+  const track: number[] = [];
+  const sampler = setInterval(() => { const hp = Number(actor.health); if (Number.isFinite(hp)) { track.push(r1(hp)); m.lowestHp = Math.min(m.lowestHp, hp); if (hp < 10) m.secondsBelow10++; } }, 1000);
+  const hp = () => Number(actor.health);
+  const readCamp = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'camp' }, 20); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
+  /** Into the room: one go to its floor, then every missing cell placed from there (one place hand, the body does not move). */
+  const enter = async (): Promise<boolean> => {
+    const t0 = Date.now();
+    const there = await act('to the room', [{ do: 'go', to: { x: room.x, y: room.y, z: room.z }, range: 0.4, seconds: 25, canPlace, maxPlace: 10 }], 40, { accept: ['blaze'] });
+    if (!m.builds) m.secondsToRoom = r1((Date.now() - t0) / 1000);
+    if (!there.ok) { note(`to the room: hp ${r1(hp())} ${(there.lines[0] ?? '').slice(0, 200)}`); return false; }
+    const missing = room.place.filter(p => !solidAt(p.x, p.y, p.z));
+    if (!missing.length) return true;
+    m.builds++;
+    const built = await act(`build#${m.builds}`, [{ do: 'place', at: missing, block: 'cobblestone' }], 40, { accept: ['blaze'] });
+    const now = room.place.filter(p => solidAt(p.x, p.y, p.z)).length;
+    if (m.builds === 1) m.placedFirst = now;
+    m.placed = Math.max(m.placed, now);
+    note(`build#${m.builds}: ${now}/${room.place.length} closed, hp ${r1(hp())}, ${built.lines.join(' | ').slice(0, 300)}`);
+    return true;
+  };
+  try {
+    let failStreak = 0;
+    while (Date.now() - start < seconds * 1000 && !disconnected && hp() > 0) {
+      if (hp() < stopHp) {
+        // the raid's head rule: out of the blazes' sight, eat to 18, wait to over stopHp (60 s at most)
+        const lowAt = Date.now();
+        m.retreats++;
+        const spot = (await readCamp())?.hideouts?.[0] as { x: number; y: number; z: number } | undefined;
+        if (!spot) m.noHideout++;
+        else { const out = await act('to the hideout', [{ do: 'go', to: { x: spot.x, y: spot.y, z: spot.z }, range: 0.6, seconds: 25, canPlace, maxPlace: 30 }], 40, { accept: ['blaze'] }); if (!out.ok) note(`to the hideout: ${(out.lines[0] ?? '').slice(0, 200)}`); }
+        const waitUntil = Date.now() + 60_000;
+        while (Date.now() < waitUntil && hp() > 0 && hp() <= stopHp && !disconnected) {
+          if (hp() < 7 && packClient().golden_apple) { await act('apple', [{ do: 'eat', item: 'golden_apple' }], 15); m.eats++; }
+          else if (Number(actor.food) < 18) { await act('eat', [{ do: 'eat' }], 15); m.eats++; }
+          await sleep(1500);
+        }
+        if (hp() > stopHp) m.recovered++;
+        m.secondsAway += (Date.now() - lowAt) / 1000;
+        if (hp() <= stopHp) { note(`health ${r1(hp())} after ${r1(m.secondsAway)} s away (hunger ${actor.food}): stop`); break; }
+      }
+      const here = actor.entity.position as Vec3;
+      if (Math.floor(here.x) !== room.x || Math.floor(here.z) !== room.z || room.place.some(p => !solidAt(p.x, p.y, p.z))) {
+        if (!(await enter())) { if (++failStreak >= 5) { note('5 tries into the room failed: stop'); break; } await sleep(2000); continue; }
+      }
+      failStreak = 0;
+      m.holds++;
+      const run = await act(`hold#${m.holds}`, [{ do: 'attack', target: 'blaze', hold: true, seconds: 20 }, { do: 'pickup', range: 3 }], 40, { accept: ['blaze'] });
+      note(`hold#${m.holds}: hp ${r1(hp())} kills ${kills} ${run.lines.join(' | ').slice(0, 200)}`);
+      if (hp() < 16 && Number(actor.food) < 18 && hp() >= stopHp) { await act('eat', [{ do: 'eat' }], 15); m.eats++; }
+      if ((await countServer('blaze_rod')) - rods0 >= toRods) { secondsToRods = r1((Date.now() - start) / 1000); note(`${toRods} rods at ${secondsToRods} s`); break; }
+    }
+  } finally { clearInterval(sampler); actor.removeListener('entityDead', onDead); }
+  const rods = (await countServer('blaze_rod')) - rods0;
+  return { seconds: r1((Date.now() - start) / 1000), kills, rods, ...m, lowestHp: r1(m.lowestHp), secondsAway: r1(m.secondsAway), secondsBelow12: track.filter(value => value < 12).length, shieldWear: shieldUsed() - shield0, deathsHere: deaths,
+    shieldCaught: ((actor as any).shieldBlock?.shieldCaught ?? 0) - shieldCounts0.caught, shieldMissed: ((actor as any).shieldBlock?.shieldMissed ?? 0) - shieldCounts0.missed,
+    hpTrack: track.filter((_, index) => index % 5 === 0).join(' '), stopHp, toRods, secondsToRods, room: [room.x, room.y, room.z] };
+}
+scene('blaze_room', 'plan A: one stand face to face with the spawner, about 7 cobblestones placed from it (three sides two high and a roof, the head cell over the spawner open), attack hold inside; the raid\x27s head rule below 12; until 7 rods (600 s at most)', note => blazeRoom(note));
 scene('blaze_r59_lid_fight', 'run59 pack: the room lidded to a 3x3 round the spawner, the away-side corner, fight 20 s acts and rest; 600 s', note => blazeNook(note, { r59: true, corner: 'away', fight: true, calm: true, rest: true, lid: true, seconds: 600 }));
 scene('blaze_r59_lid_hold', 'run59 pack: the room lidded to a 3x3 round the spawner, the away-side corner, attack hold and rest; 600 s', note => blazeNook(note, { r59: true, corner: 'away', calm: true, rest: true, lid: true, seconds: 600 }));
 scene('blaze_r59_cap_fight', 'run59 pack: the lid and a roof over the 3x3 (a cage of 3x3x2 round the spawner), the away-side corner, fight 20 s acts and rest; 600 s', note => blazeNook(note, { r59: true, corner: 'away', fight: true, calm: true, rest: true, lid: true, cap: true, seconds: 600 }));

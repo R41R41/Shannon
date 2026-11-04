@@ -100,6 +100,7 @@ function hostileInReach(bot: ShieldBot): boolean {
 }
 
 interface ShieldBot {
+  _client?: { on(event: string, listener: (...args: any[]) => void): unknown };
   entity?: { id?: number; position: Vec3 };
   entities?: Record<string, any>;
   health?: number;
@@ -118,6 +119,8 @@ interface ShieldBot {
 }
 /** `raised` counts the times the shield went up; `upTicks` the ticks it was held. */
 export interface ShieldBlockState { enabled: boolean; guard: boolean; raised: number; guards: number; upTicks: number; up: boolean; last?: string;
+  /** Server-confirmed blocks (source unspecified), and small_fireball damage confirmed by a health fall; never raise/trajectory guesses. */
+  shieldCaught?: number; shieldMissed?: number;
   /** A-6 (2, 9): the times the shield was lowered, and the times `deactivateItem` was called on the body; the handover's "kept" is read from these. */
   lowered?: number; deactivateCalls?: number }
 
@@ -135,7 +138,29 @@ function bridgeHoldsShield(bot: ShieldBot): boolean {
 
 export function installShieldBlock(bot: ShieldBot): void {
   if (bot.shieldBlock || typeof bot.on !== 'function') return;
-  const state: ShieldBlockState = bot.shieldBlock = { enabled: true, guard: true, raised: 0, guards: 0, upTicks: 0, up: false };
+  const state: ShieldBlockState = bot.shieldBlock = { enabled: true, guard: true, raised: 0, guards: 0, upTicks: 0, up: false, shieldCaught: 0, shieldMissed: 0 };
+  // entity_status 29 is the server's shield block, not merely an arm raised. It has no attacker/projectile id:
+  // keep its kind unknown (the fight line says so); neither wear nor a nearby fireball proves which attack was blocked.
+  bot._client?.on('entity_status', packet => {
+    if (packet.entityId === bot.entity?.id && packet.entityStatus === 29) state.shieldCaught!++;
+  });
+  // damage_event's sourceDirectId is the damaging entity's id + 1 (sourceCauseId is the shooter, not its ball).
+  // Only a known small_fireball followed by a health fall counts. Mixed/absorption-only/late or unknown-source notices
+  // are left uncounted: neither entityHurt nor a shield being up proves a fireball cost health. Clear at each tick
+  // so a notice with no health update cannot be paired with a later burn. This deliberately undercounts ambiguous batches.
+  let health = Number(bot.health ?? 20);
+  const hurts: boolean[] = [];
+  bot._client?.on('damage_event', packet => {
+    if (packet.entityId !== bot.entity?.id) return;
+    hurts.push(bot.entities?.[packet.sourceDirectId - 1]?.name === 'small_fireball');
+  });
+  bot.on('health', () => {
+    const now = Number(bot.health ?? health);
+    if (now < health && hurts.length === 1 && hurts[0]) state.shieldMissed!++;
+    health = now; hurts.length = 0;
+  });
+  bot.on('physicsTick', () => { hurts.length = 0; });
+  bot.on('respawn', () => { health = Number(bot.health ?? 20); hurts.length = 0; });
   // The body's own blow goes out from behind the raised shield (S2, 2026-11-03, lab: a still golem struck eight times with the shield up, down and up again lost 40 of 100 each way; the old
   // note that the server refuses such a blow was wrong). Lowering it for the blow left a five-tick gap at each blow.
   installToldVelocity(bot as any);

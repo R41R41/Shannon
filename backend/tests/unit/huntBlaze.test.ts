@@ -1,15 +1,19 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 import minecraftData from 'minecraft-data';
 import blockLoader from 'prismarine-block';
 import { createRequire } from 'node:module';
+import { makeSim, type Sim } from '../helpers/physicsBody.js';
 import { takeActReport, renderActReport } from '../../src/services/minebot/utils/actReport.js';
 import { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.js';
 import { createMotorPort, executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 import { cooldownMs } from '../../src/services/minebot/utils/primitives/attack.js';
 import { isEngaged } from '../../src/services/minebot/utils/engagement.js';
+import { isHeadCombatActive } from '../../src/services/minebot/utils/combatOwner.js';
+import { installShieldBlock } from '../../src/services/minebot/utils/shieldBlock.js';
 import { go } from '../../src/services/minebot/utils/primitives/go.js';
+import { fight } from '../../src/services/minebot/utils/primitives/fight.js';
 import { eat } from '../../src/services/minebot/utils/primitives/body.js';
 import { scanLoadedBlocks } from '../../src/services/minebot/utils/loadedBlockScan.js';
 import { GATE_PATIENCE_MS, GATE_WINDOW_MS, ShooterWatch, StrikeGate, blazeCharged, hoversAboveReach, nextShotTicks, strikeHold } from '../../src/services/minebot/utils/huntBlaze.js';
@@ -416,6 +420,164 @@ describe('fight on a blaze: below the retreat health, to a hideout', () => {
     expect(lineOf(json)).toContain('retreat');
     expect(vi.mocked(go)).not.toHaveBeenCalled();
   }, 60_000);
+
+  describe('the retreat interrupts the fighting wait', () => {
+    let camp: Camp;
+    beforeEach(() => { vi.useFakeTimers(); scanSpawner(); vi.mocked(go).mockClear(); });
+    afterEach(async () => {
+      camp?.stop(); vi.useRealTimers();
+      const actual = await vi.importActual<typeof import('../../src/services/minebot/utils/loadedBlockScan.js')>('../../src/services/minebot/utils/loadedBlockScan.js');
+      vi.mocked(scanLoadedBlocks).mockImplementation(actual.scanLoadedBlocks);
+    });
+
+    it.each(['sortie', 'meetingShot', 'home', 'replaceBroken', 'equipWeapon'] as const)('%s: below 12, go takes the legs within two ticks, even while burning', async where => {
+      camp = setUp(20, { blazes: [{ at: new Vec3(-6.5, 64.5, 0.5), health: 400 }] });
+      const shield = camp.bot.shieldBlock = { raised: 0, up: false };
+      let equipped: (() => void) | undefined, waitingForEquip = false;
+      const equip = camp.bot.equip;
+      if (where === 'equipWeapon') {
+        camp.bot.heldItem = null;
+        camp.bot.equip = () => { waitingForEquip = true; return new Promise<void>(resolve => { equipped = resolve; }); };
+      }
+      let walkedAt = Infinity, injuredAt = Infinity, oldGoal: any;
+      vi.mocked(go).mockImplementationOnce((async (ctx: any, args: any) => {
+        walkedAt = Date.now(); oldGoal = camp.bot.pathfinder.goal;
+        expect(ctx.stop.aborted).toBe(false);
+        expect(isHeadCombatActive(camp.bot)).toBe(true);
+        expect(args).not.toHaveProperty('canDig');
+        const p = args.goals[0]; ctx.bot.entity.position = new Vec3(p.x + 0.5, p.y, p.z + 0.5);
+        return { ok: true, text: '着いた' };
+      }) as never);
+      const running = act(camp, [{ do: 'fight', target: 'blaze', seconds: 30 }]);
+      await vi.advanceTimersByTimeAsync(100);
+      if (where !== 'equipWeapon') {
+        expect(camp.bot.pathfinder.goal?.entity).toBe(camp.mobs[0]);
+        // Already away from the camp; neither a retreat nor the way home may keep this follow goal alive.
+        camp.bot.entity.position = new Vec3(-2.5, 64, 0.5);
+      }
+      if (where === 'meetingShot') { shield.up = true; shield.raised++; }
+      if (where === 'home') camp.bot.entities[701] = { id: 701, name: 'small_fireball', type: 'projectile', position: new Vec3(-2.5, 65, -3), velocity: new Vec3(0, 0, 0.8) };
+      if (where === 'replaceBroken') {
+        camp.bot.inventory.slots[45] = null;
+        camp.bot.inventory.slots[21] = itemOf('shield', 1, 21);
+        camp.bot.equip = () => { waitingForEquip = true; return new Promise<void>(resolve => { equipped = resolve; }); };
+      }
+      await vi.advanceTimersByTimeAsync(100);
+      if (where === 'meetingShot') expect(camp.bot.pathfinder.goal?.entity).toBe(camp.mobs[0]);
+      if (where === 'home') expect(camp.bot.pathfinder.goal?.entity).toBeUndefined();
+      if (where === 'replaceBroken' || where === 'equipWeapon') expect(waitingForEquip).toBe(true);
+      const blows = camp.stats.swings;
+      injuredAt = Date.now(); camp.bot.entity.onFire = true; camp.bot.health = 11;
+      // No health event: physicsTick must still wake a native equip that has not returned.
+      if (where === 'sortie') camp.bot.emit('health');
+      await vi.advanceTimersByTimeAsync(100);
+      expect(walkedAt - injuredAt).toBeLessThanOrEqual(100);
+      expect(oldGoal).toBeNull();
+      expect(camp.stats.swings).toBe(blows);
+      expect(vi.mocked(go)).toHaveBeenCalledTimes(1);
+      const { json } = await running;
+      expect(lineOf(json)).toContain('退いた先');
+      expect(lineOf(json)).not.toContain('fight-retreat');
+      expect(camp.bot.listenerCount('health')).toBe(0);
+      // A native equip that finishes late must not retry a hotbar write over the completed retreat.
+      camp.bot.setQuickBarSlot = vi.fn();
+      equipped?.(); await vi.advanceTimersByTimeAsync(2500);
+      expect(camp.bot.setQuickBarSlot).not.toHaveBeenCalled();
+      camp.bot.equip = equip;
+    });
+
+    it('a floor owner already holding the body wins; the health interrupt starts no competing go', async () => {
+      camp = setUp(20, { blazes: [{ at: new Vec3(-6.5, 64.5, 0.5), health: 400 }] });
+      const running = act(camp, [{ do: 'fight', target: 'blaze', seconds: 30 }]);
+      await vi.advanceTimersByTimeAsync(100);
+      camp.bot.floorReflexes = { busy: 'cover', retreat: { engaged: false } };
+      camp.bot.health = 4.7; camp.bot.emit('health');
+      await vi.advanceTimersByTimeAsync(100);
+      const { json } = await running;
+      expect(lineOf(json)).toContain('reflex');
+      expect(vi.mocked(go)).not.toHaveBeenCalled();
+    });
+
+    it('counts confirmed shield blocks and direct small_fireball health loss in the fight line, from its own start', async () => {
+      camp = setUp(20, { blazes: [{ at: new Vec3(-6.5, 70.5, 0.5), health: 400 }] });
+      camp.bot._client = new EventEmitter(); installShieldBlock(camp.bot);
+      const status = (entityId = 1, entityStatus = 29) => camp.bot._client.emit('entity_status', { entityId, entityStatus });
+      status(); status(); // before the fight: the hand must subtract these
+      walkTo();
+      const running = act(camp, [{ do: 'fight', target: 'blaze', seconds: 30 }]);
+      await vi.advanceTimersByTimeAsync(100);
+      status(); status(99); status(1, 2);
+      camp.bot.inventory.slots[45].durabilityUsed = 6;
+      camp.bot.entities[700] = { id: 700, name: 'small_fireball', type: 'projectile', position: new Vec3(0.5, 65, 0.5) };
+      camp.bot._client.emit('damage_event', { entityId: 1, sourceDirectId: 701, sourceCauseId: 101 });
+      camp.bot.health = 17; camp.bot.emit('health');
+      expect(camp.bot.shieldBlock.shieldCaught).toBe(3);
+      expect(camp.bot.shieldBlock.shieldMissed).toBe(1);
+      camp.bot.emit('entityDead', camp.mobs[0]);
+      await vi.advanceTimersByTimeAsync(100);
+      const { json } = await running;
+      expect(lineOf(json)).toContain('盾 −6（残り330）・盾で受けた 1（種別不明）・受け損ね 1');
+    });
+  });
+});
+
+describe('confirmed shield notices, without inferring a fireball from the shield or its flight', () => {
+  it('does not count raises, wear, burns, melee, another body, absorption, mixed batches or stale/unknown sources', () => {
+    const bot: any = Object.assign(new EventEmitter(), { _client: new EventEmitter(), health: 20, entity: { id: 1, position: new Vec3(0, 64, 0) }, entities: {
+      7: { id: 7, name: 'small_fireball' }, 8: { id: 8, name: 'blaze' },
+    } });
+    installShieldBlock(bot);
+    const hurt = (direct: number, body = 1) => bot._client.emit('damage_event', { entityId: body, sourceDirectId: direct + 1, sourceCauseId: 9 });
+    const health = (hp: number) => { bot.health = hp; bot.emit('health'); };
+    bot.shieldBlock.up = true; bot.shieldBlock.raised++; bot.emit('entityHurt', bot.entity); health(19);
+    hurt(8); health(18); hurt(7, 2); health(17); hurt(77); health(16);
+    hurt(7); health(16); // absorption, no health loss
+    hurt(7); hurt(8); health(14); // more than one damage notice: attribution is unknown
+    hurt(7); bot.emit('physicsTick'); health(13); // late health fall may be a burn
+    expect(bot.shieldBlock.shieldCaught).toBe(0);
+    expect(bot.shieldBlock.shieldMissed).toBe(0);
+    hurt(7); health(10); // the shield being up does not turn actual fireball damage into a catch
+    expect(bot.shieldBlock.shieldMissed).toBe(1);
+  });
+});
+
+describe('a burning retreat keeps go\'s fire and lava rules', () => {
+  afterEach(async () => {
+    vi.useRealTimers();
+    const actual = await vi.importActual<typeof import('../../src/services/minebot/utils/loadedBlockScan.js')>('../../src/services/minebot/utils/loadedBlockScan.js');
+    vi.mocked(scanLoadedBlocks).mockImplementation(actual.scanLoadedBlocks);
+  });
+  it.each(['onFire', 'fire', 'lava'])('%s: the real go never enters another fire/lava cell', async burning => {
+    vi.useFakeTimers();
+    const actual = await vi.importActual<typeof import('../../src/services/minebot/utils/primitives/go.js')>('../../src/services/minebot/utils/primitives/go.js');
+    vi.mocked(go).mockImplementation(actual.go); vi.mocked(go).mockClear();
+    vi.mocked(scanLoadedBlocks).mockImplementation((() => ({ hits: [{ name: 'spawner', position: new Vec3(-3, 64, 2), distance: 4 }], columns: 9, reachMetres: 48, sectionsScanned: 1 })) as never);
+    const sim: Sim = makeSim((x, y, z) => Math.abs(x) > 20 || Math.abs(z) > 20 ? null
+      : y < 64 || (x === 3 && y <= 68 && Math.abs(z) <= 6) ? 'stone'
+        : y === 64 && x === 1 && z === -2 ? 'fire' : y === 64 && x === 1 && z === 2 ? 'lava' : 'air', { items: [{ name: 'iron_sword', count: 1 }] });
+    sim.bot.entity.id = 1; sim.bot.heldItem = sim.items[0];
+    sim.bot.entities[100] = { id: 100, name: 'blaze', type: 'hostile', position: new Vec3(-2.5, 70.5, 0.5), height: 1.8, width: 0.6, isValid: true };
+    const unsafe: string[] = [];
+    sim.bot.on('physicsTick', () => {
+      const p = sim.bot.entity.position, x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
+      if (x === 0 && z === 0) return; // the cell already burning under the body is the origin, never a new destination
+      for (const dy of [-1, 0, 1]) if (['fire', 'lava'].includes(sim.world.nameAt(x, y + dy, z) ?? '')) unsafe.push(`${x},${y + dy},${z}`);
+    });
+    const running = fight({ bot: sim.bot, stop: new AbortController().signal, deadline: Date.now() + 60_000, base: { x: 0, y: 64, z: 0 }, facing: 'north' }, { target: 'blaze', seconds: 30 });
+    let done = false;
+    running.then(() => { done = true; }, () => { done = true; });
+    await vi.advanceTimersByTimeAsync(100);
+    if (burning === 'onFire') sim.bot.entity.onFire = true;
+    else sim.world.set(0, 64, 0, burning);
+    sim.bot.health = 11; sim.bot.emit('health');
+    for (let elapsed = 0; !done && elapsed < 60_000; elapsed += 50) { sim.tick(); await vi.advanceTimersByTimeAsync(50); }
+    expect(done).toBe(true);
+    const outcome = await running;
+    expect(vi.mocked(go)).toHaveBeenCalled();
+    expect(unsafe).toEqual([]);
+    if (burning === 'onFire') expect(outcome.text).toContain('退いた先');
+    for (const [, args] of vi.mocked(go).mock.calls) expect(args).not.toHaveProperty('canDig');
+  });
 });
 
 describe('StrikeGate: the patience is a budget, not a delay on every blow', () => {
