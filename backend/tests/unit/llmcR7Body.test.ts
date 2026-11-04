@@ -102,17 +102,33 @@ describe('the cover: burning in a shooter\'s line, the body cuts the line by its
     expect(bot.__dug).toEqual([]);
   });
 
-  it('no cell out of the line within two (an open floor): digs down, and seals the hole over the head when that cuts the line', async () => {
+  it('no cell out of the line within two (an open floor, the blaze overhead): no dig, since going down leaves the lines open (B1: no shaft); told once', async () => {
+    // Before B1 the body dug three down and sealed itself in under the floor, with no way back up (run 31's shaft under the bridge).
     const clock = { at: 9_100_000 };
     const { bot, ledger } = burning(field, { mobs: { 9: blaze(9, 1.5, 72, 0.5) }, items: [COBBLE], now: () => clock.at });
     bot.heldItem = COBBLE;
     await ticksUntilQuiet(bot, clock, 10);
-    expect(bot.__dug).toEqual(['0,63,0', '0,62,0', '0,61,0']);
+    expect(bot.__dug).toEqual([]);
+    expect(bot.__placed).toEqual([]);
+    const lines = covers(ledger);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ kind: 'cover_none', outcome: 'failed' });
+    expect(lines[0].detail).toContain('下がっても見える線が減らない');
+    expect(lines[0].detail).toContain('見えている: blaze #9 上8・');
+  });
+
+  it('in a pit three deep, the blaze overhead: seals the hole over the head, and that cuts the line', async () => {
+    const clock = { at: 9_150_000 };
+    const pit = (x: number, y: number, z: number): Cell => (x === 0 && z === 0 && y >= 61 && y <= 63 ? AIR : field(x, y, z));
+    const { bot, ledger } = burning(pit, { mobs: { 9: blaze(9, 1.5, 72, 0.5) }, items: [COBBLE], now: () => clock.at });
+    bot.entity.position = new Vec3(0.5, 61, 0.5);
+    bot.heldItem = COBBLE;
+    await ticksUntilQuiet(bot, clock, 4);
+    expect(bot.__dug).toEqual([]);
     expect(bot.__placed).toEqual(['0,63,0']);
     const lines = covers(ledger).map(entry => entry.detail);
-    expect(lines[0]).toMatch(/^燃えて射手から見えている: 足元を掘って下がった \(0,64,0\)。まだ見えている: blaze #9 上9・\d+\.\dm 体力18$/u);
-    expect(lines.at(-1)).toMatch(/^燃えて射手から見えている: 頭の上 \(0,63,0\) を cobblestone で塞いだ。射線が切れた/u);
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^燃えて射手から見えている: 頭の上 \(0,63,0\) を cobblestone で塞いだ。射線が切れた/u);
   });
 
   it('lava beside the cell under the feet: no dig; the facts of why no hand is made are told once', async () => {

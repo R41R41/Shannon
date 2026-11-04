@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
+import { performance as wallClock } from 'node:perf_hooks';
 import minecraftData from 'minecraft-data';
 import blockLoader from 'prismarine-block';
 import pathfinder from 'mineflayer-pathfinder';
@@ -307,7 +308,13 @@ export function makeHandsSim(ground: Ground, options: { start?: [number, number,
       portalTicks++;
       if (portalTicks >= 80 && bot.game.dimension === 'overworld') { bot.game.dimension = 'the_nether'; log.push('dimension the_nether'); bot.emit('respawn'); }
     } else portalTicks = 0;
-    bot.emit('physicsTick');
+    // The pathfinder reads perf_hooks' clock, which fake timers leave on the wall: its stuck check (3.5 s without a node) and its think budget
+    // (40 ms a tick) then ran by the CPU's load, and a loaded machine re-stood the body and lost tries (obsidianHand). For the tick it reads the
+    // test's time, and each read moves it on 0.01 ms, so a search thinks as many nodes a tick on any machine.
+    const realNow = wallClock.now;
+    let reads = 0;
+    wallClock.now = () => Date.now() + (reads++) * 0.01;
+    try { bot.emit('physicsTick'); } finally { wallClock.now = realNow; }
   };
   return { bot, world, control, tick, give, items, nameAt: world.nameAt, log, recompute, count: (name: string) => items.filter(item => item.name === name).reduce((sum, item) => sum + item.count, 0) };
 }
