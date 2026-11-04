@@ -1061,6 +1061,35 @@ r225では旧use時点のローカル眼も6.14771mで、旧判定だけが1移�
 
 変更は指定コピーの `fallClutch.ts`、`minecraftFallClutch.test.ts`、このfallClutch節だけ、HEAD `3cec3da` のまま未コミット。`FALL_CLUTCH_ENABLED=false` を維持し、`floorReflexes.ts` は読み取りのみ。座標／seedの実装への決め打ち、環境変数スイッチ、新しいhand、反射の緩和は追加しない。`.codex-material/` は参照・変更せず、根拠は `lab-evidence/` を読み取った。ラボ／VM／本体／DB／外部資料の更新は行わない。
 
+### r233：支持候補の消失を「持ち替えの3 tick不足」と扱わない（頼み28、2026-11-04）
+
+**原因は `clutch()` の `!support || !timeToEquip(bot.entity, support.source.y)` が、予測支持の消失を時間不足と同じ理由で拒否していたこと。** 持ち替えの余裕を、開始判定と実行の両方で共通の `canPrepareBucket` に分離した。現在列の `groundUnder.drop` とvyで準備期間の下降量を見積もり、読み込み済み空気70セルを走査し切った場合も最低限の空間の根拠として使う。床を見つけたという意味にはせず、開始に必要な支持とpour時の床・射程確認は維持する。
+
+根拠は `lab-evidence/r233-report.json` の `scenes.end_bed_kill.knocks[0]` と `r233-probe-tail.log`。最高点2664はy=142.84631、開始2676、失敗ledgerの観測2677、接地／死亡2715（y=68）。水使用0、設置確認0。開始理由の「75／あと69／被害72」は **支持top68** に一致する。r232は手のバケツで1122に開始、1158にpour、1159に水を確認してHP20で接地しており、pack用の実行前再判定を通らない成功例である。
+
+| 観測／再現状態 | 足y／vy | 中央列 | 予測支持と旧判定 |
+| --- | --- | --- | --- |
+| 2675の記録 | 138.07886／−0.83772 | 70セル走査終了 | top68の支持ブロックy67もまだ走査外で、開始しない |
+| 2676の位置に2675の水平速度を引き継いだ再現 | 137.24114／−0.89937 | 70セル走査終了 | vx=−0.0416647、vz=0.2720775なら予測footprintが高い床へ届き、top68／drop69で開始理由を再現 |
+| 2676の記録済み速度 | 137.24114／−0.89937、vx=vz=0 | 70セル走査終了 | 高い床の列へ進まず、支持なし |
+| 2677の記録 | 136.34178／−0.95978、vx=−0.0038569、vz=0.0251864 | 70セル走査終了 | 8tickのfootprintが高い床の列へ届かず、旧runは持ち替え前に拒否 |
+
+`forecastSupports` は **8tick内に接地しなくても支持を返す**。各予測footprintの列は現在の足yから70セル下まで読む。従って「69mも高いので8tick内に地面が無い」だけが原因ではない。2676では中央列の低い床top64が走査外でも、隣の高い床top68のブロックy67は読める。水平速度が止まると予測先が変わり、そちらを見なくなる。`floorReflexes.clutchTick` は `clutchWanted` の後、`take` で既存actionを中断してからrunへ進む。`ActionExecution` の中断処理はpathfinderのstop／setGoal(null)を呼び、インストール済みpathfinderのstop→fullStopにはvx／vzを0にする処理がある。この経路と記録の速度変化が不一致を説明する。
+
+ただし、**開始前の2676の正確なvx／vz、当時読んだ全ブロック、runの呼出tickは保存されていない**。試験は2675の水平速度を引き継いだ状態と、記録済みの2676／2677を区別する。高い床を(0,0)のtop68、その周囲をtop64とする最小fixtureは記録の床と接地に整合するが、実世界全体の復元ではない。2677はledgerを記録側が観測したtickであり、拒否自体は2676内に起きた可能性がある。開始atMs→失敗ledgerは44msで、3tickを消費した証拠ではない。
+
+`support.source.y` は支持ブロックの **上面** で正しい。旧 `timeToEquip` のループは `tick <= EQUIP_TICKS` なので、EQUIP_TICKS=3でも4移動分を積分する。支持top68を渡せば、2676の4tick後y=133.05152、2677は131.92235で、どちらも従来の眼高4.4m条件を十分満たす。旧式の拒否はこの時間計算より前の `!support` で再現する。重力0.08／抗力0.98の単純積分ではtop68までそれぞれ38／37tick、実接地までも39／38tickある。`GAP_MS=6000` は初回拒否の原因ではなく、開始時に `memory.clutchAt` を置くので、その後約1.9秒の落下中に再試行できなかった理由である。今回はGAPや失敗時の扱いを変更しない。
+
+修正後の持ち替え予算は **equip 3tick＋pour判断1tick＋余裕1tick**。5移動分の下降より大きい空間を要求し、従来の4移動後も眼高がpour窓より上という条件も残す。現在列のdropは足の端数を含まない保守的な下限とし、予測支持があれば、より高い床までの距離も上限として使う。支持が無くても、走査を完了した空気の深さが十分なら、既に開始判断を通ったrunはpackの持ち替えを始められる。未知／水／溶岩／partial cubeはこの根拠にしない。`clutchWanted` 自体は従来どおり予測full cube、落下被害、End、速度、体力、bucket、能力、cooldownを要求する。**共通化するのは持ち替え予算であり、開始条件全体をrunから呼び直してcooldownで自分を拒否する変更ではない。**
+
+`equipWhileFalling` の実時間上限150ms／4回目のphysicsTickで終了する制限、所有権検査、遅延nativeクリックの送信検査は変更しない。持ち替えが完了すれば、その時点で再び5tick分の余裕を要求せず、従来のmove内でpourを待つ。現在眼高・full cube・空気・視線・3D射程を満たすposition packet直後の機会は使う。空きhotbarなら実Mineflayer equipの2クリック、全枠が埋まっていてもLRU交換の3クリックを使い、捨てる操作や新しいhandは加えない。
+
+単体試験へ2664〜2715の **52件のposition／velocityをインライン収録** し、未追跡のラボJSONが無くても実行できるようにした。修正前は2676／2677開始×hotbar空きあり／全枠満杯の4条件でequip0を再現。修正後は模擬ACK40ms／clickで80／120ms以内に持ち替え、全4条件で2714のposition直後に1回pour、2715に対象(0,68,0)の水を確認する。残り69mの開始／実行判断の一致、残り10m／5m・vy=−2.4で持ち替えも送信もしないこと、ゆっくりした落下との区別、5tick目の余裕不足、高い隣接支持、未知／液体／partialの拒否、持ち替え中の位置補正で直ちにpour窓へ入った場合も検査した。従来のr220、r224／r225、割込み・期限・所有権、756条件の離散落下モデルも維持する。
+
+検証：Node v24.21.0。fallClutch **116件（新規17件）**＋既存DragonFight **69件＝185件成功、既存2件skip**。DragonFightのclutch fixtureは既にmoveを発行しており、変更不要だった。既存の隔離フラグとOpenAI／Mongoのダミー値は試験子プロセスだけへ渡し、共有.env／DB／APIを使わない。通常のbackend TypeScript設定で変更2 TS rootだけの構文／semantic／compiler options診断0件、依存先自身と全backendの型検査は対象外。`git diff --check` 成功。
+
+仮定と残課題：再現は既存のpacket順序モデルと最小地形、模擬ACKに依存し、実受信順序・ACK遅延・recent-dig待機・位置補正・救命を証明しない。空中の射程内サンプルが無い落下、既送信クリックの中断後のcursor整合、packの実在庫／移動履歴、cooldownによる再試行停止も残る。S1が本変更入りのpackバケツで実機検証する。指定コピーのHEAD `562cbe1` に対する未コミット変更は `fallClutch.ts`、`minecraftFallClutch.test.ts`、この節だけ。`FALL_CLUTCH_ENABLED=false`、`floorReflexes.ts` と反射、hand一覧、環境変数設定は維持し、`.codex-material/` は参照・変更しない。ラボ／VM／本体／DB／外部資料更新・commit・pushは行わない。
+
 ## 頼み23：ベッドの柱を丸石、壁だけ黒曜石にする（2026-11-04）
 
 r216の `bed_halves_missing_or_wrong_facing` は、設置時の向き違いとは確認できない。座り8／bedTrials 2は足 `(-1,67,-5)` → 枕 `(-2,67,-5)` のwest、座り13／trial 3は足 `(4,66,2)` → 枕 `(5,66,2)` のeastで、どちらも計画と設置handの成功文が一致する。枕は50ms後に届き、両半分を確認した `placedTick` は5400／8251。その後、use直前の5411／8262に `observedHalves:null` となり、`useTick:null`／`useRequested:false` のまま拒否されている。失敗箇所は **設置の後、use送信前の足側state読取り** まで絞れる。

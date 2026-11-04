@@ -110,8 +110,8 @@ function legacyPhysicsPour(f: ReturnType<typeof rig>, floor: number) {
   f.bot.on('physicsTick', listener);
 }
 
-function packedRig(full = false, clickMs = 40, floorTop = 65) {
-  const f = rig(() => floorTop), slots: Array<{ name: string; slot: number } | null> = Array(46).fill(null);
+function packedRig(full = false, clickMs = 40, floorTop: number | ((x: number, z: number) => number) = 65) {
+  const f = rig(typeof floorTop === 'function' ? floorTop : () => floorTop), slots: Array<{ name: string; slot: number } | null> = Array(46).fill(null);
   slots[36] = { name: 'iron_sword', slot: 36 };
   if (full) for (let slot = 37; slot <= 44; slot++) slots[slot] = { name: `hotbar_${slot}`, slot };
   if (full) for (let slot = 9; slot < 36; slot++) slots[slot] = { name: `pack_${slot}`, slot };
@@ -153,6 +153,64 @@ function packedRig(full = false, clickMs = 40, floorTop = 65) {
   const equip = vi.spyOn(bot as unknown as FallBody & { equip: NonNullable<FallBody['equip']> }, 'equip');
   return { ...f, bot: bot as typeof bot & Required<Pick<FallBody, 'equip' | 'setQuickBarSlot'>>, slots, packets, equip };
 }
+
+// r233-report.json scenes.end_bed_kill.knocks[0].trajectory, ticks 2664..2715 (tick, x/y/z, vx/vy/vz).
+// Inline evidence keeps the regression independent of the untracked lab reports. These are test coordinates only.
+const r233Frames = [
+  [2664, 1.6261382898425467, 142.84630850284884, -4.3660775357695725, -0.03949651401529117, -0.07066830821567566, 0.25791870618455237],
+  [2665, 1.5866417758272555, 142.77564019463316, -4.10815882958502, -0.039798759292004014, -0.14765494492513206, 0.25989241735030205],
+  [2666, 1.5468430165352516, 142.62798524970802, -3.848266412234718, -0.040073802493812705, -0.2231018503688029, 0.2616884945111343],
+  [2667, 1.5067692140414388, 142.4048833993392, -3.586577917723584, -0.04032409180745861, -0.29703981914263583, 0.26332292472749164],
+  [2668, 1.4664451222339803, 142.10784358019657, -3.3232549929960924, -0.04055185508287639, -0.36949902995124695, 0.2648102562243768],
+  [2669, 1.425893267151104, 141.73834455024533, -3.0584447367717154, -0.04075911966350657, -0.44050905792573564, 0.2661637278865423],
+  [2670, 1.3851341474875973, 141.2978354923196, -2.792281008885173, -0.04094773043188003, -0.5100988866951434, 0.2673953870991129],
+  [2671, 1.3441864170557174, 140.78773660562445, -2.5248856217860602, -0.04111936623109989, -0.5782969202164835, 0.2685161969825522],
+  [2672, 1.3030670508246176, 140.20943968540797, -2.256369424803508, -0.04127555480838995, -0.6451309943681711, 0.2695361339764819],
+  [2673, 1.2617914960162275, 139.5643086910398, -1.986833290827026, -0.04141768641372391, -0.7106283883115838, 0.27046427664095796],
+  [2674, 1.2203738096025036, 138.8536803027282, -1.7163690141860684, -0.04154702617457781, -0.7748158356253918, 0.27130888646563117],
+  [2675, 1.1788267834279258, 138.07886446710282, -1.4450601277204371, -0.04166472535695486, -0.8377195352172021, 0.2720774814060838],
+  [2676, 1.137162058070971, 137.24114493188563, -1.1729826463143533, 0, -0.899365162016969, 0],
+  [2677, 1.137162058070971, 136.34177976986865, -1.1729826463143533, -0.003856931538089053, -0.9597778774565376, 0.025186394722359413],
+  [2678, 1.137162058070971, 135.38200189241212, -1.1729826463143533, -0.003856931538089053, -1.018982339739596, 0.025186394722359413],
+  [2679, 1.1333051265328817, 134.3630195526725, -1.147796251591994, -0.007366739237750091, -1.0770027139062288, 0.04810601391970648],
+  [2680, 1.1259383872951316, 133.28601683876627, -1.0996902376722875, -0.010560664244441636, -1.1338626816961797, 0.06896286738929232],
+  [2681, 1.1153777230506898, 132.1521541570701, -1.030727370282995, -0.013467136000530943, -1.1895854512148494, 0.08794260404661543],
+  [2682, 1.1019105870501589, 130.96256870585526, -0.9427847662363797, -0.01611202529857221, -1.2441937664059732, 0.10521416440477944],
+  [2683, 1.1019105870501589, 129.7183749394493, -0.9427847662363797, -0.003856931538089053, -1.2977099163348456, 0.025186394722359413],
+  [2684, 1.0980536555120697, 128.42066502311445, -0.9175983715140204, -0.007366739237750091, -1.35015574428588, 0.04810601391970648],
+  [2685, 1.0906869162743196, 127.07050927882857, -0.8694923575943139, -0.010560664244441636, -1.4015526566782186, 0.06896286738929232],
+  [2686, 1.0801262520298778, 125.66895662215035, -0.8005294902050215, -0.013467136000530943, -1.4519216318030286, 0.08794260404661543],
+  [2687, 1.0801262520298778, 124.21703499034732, -0.8005294902050215, -0.003856931538089053, -1.5012832283860544, 0.025186394722359413],
+  [2688, 1.0762693204917886, 122.71575176196126, -0.7753430954826621, -0.007366739237750091, -1.5496575939789174, 0.04810601391970648],
+  [2689, 1.0689025812540385, 121.16609416798234, -0.7272370815629556, -0.010560664244441636, -1.597064473182591, 0.06896286738929232],
+  [2690, 1.0583419170095967, 119.56902969479975, -0.6582742141736633, -0.013467136000530943, -1.6435232157064055, 0.08794260404661543],
+  [2691, 1.0448747810090657, 117.92550647909334, -0.5703316101270479, -0.01611202529857221, -1.689052784265874, 0.10521416440477944],
+  [2692, 1.0448747810090657, 116.23645369482747, -0.5703316101270479, -0.003856931538089053, -1.7336717623225606, 0.025186394722359413],
+  [2693, 1.0410178494709765, 114.50278193250492, -0.5451452154046885, -0.007366739237750091, -1.777398361669153, 0.04810601391970648],
+  [2694, 1.0336511102332264, 112.72538357083576, -0.4970392014849821, -0.010560664244441636, -1.8202504298628324, 0.06896286738929232],
+  [2695, 1.0230904459887846, 110.90513314097292, -0.42807633409568974, -0.013467136000530943, -1.8622454575099763, 0.08794260404661543],
+  [2696, 1.0230904459887846, 109.04288768346295, -0.42807633409568974, -0.003856931538089053, -1.903400585405169, 0.025186394722359413],
+  [2697, 1.0192335144506954, 107.13948709805778, -0.40288993937333034, -0.007366739237750091, -1.9437326115274296, 0.04810601391970648],
+  [2698, 1.0118667752129453, 105.19575448653036, -0.35478392545362386, -0.010560664244441636, -1.9832579978965172, 0.06896286738929232],
+  [2699, 1.0013061109685035, 103.21249648863385, -0.2858210580643315, -0.013467136000530943, -2.02199287729211, 0.08794260404661543],
+  [2700, 0.9878389749679726, 101.19050361134174, -0.1978784540177161, -0.01611202529857221, -2.0599530598386004, 0.10521416440477944],
+  [2701, 0.9878389749679726, 99.13055055150313, -0.1978784540177161, -0.003856931538089053, -2.097154039458194, 0.025186394722359413],
+  [2702, 0.9839820434298834, 97.03339651204494, -0.1726920592953567, -0.007366739237750091, -2.1336110001949478, 0.04810601391970648],
+  [2703, 0.9839820434298834, 94.89978551185, -0.1726920592953567, -0.003856931538089053, -2.1693388224123282, 0.025186394722359413],
+  [2704, 0.9801251118917942, 92.73044668943767, -0.1475056645729973, -0.007366739237750091, -2.204352088866815, 0.04810601391970648],
+  [2705, 0.9727583726540441, 90.52609460057086, -0.09939965065329082, -0.010560664244441636, -2.238665090660037, 0.06896286738929232],
+  [2706, 0.9621977084096023, 88.28742950991082, -0.030436783263998513, -0.013467136000530943, -2.272291833071863, 0.08794260404661543],
+  [2707, 0.9487305724090713, 86.01513767683896, 0.0575058207826169, -0.01611202529857221, -2.305246041276832, 0.10521416440477944],
+  [2708, 0.9487305724090713, 83.70989163556213, 0.0575058207826169, -0.003856931538089053, -2.337541165946253, 0.025186394722359413],
+  [2709, 0.9448736408709821, 81.37235046961588, 0.08269221550497632, -0.007366739237750091, -2.3691903887382666, 0.04810601391970648],
+  [2710, 0.937506901633232, 79.00316008087762, 0.1307982294246828, -0.010560664244441636, -2.400206627678101, 0.06896286738929232],
+  [2711, 0.937506901633232, 76.60295345319952, 0.1307982294246828, -0.003856931538089053, -2.430602542430726, 0.025186394722359413],
+  [2712, 0.9336499700951428, 74.1723509107688, 0.15598462414704223, -0.007366739237750091, -2.460390539468055, 0.04810601391970648],
+  [2713, 0.9262832308573927, 71.71196037130075, 0.2040906380667487, -0.010560664244441636, -2.489582777132798, 0.06896286738929232],
+  [2714, 0.9157225666129509, 69.22237759416795, 0.273053505456041, -0.013467136000530943, -2.5181911706010442, 0.08794260404661543],
+  [2715, 0.90225543061242, 68, 0.3609961095026564, -0.012255093760483159, -0.0784000015258789, 0.08002776968242004],
+] as const;
+const r233Top = (x: number, z: number) => x === 0 && z === 0 ? 68 : 64;
 
 afterEach(() => { vi.useRealTimers(); });
 
@@ -562,6 +620,118 @@ describe('pack bucket preparation and forecast start (r220)', () => {
     expect(clutchWanted(f.bot, f.memory, 1000)).toBeNull();
     visible = true;
     expect(clutchWanted(f.bot, f.memory, 1050)).not.toBeNull();
+  });
+});
+
+describe('r233 pack preparation after the horizontal forecast changes', () => {
+  it('reproduces the 2676 start with carried horizontal velocity, then loses the forecast support at 2676/2677', () => {
+    const f = packedRig(false, 40, r233Top), b = f.bot.entity;
+    for (const [tick, x, y, z, vx, vy, vz] of r233Frames) {
+      if (tick >= 2676) break;
+      Object.assign(b, { position: new Vec3(x, y, z), velocity: new Vec3(vx, vy, vz) });
+      expect(clutchWanted(f.bot, f.memory, 1000)).toBeNull();
+    }
+    const [, x, y, z, , vy] = r233Frames[2676 - 2664];
+    const previous = r233Frames[2675 - 2664];
+    // The report samples AFTER the handover: it does not contain the exact pre-stop vx/vz.
+    // Carry the last observed horizontal velocity to show how the high (0,0) support was seen.
+    Object.assign(b, { position: new Vec3(x, y, z), velocity: new Vec3(previous[4], vy, previous[6]) });
+    expect(groundUnder(bodyReader(f.bot as never), b.position).kind).toBe('void');
+    expect(groundUnder(bodyReader(f.bot as never), { x: 0.5, y, z: 0.5 })).toMatchObject({ kind: 'floor', top: 68, drop: 69 });
+    expect(clutchWanted(f.bot, f.memory, 1000)).toBe('落ちて75ブロック（地面まであと69、受ける被害およそ72）');
+    for (const tick of [2676, 2677]) {
+      const [, fx, fy, fz, vx, fvy, vz] = r233Frames[tick - 2664];
+      Object.assign(b, { position: new Vec3(fx, fy, fz), velocity: new Vec3(vx, fvy, vz) });
+      // No floor is inside the forecast footprints' 70-cell columns after the horizontal stop.
+      expect(clutchWanted(f.bot, f.memory, 1000)).toBeNull();
+    }
+  });
+
+  it.each([false, true].flatMap(full => [2676, 2677].map(start => ({ full, start }))))('r233: starts pack equip at $start despite the missing support, then pours at 2714; full hotbar=$full', async ({ full, start }) => {
+    vi.useFakeTimers();
+    const f = packedRig(full, 40, r233Top), b = f.bot.entity;
+    f.memory.from = r233Frames[0][2];
+    let running: ReturnType<typeof runFallClutch> | undefined;
+    for (const [tick, x, y, z, vx, vy, vz] of r233Frames) {
+      Object.assign(b, { position: new Vec3(x, y, z), velocity: new Vec3(vx, vy, vz), onGround: tick === 2715, isInWater: f.water.has(cellKey(new Vec3(x, y, z))) });
+      if (tick === start) {
+        f.memory.clutchAt = Date.now(); // The floor already admitted this fall and started its unchanged 6s cooldown.
+        running = runFallClutch(f.bot, createMotorPort(f.bot), f.memory);
+        expect(f.equip, 'a lost support must not mean that only three ticks remain').toHaveBeenCalledTimes(1);
+      }
+      f.emit();
+      await vi.advanceTimersByTimeAsync(50);
+      if (tick === start + 2) expect(f.bot.heldItem.name).toBe('water_bucket');
+    }
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(await running).toMatchObject({ success: true });
+    expect(f.sends).toHaveLength(1);
+    expect(r233Frames[f.sends[0].tick - 1][0]).toBe(2714);
+    expect(f.sends[0]).toMatchObject({ reachable: true, source: { x: 0, y: 68, z: 0 } });
+    const use = f.wire.findIndex(packet => packet.name === 'use_item');
+    expect(f.wire[use - 1]).toMatchObject({ name: 'position', tick: f.sends[0].tick });
+    expect(f.memory.pour?.status).toBe('water_observed');
+    expect(f.packets.filter(packet => packet.name === 'window_click').map(packet => packet.slot)).toEqual(full ? [20, 36, 20] : [20, 37]);
+    if (full) expect(f.slots[20]).toEqual({ name: 'iron_sword', slot: 20 });
+    for (const event of ['physicsTick', 'move', 'blockUpdate', 'end']) expect(f.bot.listenerCount(event)).toBe(0);
+  });
+
+  it.each([
+    { drop: 69, vy: -1.1, allowed: true },
+    { drop: 10, vy: -0.75, allowed: true },
+    { drop: 10, vy: -2.4, allowed: false },
+    { drop: 5, vy: -2.4, allowed: false },
+    { drop: 5, vy: -0.75, allowed: false },
+    { drop: 19, vy: -3.9, allowed: false }, // Four movements clear the old reach margin, but the fifth hits the floor.
+  ])('shares the pack preparation decision at drop=$drop, vy=$vy between wanted and run', async ({ drop, vy, allowed }) => {
+    vi.useFakeTimers();
+    const f = packedRig(), b = f.bot.entity;
+    b.position.y = 65 + drop; b.velocity.y = vy; f.memory.from = 170;
+    expect(clutchWanted(f.bot, f.memory, 1000) !== null).toBe(allowed);
+    const running = runFallClutch(f.bot, f.bot, f.memory);
+    expect(f.equip).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    if (allowed) f.bot.emit('end');
+    else expect((await running).result).toContain('持ち替え');
+    await running;
+    expect(f.packets.filter(packet => packet.name === 'window_click')).toHaveLength(0);
+    if (!allowed) expect(f.packets).toHaveLength(0);
+  });
+
+  it('keeps the pour opportunity after equip settles even if a correction has already brought the floor into reach', async () => {
+    vi.useFakeTimers();
+    const f = packedRig(true), b = f.bot.entity;
+    b.velocity.y = -1.1;
+    const running = runFallClutch(f.bot, createMotorPort(f.bot), f.memory);
+    b.position.y = 67; b.velocity.y = -2.4;
+    await vi.advanceTimersByTimeAsync(120);
+    expect(f.bot.heldItem.name).toBe('water_bucket');
+    f.emit();
+    expect(f.sends).toHaveLength(1);
+    expect(f.sends[0].reachable).toBe(true);
+    b.position.y = 65; b.onGround = true; f.emit();
+    await vi.advanceTimersByTimeAsync(4000); await running;
+  });
+
+  it('uses a higher forecast support for the budget even when the centre column is much deeper', async () => {
+    const f = packedRig(false, 40, x => x >= 1 ? 94 : 65), b = f.bot.entity;
+    b.velocity = new Vec3(0.5, -2.4, 0); f.memory.from = 170;
+    expect(groundUnder(bodyReader(f.bot as never), b.position).drop).toBe(35);
+    expect(clutchWanted(f.bot, f.memory, 1000)).toBeNull();
+    expect(await runFallClutch(f.bot, f.bot, f.memory)).toMatchObject({ success: false });
+    expect(f.equip).not.toHaveBeenCalled(); expect(f.packets).toHaveLength(0);
+  });
+
+  it.each(['unknown', 'lava', 'water', 'partial'])('refuses pack preparation over %s instead of treating it as a clear deep column', async kind => {
+    const f = packedRig(), original = f.bot.blockAt;
+    f.bot.entity.velocity.y = -1.1;
+    f.bot.blockAt = p => {
+      if (p.y >= 65) return original(p);
+      if (kind === 'unknown') return null as never;
+      return { ...original(p), name: kind === 'partial' ? 'end_stone' : kind, shapes: kind === 'partial' ? [[0, 0, 0, 1, 0.5, 1]] : [], boundingBox: kind === 'partial' ? 'block' : 'empty' };
+    };
+    expect(clutchWanted(f.bot, f.memory, 1000)).toBeNull();
+    expect(await runFallClutch(f.bot, f.bot, f.memory)).toMatchObject({ success: false });
+    expect(f.equip).not.toHaveBeenCalled(); expect(f.packets).toHaveLength(0);
   });
 });
 

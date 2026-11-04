@@ -40,6 +40,7 @@ const CLUTCH_TICKS = 160;
 const CLUTCH_WAIT_MS = 8000;
 const EQUIP_TICKS = 3;
 const EQUIP_WAIT_MS = EQUIP_TICKS * 50;
+const POUR_TICKS = 1, EQUIP_MARGIN_TICKS = 1;
 const SCOOP_TRIES = 3;
 /** A note of water left behind is kept this long, tried this many times (one try per SCOOP_GAP_MS at the most), and only while the body is within SCOOP_NEAR blocks of the water. */
 export const SCOOP_PENDING_MS = 90_000;
@@ -115,12 +116,30 @@ function waterBucket(bot: FallBody): WaterBucket | null {
   return item ? { held: false, slot: -1, item } : null;
 }
 
-/** Leave three movements for equip and one for the post-position pour decision. A late pack swap never starts. */
-function timeToEquip(body: BodyEntity, floor: number): boolean {
-  if (!body.velocity || body.velocity.y > CLUTCH_FALLING_VY) return false;
-  let y = body.position.y, vy = body.velocity.y;
-  for (let tick = 0; tick <= EQUIP_TICKS; tick++) { vy = (vy - 0.08) * 0.98; y += vy; }
-  return y > floor && y + (body.eyeHeight ?? EYE_HEIGHT) - floor > CLUTCH_REACH;
+/** Integrate only the short preparation budget: three equip movements, one pour decision, one spare. */
+function timeToEquip(body: BodyEntity, drop: number): boolean {
+  if (!body.velocity || !Number.isFinite(body.velocity.y) || body.velocity.y > CLUTCH_FALLING_VY || !Number.isFinite(drop)) return false;
+  let left = drop, vy = body.velocity.y;
+  for (let tick = 1; tick <= EQUIP_TICKS + POUR_TICKS + EQUIP_MARGIN_TICKS; tick++) {
+    vy = (vy - 0.08) * 0.98; left += vy;
+    // Preserve the old margin above the pour window after the fourth movement.
+    if (tick === EQUIP_TICKS + POUR_TICKS && left + (body.eyeHeight ?? EYE_HEIGHT) <= CLUTCH_REACH) return false;
+  }
+  return left > 0;
+}
+
+/**
+ * Start and execution share the preparation budget, independently of finding a pour target.
+ * An exhausted, fully loaded 70-cell column proves a minimum clearance, not a floor. A horizontal stop during handover can lose the earlier forecast support (r233).
+ * Admission still needs an observed full-cube support; pouring rechecks the actual landing footprint and current-eye reach on move.
+ */
+function canPrepareBucket(bot: FallBody, read: BlockReader, body: BodyEntity, support?: ForecastSupport): boolean {
+  const ground = groundUnder(read, body.position);
+  if (ground.kind !== 'floor' && ground.kind !== 'void') return false;
+  if (ground.kind === 'floor' && !fullCube(bot, new Vec3(Math.floor(body.position.x), ground.top - 1, Math.floor(body.position.z)))) return false;
+  // drop excludes the feet's fractional cell, so it is a conservative lower bound. Honour a higher forecast support too.
+  const drop = support ? Math.min(ground.drop, body.position.y - support.source.y) : ground.drop;
+  return timeToEquip(body, drop);
 }
 
 /**
@@ -137,8 +156,8 @@ export function clutchWanted(bot: FallBody, memory: FallMemory, now: number): st
   const have = waterBucket(bot);
   if ((bot.health ?? 20) <= 0 || !have) return null;
   if (have.item && (!bot.equip || !bot._client || !bot.on || !bot.removeListener)) return null;
-  const support = forecastSupports(bot, bodyReader(bot as never), body).pop();
-  if (!support || (have.item && !timeToEquip(body, support.source.y))) return null;
+  const read = bodyReader(bot as never), support = forecastSupports(bot, read, body).pop();
+  if (!support || (have.item && !canPrepareBucket(bot, read, body, support))) return null;
   const drop = Math.max(0, y - support.source.y);
   const total = memory.from - support.source.y;
   const damage = total - 3;
@@ -545,8 +564,8 @@ async function clutch(bot: FallBody, port: FallBody, memory: FallMemory, clock: 
   try {
     if (interrupted(port)) return TAKEN;
     if (have.item) {
-      const support = bot.entity && forecastSupports(bot, bodyReader(bot as never), bot.entity).pop();
-      if (!support || !bot.entity || !timeToEquip(bot.entity, support.source.y)) return { success: false, result: '持ち替えの3 tickを残していないので水バケツを動かさない' };
+      const body = bot.entity, read = bodyReader(bot as never);
+      if (!body || !canPrepareBucket(bot, read, body, forecastSupports(bot, read, body).pop())) return { success: false, result: '持ち替え3 tickと注水1 tick・余裕を確認できないので水バケツを動かさない' };
       await equipWhileFalling(bot, port, have.item);
       if (interrupted(port)) return TAKEN;
     } else if (!have.held) port.setQuickBarSlot?.(have.slot);
