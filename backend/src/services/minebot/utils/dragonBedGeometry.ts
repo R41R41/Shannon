@@ -2,6 +2,7 @@ import { boxesOverlap, inflate, partBox, type Box, type P3 } from './dragonParts
 import { seatedDragonHead } from './dragonHeadModel.js';
 import { Vec3 } from 'vec3';
 import { dragonHazards } from './dragonDanger.js';
+import { knockGeometry } from './endKnockRecord.js';
 
 type BedBlock = { name: string; boundingBox?: string; shapes?: number[][] } | null;
 export type BedBlockReader = (p: P3) => BedBlock;
@@ -310,3 +311,37 @@ export function bedOpenWaitCells(anchor: P3, here: P3, read: BedBlockReader): P3
   }
   return cells.sort((a, b) => Math.abs(distance(here, a) - 3) - Math.abs(distance(here, b) - 3));
 }
+
+/** r212/r214 pushBox overlaps reached 8–11 m from the body; r220 died at takeoff
+ * after a five-second go stopped short. Keep 3 m beyond that observed reach.
+ * Horizontal distance prevents a launch's height from counting as an evacuation. */
+export const BED_LEAVE_DISTANCE = 14;
+export function bedLeaveState(dragon: SeatedBedPose, feet: P3, current: SeatedBedPose | null = null) {
+  const bodyDistance = Math.hypot(feet.x - dragon.position.x, feet.z - dragon.position.z);
+  // Reuse the recorder's exact pushBox (partBox -> inflate(4,2,4) -> shift(0,-2,0)).
+  // dragonHazards intentionally omits wings; neither its reflex nor its thresholds change.
+  const poses = current ? [dragon, current] : [dragon];
+  const wingPushOverlap = poses.some(pose => knockGeometry(feet, pose).parts.some(part => part.pushOverlap));
+  return { bodyDistance, wingPushOverlap, safe: Number.isFinite(bodyDistance) && bodyDistance >= BED_LEAVE_DISTANCE && !wingPushOverlap };
+}
+
+/** Destinations only: go/reflexes retain ownership of the route. Enumerate near the
+ * anchor, even when the actor is still beside the dragon, and prefer the farthest
+ * observed open floor outside clouds and BOTH the seated/current wing push boxes. */
+export function bedLeaveCell(dragon: SeatedBedPose, anchors: readonly P3[], here: P3, read: BedBlockReader,
+  clouds: readonly BedCloud[] = [], reflexBot?: any, current: SeatedBedPose | null = null): P3 | null {
+  const dangerBot = reflexBot ?? seatedDangerReader(dragon, read);
+  return anchors.flatMap(anchor => [anchor, ...bedOpenWaitCells(anchor, anchor, read)]).filter(feet => {
+    const cell = { x: Math.floor(feet.x), y: Math.floor(feet.y), z: Math.floor(feet.z) };
+    return read({ ...cell, y: cell.y - 1 })?.name === 'end_stone'
+      && Array.from({ length: 7 }, (_, h) => air(read({ ...cell, y: cell.y + h }))).every(Boolean)
+      && bedLeaveState(dragon, feet, current).safe
+      && !clouds.some(c => Math.hypot(c.x - feet.x, c.z - feet.z) <= Math.max(7, c.dangerRadius ?? c.radius) + 0.5)
+      && dragonHazards(dangerBot, { along: [feet] }).length === 0;
+  }).sort((a, b) => bedLeaveState(dragon, b).bodyDistance - bedLeaveState(dragon, a).bodyDistance
+    || distance(here, a) - distance(here, b))[0] ?? null;
+}
+
+/** Allow slower routes/interruptions without the former five-second cutoff; all
+ * values are inside go's 5..120 s contract. A failed receipt never proves distance. */
+export const bedLeaveSeconds = (here: P3, to: P3): number => Math.min(20, Math.max(10, Math.ceil(distance(here, to) / 2) + 5));

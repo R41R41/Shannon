@@ -9,7 +9,7 @@ import * as headModel from '../../src/services/minebot/utils/dragonHeadModel.js'
 import { partBox, boxDistance, boxesOverlap, inflate, isPerched, type P3 } from '../../src/services/minebot/utils/dragonParts.js';
 import { dragonHazards } from '../../src/services/minebot/utils/dragonDanger.js';
 import { bedHalves } from '../../src/services/minebot/utils/bedRules.js';
-import { recordEndKnocks } from '../../src/services/minebot/utils/endKnockRecord.js';
+import { knockGeometry, recordEndKnocks } from '../../src/services/minebot/utils/endKnockRecord.js';
 
 const source = fs.readFileSync(new URL('../../scripts/minecraft-end-fight-probe.ts', import.meta.url), 'utf8');
 const section = '// ' + source.split('// ===== end_bed_kill:')[1].split('// ===== end end_bed_kill =====')[0];
@@ -17,6 +17,7 @@ const compiled = ts.transpileModule(section, { compilerOptions: { target: ts.Scr
 const bedUseRefusal: (input: any) => string | null = new Function('scenes', compiled + '\nreturn bedUseRefusal;')({});
 const bedSwordAllowed: (beds: number, unavailable: boolean) => boolean = new Function('scenes', compiled + '\nreturn bedSwordAllowed;')({});
 const bedPlacementRefusal: (input: any) => string | null = new Function('scenes', compiled + '\nreturn bedPlacementRefusal;')({});
+const bedLeaveReason: (input: any) => string | null = new Function('scenes', compiled + '\nreturn bedLeaveReason;')({});
 // Read the real schemas/range checker without importing the live body's service graph.
 const actSource = fs.readFileSync(new URL('../../src/services/minebot/instantSkills/act.ts', import.meta.url), 'utf8');
 const schema = actSource.slice(actSource.indexOf('const Pos ='), actSource.indexOf('export const ACT_STOP_IF'));
@@ -304,6 +305,60 @@ describe('turned seated head and bed operation geometry', () => {
   });
 });
 
+describe('takeoff evacuation destinations and time reserve', () => {
+  it.each([0, Math.PI / 4, Math.PI / 2, Math.PI, -Math.PI / 2])('selects farthest observed open ground beyond 14 m and the wing boxes (yaw %s)', yaw => {
+    const body = { position: p(103.5, 72, -39.5), yaw, phase: 5 };
+    const anchor = p(Math.floor(body.position.x + 12 * Math.cos(yaw)) + 0.5, 70, Math.floor(body.position.z - 12 * Math.sin(yaw)) + 0.5);
+    const read = (v: P3) => v.y < 70 ? solid('end_stone') : air();
+    const to = geometry.bedLeaveCell(body, [anchor], body.position, read)!;
+    expect(to).toBeTruthy();
+    const state = geometry.bedLeaveState(body, to);
+    expect(state.bodyDistance).toBeGreaterThanOrEqual(14); expect(state.safe).toBe(true);
+    expect(knockGeometry(to, body).parts.some(part => part.pushOverlap)).toBe(false);
+    expect(dragonHazards({ game: { dimension: 'the_end' }, entity: { position: new Vec3(to.x, to.y, to.z) },
+      entities: { 1: { name: 'ender_dragon', ...body, position: new Vec3(body.position.x, body.position.y, body.position.z), metadata: { 16: 5 } } }, blockAt: read }, { along: [to] })).toEqual([]);
+    const candidates = [anchor, ...geometry.bedOpenWaitCells(anchor, anchor, read)];
+    expect(state.bodyDistance).toBeCloseTo(Math.max(...candidates.map(at => geometry.bedLeaveState(body, at).bodyDistance)));
+    expect(geometry.bedLeaveState(body, p(body.position.x + 8, 170, body.position.z)).safe).toBe(false);
+  });
+  it('rejects even the farther candidate inside a CURRENT wing push box', () => {
+    const body = { position: p(103.5, 72, -39.5), yaw: 0, phase: 7 };
+    const current = { ...body, position: p(110, 72, -39.5), phase: 4 };
+    const side = p(119.5, 70, -39.5), behind = p(103.5, 70, -55.5);
+    const read = (v: P3) => v.y < 70 ? solid('end_stone') : air();
+    expect(geometry.bedLeaveState(body, side).safe).toBe(true);
+    expect(geometry.bedLeaveState(body, side, current).wingPushOverlap).toBe(true);
+    const to = geometry.bedLeaveCell(body, [side, behind], body.position, read, [], undefined, current)!;
+    expect(to).not.toEqual(side); expect(geometry.bedLeaveState(body, to, current).safe).toBe(true);
+    expect(knockGeometry(to, current).parts.some(part => part.pushOverlap)).toBe(false);
+  });
+  it('rejects unknown floors, roofs, and clouds instead of falling back to the old unsafe anchor', () => {
+    const body = { position: p(103.5, 72, -39.5), yaw: 0, phase: 5 }, anchor = p(115.5, 70, -39.5);
+    expect(geometry.bedLeaveCell(body, [anchor], anchor, () => null)).toBeNull();
+    expect(geometry.bedLeaveCell(body, [anchor], anchor, v => v.y < 70 || v.y === 75 ? solid('end_stone') : air())).toBeNull();
+    expect(geometry.bedLeaveCell(body, [anchor], anchor, v => v.y < 70 ? solid('end_stone') : air(), [{ ...anchor, radius: 50 }])).toBeNull();
+  });
+  it.each([0, 5, 14, 30, 1000])('allocates 10–20 seconds inside the actual go schema for %s metres', metres => {
+    const seconds = geometry.bedLeaveSeconds(p(0, 0, 0), p(metres, 0, 0));
+    expect(seconds).toBeGreaterThanOrEqual(10); expect(seconds).toBeLessThanOrEqual(20);
+    const hand = { do: 'go', to: p(metres, 0, 0), range: 0.5, maxDrop: 1, seconds };
+    expect(ACT_HANDS.safeParse([hand]).success).toBe(true); expect(goProblem(hand)).toBeNull();
+  });
+  const early = { now: 50, startTick: 0, endTick: null, phase: 7, phaseStart: 0, bedsPlaced: 2, bedsDetonated: 2, bedsRemaining: 6, pending: false, failedBed: false };
+  it('permits an early third bed, but gives its construction/use time to the exit near either deadline', () => {
+    expect(bedLeaveReason(early)).toBeNull();
+    expect(bedLeaveReason({ ...early, now: 99 })).toBeNull();
+    expect(bedLeaveReason({ ...early, now: 100 })).toBe('third_bed_exit_budget');
+    expect(bedLeaveReason({ ...early, now: 60, phase: 5 })).toBe('third_bed_exit_budget');
+    expect(bedLeaveReason({ ...early, bedsPlaced: 3, bedsDetonated: 3 })).toBe('three_bed_perch_limit');
+    expect(bedLeaveReason({ ...early, bedsPlaced: 3, pending: true })).toBeNull();
+    expect(bedLeaveReason({ ...early, bedsRemaining: 0 })).toBe('beds_exhausted');
+    expect(bedLeaveReason({ ...early, pending: true, failedBed: true })).toBe('unusable_bed');
+    expect(bedLeaveReason({ ...early, bedsPlaced: 0, now: 140 })).toBe('leave_time_reserve');
+    expect(bedLeaveReason({ ...early, bedsPlaced: 0, phase: 5, now: 100 })).toBe('flame_midpoint');
+  });
+});
+
 function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; limit?: number; damage?: number; headDelayMs?: number; beds?: number; obsidian?: number; cobblestone?: number; destroySupports?: boolean } = {}) {
   const t = terrain();
   const actor: any = new EventEmitter(); actor._client = new EventEmitter(); actor.health = 20; actor.food = 20;
@@ -319,7 +374,7 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
     preemptsSince: (mark: number) => preempts.filter(e => e.seq > mark), entriesSince: (mark: number) => entries.filter(e => e.seq > mark) };
   actor.blockAt = (v: P3) => t.read(v);
   const calls: any[] = [], commands: string[] = [], scenes: Record<string, any> = {};
-  let handler: ((hands: any[], signal: AbortSignal) => Promise<void | boolean>) | undefined;
+  let handler: ((hands: any[], signal: AbortSignal) => Promise<void | boolean | { ok: boolean; lines: string[]; ms?: number }>) | undefined;
   const clouds: any[] = [];
   actor.entities = { 77: d };
   const deps = { ...geometry, ...headModel, dragonEntity: () => d, Vec3, partBox, boxDistance, dragonHazards, isPerched, bedHalves, actor, actorDeaths: 0, disconnected, scenes, KILL_LIMIT_MS: options.limit ?? 10_000,
@@ -340,7 +395,9 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
       expect(ACT_HANDS.safeParse(hands).success).toBe(true);
       for (const hand of hands) if (hand.do === 'go') expect(goProblem(hand)).toBeNull();
       calls.push({ hands, at: Date.now(), signal });
-      if (handler && await handler(hands, signal) === false) return { ok: false, lines: ['mock refused'], ms: 0 };
+      const reply = handler ? await handler(hands, signal) : undefined;
+      if (reply === false) return { ok: false, lines: ['mock refused'], ms: 0 };
+      if (reply && typeof reply === 'object') return { ms: 0, ...reply };
       if (signal.aborted) return { ok: false, lines: ['aborted'], ms: 0 };
       for (const hand of hands) {
         if (hand.do === 'go') actor.entity.position = new Vec3(hand.to.x + 0.5, hand.to.y, hand.to.z + 0.5);
@@ -467,6 +524,7 @@ describe('end_bed_kill scene with mocked I/O', () => {
   });
   it('separates current-cloud rejections from geometry and caps diagnostics at the first twelve perches', async () => {
     vi.useFakeTimers(); const r = rig({ limit: 16_000 });
+    r.actor.entity.position.x += 4; // evacuations can finish between these deliberately rapid mock sits
     r.clouds.push({ x: r.perch.x, y: 70, z: r.perch.z, radius: 50 });
     const running = r.run();
     for (let n = 0; n < 14; n++) {
@@ -522,13 +580,16 @@ describe('end_bed_kill scene with mocked I/O', () => {
     expect(standAt).toHaveBeenCalledOnce(); expect(actor.floorReflexes).toBeTruthy();
     actor.floorReflexes = null; await expect(prepare(true, true)).rejects.toThrow('requires floor reflexes ON');
   });
-  it('reuses the same layout for three confirmed blasts in one sit, then falls back to sword', async () => {
+  it('reuses the same layout for three confirmed blasts, then evacuates without another attack', async () => {
     vi.useFakeTimers(); const r = rig({ hurt: true }), running = r.run();
-    await vi.advanceTimersByTimeAsync(10_000); const out = await running;
+    await vi.advanceTimersByTimeAsync(10_500); const out = await running;
     expect(r.deps.prepareKillRun).toHaveBeenCalledWith(true, true);
-    expect(out.ok).toBe(true); expect(out.bedsUsed).toBe(3); expect(out.placementAttempts).toBe(3); expect(out.explosionsHit).toBe(3); expect(out.detonations).toBe(3);
-    expect(out.windows).toHaveLength(11); expect(out.minHealth).toBe(14); expect(out.bossVerified).toBe(true);
-    expect(out.dragonDeadAt).toBeTruthy(); expect(out.killSeconds).toBeLessThan(10);
+    expect(out.ok).toBe(false); expect(out.bedsUsed).toBe(3); expect(out.placementAttempts).toBe(3); expect(out.explosionsHit).toBe(3); expect(out.detonations).toBe(3);
+    expect(out.windows).toEqual([]); expect(out.minHealth).toBe(14); expect(out.bossVerified).toBe(false);
+    expect(out.killSeconds).toBeNull(); expect(out.dragonHealthEnd).toBe(65);
+    expect(out.perches[0].leave.reason).toBe('three_bed_perch_limit');
+    expect(out.perches[0].leave.goCount).toBe(1); expect(out.perches[0].leave.goResults[0].safe).toBe(true);
+    expect(out.actions.at(-1).label).toBe('leave_on_takeoff');
     for (const b of out.bedTrials) {
       expect(b.useTick - b.placedTick).toBeGreaterThanOrEqual(4);
       expect(b.prediction.tick - b.prediction.observedTick).toBeGreaterThanOrEqual(4);
@@ -558,7 +619,7 @@ describe('end_bed_kill scene with mocked I/O', () => {
       expect(next.placementCheck.self.expected).toBeLessThanOrEqual(6);
       expect(next.placementCheck.self.expected + 4).toBeLessThan(next.placementCheck.health);
     }
-    expect(out.windows.every((w: any) => w.reason === 'three_bed_perch_limit')).toBe(true);
+    expect(out.perches[0].leave.startTick).toBeGreaterThanOrEqual(out.bedTrials[2].detonationTick);
     expect(r.commands).toEqual([]); expect(vi.getTimerCount()).toBe(0);
   });
   it('uses raw seated body pose even with missing or misleading client head data', async () => {
@@ -622,7 +683,7 @@ describe('end_bed_kill scene with mocked I/O', () => {
     if (cause === 'overlap') expect(out.refusals.some((f: any) => /_in_dragon$/u.test(f.reason))).toBe(true);
     if (cause === 'occupied') expect(out.refusals.some((f: any) => f.reason === 'bed_cells_not_air')).toBe(true);
     if (cause === 'phase' || cause === 'timeout') expect(out.actions.some((a: any) => a.label === 'leave_on_takeoff')).toBe(true);
-    if (cause === 'timeout') expect(out.perches[0].endTick - out.perches[0].startTick).toBe(240);
+    if (cause === 'timeout') expect(out.perches[0].endTick - out.perches[0].startTick).toBe(140);
   });
   it.each(['reflex', 'observation'] as const)('records the first %s interruption of approach with stand distances and phase', async cause => {
     vi.useFakeTimers(); const r = rig({ limit: 1500 });
@@ -724,6 +785,105 @@ describe('end_bed_kill scene with mocked I/O', () => {
     expect(out.actions.some((a: any) => a.label === 'leave_on_takeoff')).toBe(true);
     expect(r.calls.some(c => c.hands[0]?.do === 'use')).toBe(false); expect(vi.getTimerCount()).toBe(0);
   });
+  it('reissues evacuation after limit_time and a reflex stop, continuing throughout phase 4 until actual clearance', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 2500 }); let exits = 0, approach = true;
+    r.setHandler(async (hands, signal) => {
+      const hand = hands[0];
+      if (approach) {
+        approach = false; r.d.phase = 4;
+        await new Promise(resolve => setTimeout(resolve, 100)); expect(signal.aborted).toBe(true); return false;
+      }
+      if (hand.do !== 'go' || hand.seconds < 10) return;
+      if (++exits <= 2) return { ok: false, lines: [exits === 1 ? 'go stopped: limit_time; 13m remaining' : 'go stopped: reflex preempted'] };
+      expect(signal.aborted).toBe(false);
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(2800); const out = await running;
+    const leave = out.perches[0].leave;
+    expect(leave.startPhase).toBe(4); expect(leave.goCount).toBe(3);
+    expect(leave.goResults.map((row: any) => row.ok)).toEqual([false, false, true]);
+    expect(leave.goResults[0].lines.join()).toContain('limit_time');
+    expect(leave.goResults[1].lines.join()).toContain('reflex');
+    expect(leave.goResults[2].bodyDistance).toBeGreaterThanOrEqual(14); expect(leave.goResults[2].wingPushOverlap).toBe(false);
+    expect(leave.goResults[2].safe).toBe(true); expect(leave.safeTick).not.toBeNull();
+    expect(leave.phase4.tick).toBe(out.transitions.find((t: any) => t.phase === 4).tick);
+    expect(leave.phase4.bodyDistance).toBe(12); expect(out.leaveFailures).toBe(1);
+    expect(out.actions.filter((a: any) => a.label === 'leave_on_takeoff')).toHaveLength(3);
+    expect(out.actions.at(-1).label).toBe('leave_on_takeoff'); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('does not treat ok=true short of 14 m, or a thrown go, as successful evacuation', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 2500 }); let exits = 0;
+    r.setHandler(async hands => {
+      const hand = hands[0];
+      if (hand.do === 'go' && hand.seconds === 5) { r.d.phase = 4; return false; }
+      if (hand.do !== 'go' || hand.seconds < 10) return;
+      if (++exits === 1) {
+        r.actor.entity.position = new Vec3(r.d.position.x + 8, 70, r.d.position.z);
+        return { ok: true, lines: ['mock arrived but still close'] };
+      }
+      if (exits === 2) throw new Error('mock route interrupted');
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(2800); const out = await running;
+    const leave = out.perches[0].leave;
+    expect(leave.goCount).toBe(3); expect(leave.goResults[0]).toMatchObject({ ok: true, safe: false, bodyDistance: 8 });
+    expect(leave.goResults[1].error).toContain('mock route interrupted'); expect(leave.goResults[2].safe).toBe(true);
+    expect(out.endReason).toBe('time_limit'); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('leaves by the flame midpoint, holds its safe position until takeoff ends, and records phase-4 clearance once', async () => {
+    vi.useFakeTimers(); const r = rig({ beds: 0, limit: 7500 });
+    r.setHandler(async hands => { if (hands.some(h => h.do === 'attack')) return false; });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(100); r.d.phase = 5;
+    await vi.advanceTimersByTimeAsync(5800); r.d.phase = 4;
+    await vi.advanceTimersByTimeAsync(1900); const out = await running;
+    const leave = out.perches[0].leave, flame = out.transitions.find((t: any) => t.phase === 5);
+    expect(leave.reason).toBe('flame_midpoint'); expect(leave.startPhase).toBe(5);
+    expect(leave.startTick - flame.tick).toBe(100); expect(leave.safeTick).toBeLessThan(leave.phase4.tick);
+    expect(leave.phase4.bodyDistance).toBeGreaterThanOrEqual(14); expect(leave.phase4.wingPushOverlap).toBe(false);
+    expect(out.leaveFailures).toBe(0); expect(leave.goCount).toBe(1);
+    expect(out.actions.filter((a: any) => a.tick > leave.safeTick)).toEqual([]); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('gives the third bed time to evacuation while a slow after-blast health read is still pending', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 9000 }); let used = 0, readDone = false, held = false;
+    r.setHandler(async hands => { if (hands[0]?.do === 'use') used++; });
+    r.deps.dragonHealthServer.mockImplementation(async () => {
+      if (used >= 2 && !held) { held = true; await new Promise(resolve => setTimeout(resolve, 4000)); readDone = true; }
+      return r.d.health;
+    });
+    const running = r.run(); await vi.advanceTimersByTimeAsync(5400);
+    expect(used).toBe(2); expect(readDone).toBe(false);
+    expect(r.calls.some(c => c.hands[0]?.do === 'go' && c.hands[0].seconds >= 10)).toBe(true);
+    await vi.advanceTimersByTimeAsync(4000); const out = await running;
+    expect(out.perches[0].leave.reason).toBe('third_bed_exit_budget');
+    expect(out.perches[0].leave.startTick - out.perches[0].startTick).toBe(100);
+    expect(out.perches[0].bedsPlaced).toBe(2); expect(out.windows).toEqual([]);
+  });
+  it('still verifies a kill that occurs on the third confirmed blast', async () => {
+    vi.useFakeTimers(); const r = rig({ damage: 70 }); const running = r.run();
+    await vi.advanceTimersByTimeAsync(10_500); const out = await running;
+    expect(out.ok).toBe(true); expect(out.bossVerified).toBe(true); expect(out.detonations).toBe(3);
+    expect(out.dragonDeadAt).toBeTruthy(); expect(out.killSeconds).toBeLessThan(10);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('evacuates after the last carried bed instead of starting sword combat in that window', async () => {
+    vi.useFakeTimers(); const r = rig({ beds: 1, limit: 4000 }); const running = r.run();
+    await vi.advanceTimersByTimeAsync(4500); const out = await running;
+    expect(out.perches[0].bedsDetonated).toBe(1); expect(out.perches[0].leave.reason).toBe('beds_exhausted');
+    expect(out.perches[0].leave.goResults.at(-1).safe).toBe(true); expect(out.windows).toEqual([]);
+  });
+  it('records a phase-4 wing-box overlap and waits for an observed clear destination when clouds block all exits', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 2500 }); r.d.position.y = 72;
+    r.actor.entity.position = new Vec3(r.d.position.x + 10.5, 70, r.d.position.z);
+    r.clouds.push({ ...r.d.position, radius: 50 }); let first = true;
+    r.setHandler(async () => { if (first) { first = false; r.d.phase = 4; return false; } });
+    // No safe bed/basin exists under this cloud, so sample the takeoff independently.
+    const running = r.run(); await vi.advanceTimersByTimeAsync(100); r.d.phase = 4;
+    await vi.advanceTimersByTimeAsync(600);
+    expect(r.calls.some(c => c.hands[0]?.seconds >= 10)).toBe(false);
+    r.clouds.length = 0;
+    await vi.advanceTimersByTimeAsync(2100); const out = await running;
+    expect(out.perches[0].leave.phase4).toMatchObject({ bodyDistance: 10.5, wingPushOverlap: true, safe: false });
+    expect(out.leaveFailures).toBe(1); expect(out.refusals.some((f: any) => f.reason === 'no_observed_retreat')).toBe(true);
+    expect(out.perches[0].leave.goResults.at(-1).safe).toBe(true); expect(vi.getTimerCount()).toBe(0);
+  });
   it('leaves during a slow before-shot server health read instead of waiting for its chat response', async () => {
     vi.useFakeTimers(); const r = rig({ limit: 4500 });
     let readCount = 0;
@@ -778,6 +938,8 @@ describe('end_bed_kill scene with mocked I/O', () => {
     expect(out.bedTrials[0].notDetonatedReason).toBe(cause === 'pose' ? 'seated_pose_changed' : 'breath_or_contact_at_operation');
     expect(r.calls.some(c => c.hands[0]?.do === 'use')).toBe(false);
     expect(out.windows).toEqual([]);
+    const veto = out.actions.find((a: any) => a.label === 'use_seated_head_bed' && a.ok === false);
+    expect(out.perches[0].leave.startTick - veto.endTick).toBeLessThanOrEqual(1);
   });
   it('vetoes even a well-shielded blast when the latest HP would not leave more than four', async () => {
     vi.useFakeTimers(); const r = rig({ limit: 4000 });
@@ -791,7 +953,7 @@ describe('end_bed_kill scene with mocked I/O', () => {
     expect(out.bedTrials[0].latestEstimate.self.expected + 4).toBeGreaterThanOrEqual(5);
     expect(r.calls.some(c => c.hands[0]?.do === 'use')).toBe(false); expect(out.windows).toEqual([]);
   });
-  it('ends a delayed before-shot read at 240 ticks and retreats without waiting for telemetry or using sword', async () => {
+  it('ends a delayed before-shot read with 100 ticks left and retreats without waiting for telemetry or using sword', async () => {
     vi.useFakeTimers(); const r = rig({ limit: 15_000 });
     let reads = 0;
     r.deps.dragonHealthServer.mockImplementation(async () => {
@@ -802,9 +964,9 @@ describe('end_bed_kill scene with mocked I/O', () => {
     expect(r.calls.some(c => c.hands[0]?.do === 'use')).toBe(false);
     expect(r.calls.at(-1).hands[0].do).toBe('go');
     await vi.advanceTimersByTimeAsync(3000); const out = await running;
-    expect(out.perches[0].endTick - out.perches[0].startTick).toBe(240);
-    expect(out.perches[0].endReason).toBe('twelve_second_limit'); expect(out.windows).toEqual([]);
-    expect(out.actions.find((a: any) => a.label === 'leave_on_takeoff').tick).toBeLessThanOrEqual(246);
+    expect(out.perches[0].endTick - out.perches[0].startTick).toBe(140);
+    expect(out.perches[0].endReason).toBe('leave_time_reserve'); expect(out.windows).toEqual([]);
+    expect(out.actions.find((a: any) => a.label === 'leave_on_takeoff').tick).toBeLessThanOrEqual(146);
   });
   it('moves to a different open footing every three seconds during flight, with schema-valid go seconds', async () => {
     vi.useFakeTimers(); const r = rig({ limit: 10_000 }); r.d.phase = 1;

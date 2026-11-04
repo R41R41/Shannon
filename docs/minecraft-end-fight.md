@@ -980,6 +980,27 @@ Node v24.21.0でベッド93件、関連のhead model22＋比較66＋nook10＋ful
 
 検証結果：Node v24.21.0。新しいfallClutch試験57件（上記378通りを含む）、既存DragonFight試験69件成功、無効スイッチによる既存2件skip。既存priority380によるflee250の中断・pour成功と、priority500に所有権を取られた後の送信0件も実ActionExecution経由で確認した。通常のTypeScript設定から変更した3 TS rootだけの構文／semantic診断を収集し0件（依存先自身／全backendの型検査ではない）。`git diff --check` 成功。ラボは未実施。
 
+### r220：インベントリの水バケツと ground_void（頼み24、2026-11-04）
+
+`lab-evidence/r220-report.json` の `scenes.end_bed_kill.knocks[0]` と `r220-probe-tail.log` を照合した。開始8334の速度は `(5.09357, 5.45102, -3.67771)` blocks/tick、最高点8378はy=168.44968、接地8440は `(9.20963,64,-6.59075)`、死亡8441。`clutchStarts`／水使用／ledgerは空であり、送信失敗より前の **開始条件で止まった** 記録である。
+
+- **`bucket_not_in_hand_or_hotbar`**：全106 trajectoryサンプルが `bucket:'absent_or_pack'`。旧開始判定は `inHand` だけなので、slot 9〜35などにある水バケツも「無い」と同じ扱いだった。下降条件vy≤−0.75を満たす空中52tickすべてにこの理由がある。8411に床が見えてから接地8440まで29tick（実時刻差1.479秒）があり、1〜3tickの準備を始められる余裕があった。記録はpackの実slot／全在庫／equip履歴を保存していないので、**どのequipがいつ水バケツを押し出したか、水バケツがその時もpackにあったかまでは未確定**。初期の持ち物を前提にした説明と、観測できた手／hotbar不在を分ける。
+- **`ground_void`**：8352〜8410の59tick、下降条件成立後8388〜8410の23tickがすべて `drop:70`。理由の算出元は **現在位置の中央列を読む `groundUnder`** であり、`targetForPour` の水平予測結果ではない。70セルを読み切ったことをvoidと呼んでいた。最高点の走査はy=167〜98だけで、島の地表は範囲外。8410は足y=134.71989、走査y=133〜64で支持ブロックy=63を読めず、8411は足y=132.81811、走査y=131〜62に入り `top:64, drop:68, kind:'floor'` へ戻る。初速vx=5.09がそのまま落下中まで続いたわけでもなく、8388はvx=−0.22516、vz=0.16257。この記録のvoid表示を「島の端を越した水平着地予測」とは扱わない。
+
+開始判定とpour判定で同じ `forecastSupports` を使い、水平速度一定・重力0.08／抗力0.98の **次の1〜8tickのfootprint** を調べる。最初の接地候補までの、読み込まれたfull cubeだけが対象。同じ列はその判定内で再利用する。中央直下がvoidでも予測先に島の支持があれば開始でき、どの候補にも床が見えない間は待つ。支持が8tick内に接地しなければ最後に見えた候補で準備の要否を判断し、pour時には改めて実際に8tick内で接地する支持・空気・視線・3D射程を確認する。**8tick先の地面が見えたことは最終着地点の保証ではない。** `groundUnder` の70セル上限と中央列の公開契約は維持し、高さで探索範囲外にある床を捏造しない。
+
+水バケツは手／hotbarを優先し、無ければ既知slotのインベントリ全体から探す。packからは `port.equip(item,'hand')` をawaitしてから従来のphysicsTick pourへ進む。equip・送信／tick監視能力が無いbodyではpack準備を開始しない。開始時と実行時に、3回の準備移動と次の送信判断に対して、予測眼高がまだ4.4mのpour窓より上にあることを保守的に確認する。足りない場合はequipも選択も送らない。手／hotbarの即時経路にはこの3tick制限を加えない。
+
+Mineflayerの実 `simple_inventory.equip` は、空いたhotbarへ移し、満杯なら内部の循環LRU枠を選ぶ。`moveSlotItem` は空き枠なら2クリック、満杯なら3クリックで交換先の品を元のpack枠へ戻す。試験は実equipを読み込み、クリック完了だけをモックする。全収納枠が満杯でも、slot 20の水バケツとslot 36の剣を交換し、剣はslot 20に残ることを確認した。終了時の手の復元は従来どおり **同名の品がhotbarにある場合だけ**。交換で剣自体がpackへ行った場合は自動で持ち戻さず、別の複数クリック処理は追加しない。
+
+`port.equip` の入口だけの所有権確認では、native処理がawait後に素のbotから続けるクリックを止められない。そのため、このequipのaction contextに属する `window_click`／`held_item_slot` を送信直前にも検査する。中断・終了・死亡・接地、150msの準備期限または4回目のphysicsTickで待機を終え、後から続くnative送信も遮断する。イベント／timerは直ちに外し、送信の検査だけをnative Promiseがsettleするまで残してから元へ戻す。後任のactionと通常のprotocol応答は通す。既に送ったクリックは取り消せず、中断時のcursor／途中の交換の整合は実機確認が残る。所有権を失った後の巻き戻しクリックは送らない。
+
+単体試験はpackからの持ち替えとpour、1〜3tickしか残らない場合の無送信、満杯時の交換、hotbar重複の即時経路、能力／slot不足、壁時計を進めないcatch-up、準備中の中断／タイムアウト／終了／死亡／接地と遅延送信の遮断、後任の手の選択、中央列voidから予測先の島へ向かう開始とpour、未知／液体／partial cubeの拒否を追加した。r220の下降サンプルと地表top64を使うfixtureでは8411に準備を始め、120msの模擬3クリック後、8438に `(9,64,-7)` へ1回送信する。接地8440より2tick早い **従来の1移動先でuseを処理するモデル上の結果** であり、実機の救命成功ではない。水平入力・再ノック・位置補正、ACK遅延／recent-dig待機が150msを超す場合、実サーバーでのposition／use順序と水反映はS1の確認が必要。
+
+knock recorderは今回変更しないので、既存の `bucket_not_in_hand_or_hotbar` は依然としてpackと本当の不在を区別せず、`ground_void` も70セル走査終了のラベルとして残る。新しい開始条件と記録側の旧診断条件が異なる点に注意する。`FALL_CLUTCH_ENABLED=false`、反射の優先度／条件、GAP、hand一覧と環境変数設定は維持。変更は指定コピーのfallClutch・その単体試験・この節の3ファイルだけで未コミット。並行作業のprobe／geometry／knock recorderと `.codex-material/` は触らず、ラボ／VM／本体／DB／外部資料更新は行わない。
+
+最終検証：Node v24.21.0、fallClutch 79件（新規22件、既存の378通りの落下モデルを維持）＋既存DragonFight 69件＝**148件成功・既存2件skip**。試験子プロセスにだけ既存の隔離フラグとオフライン用OpenAI／Mongoダミー値を渡し、共有設定は変更しない。通常のbackend TypeScript設定から今回変更した2 TS rootの構文／semantic／compiler options診断だけを収集して0件。依存先自身のsemantic診断と全backend型検査は対象外。指定3ファイルの `git diff --check` 成功。実ラボは未実施。
+
 ## 頼み23：ベッドの柱を丸石、壁だけ黒曜石にする（2026-11-04）
 
 r216の `bed_halves_missing_or_wrong_facing` は、設置時の向き違いとは確認できない。座り8／bedTrials 2は足 `(-1,67,-5)` → 枕 `(-2,67,-5)` のwest、座り13／trial 3は足 `(4,66,2)` → 枕 `(5,66,2)` のeastで、どちらも計画と設置handの成功文が一致する。枕は50ms後に届き、両半分を確認した `placedTick` は5400／8251。その後、use直前の5411／8262に `observedHalves:null` となり、`useTick:null`／`useRequested:false` のまま拒否されている。失敗箇所は **設置の後、use送信前の足側state読取り** まで絞れる。
@@ -999,3 +1020,30 @@ r216の `bed_halves_missing_or_wrong_facing` は、設置時の向き違いと�
 仮定と残課題：既存の着座モデル・shape・クライアント受信tickを使う。丸石を除外した自傷見積もりは保守的なので、候補数が減る可能性がある。実地の資材寿命・起爆回数・r216相当のベッド消失原因は、S1がr220〜r223とは別の変更入りラボで診断する。この作業は指定コピーだけ、HEAD `843f814` のまま未コミット。ラボ／VM／本体／DB／外部資料更新は行わず、`.codex-material/`、反射、fallClutch、FALL_CLUTCH_ENABLED、floorReflexes、dragonDanger、gazeGuard、dragonStrike、hand一覧、環境変数設定は変更しない。
 
 最終検証：Node v24.21.0。ベッド105件（新規12件）、head model22＋比較66＋nook10＋full chain125＋knock39＝**6ファイル367件成功**。材質別の施工／消費、別予算／不足、丸石を除外した自傷と体力余裕、足場消失後の再施工、片側消失・向き違い・隣の半分・properties欠落の送信前拒否と診断を検査した。既存の隔離フラグとダミー値を試験子プロセスにだけ渡し、共有.env／DB／APIは使わない。`node tests/unit/checkEndBedKill.cjs` は変更3 TS root（**probe全体**・geometry・ベッド試験）の構文／semantic／compiler options診断0件。依存先自身のsemantic診断と全backend型検査は対象外。`git diff --check` 成功。
+
+## 頼み25：座りの終わりに翼の押しの外まで離脱する（2026-11-04）
+
+r220は座り14の総trial 3をtick 8209に設置したが、8221の `seated_pose_changed` で使用できなかった。8226／phase 5の `leave_on_takeoff` は `seconds:5` の上限で8254に止まり、「行き先まであと13m」、位置 `(2.38,65.02,-1.66)` のまま。旧制御は失敗応答でも `leaveNeeded=false` にしたため、次の離脱はphase 4を観測した8335より後の8341まで出なかった。8334の記録は `takeoff_wing`、速度 `(5.09,5.45,-3.68)`、約104m上への打ち上げの後、464.7秒で死亡。r214も待ち位置で離陸の翼に押され、614.503秒で死亡している。8〜11mでも `knocks[].parts[].pushBox` に入った実測に余裕を加え、離脱完了を14mにする。
+
+`bedLeaveReason` をphysicsTickの観測中と次のhandを選ぶ前に確認する。座り窓の終了、3回の起爆完了、最後の手持ちベッドの処理完了、置いたベッドの使用拒否に加え、座りの残り100tick、または約200tick続くphase 5の100tick目で離脱へ移る。3個目を始める前（`bedsPlaced>=2` かつ未処理のベッドなし）は施工／使用40tick＋離脱100tickを確保し、座りまたは火炎の残りが140tick以下なら3個目を見送る。早い3個目は従来の安全検査を通った場合だけ使用できる。姿勢変化・両半分の不整合・設置後の消失などは、その場で窓を閉じ、掘り直しや剣への切替を挟まず離脱する。待機中の体力計測返信も離脱を遅らせない。
+
+`bedLeaveCell` は `basinWaitingCell` と、その周囲を `bedOpenWaitCells(anchor, anchor, read)` で列挙した候補から選ぶ。体の現在位置から5m以内の列挙にはしない。end_stoneの床、7セルの開けた上方、既知の雲の外、`dragonHazards` に危険なし、竜の体から水平14m以上、翼の押し箱の外を要求し、体から最も遠い候補を優先する。近くの候補が無ければ既存のfar版 `basinWaitingCell` を同じ条件で調べる。未観測床や危険な旧anchorへは戻さず、`no_observed_retreat` を残して再観測する。
+
+翼の押し箱は既存の `endKnockRecord.knockGeometry` を再利用する。同関数は `dragonParts.partBox` → `inflate(4,2,4)` → `shift(0,-2,0)` とプレイヤーの全AABBの重なりを使う。現在の `dragonHazards` は翼を返さないので、それだけを翼の安全根拠にしない。座り開始時と最新の竜の姿勢の両方を調べる。`dragonDanger` や反射は変更しない。
+
+離脱のgoは距離に応じて `clamp(ceil(3D距離/2)+5,10,20)` 秒（既存の5〜120秒契約内）。中断・`limit_time`・経路エラー・例外でも離脱を解除せず、成功応答でも実位置が14m未満なら次のgoを出す。phase 4へ変わっても続ける。14mに達した後も座り／phase 4が終わるまで距離と押し箱を再確認し、再び近づけば離脱を再開する。その間は通常の待機移動や攻撃で近づき直さない。
+
+| 記録欄 | 内容 |
+| --- | --- |
+| `perches[].leave.startTick / startPhase / reason` | 離脱を決めた受信tick・phase・理由。未開始はnull |
+| `leave.goCount / goResults[]` | go試行数と、開始tick／phase／出発位置／候補／seconds、`dispatchedTick`、終了tick、ok、lines、中断理由・例外、終了位置、距離・翼重なり・safe。送信前に中止ならdispatchedTickはnull |
+| `leave.safeTick / completedTick` | 初めて安全距離を確認したtickと、監視を終えて次の窓／飛行待機へ戻ったtick |
+| `leave.phase4` | 最初にphase 4を観測したtick、実位置、`bodyDistance`、`wingPushOverlap`、`safe`。未観測はnull。姿勢不明なら距離・重なりはnullでsafe=false |
+| `out.leaveFailures` | 最初のphase 4観測時に14m未満だった座りの数。同じ座りで重複加算しない |
+| `out.leaveDistanceMetric / operationBudget` | 距離の定義と14m／100tick／140tick／火炎中盤100tickの判断値 |
+
+距離は固定した `perch.body.position` からの**水平距離**。打ち上げの高さを離脱成功に数えない。翼の重なりは上記の座り開始時／最新姿勢のいずれかの箱と体が交差したかを表す。phase 4の記録はクライアントが最初にそのphaseを受けたtickで、サーバー側で押された瞬間との同時性は保証しない。
+
+検証：Node v24.21.0。ベッド125件（新規20件）、head model22＋比較66＋nook10＋full chain125＋knock39＝**6ファイル387件成功**。時間切れ／反射停止／例外／近すぎる成功応答からの再試行、雲で候補が無い場合の再観測、翼の押し箱への重なり、複数yawでの14m以上の選択、goの実schema、火炎中盤と3個目の離脱優先、使用拒否直後の離脱、phase 4までの距離維持と失敗数、3発目で討伐した場合の従来の証明を検査した。`node tests/unit/checkEndBedKill.cjs` は変更3 TS root（**probe全体**・geometry・ベッド試験）の構文／semantic／compiler options診断0件。依存先自身や全backendの型検査は対象外。既存の隔離フラグとダミー値を試験子プロセスにだけ渡し、共有.env／DB／APIは使わない。
+
+仮定と残課題：14mは8〜11mの実測に対する余裕で、飛行中の実サーバー部位を完全再現する距離ではない。100tickの移動余裕と施工／使用40tickは計画上の仮定で、壁・経路遮断・反射中断が続けば離陸前の到達は保証できない。その場合も再試行とphase 4時点の失敗記録を続ける。最新姿勢も既存の部位推定であり、候補の安全性は経路全体の無接触を証明しない。ラボはS1が担当し、本変更入りで離陸時14m以上／押し箱外へ出られたかを確認する。本作業は指定コピーのHEAD `c68c307` に対して未コミット。ラボ／VM／本体／DB／外部資料の更新は実施せず、`.codex-material/`、並行作業のfallClutchとその試験、禁止された反射・hand一覧・環境変数設定は変更していない。
