@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 import { makeSim, type Ground, type Sim, type Stack } from '../helpers/physicsBody.js';
-import { bridgeSideCells, go, installBoundedLanding, lastGoTiming, overLava, sprintHazardAt, type GoArgs } from '../../src/services/minebot/utils/primitives/go.js';
+import { bridgeSideCells, fortressOpenAt, go, installBoundedLanding, lastGoTiming, overLava, sprintHazardAt, strandedPack, type GoArgs } from '../../src/services/minebot/utils/primitives/go.js';
 import type { StepContext, StepOutcome } from '../../src/services/minebot/utils/primitives/common.js';
 
 // S8 (2026-11-05): the Nether's pace. The lab's Nether walks ran 0.6 to 0.7 m a second, digging a tunnel nearly all the way (460 digs on 233 m); a person runs on
@@ -118,6 +118,33 @@ describe('the landing search reads no deeper than the drop allowed (installBound
   });
 });
 
+describe('run 62: no way back, and the fortress open floor', () => {
+  it('knows a pack with no pickaxe and no block as stranded', () => {
+    const pack = (...names: string[]) => ({ inventory: { items: () => names.map(name => ({ name, count: 1 })) } });
+    expect(strandedPack(pack())).toBe(true);
+    expect(strandedPack(pack('cooked_beef', 'iron_sword'))).toBe(true);
+    expect(strandedPack(pack('wooden_pickaxe'))).toBe(false);
+    expect(strandedPack(pack('netherrack'))).toBe(false);
+    expect(strandedPack(pack('oak_planks'), ['oak_planks'])).toBe(false);
+  });
+  it('prices a fortress corridor or bridge, not a 1x2 tunnel under its floor', () => {
+    // A corridor three wide on nether bricks at y=70 (floor 69), walls at z=+-2; under the floor, netherrack with a tunnel at y=67..68 along x.
+    const fortress: Ground = (x, y, z) => {
+      if (y === 69) return 'nether_bricks';
+      if (y >= 70 && y <= 72) return Math.abs(z) >= 2 ? 'nether_bricks' : 'air';
+      if (y >= 67 && y <= 68 && z === 0) return 'air';
+      return y < 69 ? 'netherrack' : 'air';
+    };
+    expect(fortressOpenAt(reader(fortress), 0, 70, 0)).toBe(true);
+    expect(fortressOpenAt(reader(fortress), 0, 70, 1)).toBe(true);
+    expect(fortressOpenAt(reader(fortress), 0, 67, 0)).toBe(false);
+    // A 1x2 tunnel cut through the fortress's own floor level: two sides open only.
+    const tunnel: Ground = (x, y, z) => (y === 69 ? 'nether_bricks' : y >= 70 && y <= 71 && z === 0 ? 'air' : y >= 70 ? 'nether_bricks' : 'netherrack');
+    expect(fortressOpenAt(reader(tunnel), 0, 70, 0)).toBe(false);
+    expect(fortressOpenAt(reader(netherFlat), 0, FLOOR, 0)).toBe(false);
+  });
+});
+
 // ---- the hand in the Nether ----------------------------------------------------------------------------------------------------------------
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] }); });
@@ -135,6 +162,34 @@ const run = (sim: Sim, args: Omit<GoArgs, 'goals'>, to: { x: number; y: number; 
 const PICK: Stack = { name: 'diamond_pickaxe', count: 1 };
 
 describe('go in the Nether', () => {
+  it('goes back the way it came when it has no pickaxe and no block: a ledge two down is not taken', async () => {
+    // The body at y=64 on a terrace; the place is 6 down by a cliff of two-cell steps (falls of two), or by a long way round of one-cell steps along z=8.
+    const terrace: Ground = (x, y, z) => {
+      if (Math.abs(x) > R || Math.abs(z) > R) return null;
+      const top = z >= 6 ? FLOOR - Math.min(6, Math.max(0, x - 2)) : FLOOR - 2 * Math.min(3, Math.max(0, Math.floor((x - 2) / 2) + 1));
+      return y < top ? 'netherrack' : 'air';
+    };
+    const sim = netherSim(terrace, []);
+    let maxZ = 0;
+    const promise = run(sim, { maxDrop: 3, seconds: 60 }, { x: 10, y: FLOOR - 6, z: 0 });
+    let settled = false;
+    promise.then(() => { settled = true; }, () => { settled = true; });
+    for (let elapsed = 0; elapsed < 120_000 && !settled; elapsed += 50) { sim.tick(); maxZ = Math.max(maxZ, sim.bot.entity.position.z); await vi.advanceTimersByTimeAsync(50); }
+    const outcome = await promise;
+    // It went down the one-cell steps (each climbed back by a jump), not the ledges of two.
+    expect(outcome.ok).toBe(true);
+    expect(maxZ).toBeGreaterThan(5.5);
+    // With a pickaxe it may take the ledges (the straight way).
+    const armed = netherSim(terrace, [PICK]);
+    let armedMaxZ = 0;
+    const armedRun = run(armed, { maxDrop: 3, seconds: 60 }, { x: 10, y: FLOOR - 6, z: 0 });
+    let armedDone = false;
+    armedRun.then(() => { armedDone = true; }, () => { armedDone = true; });
+    for (let elapsed = 0; elapsed < 120_000 && !armedDone; elapsed += 50) { armed.tick(); armedMaxZ = Math.max(armedMaxZ, armed.bot.entity.position.z); await vi.advanceTimersByTimeAsync(50); }
+    expect((await armedRun).ok).toBe(true);
+    expect(armedMaxZ).toBeLessThan(3);
+  });
+
   it('goes round a netherrack hill on the open ground instead of tunnelling through it', async () => {
     // A hill 4 thick across the way (x=4..7, z=-3..3), 6 high; the way round is 4 cells aside.
     const sim = netherSim(over(netherFlat, box('netherrack', 4, 7, FLOOR, FLOOR + 5, -3, 3)), [PICK]);

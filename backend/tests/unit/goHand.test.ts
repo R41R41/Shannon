@@ -300,10 +300,16 @@ describe('go: up and down', () => {
     const careful = makeSim(platform, { start });
     const refused = await drive(careful, run(careful, { maxDrop: 3 }, goal(6, FLOOR, 0)));
     expect(refused.reason).toBe('dead_end');
-    const bold = makeSim(platform, { start });
+    const bold = makeSim(platform, { start, items: stacks(PICK) });
     const taken = await drive(bold, run(bold, { maxDrop: 7 }, goal(6, FLOOR, 0)));
     expect(taken.ok).toBe(true);
     expect(Math.floor(bold.bot.entity.position.y)).toBe(FLOOR);
+    // Run 62 (#21): with no pickaxe and no block to climb back with, a fall of two or more is not taken, whatever maxDrop says.
+    const empty = makeSim(platform, { start });
+    const stranded = await drive(empty, run(empty, { maxDrop: 7 }, goal(6, FLOOR, 0)));
+    expect(stranded.reason).toBe('no_return');
+    expect(stranded.text).toMatch(/ツルハシもブロックも無い/u);
+    expect(Math.floor(empty.bot.entity.position.y)).toBe(FLOOR + 6);
   });
 });
 

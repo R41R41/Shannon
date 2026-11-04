@@ -70,3 +70,23 @@ scene('nether_go', 'S8: the Nether walk on c1 (arrival to the blaze stand, then 
   return { sprint: s8Sprint ?? 'body', legs, deathsHere: deaths - deaths0, seconds: r1((Date.now() - began) / 1000) };
 });
 
+
+// Scene s8_stranded (run 62, #21): the body with nothing (no pickaxe, no block, no armour) at the run's Nether gate (16,67,16) on c1 is sent, as the head sent it at
+// 03:46:34, to (19,51,31) with maxDrop 3 ("掘らずもっと低い所でゲート近くへ"), then back to the gate. The run went down 16 into the valley and never came back.
+// Pass for the body: whatever it does, it can go back to the gate (it either refuses the fall it cannot climb, or comes down only by steps it climbs again).
+scene('s8_stranded', 'S8: run 62 #21, a body with nothing at the Nether gate sent down with maxDrop 3, then back to the gate', async note => {
+  const deaths0 = deaths;
+  const gate = [16, 67, 16], low = [19, 51, 31];
+  await ask('difficulty normal'); await ask('gamerule doMobSpawning false');
+  await equip({}, { armor: 'none', shield: false });
+  await placeActor('the_nether', gate[0], gate[1], gate[2], 48);
+  const startY = Math.floor(Number(actor.entity?.position?.y));
+  const down = await act('down', [{ do: 'go', to: { x: low[0], y: low[1], z: low[2] }, range: 2, maxDrop: 3, seconds: 60 }], 90);
+  const lowestY = Math.floor(Number(actor.entity?.position?.y));
+  note(`down: ${down.ok ? 'ok' : 'NO'} ${s8Short(down.lines[0] ?? '', 260)} feet y ${lowestY} (start ${startY})`);
+  const back = await act('back', [{ do: 'go', to: { x: gate[0], y: gate[1], z: gate[2] }, range: 2, maxDrop: 3, seconds: 90 }], 120);
+  const endDistance = r1(s8Planar(gate));
+  note(`back: ${back.ok ? 'ok' : 'NO'} ${s8Short(back.lines[0] ?? '', 260)} now ${r1(endDistance)} m from the gate, feet y ${Math.floor(Number(actor.entity?.position?.y))}`);
+  return { startY, downOk: down.ok, downLine: s8Short(down.lines[0] ?? '', 200), lowestY, backOk: back.ok, backLine: s8Short(back.lines[0] ?? '', 200),
+    endDistance, endY: Math.floor(Number(actor.entity?.position?.y)), canGoBack: back.ok || endDistance <= 3, deathsHere: deaths - deaths0 };
+});

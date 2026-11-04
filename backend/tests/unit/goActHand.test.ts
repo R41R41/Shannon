@@ -72,7 +72,8 @@ describe('act: the hand go', () => {
 
   it('lets a go that may drop fall what it may, where the act would stop any other hand at a fall of four', async () => {
     const platform: Ground = (x, y, z) => (Math.abs(x) > R || Math.abs(z) > R ? null : y < 64 || (x <= 2 && y < 70) ? 'stone' : 'air');
-    const high = makeSim(platform, { start: [0.5, 70, 0.5] });
+    // A pickaxe in the pack: with none and no block, a fall it cannot climb back is not taken (run 62, #21).
+    const high = makeSim(platform, { start: [0.5, 70, 0.5], items: [{ name: 'stone_pickaxe', count: 1 }] });
     const dropped = await drive(high, runAct(high.bot, hands([{ do: 'go', to: { x: 6, y: 64, z: 0 }, maxDrop: 7 }])));
     expect(dropped.success).toBe(true);
     expect(parse(dropped).lines[0].line).toMatch(/^go 着いた \(6,64,0\)/u);

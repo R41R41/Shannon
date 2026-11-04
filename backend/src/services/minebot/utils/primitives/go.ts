@@ -350,6 +350,60 @@ export function bridgeSideCells(read: (x: number, y: number, z: number) => strin
   return out;
 }
 
+// ---- no way back (run 62, S8 2026-11-05) -----------------------------------------------------------------------------------------------
+
+/**
+ * Run 62 (03:46:34, the synthesis's #21): with no pickaxe and no block left, a go with maxDrop 3 took the body down by drops of three into a Nether valley 16 below
+ * its gate, and nothing brought it back up (a fall of two or more is climbed only by laying a block or digging a stair). Whether the body holds neither: no pickaxe,
+ * and no block it could lay to climb (the cheap building blocks, or the ones the go may lay).
+ */
+export function strandedPack(bot: any, placeHeld: readonly string[] = []): boolean {
+  const items = (bot.inventory?.items?.() ?? []) as Array<{ name?: string; count?: number }>;
+  if (items.some(item => /_pickaxe$/u.test(String(item.name ?? '')) && Number(item.count ?? 0) > 0)) return false;
+  return !items.some(item => Number(item.count ?? 0) > 0 && (BRIDGE_BLOCKS.test(String(item.name ?? '')) || placeHeld.includes(String(item.name ?? ''))));
+}
+/** A fall a body climbs back with nothing in its hands: one (a jump). */
+export const STRANDED_MAX_DROP = 1;
+/** With nothing to climb back with, a step onto a cell this body has not stood in (in this dimension) costs this much more: the way it came is the first way back. */
+export const UNWALKED_COST = 0.5;
+const WALKED_MAX = 6000;
+const walkedCells = new WeakMap<object, Map<string, Set<string>>>();
+/** The feet cells this body has stood in during its gos, by dimension (the last WALKED_MAX of each). */
+export function walkedOf(host: object, dimension: string): Set<string> {
+  let byDimension = walkedCells.get(host);
+  if (!byDimension) { byDimension = new Map(); walkedCells.set(host, byDimension); }
+  let cells = byDimension.get(dimension);
+  if (!cells) { cells = new Set(); byDimension.set(dimension, cells); }
+  return cells;
+}
+function noteWalked(host: object, dimension: string, key: string): void {
+  const cells = walkedOf(host, dimension);
+  cells.delete(key); cells.add(key);
+  if (cells.size > WALKED_MAX) cells.delete(cells.values().next().value as string);
+}
+
+// ---- inside a Nether fortress (run 62, the synthesis's #22) ----------------------------------------------------------------------------
+
+/** The blocks a Nether fortress's floors are made of. */
+const FORTRESS_FLOOR = /^(?:nether_bricks|cracked_nether_bricks|chiseled_nether_bricks|nether_brick_slab|nether_brick_stairs)$/u;
+/**
+ * Run 62 (five deaths to wither skeletons in a fortress corridor three wide): a step onto a fortress's floor (nether bricks under the feet) with three or more of the
+ * four sides open at the feet's height (a corridor, a bridge, a room) costs this much more. A person goes a level under the floor in a 1x2 tunnel, where a wither
+ * skeleton (2.4 tall) does not follow and a blaze cannot shoot; a go that may dig (netherrack, nether_bricks) takes that way when it is not much longer. A cost, not a
+ * ban: a go that may not dig walks the corridor still.
+ */
+export const FORTRESS_OPEN_COST = 6;
+export function fortressOpenAt(read: (x: number, y: number, z: number) => string | null, x: number, y: number, z: number): boolean {
+  const floor = read(x, y - 1, z);
+  if (!floor || !FORTRESS_FLOOR.test(floor)) return false;
+  let open = 0;
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+    const name = read(x + dx, y, z + dz);
+    if (name !== null && (OPEN_NAME.test(name) || name === 'lava')) open++;
+  }
+  return open >= 3;
+}
+
 // ---- what the route search has read (run 41) -------------------------------------------------------------------------------------------
 
 /**
@@ -408,7 +462,7 @@ export function keepReads(movements: any, watch: WorldWatch): (x: number, y: num
 interface Plan { status: string; path: any[]; digs: Map<string, number>; places: number; visited: number }
 const yieldNow = () => new Promise<void>(resolve => setImmediate(resolve));
 
-interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean; upstream?: boolean; dragon?: boolean }
+interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean; upstream?: boolean; dragon?: boolean; /** the drop as asked (a stranded body's is cut to one) */ drops?: boolean }
 export interface GoState {
   steps: number; dug: number; placed: number; redraws: number;
   veto: { code: string; text: string; hint?: string } | null;
@@ -425,7 +479,7 @@ export interface GoState {
 
 // ---- the movements ---------------------------------------------------------------------------------------------------------------------
 
-export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk' | 'maxDig' | 'maxPlace'>> & { sprint: boolean | 'auto' }, rule: DigRule, placeHeld: string[], state: GoState, relax: Relax = {}): any {
+export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk' | 'maxDig' | 'maxPlace'>> & { sprint: boolean | 'auto'; stranded?: boolean }, rule: DigRule, placeHeld: string[], state: GoState, relax: Relax = {}): any {
   const mayDigAny = rule.names.size > 0 || !!relax.permissions;
   const mayPlaceAny = placeHeld.length > 0 || !!relax.blocks || !!relax.permissions;
   const nether = isNether(bot);
@@ -483,6 +537,26 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
     const avoided = (block: any) => (block?.position && state.avoid.has(`${block.position.x},${block.position.y},${block.position.z}`) ? GO_AVOID_COST : 0);
     movements.exclusionAreasStep = [...(movements.exclusionAreasStep ?? []), avoided];
     movements.exclusionAreasPlace = [...(movements.exclusionAreasPlace ?? []), avoided];
+  }
+  // Run 62 (#22): the open floor of a fortress costs more than a tunnel a level under it.
+  if (nether && !relax.hazards) {
+    const kept = new Map<string, number>();
+    (movements as any).exclusionAreasStep = [...((movements as any).exclusionAreasStep ?? []), (block: any) => {
+      const p = block?.position;
+      if (!p) return 0;
+      const key = `${p.x},${p.y},${p.z}`;
+      let cost = kept.get(key);
+      if (cost === undefined) { cost = fortressOpenAt(read, p.x, p.y, p.z) ? FORTRESS_OPEN_COST : 0; kept.set(key, cost); }
+      return cost;
+    }];
+  }
+  // Run 62 (#21): with nothing to climb back with, the cells walked before are the first way (the way the body came is one it can go back by).
+  if (args.stranded) {
+    const walked = walkedOf(nativeActionHost(bot), String(bot.game?.dimension ?? ''));
+    if (walked.size) (movements as any).exclusionAreasStep = [...((movements as any).exclusionAreasStep ?? []), (block: any) => {
+      const p = block?.position;
+      return p && !walked.has(`${p.x},${p.y},${p.z}`) ? UNWALKED_COST : 0;
+    }];
   }
   // S8: in the Nether a floor laid over lava costs more (a bridge over the lava sea is where a ghast's blast or a push ends the run): the way round first.
   if (nether && !relax.hazards) {
@@ -838,6 +912,10 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   /** What one search of the road is given (the stop says this long). */
   const searchSlice = args.searchMs === undefined ? Math.min(searchCap, SEARCH_SLICE_MS) : searchCap;
   const place = placeNamesOf(bot, args.canPlace);
+  // Run 62 (#21): no pickaxe and no block to climb with: no fall the body cannot climb back (a jump), the way it came first; the drop as asked is only for the stop's reason.
+  const requestedDrop = limits.maxDrop;
+  const stranded = strandedPack(bot, place.held);
+  if (stranded && limits.maxDrop > STRANDED_MAX_DROP) limits.maxDrop = STRANDED_MAX_DROP;
   const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, exposed: new Map(), avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
   const start = feetCell(bot)!;
   /** S8: the times this go cut its way itself at a point on the line (relay). */
@@ -974,7 +1052,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       const feet = feetCell(bot);
       if (!feet) return;
       const key = keyOf(feet);
-      if (key !== lastCell) { lastCell = key; state.steps++; if (state.steps % 4 === 0) ctx.progress?.(`${state.steps}歩・掘${state.dug}・置${state.placed}`); }
+      if (key !== lastCell) { lastCell = key; noteWalked(nativeActionHost(bot), String(bot.game?.dimension ?? ''), key); state.steps++; if (state.steps % 4 === 0) ctx.progress?.(`${state.steps}歩・掘${state.dug}・置${state.placed}`); }
     } catch { /* a count is never the stop */ }
   };
   bot.on?.('physicsTick', onTick);
@@ -1179,7 +1257,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     return chosen;
   };
 
-  const movementsFor = (relax: Relax = {}) => goMovements(bot, limits, rule, place.held, state, relax);
+  const movementsFor = (relax: Relax = {}) => goMovements(bot, { ...limits, ...(relax.drops ? { maxDrop: requestedDrop } : {}), stranded }, rule, place.held, state, relax);
   const timeLeft = () => deadline - Date.now();
   const limitStop = (): StepOutcome | null => {
     if (timeLeft() <= 0) return limitTime(near() ? distanceTo(bot, near()).toFixed(0) : '?');
@@ -1255,6 +1333,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const ignored = rule.ignored.length ? `（無視した canDig: ${rule.ignored.slice(0, 3).join('・')}）` : '';
     const lifts: Array<[Relax, (found: Plan) => StepOutcome]> = [
       ...(lyingCloudZones(bot).length ? [[{ dragon: true }, () => fail('dead_end', '道の先が竜の息の雲の中で、避けると道が無い（雲は約 30 秒で消える）', '雲が消える（観測の dragonBreath が空になる）まで高い足場で待つか、別の側から')] as [Relax, (found: Plan) => StepOutcome]] : []),
+      ...(stranded && requestedDrop > limits.maxDrop ? [[{ drops: true }, () => fail('no_return', `ツルハシもブロックも無いので、登って戻れない降り（${STRANDED_MAX_DROP + 1} 段以上）は取らない。この道は降りると戻れない`,
+        '来た道で戻るか、ブロック（丸石・ネザーラック）かツルハシを手に入れてから')] as [Relax, (found: Plan) => StepOutcome]] : []),
       [{ hazards: true }, () => fail('lava', '道の先が溶岩・火・マグマ・サボテンなどで、避けると道が無い', '別の行き先か、別の側から')],
       ...(state.dug >= limits.maxDig || state.placed >= limits.maxPlace ? [[{ limits: true }, () => state.dug >= limits.maxDig
         ? fail('limit_dig', `掘る数の上限 ${limits.maxDig} に着いた（この先にも掘る所がある）`, 'maxDig を増やすか、別の道を')
