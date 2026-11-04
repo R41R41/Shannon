@@ -14,6 +14,7 @@ import { go as bodyGo } from '../../src/services/minebot/utils/primitives/go.js'
 import { StepStopped } from '../../src/services/minebot/utils/primitives/common.js';
 import { dragonNook, insideDragonNook, nookCellSupported } from '../../src/services/minebot/utils/dragonNook.js';
 import { walkGround } from '../../src/services/minebot/utils/dragonWalk.js';
+import { recordEndKnocks } from '../../src/services/minebot/utils/endKnockRecord.js';
 
 // Load only the marked lab HEAD, with its I/O replaced. Importing the probe itself would open two live connections.
 const source = fs.readFileSync(new URL('../../scripts/minecraft-end-fight-probe.ts', import.meta.url), 'utf8');
@@ -65,6 +66,7 @@ function rig(options: { estimate?: number; proofId?: number; missingPlan?: boole
     return { ok: true, lines: reflected ? ['反射'] : ['ok'], parsed: { lines: [] }, ms: 10 };
   };
   const deps: Record<string, any> = { actor, actorDeaths: 0, disconnected: null, wanted: ['dragon_kill_sword'], scenes: {}, g: 70,
+    trackEndKnocks: () => recordEndKnocks(actor, { enabled: false, dragon: () => d, clouds: () => [] }),
     context: { taskId: 'test', taskRevision: 1 }, Vec3, isPerched, partBox, perchBedFoot, bedWallCells, bedCellSupported, supportedBedCells, bedHalves, BLOCK_REACH, feetCentre,
     approachClear: vi.fn(() => true), dragonHazards: vi.fn(() => []), standing: vi.fn(() => true), bodyReader: vi.fn(() => ({})),
     dragonNook: vi.fn(dragonNook), insideDragonNook, nookCellSupported, walkGround,
@@ -94,6 +96,17 @@ function rig(options: { estimate?: number; proofId?: number; missingPlan?: boole
 afterEach(() => { vi.useRealTimers(); });
 
 describe('basin lab HEAD uses observed walking candidates', () => {
+  it('returns the shared knock recorder report and removes its listeners on death', async () => {
+    vi.useFakeTimers(); const r = rig(); r.actor.entity.id = 42;
+    const promise = r.basin('walk'); await vi.advanceTimersByTimeAsync(100);
+    r.actor._client.emit('entity_velocity', { entityId: 42, velocity: { x: 0, y: 1.5, z: 0 } });
+    r.actor.entity.onGround = false; r.actor.entity.velocity = new Vec3(0, 1.5, 0); r.actor.entity.position.y = 80; r.actor.emit('physicsTick');
+    await r.die(); const result = await promise;
+    expect(result.knocks).toHaveLength(1); expect(result.knocks[0].peak.position.y).toBe(80);
+    expect(result.knocks[0].end.outcome).toBe('death'); expect(result.knockRecordErrors).toEqual([]);
+    expect(r.actor._client.listenerCount('entity_velocity')).toBe(0); expect(r.actor.listenerCount('physicsTick')).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it.each(['tp', 'walk'])('uses only the first basin observation for %s, enters at phase 6 and swings through closed short windows', async mode => {
     vi.useFakeTimers(); const r = rig();
     const p = { x: 102.5, y: 70, z: -30.5, walkMeters: 10, walkSeconds: 2.3, headReach: 2, inWingPush: true, inBreathNow: false, side: 0 };

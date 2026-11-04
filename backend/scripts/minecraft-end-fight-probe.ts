@@ -21,6 +21,8 @@ import { entityHealth } from '../src/services/minebot/utils/mapMarks.js';
 import { partBox, partTarget, boxDistance, type DragonPart } from '../src/services/minebot/utils/dragonParts.js';
 import { breathCloudsOf, dragonPhaseOf, endDragonOf, endObservation } from '../src/services/minebot/utils/dragonState.js';
 import { dragonHazards } from '../src/services/minebot/utils/dragonDanger.js';
+import { recordEndKnocks } from '../src/services/minebot/utils/endKnockRecord.js';
+import { FALL_CLUTCH_ENABLED } from '../src/services/minebot/utils/floorReflexes.js';
 import { activeActionCapabilities, hasActiveSafetyLease, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../src/services/minebot/execution/ActionExecution.js';
 import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
 import { feetCentre, standing, walkGround } from '../src/services/minebot/utils/dragonWalk.js';
@@ -88,6 +90,9 @@ const wanted = (process.env.MINECRAFT_END_SCENES ?? '').split(',').map(s => s.tr
 const include = (name: string) => wanted.length === 0 || wanted.some(prefix => name.startsWith(prefix));
 
 const dragonEntity = () => endDragonOf(actor);
+// One passive recorder for either scene. S1's tar-only release constant is reported as actually loaded.
+const trackEndKnocks = (tick?: () => number, bedTrials?: () => Array<{ detonationTick: number | null }>) =>
+  recordEndKnocks(actor, { enabled: FALL_CLUTCH_ENABLED, tick, bedTrials });
 /** The End fields of the observation, under the names the head reads (`state.world.dragon`, `.crystals`, `.perch`, `.dragonBreath`, `.dragonFireballs`), or null outside the End. */
 const endView = () => { const world = (body.observe().state as { world?: any }).world; return world?.crystals ? world : null; };
 /** The loaded crystals of a view, with their place flat (x, y, z). */
@@ -3326,6 +3331,8 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 
   actor.on('entityDead', onDead);
   // the phase is watched on its own timer (the swinging loop below does not return for seconds): its changes, to 0.1 s
   const phaseTimer = setInterval(() => { const p = endView()?.dragon?.phase ?? null; if (p !== lastPhase) { lastPhase = p; transitions.push([Math.round(elapsed() * 10) / 10, p]); } }, 100);
+  const knockRecord = trackEndKnocks();
+  let endSeconds = 0;
   try {
     while (Date.now() < deadline) {
       if (actorDeaths > deaths0) { endReason = 'actor_dead'; break; }
@@ -3398,12 +3405,19 @@ const basinAssist = async (mode: 'tp' | 'walk', pumpkin = false, keep: 'none' | 
       }
       sits.push(row);
     }
-  } finally { clearInterval(phaseTimer); clearInterval(sampleTimerCrystals); actor.removeListener('entityDead', onDead); }
+  } finally {
+    endSeconds = elapsed(); // passive ledger drain must not count toward the fight time
+    knockRecord.finish(disconnected ? 'disconnected' : endReason);
+    clearInterval(phaseTimer); clearInterval(sampleTimerCrystals); actor.removeListener('entityDead', onDead);
+    try { await knockRecord.settle(); } finally { knockRecord.stop(); }
+  }
   const counts = actor.reflexLedger.counts(), reflexKinds: Record<string, number> = {};
   for (const [kind, n] of Object.entries(counts) as Array<[string, number]>) { const used = n - (counts0[kind] ?? 0); if (used > 0) reflexKinds[kind] = used; }
   const health = await dragonHealthServer().catch(() => null);
-  return { scene: 'dragon_kill_compare', style: 'basin_assist', endReason, seconds: elapsed(), killSeconds: endReason === 'dragon_dead' ? elapsed() : null, deaths: actorDeaths - deaths0,
-    minHealth: lowest.stop(), dragonHealthEnd: health, waiting: initial.ground, waitingChosen, keptCrystals: keptCrystals.length, eats, dragonSamples, windows: sits, transitions: transitions.slice(0, 400), reflexKinds, ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
+  return { scene: 'dragon_kill_compare', style: 'basin_assist', endReason, seconds: endSeconds, killSeconds: endReason === 'dragon_dead' ? endSeconds : null, deaths: actorDeaths - deaths0,
+    minHealth: lowest.stop(), dragonHealthEnd: health, waiting: initial.ground, waitingChosen, keptCrystals: keptCrystals.length, eats, dragonSamples, windows: sits, transitions: transitions.slice(0, 400), reflexKinds,
+    knocks: knockRecord.knocks, fallClutchEnabled: knockRecord.enabled, knockRecordErrors: knockRecord.errors, knockTickBasis: 'actor physicsTick since timed basin start; client receipt ticks',
+    ok: endReason === 'dragon_dead' && actorDeaths === deaths0 };
 };
 scenes.dragon_kill_basin_assist = () => basinAssist('tp');
 scenes.dragon_kill_basin_walk = () => basinAssist('walk');
@@ -3569,6 +3583,8 @@ async function endBedKill() {
   const onTick = () => { tick++; sample(); };
   actor.on('physicsTick', onTick); actor.on('entityDead', onDead); actor.on('death', onDeath); actor.on('health', onHealth);
   actor.on('blockUpdate', onBlock); actor._client.on('explosion', onExplosion);
+  const knockRecord = trackEndKnocks(() => tick, () => out.bedTrials);
+  out.knocks = knockRecord.knocks; out.fallClutchEnabled = knockRecord.enabled; out.knockRecordErrors = knockRecord.errors;
   const timer = setInterval(() => {
     if (Date.now() >= deadline) stop('time_limit');
     if (disconnected) stop('disconnected');
@@ -3790,9 +3806,11 @@ async function endBedKill() {
   } catch (error) { out.error = String((error as Error)?.stack ?? error).slice(0, 1600); stop('script_error'); }
   finally {
     stop('time_limit'); clearInterval(timer); abortActive('scene_finished');
+    knockRecord.finish(terminal ?? 'scene_end');
     actor.removeListener('physicsTick', onTick); actor.removeListener('entityDead', onDead); actor.removeListener('death', onDeath);
     actor.removeListener('health', onHealth); actor.removeListener('blockUpdate', onBlock); actor._client.removeListener('explosion', onExplosion);
-    await Promise.all([samplePending, bedReadPending, serverQueue]);
+    try { await Promise.all([samplePending, bedReadPending, serverQueue]); await knockRecord.settle(); }
+    finally { knockRecord.stop(terminal ?? 'scene_end'); }
     out.phaseDurations.push({ phase, fromTick: phaseStart, toTick: out.endTick, ticks: out.endTick - phaseStart, seconds: out.seconds - phaseStartSeconds, partial: true });
     out.phase1Seconds = out.phaseDurations.filter((p: any) => p.phase === 1).reduce((n: number, p: any) => n + p.seconds, 0);
     out.deaths = actorDeaths - deaths0; out.minHealth = lowest.stop(); out.dragonHealthEnd = view?.dragon?.health ?? null;

@@ -8,6 +8,7 @@ import * as geometry from '../../src/services/minebot/utils/dragonBedGeometry.js
 import * as headModel from '../../src/services/minebot/utils/dragonHeadModel.js';
 import { partBox, isPerched, type P3 } from '../../src/services/minebot/utils/dragonParts.js';
 import { bedHalves } from '../../src/services/minebot/utils/bedRules.js';
+import { recordEndKnocks } from '../../src/services/minebot/utils/endKnockRecord.js';
 
 const source = fs.readFileSync(new URL('../../scripts/minecraft-end-fight-probe.ts', import.meta.url), 'utf8');
 const section = '// ' + source.split('// ===== end_bed_kill:')[1].split('// ===== end end_bed_kill =====')[0];
@@ -162,6 +163,7 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
   const clouds: any[] = [];
   actor.entities = {};
   const deps = { ...geometry, ...headModel, dragonEntity: () => d, Vec3, partBox, isPerched, bedHalves, actor, actorDeaths: 0, disconnected, scenes, KILL_LIMIT_MS: options.limit ?? 10_000,
+    trackEndKnocks: (tick: () => number, bedTrials: () => Array<{ detonationTick: number | null }>) => recordEndKnocks(actor, { enabled: false, tick, bedTrials, dragon: () => d, clouds: () => [] }),
     chainDistance: (a: P3, b: P3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z),
     killCell: (v: P3) => p(Math.floor(v.x), Math.floor(v.y), Math.floor(v.z)), killPlaced: new Map(), killBlasts: [],
     prepareKillRun: vi.fn(async () => ({ dragonId: 77, ground: { ...actor.entity.position } })),
@@ -220,6 +222,17 @@ function rig(options: { explode?: boolean; proofId?: number; hurt?: boolean; lim
 }
 
 describe('end_bed_kill scene with mocked I/O', () => {
+  it('includes the shared knock record on death and removes packet listeners', async () => {
+    vi.useFakeTimers(); const r = rig({ limit: 4000 }); r.actor.entity.id = 42;
+    const promise = r.run(); await vi.advanceTimersByTimeAsync(100);
+    r.actor._client.emit('entity_velocity', { entityId: 42, velocity: { x: 0, y: 1.5, z: 0 } });
+    r.actor.entity.onGround = false; r.actor.entity.velocity = new Vec3(0, 1.5, 0); r.actor.entity.position.y = 90;
+    await vi.advanceTimersByTimeAsync(50); r.die(); await vi.advanceTimersByTimeAsync(200);
+    const out = await promise; expect(out.knocks).toHaveLength(1); expect(out.knocks[0].peak.position.y).toBe(90);
+    expect(out.knocks[0].end.outcome).toBe('death'); expect(out.knockRecordErrors).toEqual([]);
+    expect(r.actor._client.listenerCount('entity_velocity')).toBe(0); expect(r.actor.listenerCount('physicsTick')).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it('prepares HP 200, zero crystals, four beds/four obsidian/iron gear and a single natural-flight reset, with reflexes on', async () => {
     const node = ts.createSourceFile('probe.ts', source, ts.ScriptTarget.Latest, true).statements.find(s => ts.isFunctionDeclaration(s) && s.name?.text === 'prepareKillRun')!;
     const prepareCode = ts.transpileModule(node.getText(), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;

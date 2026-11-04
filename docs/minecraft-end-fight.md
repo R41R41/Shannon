@@ -810,3 +810,52 @@ phase 6の見回しが終わり、**phase 7へ入った最初の生の本体位�
 仮定は着座中の頭を既存partBoxで近似できること、20 tick/s、クライアント受信tickとサーバーtickのずれ、hand内部のequip／lookと通信遅延である。HP差と自己被害は計測区間内の全原因を含み、爆発だけの因果証明ではない。実地の起爆数／サーバー実被害／操作時間／ノックバック死亡の改善率、歩行と既存反射との両立、黒曜石を残して次窓のyawに再利用できる頻度は **S1のラボで確認する課題**。この作業ではラボ／ゲーム／本体／DB／VM／外部資料更新を実行せず、指定コピーだけを未コミットで変更する。反射・gazeGuard・dragonStrike・hand一覧・環境変数設定・fallClutch・`.codex-material/`は変更しない。
 
 最終検証：このコピーのNode v24.21.0でベッド55＋head model22＋kill compare65＋nook10＋full chain125＝**5ファイル277件成功**。`node tests/unit/checkEndBedKill.cjs` は変更4 TS root（probe全体を含む）の対象診断0件。`git diff --check` 成功。枝 `claude/dragon-end-sections`、HEAD `2499f36` のまま、指定6ファイルだけを未コミットで変更した。
+
+## knock と fallClutch の場面記録（2026-11-04、頼み19）
+
+### 手元の既存記録からの分類
+
+このコピーの `lab-evidence/` にある記録だけを読むと、knock の ledger と大きな上昇、その後の下降・死亡を確認できた下表の **4件はすべて `unknown`**。`wing_push=0, head_contact=0, neck_contact=0, body_contact=0, takeoff_wing=0, bed_blast=0, cloud=0, unknown=4`。0は原因が存在しなかったという意味ではなく、確定できた件数が0という意味である。
+
+| 記録 | knock / 死亡直前ログ行 | 観測した最高Y → 最終Y | 最高点後の下降vy | 分類・限界 |
+|---|---|---|---|---|
+| [r85](../lab-evidence/r85-probe-tail.log) | 27 / 30 | 108.5 → 66 | -2.1まで | unknown。endermanとの近接も記録されている。打ち上げ時の竜の姿勢／箱なし |
+| [r106](../lab-evidence/r106-probe-tail.log) | 123 / 126 | 75.8 → 66 | -1.1まで | unknown。盆地walk、終盤のphase履歴は0だが打ち上げtickの竜座標なし |
+| [r114](../lab-evidence/r114-probe-tail.log) | 126 / 134 | 84.7 → 64 | -1.2まで | unknown。盆地walk、窓内に首の危険／enderman／息の記録が混在。phase履歴は5で終わる。首の記録だけで原因を確定しない |
+| [r146](../lab-evidence/r146-probe-tail.log) | 47 / 48 | 89.7 → 60 | -1.7まで | unknown。end_full_chainのcrystals区間。竜の打ち上げ時の姿勢／箱なし |
+
+[r136](../lab-evidence/r136-probe-tail.log) 54 / 56行にもknockと死亡があるが、最終ログはY69〜70、HP18→12→6→0で、大きな上昇・落下死亡とは確認できないため4件に混ぜない。[r96](../lab-evidence/r96-probe-tail.log) 39行のknockにも、その後の死亡traceはない。既存の「死亡直前の動き」は **250ms間隔**（`motionRecorder.ts`）、全tickの原記録ではない。最高点はサンプル上の最大であり、真の最高点の下限。着地時のHP減少も回復・別の被害・致死時のHP下限を含み、落下被害量の確定値にはできない。
+
+依頼文に挙がる **r188・r196・r197・r200・r205・r207、r115・r116・r119・r145・r184・r186、およびr208〜r211はこのコピーにない**。依頼文の「ベッド死亡9件中6件はknock→落下」は背景情報として保持するが、6件のログ照合・原因の再分類・fallClutch成績は未確認。上の4件の集計に加算しない。
+
+### 新しい report.json
+
+`utils/endKnockRecord.ts` の受動的な補助を `end_bed_kill` と `basinAssist`（tp/walkおよび派生場面）で使う。各場面の `knocks[]` に以下を残す。タイミング・移動・持ち替え・反射の条件を変える処理はない。
+
+- トリガー：本人の `entity_velocity` の上向き速度が **0.8 block/tick以上**、またはledgerのknock累計増分。physicsの速度も0.8以上かつ前tick比+0.5以上なら拾う。通常ジャンプ約0.42と区別する測定閾値。新形式lpVec3はそのまま、旧整数形式だけ8000で割る。ledgerの同一seqへの併合もcountsで検出する。
+- `tick`／`seconds` と最初の身体位置・速度・HP・接地・水中・身体AABB・竜本体位置／yaw（rad）／phase。`impulses[]` に各トリガー時点の同じ情報、生packet速度、5部位の生箱・接触箱・重なり・翼の押し箱・重なり、`dragonBreath` の雲位置／半径とdisc＋slab重なりを保存する。雲は火球由来／着座の息由来の両方を含むが、元の雲の発生原因を捏造しない。竜が見えなければnull／箱なし。
+- 接触箱は `inflate(partBox,1.1)`、翼の押し箱は `shift(inflate(partBox,4,2,4),0,-2,0)`。頭／首の判定はdangerの1+0.1と同じ。体の候補は生箱との重なりだけ。着座中の翼も記録し、全phaseを測る。着座でも既存partBoxの推定であり、飛行・離陸中は特に実部位位置ではない。既存の `dragonDanger.ts` は変更しない。
+- 原因の優先順位は **確認済み起爆から0〜3 tickならbed_blast → phase 4の翼pushならtakeoff_wing → head_contact → neck_contact → body_contact → wing_push → cloud → unknown**。`bedDetonationTicks` は同じ時計の `bedTrials[].detonationTick` の過去20 tick（両端を含む）。4〜20 tick前は文脈だけ、未来／null／未確認useは起爆に数えない。packet listener順による同tickの確認遅れは終了時に再分類する。`candidates` と `ambiguous` に競合も残す。雲に触れたことも含め、これは観測候補の順位であり、力を加えた主体の証明ではない。
+- packet／physics／ledgerの重複や、着地前の再打ち上げは1飛行の `impulses[]`。`peak`（位置・tick・秒）、`fallingTick`、`trajectory[]`、`end`（landed／water_landing／death／未完理由）、最高点から終了までの高さ・秒、開始からの秒を対にする。着地直後2 tick内の死亡は同じ件に反映。サーバー位置補正は `server_position_correction` とし、tp／respawnを着地成功にしない。場面終了・切断は未完理由のまま残す。
+
+ベッドは既存の開始時刻・physicsTickを共有する。盆地は計時区間の先頭からの専用physicsTickで、`transitions` の秒と対照できる。どちらも **クライアント受信tickで、サーバーgameTimeではない**。`knockRecordErrors` は最大8件の観測失敗。観測失敗で体の動作を止めない。場面終了で飛行を閉じ、新しい飛行を開始せず、既に開始を観測したclutchの非同期ledgerだけを最大8.25秒（既存floor timeout 8秒＋余裕）待って回収する。待機は戦闘時間に算入しない。待っても結果が無ければ `ledger_pending_at_stop`。回収後はlistenerとwriteのtapを外す。両場面の `fallClutchEnabled` はknocksが空でも有効状態を示す。
+
+### fallClutchの照合と未作動理由
+
+`floorReflexes.ts` を読むと現在のReflexKindにclutch/fallはなく、**kind=`retreat`、detailが「落下を水バケツで…」**、outcomeがdone/cut/failedとなる。kind名だけの検索では見落とす。補助はこのdetailと将来のclutch/fall kindも読み、`floorReflexes.fall.clutchAt` の変化を開始として記録する。ledgerは終了時に載るため、開始時のseq範囲で対応付ける。稼働中の `FALL_CLUTCH_ENABLED` を引数で読むだけで、リポジトリのfalseを変更しない。S1のtar内でtrueにした測定ではtrueが記録される。
+
+`trajectory[]` は同じ `CLUTCH_FALLING_VY=-0.75`／`CLUTCH_MIN_DAMAGE=5`／`groundUnder` を読み、最高点からの落下量＋残りの整数drop−3、床のkind／top／block名／完全立方体の有無、目から床までの距離、hand／hotbar（slot36〜44）／packまたは不所持、6秒cooldown、接地・水中・floor busyと、満たさない条件を毎tick残す。`groundUnder` は床を70ブロックまで読むため、`ground_void` はその範囲で床が見つからない意味で、無限の虚空の確定ではない。未ロードは `ground_unknown` と区別する。実clutchの条件はエンドストーンに限定されず、同じfloor判定を使う。`floorName=end_stone`／`floorFullCube`、その床の上2マスが空いて立てるかの `endStoneStandable` も別に確認でき、これを反射の新しい条件には加えない。
+
+`clutch` に開始・有効だったtick・ledgerの成否・送信・水中着地と `notWorkedReasons` をまとめる。主な理由はrelease_disabled、no_falling_threshold_sample、below_min_damage、bucket_not_in_hand_or_hotbar、ground_void/unknown/water/lava、cooldown、条件を満たしたが開始が見えないeligible_but_start_unobserved、開始したが水を出す前の着地landed_before_pour、使用射程へ入ったsampleが無いno_reachable_floor_sample_before_end、ledger_cut/failedとその原文。条件不足は当該tickの観測であり、複数の理由が別tickに生じる場合もある。
+
+`waterUses[]` は実際の `use_item`／`block_place` を水入り／空バケツの時だけ透過的に観測し、手のitem・sequence・位置・床までの高さ・着地までの高さ／秒とsent_unconfirmed／write_failed等を残す。送信自体を成功にしない。`waterObserved[]` の近傍水ブロック、water_landing、ledger結果を分け、useSuccessはwater_landing_after_sendまたはunconfirmed。空バケツの汲み直しもheldで区別する。packetの追加・引数の変更・hand追加はない。
+
+`healthLosses[]` と `damageEvents[]`（直前2 tickのpacketも含む）にはHPの減少、sourceTypeId／causeId／directIdを残す。**damage_eventには被害量がなく、現行registryは通常damage_type名も保持しない。** 数値IDをfallと決め打ちせず、落下被害の確定値 `fallDamage`／`clutch.actualFallDamage` はnull。代わりに着地前後2 tickの `landingWindowHpLossAllCauses` と、最高点差−3を切り上げた防具／効果／水などを適用する前の `unmitigatedFallEstimate` を明示する。これらは実落下ダメージと同一ではない。確定被害量はサーバー側の独立計測が残る課題。
+
+### 検証範囲
+
+分類・箱・向き／移動地形・起爆3/20 tick境界・新旧速度packet・同一飛行の再打ち上げ・ledger併合・水送信／着水・中断／未作動理由・位置補正・死亡・後始末を単体試験で検査する。両場面も外部I/Oをモックし、knocksがreportへ載ることを確認する。型検査は `node tests/unit/checkEndKnock.cjs` で、変更した **probe全体・補助・関係試験3本の5 TS root** の構文／semantic／compiler options診断だけを検査する。依存先自身のsemantic診断と全backend型検査は対象外。
+
+本作業は指定コピーだけ。commit、VM、本体／DB／ラボ／LLM、外部資料更新を行わず、`.codex-material/` は読まず変更しない。反射・fallClutch・FALL_CLUTCH_ENABLED・gazeGuard・dragonStrike・act一覧・環境変数設定は変更しない。S1に残るのはr208〜r211以降のラボ測定、新記録での原因候補／クラッチ開始・送信・着地・死亡率の確認、飛行中の箱の独立検証、実落下被害の取得である。
+
+最終検証：Node v24.21.0で補助39＋ベッド56＋比較66＝**3ファイル161件成功**。試験子プロセスだけに既存の隔離フラグとOPENAI／Mongoのオフライン用ダミーを渡し、共有.envの読込み・設定ファイル更新・実接続はしない。`node tests/unit/checkEndKnock.cjs` は変更5 TS root（probe全体を含む）の対象診断0件。`git diff --check` 成功。枝 `claude/dragon-end-sections`、HEAD `ba6bf2a`、許可範囲の8ファイルを未コミットで変更。
