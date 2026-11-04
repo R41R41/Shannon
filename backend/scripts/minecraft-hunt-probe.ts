@@ -10,6 +10,7 @@
 //   MINECRAFT_HUNT_SCENES=blaze_hold,barter    names or prefixes (default: all)
 //   MINECRAFT_HUNT_SECONDS=<n>         the length of the timed scenes (blaze camps: default 240)
 //   MINECRAFT_HUNT_REPORT=<file>       the whole report as JSON
+//   ROOF_STAND=overworld,X,Y,Z        optional ender_roof_natural stand (or the_nether,X,Y,Z); Y is feet height
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -44,6 +45,7 @@ const stamp = () => new Date().toTimeString().slice(0, 8);
 const log = (text: string) => console.log(`[${stamp()}] ${text}`);
 const timedSeconds = Number(process.env.MINECRAFT_HUNT_SECONDS ?? 0) || 0;
 const reportFile = process.env.MINECRAFT_HUNT_REPORT ?? '';
+let roofStand: { dimension: 'overworld' | 'the_nether'; x: number; y: number; z: number } | null = null;
 const ACTOR = 'MinebotTrial';
 
 const operator = await createProbeBot(port);
@@ -1238,14 +1240,31 @@ scene('ender_warped', 'enderman: the warped forest itself, four endermen', note 
 // ===== natural roof hunt: ONLY this scene stands in for the head's choices; no site/target policy is installed in the body ===================
 scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×3屋根・中央固定。召喚なし、観測から場所と #id を選ぶ', async note => {
   if (timedSeconds && timedSeconds !== 1500 && timedSeconds < 60) throw new Error('ENDER_ROOF_NATURAL_REQUIRES_MINECRAFT_HUNT_SECONDS_1500_OR_A_DIAGNOSTIC_OF_60_OR_MORE');
-  const stand = sites.warpedStand as number[] | undefined;
+  const override = process.env.ROOF_STAND?.split(',').map(part => part.trim());
+  if (override && (override.length !== 4 || !['overworld', 'the_nether'].includes(override[0])
+    || override.slice(1).some(part => !part || !Number.isFinite(Number(part))))) throw new Error('INVALID_ROOF_STAND: expected overworld,X,Y,Z or the_nether,X,Y,Z');
+  const dimension = override?.[0] === 'overworld' ? 'overworld' : 'the_nether';
+  const stand = override ? override.slice(1).map(Number) : sites.warpedStand as number[] | undefined;
   if (!stand || stand.length !== 3 || !stand.every(Number.isFinite)) throw new Error('no warpedStand in the sites');
+  roofStand = { dimension, x: stand[0], y: stand[1], z: stand[2] };
   const fixtureAt = Date.now();
+  if (dimension === 'overworld') {
+    await ask('time set midnight'); await ask('weather clear');
+    let frozen = false;
+    // 1.21.11 renamed doDaylightCycle to advance_time; confirm the freeze before observing.
+    for (const key of ['doDaylightCycle', 'advance_time']) {
+      if (!/\b(true|false)\b/u.test(await ask(`gamerule ${key}`))) continue;
+      await ask(`gamerule ${key} false`);
+      frozen = /\bfalse\b/u.test(await ask(`gamerule ${key}`));
+      break;
+    }
+    if (!frozen) throw new Error('CANNOT_FREEZE_ROOF_DAYLIGHT_CYCLE');
+  }
   await ask('difficulty normal');
   // Fixed starting equipment, no mid-run supply, buffs, platform or mob manipulation. The initial transfer is the only teleport of the actor.
   const equipment = { stone_sword: 3, stone_pickaxe: 1, cooked_beef: 32, cobblestone: 128 };
   await equip(equipment, { armor: 'iron', shield: true });
-  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  await placeActor(dimension, stand[0], stand[1], stand[2], 24);
   await ask(`effect clear ${ACTOR}`);
   let spawning: { key: string; was: string } | null = null;
   for (const key of ['spawn_mobs', 'doMobSpawning']) {
@@ -1505,7 +1524,8 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
   }
   const fights = rows.filter(row => row.kind === 'fight'), provoked = fights.filter(row => row.angryAt !== null), arrived = provoked.filter(row => row.reachedAt !== null);
   const mean = (name: string) => { const xs = fights.map(row => row[name]).filter((v: unknown): v is number => typeof v === 'number'); return xs.length ? xs.reduce((a: number, b: number) => a + b, 0) / xs.length : null; };
-  const summary = { natural: true, seconds: 1500, fixtureSetupMs, wallMs, stopReason, equipment: { ...equipment, armor: 'iron', shield: true },
+  const summary = { natural: true, seconds: 1500, fixtureSetupMs, wallMs, stopReason,
+    stand: roofStand, equipment: { ...equipment, armor: 'iron', shield: true },
     observedUnique: seen.size, eyeCandidateUnique: candidatesSeen.size, fightAttempts: fights.length, angryAttempts: provoked.length,
     provokedAttempts: fights.filter(row => row.stareToAngrySeconds !== null).length,
     arrivedAttempts: arrived.length, arrivalRatio: provoked.length ? arrived.length / provoked.length : null,
@@ -2228,7 +2248,8 @@ try {
   log(`FATAL ${fatal}`);
   process.exitCode = 1;
 } finally {
-  const summary = { scenes: results.length, planned: chosen.length, deaths, durationMs: Date.now() - startedAll, disconnected, fatal, port, worldDirectory };
+  const summary = { scenes: results.length, planned: chosen.length, deaths, durationMs: Date.now() - startedAll, disconnected, fatal, port, worldDirectory,
+    ...(roofStand ? { stand: roofStand } : {}) };
   console.log(`HUNT_RESULT ${JSON.stringify(summary)}`);
   if (reportFile) { try { fs.writeFileSync(reportFile, JSON.stringify({ summary, results }, null, 2), { mode: 0o600 }); } catch (error) { log(`REPORT_WRITE_FAILED ${String(error)}`); } }
   try { await body.dispose(); } catch { /* the lab is closing */ }
