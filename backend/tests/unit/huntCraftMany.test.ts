@@ -86,3 +86,38 @@ describe('a shortfall says what the pack makes now and how the short ingredient 
     expect(result.text).toContain('craft item=blaze_powder count=2');
   });
 });
+
+describe('make in the hand, many rounds (S5 rig, c1: make ender_eye 12 made the powder, then failed the eyes with "missing ingredient")', () => {
+  it('makes the powder from the rods and then the twelve eyes one round at a time', async () => {
+    const { make } = await import('../../src/services/minebot/utils/primitives/make.js');
+    const ROD = 1123;
+    const stock: Record<string, number> = { ender_pearl: 14, blaze_powder: 0, blaze_rod: 7, ender_eye: 0 };
+    const eye = { requiresTable: false, result: { id: EYE, count: 1 }, delta: [{ id: PEARL, count: -1 }, { id: POWDER, count: -1 }, { id: EYE, count: 1 }], ingredients: [{ id: PEARL }, { id: POWDER }] };
+    const powder = { requiresTable: false, result: { id: POWDER, count: 2 }, delta: [{ id: ROD, count: -1 }, { id: POWDER, count: 2 }], ingredients: [{ id: ROD }] };
+    const calls: Array<[string, number]> = [];
+    let lastEnd = 0;
+    const bot: any = {
+      entity: { position: { x: 0.5, y: 64, z: 0.5, offset: () => ({ x: 0.5, y: 65.6, z: 0.5 }) } },
+      registry: { itemsByName: { ender_eye: { id: EYE, stackSize: 64 }, blaze_powder: { id: POWDER, stackSize: 64 }, blaze_rod: { id: ROD, stackSize: 64 }, ender_pearl: { id: PEARL, stackSize: 16 } },
+        items: { ...NAMES, [ROD]: { name: 'blaze_rod' } } },
+      inventory: { items: () => Object.entries(stock).filter(([, count]) => count > 0).map(([name, count]) => ({ name, count })), slots: [], emptySlotCount: () => 20 },
+      recipesAll: (id: number) => (id === EYE ? [eye] : id === POWDER ? [powder] : []),
+      blockAt: () => null, world: { getColumns: () => [] },
+      craft: async (recipe: any, count: number) => {
+        const name = recipe === eye ? 'ender_eye' : 'blaze_powder';
+        calls.push([name, count]);
+        // Like the real thing: a round begun before the last one has settled (under 150 ms) finds its materials gone.
+        if (lastEnd && Date.now() - lastEnd < 150) throw new Error('Error: missing ingredient');
+        for (let i = 0; i < count; i++) {
+          if (i > 0) throw new Error('Error: missing ingredient');
+          if (recipe === eye) { stock.ender_pearl--; stock.blaze_powder--; stock.ender_eye++; } else { stock.blaze_rod--; stock.blaze_powder += 2; }
+        }
+        lastEnd = Date.now();
+      },
+    };
+    const result = await make(ctx(bot), { item: 'ender_eye', count: 12 });
+    expect(result.ok).toBe(true);
+    expect(stock.ender_eye).toBe(12);
+    expect(calls.every(([, count]) => count === 1)).toBe(true);
+  }, 30_000);
+});

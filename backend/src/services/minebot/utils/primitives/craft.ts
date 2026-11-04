@@ -5,7 +5,7 @@ import { withProgress } from './progressUnits.js';
 import { craftEvents } from './craftEvents.js';
 
 /** Between two rounds of a craft in the hand the server's answer is let settle this long (see the loop below). */
-const ROUND_SETTLE_MS = 250;
+export const ROUND_SETTLE_MS = 250;
 
 /**
  * craft: `count` of an item (design mb-llm-centric 2.3). A recipe of the 2x2 grid is made in the hand; one that needs the 3x3 uses a
