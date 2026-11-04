@@ -32,4 +32,29 @@ export function bedExplodesHere(bot: { game?: { dimension?: unknown } }): boolea
   return /nether|the_end/.test(String(bot.game?.dimension ?? ''));
 }
 
-export const BED_EXPLODES = 'ネザーとエンドではベッドは爆発するため使いません（リスポーン地点はオーバーワールドのベッドで決めます）';
+type WakingBot = {
+  isSleeping?: boolean; wake?: () => unknown; entity?: { id?: number };
+  registry?: unknown; _client?: { write?: (name: string, params: Record<string, unknown>) => void };
+};
+/** Whether this version's protocol names the player commands (1.21.6 and later: leaving the bed is 0, `leave_bed`). */
+function namesLeaveBed(bot: WakingBot): boolean {
+  try {
+    const types = (bot.registry as { protocol?: { play?: { toServer?: { types?: Record<string, unknown> } } } } | undefined)?.protocol?.play?.toServer?.types;
+    return JSON.stringify(types?.packet_entity_action ?? '').includes('"leave_bed"');
+  } catch { return false; }
+}
+/**
+ * Getting out of bed. mineflayer 4.35's `wake()` sends player command 2, which from 1.21.6 the server reads as `stop_sprinting` (leaving
+ * the bed became 0): on 1.21.11 the body stayed lying in the bed (the lab's night_sleep B, 2026-11-05). Where the version names the
+ * command it is sent by name; elsewhere the library's own. The server's wake (the animation) clears `isSleeping` as before.
+ */
+export async function leaveBed(bot: WakingBot): Promise<void> {
+  if (!bot.isSleeping) return;
+  if (namesLeaveBed(bot) && bot._client?.write && bot.entity?.id !== undefined) {
+    bot._client.write('entity_action', { entityId: bot.entity.id, actionId: 'leave_bed', jumpBoost: 0 });
+    return;
+  }
+  await bot.wake?.();
+}
+
+export const BED_EXPLODES ='ネザーとエンドではベッドは爆発するため使いません（リスポーン地点はオーバーワールドのベッドで決めます）';

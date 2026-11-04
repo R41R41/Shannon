@@ -4,7 +4,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { actionDelay } from '../execution/observedWait.js';
-import { BED_EXPLODES, bedExplodesHere, isBedName } from '../utils/bedRules.js';
+import { BED_EXPLODES, bedExplodesHere, isBedName, leaveBed } from '../utils/bedRules.js';
 import { planBedSpot, walkableCells } from '../utils/bedSpot.js';
 import { hostileNear, PICKUP_SAFE_RANGE } from './craftOne.js';
 
@@ -167,7 +167,7 @@ class SleepInBed extends InstantSkill {
       const done = () => { clearTimeout(timer); resolve(); };
       this.bot.once('wake', done);
     });
-    try { await this.bot.wake(); await woke; } catch (error: any) { log.warn(`起き上がれません: ${error?.message ?? error}`); }
+    try { await leaveBed(this.bot as never); await woke; } catch (error: any) { log.warn(`起き上がれません: ${error?.message ?? error}`); }
     return !this.bot.isSleeping;
   }
 
@@ -180,7 +180,7 @@ class SleepInBed extends InstantSkill {
       // ベッドから起きる場合
       if (wakeUp) {
         if (this.bot.isSleeping) {
-          await this.bot.wake();
+          await leaveBed(this.bot as never);
           return { success: true, result: 'ベッドから起きました' };
         } else {
           return { success: false, result: '現在寝ていません' };
@@ -420,7 +420,7 @@ class SleepInBed extends InstantSkill {
       const nightPassed = slept.woke;
       // The night did not pass (another player is awake): with `leaveIfNight` the body gets up and takes its bed back all the same.
       if (!slept.woke && options.leaveIfNight && await this.getUpIfNight(true)) slept.result += 'が、夜は明けませんでした（ほかに起きているプレイヤーがいます）。起き上がりました';
-      else if (!slept.woke || this.bot.isSleeping) return { success: slept.success, nightPassed, result: `${slept.result}。置いたベッドは(${at.x}, ${at.y}, ${at.z})にあります（起きたら dig-block-at takeEquipment=true で拾えます）` };
+      else if (!slept.woke || this.bot.isSleeping) return { success: slept.success, nightPassed, bedLeft: true, result: `${slept.result}。置いたベッドは(${at.x}, ${at.y}, ${at.z})にあります（起きたら dig-block-at takeEquipment=true で拾えます）` };
       if (hostileNear(this.bot as any, PICKUP_SAFE_RANGE)) {
         return { success: true, nightPassed, bedLeft: true, result: `${slept.result}。敵が近いので、ベッド(${at.x}, ${at.y}, ${at.z})はそのままにしました（後で dig-block-at takeEquipment=true で拾えます）` };
       }

@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { activateItemFacing } from '../activateItemFacing.js';
-import { bedHalves, isBedName } from '../bedRules.js';
+import { bedHalves, isBedName, leaveBed } from '../bedRules.js';
 import { equipToHandVerified } from '../equipVerified.js';
 import { feetCell, type Cell } from '../localMap.js';
 import { noteSpawnBed } from '../ownedBlocks.js';
@@ -139,7 +139,7 @@ async function sleepInBed(ctx: StepContext, cell: Cell, asked: any): Promise<Ste
   }
   try { noteSpawnBed(bot, halves ? [halves.foot, halves.head] : [cell], String(asked.name)); } catch { /* the ledger is a help */ }
   const woke = await waitUntil(ctx, () => !bot.isSleeping, 15_000, 200);
-  if (!woke) { try { await bot.wake(); } catch { /* up */ } }
+  if (!woke) { try { await leaveBed(bot as never); } catch { /* up */ } }
   return { ok: true, text: `${cellText(cell)} のベッドで寝た${woke ? '（朝になって起きた）' : '（15秒で起きた。夜はまだ）'}。リスポーン地点はこのベッド${late >= 20 ? `（頭のブロックが来るまで ${late}ms 待った）` : ''}`, at: cell };
 }
 

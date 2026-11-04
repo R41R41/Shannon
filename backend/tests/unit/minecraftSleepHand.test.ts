@@ -6,6 +6,7 @@ import { enemiesInSleepBox, enemyWords, sleep } from '../../src/services/minebot
 import { StepStopped } from '../../src/services/minebot/utils/primitives/common.js';
 import { handProblem } from '../../src/services/minebot/utils/actHandRules.js';
 import { closedWord } from '../../src/services/minebot/utils/actReport.js';
+import { leaveBed } from '../../src/services/minebot/utils/bedRules.js';
 import { ACT_HANDS, HAND_KINDS, runAct } from '../../src/services/minebot/instantSkills/act.js';
 
 const { default: SleepInBed } = await import('../../src/services/minebot/instantSkills/sleepInBed.js');
@@ -138,6 +139,25 @@ describe('sleep-in-bed with noDig: no spot is cut out of the rock', () => {
     expect(result).toMatchObject({ success: false, failureType: 'no_bed_spot' });
     expect(skill.callSkill.mock.calls.filter(([name]: [string]) => /dig/u.test(name))).toEqual([]);
     expect(bot.placeBlock).not.toHaveBeenCalled();
+  });
+});
+
+describe('leaveBed: getting out of bed on the server\'s version', () => {
+  const named = { protocol: { play: { toServer: { types: { packet_entity_action: ['container', [{ name: 'actionId', type: ['mapper', { type: 'varint', mappings: { 0: 'leave_bed', 2: 'stop_sprinting' } }] }]] } } } } };
+  const plain = { protocol: { play: { toServer: { types: { packet_entity_action: ['container', [{ name: 'actionId', type: 'varint' }]] } } } } };
+  it('1.21.6 and later: the command is sent by name (the library\'s 2 is stop_sprinting there), not through wake()', async () => {
+    const bot = { isSleeping: true, entity: { id: 7 }, registry: named, _client: { write: vi.fn() }, wake: vi.fn(async () => {}) };
+    await leaveBed(bot);
+    expect(bot._client.write).toHaveBeenCalledWith('entity_action', { entityId: 7, actionId: 'leave_bed', jumpBoost: 0 });
+    expect(bot.wake).not.toHaveBeenCalled();
+  });
+  it('earlier versions use the library\'s wake(); a body not in bed sends nothing', async () => {
+    const old = { isSleeping: true, entity: { id: 7 }, registry: plain, _client: { write: vi.fn() }, wake: vi.fn(async () => {}) };
+    await leaveBed(old);
+    expect(old.wake).toHaveBeenCalled(); expect(old._client.write).not.toHaveBeenCalled();
+    const up = { isSleeping: false, entity: { id: 7 }, registry: named, _client: { write: vi.fn() }, wake: vi.fn(async () => {}) };
+    await leaveBed(up);
+    expect(up._client.write).not.toHaveBeenCalled(); expect(up.wake).not.toHaveBeenCalled();
   });
 });
 

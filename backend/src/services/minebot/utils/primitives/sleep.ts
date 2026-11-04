@@ -1,5 +1,5 @@
 import { createMotorPort, executeAction } from '../../execution/ActionExecution.js';
-import { bedExplodesHere, isBedName } from '../bedRules.js';
+import { bedExplodesHere, isBedName, leaveBed } from '../bedRules.js';
 import { isThreatEntity, type ThreatBody } from '../hostileMobHints.js';
 import type { Cell } from '../localMap.js';
 import { StepStopped, stopped, type StepContext, type StepOutcome } from './common.js';
@@ -94,7 +94,7 @@ export async function sleep(ctx: StepContext, args: SleepArgs): Promise<StepOutc
   const bedName = args.item ?? beds[0]?.name ?? 'ベッド';
   const timeoutMs = Math.max(1000, Math.min((args.seconds ?? SLEEP_SECONDS) * 1000, ctx.deadline - Date.now()));
   // In bed the body cannot move: a stop from outside (stopIf, a reflex, the command's end) wakes it at once.
-  const getUp = () => { if (bot.isSleeping) void Promise.resolve(bot.wake?.()).catch(() => undefined); };
+  const getUp = () => { void leaveBed(bot as never).catch(() => undefined); };
   ctx.stop.addEventListener('abort', getUp, { once: true });
   const host = skill.rootBot ?? skill.bot;
   let result: SkillResult;
@@ -107,7 +107,7 @@ export async function sleep(ctx: StepContext, args: SleepArgs): Promise<StepOutc
     }) as SkillResult;
   } finally { ctx.stop.removeEventListener('abort', getUp); }
   // Never left lying in bed: a body in bed cannot act on the next hand.
-  if (bot.isSleeping) await Promise.resolve(bot.wake?.()).catch(() => undefined);
+  await leaveBed(bot as never).catch(() => undefined);
   if (ctx.stop.aborted) throw new StepStopped(String(ctx.stop.reason ?? 'stopped'));
   const text = String(result?.result ?? '').replace(/\s+/gu, ' ');
   if (!result?.success) {
