@@ -259,14 +259,14 @@ describe('fight an enderman from a roofed hole', () => {
     expect(field.stats.laid).toHaveLength(0);
   }, 60_000);
 
-  it('one already angry and coming: the hand builds while it comes, stops to fight when it is on it, and survives with the shield', async () => {
+  it('stops support_unsafe when an already angry target approaches before the temporary supports are removed', async () => {
     const field = makeField({ at: new Vec3(9.5, FLOOR, 0.5), angry: true });
     const { json } = await act(field, [{ do: 'fight', target: 'enderman', seconds: 40 }]);
     field.stop();
     console.log('[ender 5]', lineOf(json), JSON.stringify({ ...field.stats, laid: field.stats.laid.length }), 'hp', field.bot.health);
     expect(field.bot.health).toBeGreaterThan(0);
-    expect(field.mob.health).toBeLessThanOrEqual(0);
-    expect(json.ok).toBe(true);
+    expect(field.stats.hits).toBe(0);
+    expect(json.ok).toBe(false); expect(lineOf(json)).toContain('support_unsafe');
   }, 90_000);
 
   it('a roof that already stands (a second enderman at the same hole) is not laid again', async () => {

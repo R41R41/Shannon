@@ -22,7 +22,9 @@ import { blackBoxOf } from '../src/services/minebot/utils/blackbox.js';
 import { exposureFromSpawner, hideoutsFrom, campSite } from '../src/services/minebot/utils/huntCamp.js';
 import { bodyReader, type Cell, type BlockReader } from '../src/services/minebot/utils/localMap.js';
 import { clearEndermanCampObservation, endermanCampObservation, roofWorldOf } from '../src/services/minebot/utils/huntEndermanCamp.js';
-import { ENDERMAN_EYE, atRoofCentre, endermanAngry, endermanLine, endermanStrikePoint, looksAtEyes, planRoof } from '../src/services/minebot/utils/huntEnderman.js';
+import { ENDERMAN_EYE, atRoofCentre, endermanAngry, endermanLine, endermanStrikePoint, looksAtEyes, planRoof,
+  roofCellOccupied } from '../src/services/minebot/utils/huntEnderman.js';
+import { chooseRoofClearing, huntCandidates, RoofTopReadings } from '../src/services/minebot/utils/huntEndermanProbe.js';
 import { isDying } from '../src/services/minebot/utils/primitives/use.js';
 import { denCenter, denClearRay, denOffset, denStandable, endermanDenCandidates, inspectEndermanDen, type EndermanDenSpec } from '../src/services/minebot/utils/huntEndermanDen.js';
 import { clearEndermanDenObservation, endermanDenObservation, type DenEntity } from '../src/services/minebot/utils/huntEndermanDenFight.js';
@@ -1275,6 +1277,7 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
   const fixtureSetupMs = Date.now() - fixtureAt;
   const start = Date.now(), endAt = start + 1_500_000, deathsBefore = deaths, pearlStart = packClient().ender_pearl ?? 0;
   const rows: any[] = [], seen = new Set<number>(), candidatesSeen = new Set<number>(), killed = new Set<number>();
+  const topReadings = new RoofTopReadings();
   let exploreStep = 0;
   const rejects: Record<string, number> = {};
   const reject = (why: string) => { rejects[why] = (rejects[why] ?? 0) + 1; };
@@ -1286,14 +1289,17 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
   const endermen = (): any[] => (Object.values(actor.entities ?? {}) as any[]).filter(e => e?.name === 'enderman' && e.isValid !== false
     && e.position && !killed.has(e.id) && !isDying(actor, e));
   const angry = () => endermen().filter(e => endermanAngry(actor.registry, e));
-  const candidateList = (from = actor.entity.position, read = bodyReader(actor)) => endermen().filter(e => {
-    const d = e.position.distanceTo(new Vec3(from.x, from.y, from.z));
-    return d >= 8 && d <= 48 && endermanLine(read, from, e.position, ENDERMAN_EYE).clear;
-  }).sort((a, b) => a.position.distanceTo(new Vec3(from.x, from.y, from.z)) - b.position.distanceTo(new Vec3(from.x, from.y, from.z)));
+  const occupied = (c: Cell) => roofCellOccupied(Object.values(actor.entities ?? {}), actor.entity.id, c);
+  const candidateList = (from = actor.entity.position, read = bodyReader(actor), anchor = roof) => huntCandidates(read, from, endermen(), anchor, occupied);
   let roof: Cell | null = null, active: any = null, noCandidateSince: number | null = null, wallMs = 0, healthLost = 0;
   let maxCentreDrift: number | null = null, maxAxisDrift: number | null = null, lastHp = Number(actor.health), hurtAt = 0;
   const damage: any[] = [], jumps: any[] = [], observations: any[] = [];
   const previous = new Map<number, { position: Vec3; at: number; lookingAtEyes: boolean; eyeVisible: boolean }>();
+  const candidateViews = (list: ReturnType<typeof candidateList>) => list.map(e => ({ id: e.id, via: e.via }));
+  const topReading = () => {
+    const c = (active ? endermanCampObservation(actor)?.roofCell : null) ?? roof ?? feetCell(actor);
+    return topReadings.observe(bodyReader(actor), c ? { x: c.x + 0.5, y: c.y, z: c.z + 0.5 } : null, endermen());
+  };
   const clock = { siteAndMoveMs: 0, fightMs: 0, pickupAndReturnMs: 0, waitAndDecisionMs: 0 };
   const closeRow = () => {
     const row = rows.at(-1);
@@ -1323,7 +1329,7 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
   let nextObservation = 0;
   const sample = () => {
     if (!actor.entity?.position || disconnected) return;
-    const now = Date.now(), list = endermen(), candidates = candidateList();
+    const now = Date.now(), list = endermen(), candidates = candidateList(), top = topReading();
     // Include building, fighting and pickup in the continuous zero-candidate clock too.
     if (candidates.length || angry().length) noCandidateSince = null; else noCandidateSince ??= now;
     for (const e of list) seen.add(e.id);
@@ -1358,44 +1364,15 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
     }
     if (now >= nextObservation) {
       observations.push({ seconds: (now - start) / 1000, position: xyz(actor.entity.position), observed: list.length, observedIds: list.map(e => e.id),
-        candidates: candidates.length, candidateIds: candidates.map(e => e.id), angryIds: angry().map(e => e.id), drift: d, phase: camp?.latest?.phase ?? 'head' });
+        candidates: candidates.length, candidateIds: candidates.map(e => e.id), candidateViews: candidateViews(candidates), ...top,
+        angryIds: angry().map(e => e.id), drift: d, phase: camp?.latest?.phase ?? 'head' });
       nextObservation = now + 1000;
     }
   };
-  /** A small clearing observed in loaded blocks, with a level 5x5 floor. Rank by real eye rays AFTER the nine roof caps exist, then open horizons. */
-  const chooseClearing = (relocate: boolean, wide = false) => {
-    const p = actor.entity.position as Vec3, read0 = bodyReader(actor), cache = new Map<string, ReturnType<BlockReader>>();
-    const read: BlockReader = (x, y, z) => { const k = `${x},${y},${z}`; if (!cache.has(k)) cache.set(k, read0(x, y, z)); return cache.get(k)!; };
-    const world = roofWorldOf(actor), options: Array<{ cell: Cell; visible: number; horizons: number; distance: number }> = [];
-    const radius = relocate || wide ? 16 : 7;
-    for (let dx = -radius; dx <= radius; dx++) for (let dz = -radius; dz <= radius; dz++) {
-      const distance = Math.hypot(Math.floor(p.x) + dx + 0.5 - p.x, Math.floor(p.z) + dz + 0.5 - p.z);
-      if (distance > (relocate || wide ? 15.5 : 7) || (relocate && !wide && distance < 8.5)) continue;
-      for (let dy = -2; dy <= 2; dy++) {
-        const c = { x: Math.floor(p.x) + dx, y: Math.floor(p.y + 0.001) + dy, z: Math.floor(p.z) + dz };
-        if (visited.has(keyOf(c))) { reject('visited'); continue; }
-        let flat = true, outerBad = 0;      // the 3x3 under the roof must be level and clear; the ring round it may have up to six bad cells (a lumpy forest floor)
-        for (let ux = -2; ux <= 2 && flat; ux++) for (let uz = -2; uz <= 2; uz++) {
-          const floor = read(c.x + ux, c.y - 1, c.z + uz), feet = read(c.x + ux, c.y, c.z + uz), head = read(c.x + ux, c.y + 1, c.z + uz);
-          const bad = !floor?.solid || (floor.top ?? 1) !== 1 || /lava|water|magma|campfire|slab|stairs|fence|wall|leaves/u.test(floor.name)
-            || !feet || !head || feet.solid || head.solid || /lava|water|fire|portal|cobweb/u.test(`${feet.name} ${head.name}`);
-          if (bad && Math.abs(ux) <= 1 && Math.abs(uz) <= 1) { flat = false; break; }
-          if (bad && ++outerBad > 6) { flat = false; break; }
-        }
-        if (!flat) { reject('not_flat'); continue; }
-        const plan = planRoof(world, c, undefined, undefined, true);
-        if (plan.problems.length) { reject('plan:' + String(plan.problems[0]).slice(0, 40)); continue; }
-        if ((packClient().cobblestone ?? 0) < plan.placements.length || (relocate && !wide && plan.caps === 0)) { reject('blocks_or_caps'); continue; }
-        const future: BlockReader = (x, y, z) => y === c.y + 2 && Math.abs(x - c.x) <= 1 && Math.abs(z - c.z) <= 1 ? { name: 'cobblestone', solid: true } : read(x, y, z);
-        const from = { x: c.x + 0.5, y: c.y, z: c.z + 0.5 }, visible = candidateList(from, future).length;
-        let horizons = 0;
-        for (let k = 0; k < 8; k++) if (endermanLine(future, from,
-          { x: from.x + 12 * Math.cos(k * Math.PI / 4), y: c.y, z: from.z + 12 * Math.sin(k * Math.PI / 4) }, ENDERMAN_EYE).clear) horizons++;
-        if (horizons > 0) options.push({ cell: c, visible, horizons, distance }); else reject('no_horizon');
-      }
-    }
-    return options.sort((a, b) => b.visible - a.visible || b.horizons - a.horizons || a.distance - b.distance)[0] ?? null;
-  };
+  /** Rank the eight open eye directions first, then current candidates after the roof exists, then walking distance. */
+  const chooseClearing = (relocate: boolean, wide = false) => chooseRoofClearing(bodyReader(actor), roofWorldOf(actor), actor.entity.position, endermen(), {
+    relocate, wide, blocks: packClient().cobblestone ?? 0, visited: c => visited.has(keyOf(c)), reject, occupied,
+  });
   const doAct = async (label: string, hands: unknown[], seconds: number, safe = false) => act(label, hands,
     Math.max(0.1, Math.min(seconds, remaining() / 1000)), { accept: ['enderman'] }, { deadlineAt: endAt,
       ...(safe ? { stopWhen: () => angry().length ? 'angry_enderman_during_walk_or_pickup' : null } : {}) });
@@ -1430,6 +1407,7 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
       const at = Date.now(), list = endermen(), candidates = candidateList(), hostile = angry();
       closeRow();
       row.observed = list.length; row.observedIds = list.map(e => e.id); row.candidates = candidates.length; row.candidateIds = candidates.map(e => e.id);
+      row.candidateViews = candidateViews(candidates); Object.assign(row, topReading());
       row.angryIds = hostile.map(e => e.id); row.roof = roof; rows.push(row);
       if (!hostile.length && Number(actor.food) < 18 && remaining() >= 6_000) {
         row.reason = 'eat'; row.lines = (await doAct(`roof-eat#${row.i}`, [{ do: 'eat' }], 10, true)).lines;
@@ -1478,6 +1456,7 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
       if (!target) { row.reason = 'no_eligible_target'; await pause(500); clock.waitAndDecisionMs += Date.now() - at; continue; }
       if (!roof) { row.reason = 'angry_before_site'; await pause(500); clock.waitAndDecisionMs += Date.now() - at; continue; }
       row.kind = 'fight'; row.targetId = target.id; row.targetPosition = xyz(target.position); row.position = xyz(actor.entity.position);
+      row.via = candidates.find(e => e.id === target.id)?.via ?? null;
       Object.assign(row, { angryAt: null, reachedAt: null, killedAt: null, maxCentreDrift: null, maxAxisDrift: null, positionJumps: [], damage: [] });
       attempted.set(target.id, Date.now()); previous.delete(target.id); clearEndermanCampObservation(actor); active = row;
       const before = packClient().ender_pearl ?? 0;
@@ -1526,7 +1505,8 @@ scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×
   const mean = (name: string) => { const xs = fights.map(row => row[name]).filter((v: unknown): v is number => typeof v === 'number'); return xs.length ? xs.reduce((a: number, b: number) => a + b, 0) / xs.length : null; };
   const summary = { natural: true, seconds: 1500, fixtureSetupMs, wallMs, stopReason,
     stand: roofStand, equipment: { ...equipment, armor: 'iron', shield: true },
-    observedUnique: seen.size, eyeCandidateUnique: candidatesSeen.size, fightAttempts: fights.length, angryAttempts: provoked.length,
+    observedUnique: seen.size, eyeCandidateUnique: candidatesSeen.size, topCandidateUnique: topReadings.unique,
+    fightAttempts: fights.length, angryAttempts: provoked.length,
     provokedAttempts: fights.filter(row => row.stareToAngrySeconds !== null).length,
     arrivedAttempts: arrived.length, arrivalRatio: provoked.length ? arrived.length / provoked.length : null,
     stareToAngrySeconds: mean('stareToAngrySeconds'), angryToReachSeconds: mean('angryToReachSeconds'), reachToKillSeconds: mean('reachToKillSeconds'), fightToKillSeconds: mean('fightToKillSeconds'),

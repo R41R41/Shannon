@@ -1,11 +1,13 @@
 import { Vec3 } from 'vec3';
 import pathfinder from 'mineflayer-pathfinder';
-import { ENDERMAN_EYE, ENDERMAN_LEGS, ENDERMAN_STARE_MS, atRoofCentre, endermanAngry, endermanStrikePoint, endermanView, planRoof, roofBlockFor, roofExitCandidates, roofExitStep, roofInterior, roofInteriorStep, roofSites, type EndermanLine, type EndermanView, type RoofPlan, type RoofWorld } from './huntEnderman.js';
+import { ENDERMAN_EYE, ENDERMAN_LEGS, ENDERMAN_STARE_MS, atRoofCentre, endermanAngry, endermanStrikePoint, endermanView,
+  planRoof, roofBlockFor, roofCellOccupied, roofExitForSight, roofExitStep, roofInterior, roofInteriorStep, roofSites,
+  type EndermanLine, type EndermanView, type RoofPlan, type RoofWorld } from './huntEnderman.js';
 import { bodyReader, feetCell, type Cell } from './localMap.js';
 import { nativeActionHost } from '../execution/ActionExecution.js';
 import { reflexHeld } from './floorReflexes.js';
 import { PLACE_REPLACEABLE, place } from './primitives/place.js';
-import { dig } from './primitives/dig.js';
+import { removeRoofSupport } from './huntEndermanSupport.js';
 import { cellText, guard, inventoryCount, letGo, stopped, wait, type StepContext, type StepOutcome } from './primitives/common.js';
 import { goWith, walkMovements } from './primitives/walk.js';
 
@@ -266,11 +268,7 @@ export class EndermanCamp {
 
   private shiftOccupied(to: Cell): boolean {
     const bot = this.ctx.bot;
-    return (Object.values(bot.entities ?? {}) as any[]).some(e => e && e !== bot.entity && e.id !== bot.entity.id && e.isValid !== false
-      && e.position && !['item', 'experience_orb'].includes(String(e.name))
-      && Math.abs(e.position.x - (to.x + 0.5)) < 0.3 + (e.width ?? 0.6) / 2
-      && Math.abs(e.position.z - (to.z + 0.5)) < 0.3 + (e.width ?? 0.6) / 2
-      && e.position.y < to.y + 1.8 && e.position.y + (e.height ?? 1.8) > to.y);
+    return roofCellOccupied(Object.values(bot.entities ?? {}), bot.entity.id, to);
   }
 
   private stopExitMotion(): void {
@@ -296,14 +294,12 @@ export class EndermanCamp {
     return false;
   }
 
-  /** The only unprotected move: before any confirmed anger, from the original centre, for a roof cap hiding the eyes. */
+  /** Before confirmed anger, a clear exit ray may go round a cap or terrain hiding this same target. */
   private startExit(live: any, view: CampObservation, now: number): boolean {
     if (this.angeredAt || this.observation.stareEndedAt !== null || this.exitStare === this.restares
       || this.observation.exits.length >= ROOF_EXIT_LIMIT || !atRoofCentre(this.ctx.bot.entity.position, this.cell)) return false;
-    const cap = view.eyes.between.some(({ at }) => at.y === this.cell.y + 2
-      && Math.abs(at.x - this.cell.x) <= 1 && Math.abs(at.z - this.cell.z) <= 1);
-    if (!cap) return false;
-    const to = roofExitCandidates(bodyReader(this.ctx.bot), this.cell, live.position).find(c => !this.exitOccupied(c, c));
+    if (view.eyes.clear) return false;
+    const to = roofExitForSight(bodyReader(this.ctx.bot), this.cell, live.position, view.eyes, c => this.shiftOccupied(c))[0];
     if (!to) return false;
     this.exitStare = this.restares;
     this.exit = { to, stage: 'out', at: now };
@@ -463,8 +459,10 @@ export class EndermanCamp {
     if (angry && !this.angeredAt) { this.angeredAt = now; this.observation.angryAt = now; await this.legs(live, now); }
 
     if (this.phase === 'build') {
-      // An angry enderman within reach is the fight's: the shield, the blow, and the roof when it has gone.
-      if (angry && box <= CONTACT) return { kind: 'fight' };
+      // A close angry target may interrupt building only before any temporary support stands.
+      if (angry && box <= CONTACT) return this.temporary.size
+        ? this.failure('roof_failed', 'support_unsafe', '仮の柱が残っているため戦闘へ進めない。敵対中は柱を掘らない', this.cell)
+        : { kind: 'fight' };
       if (now - this.began > BUILD_MS) return this.failure('roof_failed', 'build_stalled', `屋根を ${BUILD_MS / 1000} 秒で建て終えられなかった（${this.laid}/${this.plan.placements.length}）。場所を変えるか、ブロックを増やして呼び直す`, this.cell);
       // Preserve the existing pre-placement replan if pushed into another cell; once anything is laid, never relocate the plan.
       const feet = feetCell(bot);
@@ -485,7 +483,7 @@ export class EndermanCamp {
           if (!block || (block.boundingBox === 'block' && block.name !== support.name)) return this.failure('roof_failed', 'support_changed', '仮の柱が変化したため撤去を止めた', support.cell);
           if (block.boundingBox === 'block') {
             if (angry) return this.failure('roof_failed', 'support_unsafe', '敵対中は仮の柱を掘らない', support.cell);
-            const removed = await dig(this.ctx, { at: [support.cell], collect: false });
+            const removed = await removeRoofSupport(this.ctx, this.cell, support.cell, live, this.began + BUILD_MS);
             if (!removed.ok) return this.failure('roof_failed', 'support_not_removed', `仮の柱を外せない: ${removed.text}`, support.cell);
             this.observation.supportsRemoved++;
           }

@@ -242,6 +242,26 @@ export function roofExitCandidates(read: BlockReader, anchor: Cell3, target: Cel
     .filter(to => roofExitStep(read, anchor, to) && endermanLine(read, { x: to.x + 0.5, y: to.y, z: to.z + 0.5 }, target, ENDERMAN_EYE).clear);
 }
 
+/** Nearby supports/extended caps retain interior recovery. Terrain beyond that footprint may use the same exterior stare. */
+export function roofExitForSight(read: BlockReader, anchor: Cell3, target: Cell3, eyes: EndermanLine,
+  occupied: (cell: Cell3) => boolean = () => false): Cell3[] {
+  const cap = eyes.between.some(({ at }) => at.y === anchor.y + 2
+    && Math.abs(at.x - anchor.x) <= 1 && Math.abs(at.z - anchor.z) <= 1);
+  const terrain = eyes.between.some(({ at }) => Math.abs(at.x - anchor.x) > 2 || Math.abs(at.z - anchor.z) > 2);
+  return !eyes.clear && (cap || terrain) ? roofExitCandidates(read, anchor, target).filter(to => [0, 1, 2].every(i => !occupied({
+    x: anchor.x + (to.x - anchor.x) * i / 2, y: anchor.y, z: anchor.z + (to.z - anchor.z) * i / 2,
+  }))) : [];
+}
+
+/** Same swept-column entity test for the probe's eligibility and the camp's movement rechecks. */
+export function roofCellOccupied(entities: any[], bodyId: number, to: Cell3): boolean {
+  return entities.some(e => e && e.id !== bodyId && e.isValid !== false && e.position
+    && !['item', 'experience_orb'].includes(String(e.name))
+    && Math.abs(e.position.x - (to.x + 0.5)) < 0.3 + (e.width ?? 0.6) / 2
+    && Math.abs(e.position.z - (to.z + 0.5)) < 0.3 + (e.width ?? 0.6) / 2
+    && e.position.y < to.y + 1.8 && e.position.y + (e.height ?? 1.8) > to.y);
+}
+
 /**
  * Can this same enderman walk through known, dry three-high columns to a visible lower-body contact point?
  * A bounded local search observes the route only: the body never walks it. One-block steps need headroom over both columns.
