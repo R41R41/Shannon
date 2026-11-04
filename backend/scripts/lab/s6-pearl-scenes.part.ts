@@ -25,7 +25,7 @@ scene('s6_pearls_kind', '自然湧き: fight target=enderman（体が選ぶ）�
   let lastHp = Number(actor.health), healthLost = 0, explore = 0, reachedAt: number | null = null, emptyInRow = 0;
   const hurt = () => { const hp = Number(actor.health); if (Number.isFinite(hp)) { healthLost += Math.max(0, lastHp - hp); lastHp = hp; } };
   actor.on('health', hurt);
-  const angryNear = () => (Object.values(actor.entities ?? {}) as any[]).some(e => e?.name === 'enderman' && endermanAngry(actor.registry, e));
+  const angryNear = () => (Object.values(actor.entities ?? {}) as any[]).some(e => e?.name === 'enderman' && e.isValid !== false && !isDying(actor, e) && endermanAngry(actor.registry, e));
   const walkTo = (to: { x: number; y: number; z: number }) => ({ do: 'go', to, range: 0, maxDig: 0, maxPlace: 0, maxDrop: 0, waterOk: false, seconds: 12 });
   let stopReason = 'clock';
   try {
@@ -46,6 +46,7 @@ scene('s6_pearls_kind', '自然湧き: fight target=enderman（体が選ぶ）�
       if (killed) {
         emptyInRow = 0;
         const camp = endermanCampObservation(actor), home = camp?.roofCell ?? null;
+        await sleep(1200);   // the corpse (still angry in its data) is kept a second by the game
         if (!angryNear()) {
           const p0 = Date.now();
           const back = home ? [walkTo(home)] : [];
