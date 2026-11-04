@@ -29,8 +29,13 @@ NODEBIN=$HOME/.nvm/versions/node/v$(cat "$DEV/.nvmrc")/bin
 SOCKET=minebot-lab
 DIR=""; SESSION=""; PORT=""; STATUS=1
 
-exec 9>/tmp/hands-live.lock
-flock -n 9 || { echo "another lab run holds /tmp/hands-live.lock (the VM has 2 cores: one at a time)" >&2; exit 3; }
+# Under lab-slot.sh (LAB_PORT set) the run holds its own port's lock and only a shared hold on the global one, so the other slot can run beside it
+if [ -n "${LAB_PORT:-}" ]; then
+  exec 6>"/tmp/hands-live.$LAB_PORT.lock"; flock -n 6 || { echo "another lab run holds /tmp/hands-live.$LAB_PORT.lock" >&2; exit 3; }
+  exec 9>/tmp/hands-live.lock; flock -s -n 9 || { echo "a lab run started by hand holds /tmp/hands-live.lock" >&2; exit 3; }
+else
+  exec 9>/tmp/hands-live.lock; flock -n 9 || { echo "another lab run holds /tmp/hands-live.lock (outside lab-slot.sh: one at a time)" >&2; exit 3; }
+fi
 
 log() { echo "[$(date +%H:%M:%S)] run-end-fight: $*"; }
 
