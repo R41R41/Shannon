@@ -108,7 +108,7 @@ describe('the shield goes up at what is flying at the body (lab: a skeleton thir
     expect(bot.controls.forward).toBe(true);
   });
 
-  it('in a fight the planner chose, keeps the shield up against whoever is within a blow, and lowers it for the body\'s own blow', () => {
+  it('in a fight the planner chose, keeps the shield up against whoever is within a blow, and strikes from behind it', () => {
     const bot = body();
     const blows: unknown[] = [];
     bot.attack = (entity: unknown) => { bot.calls.push('strike'); blows.push(entity); };
@@ -121,9 +121,9 @@ describe('the shield goes up at what is flying at the body (lab: a skeleton thir
     expect(bot.calls).toEqual(['raise true']);
     expect(bot.controls.forward).toBe(true);                               // the look and the legs stay the fight's own
     bot.attack(bot.entities[2]);
-    expect(bot.calls.slice(-2)).toEqual(['lower', 'strike']);              // down for the blow
+    expect(bot.calls.slice(-1)).toEqual(['strike']);                       // the blow goes out with the shield up (lab, 2026-11-03)
     bot.emit('physicsTick');
-    expect(bot.calls.at(-1)).toBe('raise true');                           // and up again
+    expect(bot.calls.filter(call => call === 'lower')).toEqual([]);
     bot.entities[2].position = new Vec3(9.5, 64, 0.5);                     // out of reach: down
     bot.emit('physicsTick');
     expect(bot.calls.at(-1)).toBe('lower');

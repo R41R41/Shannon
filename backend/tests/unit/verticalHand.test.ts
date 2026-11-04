@@ -45,6 +45,11 @@ describe('stairs up: an obstruction above the current stance', () => {
       expect(outcome.text).toContain('現在位置の頭上');
       expect(outcome.text).toContain('向きだけを変えても');
       expect(outcome.text).toContain('横の安全な立ち位置');
+      expect(outcome.text).toContain('別の列');
+      expect(outcome.text).toContain('別向きの vertical か go');
+      expect(outcome.text.length).toBeLessThanOrEqual(160);
+      expect(sim.bot.placedBlocks).toEqual([]);
+      expect(feetCell(sim.bot)).toEqual(at(0, y, 0));
     });
   }
 });

@@ -135,12 +135,30 @@ describe('M1: a meal does not cut the API\'s own escape and shelter commands (de
     // Any other escape (a shelter being dug) is still cut: an explosion is a second away.
     expect(await cut(creeperNear(false), 'dig-shelter')).toBe(true);
   });
-  it('health 6 or less at food 18 or 19 is no meal at all (the body regenerates there; run 16 change); at food 17 or less it is critical', () => {
-    const idle = (health: number, food: number) => floorEatChoice({ ...fixture(flat()).bot, health, food, entities: {}, inventory: { items: () => [bread], slots: [] } })?.name ?? null;
-    expect(idle(5, 19)).toBeNull();
-    expect(idle(5, 18)).toBeNull();
+  it('a meal at food 18 or 19 is a mending meal now (it refills the saturation: one health point every half second instead of every four seconds): hurt, not full, nothing near', () => {
+    const idle = (health: number, food: number, entities: Record<string, unknown> = {}, items: Array<{ name: string }> = [bread]) =>
+      floorEatChoice({ ...fixture(flat()).bot, health, food, entities, inventory: { items: () => items, slots: [] } } as never)?.name ?? null;
+    expect(idle(5, 19)).toBe('bread');
+    expect(idle(5, 18)).toBe('bread');
     expect(idle(5, 17)).toBe('bread');
+    expect(idle(15, 19)).toBe('bread');
     expect(idle(20, 19)).toBeNull();
+    expect(idle(15, 20)).toBeNull();
+    // not under a threat: a hostile within 8 m, a dragon fireball flying within 40 m
+    expect(idle(15, 19, { 2: { id: 2, name: 'zombie', position: new Vec3(7, 65, 0.5) } })).toBeNull();
+    expect(idle(15, 19, { 3: { id: 3, name: 'dragon_fireball', position: new Vec3(30, 70, 0.5) } })).toBeNull();
+    // cooked food only for a mending meal (raw meat and rotten flesh keep their own rules)
+    expect(idle(15, 19, {}, [{ name: 'beef' }, { name: 'rotten_flesh' }])).toBeNull();
+  });
+  it('unhurt, the body tops up once the bar is at 14 or less (the walk would otherwise sprint-lock at food 6), under the same safety checks, cooked food only', () => {
+    const idle = (health: number, food: number, entities: Record<string, unknown> = {}, items: Array<{ name: string }> = [bread]) =>
+      floorEatChoice({ ...fixture(flat()).bot, health, food, entities, inventory: { items: () => items, slots: [] } } as never)?.name ?? null;
+    expect(idle(20, 14)).toBe('bread');
+    expect(idle(20, 8)).toBe('bread');
+    expect(idle(20, 15)).toBeNull();
+    expect(idle(20, 14, { 2: { id: 2, name: 'zombie', position: new Vec3(7, 65, 0.5) } })).toBeNull();
+    expect(idle(20, 14, { 3: { id: 3, name: 'dragon_fireball', position: new Vec3(30, 70, 0.5) } })).toBeNull();
+    expect(idle(20, 14, {}, [{ name: 'beef' }])).toBeNull();
   });
 });
 

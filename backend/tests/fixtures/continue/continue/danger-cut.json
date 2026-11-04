@@ -1,0 +1,268 @@
+{
+ "contract": "continue",
+ "version": "3.2+r3-2",
+ "scene": "体の安全の切り（R3-2、11/3。頭と体が同じ物を読む。正本）：危険で終わった項目の後ろは、dependsOn: [] の項目も始めずに落とす",
+ "rule": "前の項目が、(1) 反射・stopIf・被弾・落下（lava・息・壁の反射を含む）の stop code で終わった時、(2) fight・attack の手の相手が FIGHT_THREAT_RANGE_M 内で生きている時（done で終わった項目は除く）は、列で待つ項目を全部落とす（dependsOn が [] でも、前の項目の名を含まなくても）。落とした項目は始めていない（手は動いていない）。code は depends_failed、item は終わった項目、理由の言葉は danger。止めるだけで、手は選ばない。",
+ "dangerStopCodes": [
+  "reflex",
+  "interrupted_by_reflex",
+  "damage_taken",
+  "fell"
+ ],
+ "dangerStopPrefix": "stop_if",
+ "fightThreatRangeM": 16,
+ "cases": [
+  {
+   "name": "a reflex took the body: the independent waiting item is dropped with the one that names nothing",
+   "ended": {
+    "goal": "partial",
+    "end": "cut",
+    "released": true,
+    "code": "interrupted_by_reflex"
+   },
+   "fightTargetNear": null,
+   "waiting": [
+    {
+     "item": "q13",
+     "dependsOn": []
+    },
+    {
+     "item": "q14"
+    }
+   ],
+   "expect": {
+    "danger": "interrupted_by_reflex",
+    "dropped": [
+     "q13",
+     "q14"
+    ],
+    "kept": []
+   }
+  },
+  {
+   "name": "a reflex by its short name",
+   "ended": {
+    "goal": "failed",
+    "end": "cut",
+    "released": true,
+    "code": "reflex"
+   },
+   "fightTargetNear": null,
+   "waiting": [
+    {
+     "item": "q13",
+     "dependsOn": []
+    }
+   ],
+   "expect": {
+    "danger": "reflex",
+    "dropped": [
+     "q13"
+    ],
+    "kept": []
+   }
+  },
+  {
+   "name": "a stopIf of the item (hostile near)",
+   "ended": {
+    "goal": "partial",
+    "end": "cut",
+    "released": true,
+    "code": "stop_if_hostile"
+   },
+   "fightTargetNear": null,
+   "waiting": [
+    {
+     "item": "q13",
+     "dependsOn": []
+    }
+   ],
+   "expect": {
+    "danger": "stop_if_hostile",
+    "dropped": [
+     "q13"
+    ],
+    "kept": []
+   }
+  },
+  {
+   "name": "a stopIf of the item (health below)",
+   "ended": {
+    "goal": "partial",
+    "end": "cut",
+    "released": true,
+    "code": "stop_if_hp"
+   },
+   "fightTargetNear": null,
+   "waiting": [
+    {
+     "item": "q13",
+     "dependsOn": [
+      "q99"
+     ]
+    }
+   ],
+   "expect": {
+    "danger": "stop_if_hp",
+    "dropped": [
+     "q13"
+    ],
+    "kept": []
+   }
+  },
+  {
+   "name": "a hit",
+   "ended": {
+    "goal": "partial",
+    "end": "cut",
+    "released": true,
+    "code": "damage_taken"
+   },
+   "fightTargetNear": null,
+   "waiting": [
+    {
+     "item": "q13",
+     "dependsOn": []
+    }
+   ],
+   "expect": {
+    "danger": "damage_taken",
+    "dropped": [
+     "q13"
+    ],
+    "kept": []
+   }
+  },
+  {
+   "name": "a fall",
+   "ended": {
+    "goal": "partial",
+    "end": "cut",
+    "released": true,
+    "code": "fell"
+   },
+   "fightTargetNear": null,
+   "waiting": [
+    {
+     "item": "q13",
+     "dependsOn": []
+    }
+   ],
+   "expect": {
+    "danger": "fell",
+    "dropped": [
+     "q13"
+    ],
+    "kept": []
+   }
+  },
+  {
+   "name": "a fight that ended with its target alive within the range",
+   "ended": {
+    "goal": "partial",
+    "end": "finished",
+    "released": true,
+    "code": "target_lost"
+   },
+   "fightTargetNear": "zombie",
+   "waiting": [
+    {
+     "item": "q13",
+     "dependsOn": []
+    },
+    {
+     "item": "q14",
+     "dependsOn": [
+      "q13"
+     ]
+    }
+   ],
+   "expect": {
+    "danger": "fight_target:zombie",
+    "dropped": [
+     "q13",
+     "q14"
+    ],
+    "kept": []
+   }
+  },
+  {
+   "name": "an ordinary failure with no target near: the independent item stays, the one that names nothing is dropped (as before)",
+   "ended": {
+    "goal": "failed",
+    "end": "finished",
+    "released": true,
+    "code": "search_timeout"
+   },
+   "fightTargetNear": null,
+   "waiting": [
+    {
+     "item": "q13",
+     "dependsOn": []
+    },
+    {
+     "item": "q14"
+    }
+   ],
+   "expect": {
+    "danger": null,
+    "dropped": [
+     "q14"
+    ],
+    "kept": [
+     "q13"
+    ]
+   }
+  },
+  {
+   "name": "an item that ended done leaves everything waiting, whatever stands near (a stale fight target)",
+   "ended": {
+    "goal": "done",
+    "end": "finished",
+    "released": true
+   },
+   "fightTargetNear": "zombie",
+   "waiting": [
+    {
+     "item": "q13",
+     "dependsOn": []
+    },
+    {
+     "item": "q14"
+    }
+   ],
+   "expect": {
+    "danger": null,
+    "dropped": [],
+    "kept": [],
+    "stays": [
+     "q13",
+     "q14"
+    ]
+   }
+  },
+  {
+   "name": "a stop code that is not a danger (the dig has no tool) with no target near",
+   "ended": {
+    "goal": "failed",
+    "end": "finished",
+    "released": true,
+    "code": "missing_item"
+   },
+   "fightTargetNear": null,
+   "waiting": [
+    {
+     "item": "q13",
+     "dependsOn": []
+    }
+   ],
+   "expect": {
+    "danger": null,
+    "dropped": [],
+    "kept": [
+     "q13"
+    ]
+   }
+  }
+ ]
+}

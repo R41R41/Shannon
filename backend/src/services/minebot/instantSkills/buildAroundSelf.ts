@@ -46,7 +46,9 @@ interface Cell { pos: Vec3; spec: string; phase: number; /** What this cell is t
 
 /** Whole blocks a wall can be made of, in the order they are spent (what burns or falls last, or not at all). */
 export const BUILDING_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'blackstone',
-  'tuff', 'basalt', 'nether_bricks', 'stone_bricks', 'end_stone', 'dirt', 'netherrack'];
+  'tuff', 'basalt', 'nether_bricks', 'stone_bricks', 'end_stone', 'obsidian', 'dirt', 'netherrack'];
+/** In the End the dragon flies through every other block and breaks it; these two it cannot break: they are laid first there. */
+const END_PROOF_BLOCKS = ['obsidian', 'end_stone'];
 const REACH = 4.5;
 /**
  * The cell the feet are in. A body on soul sand or mud stands at .875 of a block: floored, its feet were put in
@@ -183,7 +185,8 @@ class BuildAroundSelf extends InstantSkill {
   private itemFor(spec: string): any | null {
     const items = this.bot.inventory.items();
     if (spec === '@solid') {
-      for (const name of BUILDING_BLOCKS) { const item = items.find(entry => entry.name === name); if (item) return item; }
+      const inEnd = /(^|:)the_end$/u.test(String(this.bot.game?.dimension ?? ''));
+      for (const name of inEnd ? [...END_PROOF_BLOCKS, ...BUILDING_BLOCKS] : BUILDING_BLOCKS) { const item = items.find(entry => entry.name === name); if (item) return item; }
       return null;
     }
     if (spec === '@slab:top') return items.find(entry => entry.name.endsWith('_slab')) ?? null;

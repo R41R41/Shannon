@@ -9,6 +9,7 @@
   "continue/act-hand-depends.json": "c3dec58dfcc48becde35e2e95e4371f7f62a4558b6412e1b9cb3a26a484bb8ac",
   "continue/admit-after-stopped.json": "e6b55458b7ef495f3f06f1b96b1fb8e7eeacab709148fe56ca625fbdd5a5d70c",
   "continue/cross-step-depends-refused.json": "1db8915e666eb3c89b0ddb975ce04f3ea372e4573fca3310097a3a3a37e064c9",
+  "continue/danger-cut.json": "ad754b1a5793a80c2da1c81dcfb81fdea8c6b1294cc98e3d820e3a73ca2e9ed0",
   "continue/death-before-depends.json": "4747947e458eeb1f8438982af8896484b2011456fcffddb020b698584cf0c745",
   "continue/dependency-table.json": "9c0bb173c8d67a30dda5bd7d7c79cb7df3ee21f6f977b142faf57acddfcafece",
   "continue/indirect-depends.json": "6c7ac36d638048e59eb75fdee0d1359f9c17f1ea4fe34a97b8d2e47c778cc806",

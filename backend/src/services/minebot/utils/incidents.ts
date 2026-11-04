@@ -94,6 +94,9 @@ export function explainedStop(line: { do: string; line: string }): { code: strin
     || (line.do === 'vertical' && code === 'falling_above')
     || (line.do === 'go' && code === 'stuck' && /流れる水の中|置いたブロックが世界に現れない/u.test(text))
     || (line.do === 'go' && code === 'dead_end' && /掘ると流れ込む|掘ると落ちてくる|canDig に無い|canDig に \S+ を許せば|道は流れる水を天井/u.test(text))
+    // Run 59 leg 2 (the Nether, 88 m to the fortress): the search ran out of its 5 s once and the hold came at once, though the line says
+    // what to do (a waypoint within 10 m, or stairs and shafts). The first at a place goes back to the planner; the second there is held.
+    || (line.do === 'go' && code === 'search_timeout' && /10m 以内の中継点/u.test(text))
     || (code === 'cannot_dig' && /canDig に \S+ を足/u.test(text));
   if (!explained) return null;
   const cell = /\((-?\d+),(-?\d+),(-?\d+)\)/u.exec(text);

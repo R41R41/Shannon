@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { executeAction, physicalActionBusy } from '../../src/services/minebot/execution/ActionExecution.js';
-import { creeperLit, floorEatChoice, floorRetreatTick, retreatThreat, type FloorBody, type RetreatState } from '../../src/services/minebot/utils/floorReflexes.js';
+import { coverChoice, supportCells, creeperLit, floorEatChoice, floorRetreatTick, retreatThreat, shootersInReach, type FloorBody, type RetreatState } from '../../src/services/minebot/utils/floorReflexes.js';
 
 function body(patch: Partial<FloorBody> & { items?: { name: string }[]; slots?: ({ name: string } | null)[] } = {}) {
   const keys: Record<string, boolean> = {}, looks: number[] = [];
@@ -16,6 +16,83 @@ function body(patch: Partial<FloorBody> & { items?: { name: string }[]; slots?: 
 }
 const retreat = (): RetreatState => ({ engaged: false, ticks: 0, cooldown: 0, engagements: 0 });
 const add = (bot: FloorBody, id: number, entity: Record<string, unknown>) => { bot.entities![id] = { id, ...entity } as any; };
+
+describe('cover digging preserves footing and a way back', () => {
+  const field = () => {
+    const blocks = new Map<string, string | null>();
+    const bot = body({
+      blockAt: (p: Vec3) => {
+        const at = p.floored(), key = `${at.x},${at.y},${at.z}`;
+        const name = blocks.has(key) ? blocks.get(key) : at.y < 64 ? 'stone' : 'air';
+        if (name === null) return null;
+        return { name, boundingBox: ['stone', 'magma_block', 'oak_fence', 'cobblestone'].includes(name!) ? 'block' : 'empty', position: at };
+      },
+    } as Partial<FloorBody>);
+    bot.entity!.position = new Vec3(0.5, 64, 0.5);
+    add(bot, 2, { name: 'blaze', position: new Vec3(20.5, 64, 0.5), height: 1.8 });
+    const choose = (options = {}) => coverChoice(bot, shootersInReach(bot, bot.entity!.position), 0, options);
+    return { bot, blocks, choose };
+  };
+
+  it.each(['air', 'lava', 'magma_block', 'oak_fence', null])('does not dig onto an unsupported or unsafe landing: %s', name => {
+    const f = field(); f.blocks.set('0,62,0', name);
+    const choice = f.choose();
+    expect(choice.cover).toBeNull(); expect(choice.why).toContain('立てない');
+  });
+  it('does not dig when the lowered feet would be beside fire', () => {
+    const f = field(); f.blocks.set('-1,63,0', 'fire');
+    const choice = f.choose();
+    expect(choice.cover).toBeNull(); expect(choice.why).toContain('fire_near');
+  });
+  it('does not dig into a pit with no one-step return to safe ground at the original height', () => {
+    const f = field(); f.bot.entities![2].position = new Vec3(10.5, 66, 0.5);
+    for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) f.blocks.set(`${x},64,${z}`, 'stone');
+    const choice = f.choose();
+    expect(choice.cover).toBeNull(); expect(choice.why).toContain('戻れない');
+  });
+  it('does not dig if descending leaves both sight lines open', () => {
+    const f = field(); f.bot.entities![2].position = new Vec3(4.5, 64, 0.5);
+    const choice = f.choose();
+    expect(choice.cover).toBeNull(); expect(choice.why).toContain('見える線が減らない（2→2）');
+  });
+  it('uses a carried block on the line when the landing cannot hold the body', () => {
+    const f = field(); f.blocks.set('0,62,0', 'air');
+    f.bot.inventory!.items = () => [{ name: 'cobblestone', count: 8 }] as any;
+    expect(f.choose({ line: true }).cover).toMatchObject({ kind: 'line', block: 'cobblestone' });
+  });
+  it('S2 raid2: standing across two cells, the line never picks the other cell the body is in (the place hand refuses it)', () => {
+    const f = field(); f.blocks.set('0,62,0', 'air');
+    f.bot.inventory!.items = () => [{ name: 'cobblestone', count: 8 }] as any;
+    f.bot.entity!.position = new Vec3(0.95, 64, 0.5);
+    const choice = f.choose({ line: true });
+    expect(choice.cover, choice.why).toMatchObject({ kind: 'line', cell: { x: 2, y: 64, z: 0 } });
+  });
+  it('still digs one step when it can land, climb back and reduce exposure', () => {
+    const f = field(), choice = f.choose();
+    expect(choice.cover, choice.why).toMatchObject({ kind: 'dig', cell: { x: 0, y: 63, z: 0 } });
+    expect(choice.cover?.detail).toContain('見える線 2→1');
+    expect(coverChoice(f.bot, shootersInReach(f.bot, f.bot.entity!.position), 3).cover).toBeNull();
+  });
+  it('S2: burning with the shooter far, still the dig; within 6 m, a run first; after a dig that did not lower the body, never the dig', () => {
+    const f = field();
+    expect(f.choose({ burning: true }).cover).toMatchObject({ kind: 'dig' });
+    f.bot.entities![2].position = new Vec3(4.5, 64, 0.5);
+    expect(f.choose({ burning: true }).cover).toMatchObject({ kind: 'run', ids: [2] });
+    f.bot.entities![2].position = new Vec3(20.5, 64, 0.5);
+    expect(f.choose({ noDig: true }).cover).toMatchObject({ kind: 'run', detail: expect.stringContaining('掘っても下がれなかった') });
+    // No safe heading (lava all round the floor): no dig either, and why.
+    for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) if (x !== 0 || z !== 0) f.blocks.set(`${x},63,${z}`, 'lava');
+    const none = f.choose({ noDig: true });
+    expect(none.cover).toBeNull();
+    expect(none.why).toContain('もう掘らない');
+  });
+  it('S2: counts the cells under the body that hold it up', () => {
+    const f = field();
+    expect(supportCells(f.bot, 64)).toEqual([{ x: 0, y: 63, z: 0 }]);
+    f.bot.entity!.position = new Vec3(0.9, 64, 0.5);
+    expect(supportCells(f.bot, 64)).toEqual([{ x: 0, y: 63, z: 0 }, { x: 1, y: 63, z: 0 }]);
+  });
+});
 
 describe('floor reflexes (ADR-0010 D8, defence only)', () => {
   it('reads a lit creeper from its fuse state or its ignited flag', () => {

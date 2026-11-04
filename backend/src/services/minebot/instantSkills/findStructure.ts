@@ -1,6 +1,7 @@
 import minecraftData from 'minecraft-data';
 import { detectVillage } from '../utils/landmarks.js';
 import { scanLoadedBlocks } from '../utils/loadedBlockScan.js';
+import { STRONGHOLD_EVIDENCE_BLOCKS, blazeCampReport, strongholdFramesReport } from '../utils/huntStructures.js';
 import { WOOL_COLORS } from '../utils/nightGate.js';
 import { CustomBot, InstantSkill } from '../types.js';
 
@@ -13,7 +14,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 export const STRUCTURE_MARKERS: Record<string, { blocks: string[]; distance: number }> = {
   fortress: { blocks: ['nether_bricks', 'nether_brick_fence'], distance: 256 },
   bastion: { blocks: ['polished_blackstone_bricks', 'gilded_blackstone'], distance: 256 },
-  stronghold: { blocks: ['end_portal_frame', 'infested_stone_bricks', 'infested_mossy_stone_bricks', 'infested_cracked_stone_bricks'], distance: 64 },
+  stronghold: { blocks: ['end_portal_frame', ...STRONGHOLD_EVIDENCE_BLOCKS], distance: 64 },
   // A bed set down in the world (an igloo's, a village's): one to take, not a structure to enter (explore-for-structure only).
   bed: { blocks: WOOL_COLORS.map(color => `${color}_bed`), distance: 128 },
 };
@@ -34,23 +35,41 @@ class FindStructure extends InstantSkill {
     this.skillName = 'find-structure';
     this.description = '指定した構造物（要塞、村、ネザー要塞など）を、読み込み済みの範囲から探します。村は観測のlandmarksにも自動で出ます。'
       // Only the loaded chunks are searched: not found means not here yet, not nowhere.
-      + '見つからなければ、まだ行っていない方角へ100〜200ブロック移動してから、もう一度探してください（ネザー要塞はネザーの中だけ）';
+      + '見つからなければ、まだ行っていない方角へ100〜200ブロック移動してから、もう一度探してください（ネザー要塞はネザーの中だけ）。'
+      + 'stronghold はエンドポータルの枠だけを探し（高さは問わない）、中心 x・z と半径 radius（最大128）を指定できます。枠が無い時は、16ブロック刻みの輪の次の点を返します。'
+      + 'blaze_spawner はネザー要塞のブレイズの湧き場と、その3m以内の野営向きの足場（縁・火の無い所）と、湧き場から見えない隠れ場所（体力が減った時に退く所）を返します。'
+      + 'probe kind=lane で四方向のレーン計画（必要な丸石・建築順・支え・生き物・手の距離・危険）を読むだけで確認できます';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {
         name: 'structureType',
         type: 'string',
         description:
-          '構造物の種類（fortress=ネザー要塞, village=村, stronghold=要塞など）',
+          '構造物の種類（fortress=ネザー要塞, village=村, stronghold=要塞, blaze_spawner=ブレイズの湧き場など）',
         required: true,
       },
+      { name: 'radius', type: 'number', description: 'stronghold だけ: 枠を探す半径（中心から水平に。既定64、最大128）' },
+      { name: 'x', type: 'number', description: 'stronghold だけ: 探す中心の x（既定は今いる所）。z と一緒に' },
+      { name: 'z', type: 'number', description: 'stronghold だけ: 探す中心の z' },
     ];
   }
 
-  async runImpl(structureType: string) {
+  /** stronghold: the portal room's frames within a radius of a centre, or the next points of the rings (utils/huntStructures; the body's `probe kind=frames` says the same). */
+  private strongholdFrames(radius?: number, x?: number, z?: number) {
+    return { success: true, result: strongholdFramesReport(this.bot as any, { radius, x, z }).text };
+  }
+
+  /** blaze_spawner: the spawner and the cells within three blocks to camp on (utils/huntStructures; the body's `probe kind=camp` says the same). */
+  private blazeSpawner() {
+    return { success: true, result: blazeCampReport(this.bot as any).text };
+  }
+
+  async runImpl(structureType: string, radius?: number, x?: number, z?: number) {
     try {
       // 構造物の種類を正規化
       const normalizedType = structureType.toLowerCase();
+      if (normalizedType === 'stronghold') return this.strongholdFrames(radius, x, z);
+      if (normalizedType === 'blaze_spawner' || normalizedType === 'spawner') return this.blazeSpawner();
 
       // サポートされている構造物
       const supportedStructures = [

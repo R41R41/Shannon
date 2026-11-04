@@ -44,6 +44,7 @@ import { serverRefusalPlugin } from './utils/serverRefusals.js';
 import { lavaDigGuardPlugin, lavaReflexPlugin } from './utils/lavaSafety.js';
 import { wallReflexPlugin } from './utils/wallReflex.js';
 import { gazeGuardPlugin } from './utils/gazeGuard.js';
+import { entityResetPlugin } from './utils/entityReset.js';
 import { exposureDigGuardPlugin } from './utils/exposureGuard.js';
 import { promptPlacePlugin } from './utils/promptPlace.js';
 import { installCollisionTolerance } from './utils/collisionTolerance.js';
@@ -199,6 +200,7 @@ export class MinebotClient extends BaseClient {
     this.bot.loadPlugin(lavaReflexPlugin);
     this.bot.loadPlugin(wallReflexPlugin);
     this.bot.loadPlugin(gazeGuardPlugin);
+    this.bot.loadPlugin(entityResetPlugin);
     this.bot.loadPlugin(fireballDeflectPlugin);
     this.bot.loadPlugin(shieldBlockPlugin);
     this.bot.loadPlugin(knockBracePlugin);

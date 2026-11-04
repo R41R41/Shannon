@@ -17,6 +17,7 @@ const log = createLogger('Minebot:WallReflex');
  * head's cell, then the feet's, again as long as more falls in (at most eight digs), with the quickest tool it carries.
  */
 export const WALL_ESCAPE_PRIORITY = 420;
+export const WALL_ESCAPE_LIMIT_MS = 25_000;
 const EYE = 1.62;
 /**
  * Run 42 (+711): lying in a bed at y=-5 in a cave, the server put the body at y=-4.31; the eye taken 1.62 above that was in the tuff of the ceiling,
@@ -127,7 +128,9 @@ export function installWallReflex(bot: WallBody): void {
     let handle: ReturnType<ReturnType<typeof ensureReflexLedger>['begin']> | null = null;
     try { handle = ensureReflexLedger(bot as any).begin('wall', `壁の中（${what}、足 (${Math.floor(p.x)},${Math.floor(p.y + 0.001)},${Math.floor(p.z)})）を掘り出る`); } catch { handle = null; }
     try { preemptLowerPriorityActions(bot, WALL_ESCAPE_PRIORITY, 'wall_escape'); } catch { /* the dig goes on */ }
-    void executeAction(bot as any, 'wall-escape', 10_000, () => digOut(bot), { priority: WALL_ESCAPE_PRIORITY, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true })
+    // S2 lab (2026-11-02): a body with no pickaxe in a block of cobblestone dug by hand, which takes 10 s (hardness 2 x 5): the old 10 s limit cut every try a moment before
+    // the block broke and began it again 1.5 s later, nine times in 90 s, and the body went from 20 health to 1. The limit holds the longest hand dig of an ordinary block (stone: 7.5 s, cobblestone: 10 s).
+    void executeAction(bot as any, 'wall-escape', WALL_ESCAPE_LIMIT_MS, () => digOut(bot), { priority: WALL_ESCAPE_PRIORITY, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true })
       .then(result => {
         log.info(`🧱 ${result.result}`);
         try { if (handle) ensureReflexLedger(bot as any).end(handle, result.success ? 'done' : 'failed'); } catch { /* the ledger is a note */ }

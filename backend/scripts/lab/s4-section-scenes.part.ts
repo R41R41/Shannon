@@ -207,7 +207,8 @@ scene('frames_enter', 'S10 on the real seed: twelve eyes into the twelve frames 
       const run = await act(`frame#${metrics.tries + 1}`, [{ do: 'go', to: { x: frame.x, y: frame.y, z: frame.z }, range: 3, seconds: 25, canPlace: ['cobblestone'], maxPlace: 8 }, { do: 'use', item: 'ender_eye', at: [{ x: frame.x, y: frame.y, z: frame.z }] }], 60);
       metrics.tries++; if (run.ok) metrics.placed++;
       metrics.hpLost += Math.max(0, hp0 - Number(actor.health)); metrics.lowestHp = Math.min(metrics.lowestHp, Number(actor.health));
-      if (!run.ok) stops.push(`pass ${pass} frame ${frame.x},${frame.z}: ${s4Why(run)}`);
+      if (!run.ok && /falling_above|dead_end|no_floor/u.test(s4Why(run))) turns++;
+    if (!run.ok) stops.push(`pass ${pass} frame ${frame.x},${frame.z}: ${s4Why(run)}`);
     }
   }
   const eyesServer = await filled();
@@ -270,3 +271,42 @@ async function blazeCampHead(kind: 'fight' | 'hold', note: (text: string) => voi
 }
 scene('blaze_head_fight', 'blaze camp as a head plays it (fight): the body\'s own advice steers: fire dug out, unsafe cells changed; three rods or the clock', note => blazeCampHead('fight', note));
 scene('blaze_head_hold', 'blaze camp as a head plays it (attack hold): the same loop', note => blazeCampHead('hold', note));
+
+// S4 (run61 d0161-d0183): "leave from 33 blocks under the surface to the surface in one go". The head's way (vertical stairs, seal_water, repeated as often as it stops),
+// a dry pillar, a go. `water` puts a block of water (7 x 6 x 7) around the way, 12 blocks up, as the water the head met at y21-25.
+async function surfaceExit(mode: 'stairs' | 'pillar' | 'go', water: boolean, note: (text: string) => void): Promise<Record<string, unknown>> {
+  const top = (sites.exitSurface ?? sites.spawn) as number[] | undefined;
+  if (!top) throw new Error('no exitSurface / spawn in the sites');
+  const deaths0 = deaths, depth = 33, surfaceY = top[1], y0 = surfaceY - depth, x = top[0], z = top[2];
+  await ask('difficulty normal'); await ask('gamerule doMobSpawning false'); await ask('time set day'); await ask('weather clear');
+  await equip({ diamond_pickaxe: 1, iron_sword: 1, water_bucket: 1, cobblestone: 64, cooked_beef: 16 }, { armor: 'iron', shield: true });
+  await placeActor('overworld', x, surfaceY + 1, z, 24);
+  // a stone mass round the way, a 3 x 3 x 3 room at the bottom (the rest is what the world has: stone, deepslate, caves)
+  await ask(`execute in minecraft:overworld run fill ${x - 3} ${y0 - 1} ${z - 3} ${x + 3} ${y0 + 3} ${z + 3} minecraft:stone`);
+  await ask(`execute in minecraft:overworld run fill ${x - 1} ${y0} ${z - 1} ${x + 1} ${y0 + 2} ${z + 1} minecraft:air`);
+  if (water) await ask(`execute in minecraft:overworld run fill ${x - 3} ${y0 + 12} ${z - 3} ${x + 3} ${y0 + 17} ${z + 3} minecraft:water replace minecraft:stone`);
+  await ask(`execute in minecraft:overworld run tp ${ACTOR} ${x + 0.5} ${y0} ${z + 0.5}`);
+  await sleep(2500);
+  const limitMs = 300_000, started = Date.now(), startY = s4Feet(), tops: string[] = [], stops: string[] = [];
+  const metrics = { acts: 0, okActs: 0, hpLost: 0, lowestHp: 20, minY: startY, maxDrop: 0 };
+  const canDig = ['stone', 'deepslate', 'tuff', 'andesite', 'diorite', 'granite', 'dirt', 'gravel', 'sand', 'cobblestone'];
+  const reached = () => s4Feet() >= surfaceY - 1;
+  let lastY = startY, turns = 0;
+  while (Date.now() - started < limitMs && s4Alive(deaths0) && !reached() && metrics.acts < 10) {
+    const hp0 = Number(actor.health), y0a = s4Feet();
+    const hand = mode === 'go' ? { do: 'go', to: { x, y: surfaceY, z }, range: 1.5, seconds: 120, maxDig: 60, maxPlace: 40, canDig, canPlace: ['cobblestone'] }
+      : { do: 'vertical', dir: 'up', shape: mode === 'stairs' ? 'stairs' : 'pillar', ...(mode === 'stairs' ? { toward: ['north', 'east', 'south', 'west'][turns % 4] } : {}), toY: surfaceY, liquid: 'seal_water', range: 2, seconds: 120, canDig, canPlace: ['cobblestone'] };
+    const run = await act(`exit-${mode}#${metrics.acts + 1}`, [hand], 150, { stopIf: { hostileWithin: 6, hpBelow: 12 } });
+    metrics.acts++; if (run.ok) metrics.okActs++;
+    metrics.hpLost += Math.max(0, hp0 - Number(actor.health)); metrics.lowestHp = Math.min(metrics.lowestHp, Number(actor.health));
+    metrics.minY = Math.min(metrics.minY, s4Feet()); metrics.maxDrop = Math.max(metrics.maxDrop, lastY - s4Feet()); lastY = s4Feet();
+    tops.push(`${y0a}->${s4Feet()}@${Math.round((Date.now() - started) / 1000)}s${run.ok ? '' : '!'}`);
+    if (!run.ok) stops.push(`${Math.round((Date.now() - started) / 1000)}s y${s4Feet()} ${s4Why(run)}`);
+    await sleep(1500);
+  }
+  return { mode, water, reached: reached(), startY, endY: s4Feet(), surfaceY, seconds: r1((Date.now() - started) / 1000), ...metrics, deathsHere: deaths - deaths0, progress: tops.join(' '), stops: stops.slice(0, 10) };
+}
+scene('exit_stairs', 'surface exit: 33 blocks, vertical stairs seal_water (the head\'s hand), dry', note => surfaceExit('stairs', false, note));
+scene('exit_stairs_water', 'surface exit: vertical stairs seal_water with a block of water 12 up', note => surfaceExit('stairs', true, note));
+scene('exit_pillar', 'surface exit: vertical pillar, dry', note => surfaceExit('pillar', false, note));
+scene('exit_go', 'surface exit: go to the surface with maxDig, dry', note => surfaceExit('go', false, note));

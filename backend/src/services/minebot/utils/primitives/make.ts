@@ -5,6 +5,7 @@ import { nearestTable, tableInReach } from './craft.js';
 import { placeNearby } from './placeSpot.js';
 import { withProgress } from './progressUnits.js';
 import { craftEvents } from './craftEvents.js';
+import { withWoodForms } from './woodRecipes.js';
 
 /**
  * make: one item, and the parts it is made of, in a chain of crafts (hands-contract.md 4). The planner says what and how many; the body
@@ -33,7 +34,7 @@ const perCraft = (recipe: any): number => Math.max(1, Number(recipe.result?.coun
 function recipesFor(bot: any, name: string): any[] {
   const item = bot.registry?.itemsByName?.[name];
   if (!item) return [];
-  try { return (bot.recipesAll?.(item.id, null, true) ?? []) as any[]; } catch { return []; }
+  try { return withWoodForms(bot, name, (bot.recipesAll?.(item.id, null, true) ?? []) as any[]); } catch { return []; }
 }
 const clone = (state: State): State => ({ stock: new Map(state.stock), steps: [...state.steps], short: new Map(state.short), nodes: state.nodes });
 const shortTotal = (state: State) => [...state.short.values()].reduce((sum, n) => sum + n, 0);

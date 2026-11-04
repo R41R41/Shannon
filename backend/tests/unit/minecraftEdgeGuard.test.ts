@@ -101,6 +101,23 @@ describe('edge guard on real client physics (paid run L10 sprinted off a 32-bloc
     expect(lava.lowest).toBe(72);
   });
 
+  it('refuses a step into lava that lies level with the ground, with stone right under it (S5 lab, c1: a one-deep pit in the Nether floor)', () => {
+    // Ground at y=71 (feet at 72) for z >= 0; for z < 0 the floor cell y=71 is lava and y=70 is stone: no fall, but the body sinks into lava.
+    const pit = columnWorld((_x, z) => (z >= 0 ? 71 : 70), (_x, z) => (z < 0 ? { name: 'lava', top: 71 } : null));
+    expect(run(pit, new Vec3(0.5, 72, 4.5), { guard: false }).lowest).toBeLessThan(72);
+    const result = run(pit, new Vec3(0.5, 72, 4.5));
+    expect(result.stops).toBeGreaterThan(0);
+    expect(result.lowest).toBe(72);
+    expect(stepOffDrop(pit, 0.5, 72, -0.5)).toBe(Infinity);
+    expect(edgeRisk(pit, 0.5, 72, -0.5, 20)).toBe(Infinity);
+  });
+
+  it('still takes water that lies level with the ground as no fall at all', () => {
+    const pond = columnWorld((_x, z) => (z >= 0 ? 71 : 70), (_x, z) => (z < 0 ? { name: 'water', top: 71 } : null));
+    expect(stepOffDrop(pond, 0.5, 72, -0.5)).toBe(0);
+    expect(run(pond, new Vec3(0.5, 72, 4.5)).stops).toBe(0);
+  });
+
   it('refuses a sprint-jump whose arc comes down in the ravine', () => {
     expect(run(ravine, new Vec3(0.5, 72, 4.5), { jump: true, guard: false }).lowest).toBeLessThan(45);
     const result = run(ravine, new Vec3(0.5, 72, 4.5), { jump: true });

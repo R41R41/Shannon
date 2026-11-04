@@ -11,8 +11,8 @@ import { actContextOf } from '../utils/actContext.js';
 import { lifeOf } from '../utils/life.js';
 import { handReasons, SELF_COUNTING, trackPack } from '../utils/packEvents.js';
 import { cutByOf, finishedVerdict, numberEvents, stoppedFromOutside, type HandVerdict } from '../utils/handOutcome.js';
-import { blockAt, cellNow, freeSlots, inventoryCount, resolvePosition, StepStopped, wait, type PositionSpec, type StepContext, type StepOutcome } from '../utils/primitives/common.js';
-import { dimensionOf, portalWalks, walk } from '../utils/primitives/walk.js';
+import { blockAt, cellNow, cellText, freeSlots, inventoryCount, resolvePosition, StepStopped, wait, type PositionSpec, type StepContext, type StepOutcome } from '../utils/primitives/common.js';
+import { dimensionOf, dimensionWords, portalWalks, walk } from '../utils/primitives/walk.js';
 import { dig } from '../utils/primitives/dig.js';
 import { place } from '../utils/primitives/place.js';
 import { findEntity, use } from '../utils/primitives/use.js';
@@ -29,6 +29,8 @@ import { vertical } from '../utils/primitives/vertical.js';
 import { obsidian, obsidianProblem } from '../utils/primitives/obsidian.js';
 import { portal, portalProblem } from '../utils/primitives/portal.js';
 import { fight, HandCut } from '../utils/primitives/fight.js';
+import { shieldRush, shieldRushProblem, SHIELD_RUSH_DESCRIPTION, type ShieldRushResult, type ShieldRushOutcome } from '../utils/primitives/shieldRush.js';
+import { fill, fillProblem, FILL_DESCRIPTION, type FillResult, type FillOutcome } from '../utils/primitives/fill.js';
 import { LINE_MAX, LINE_MAX_WITH_CAUSE } from '../utils/actReport.js';
 import { waterDigWords } from '../utils/waterDigWords.js';
 import { mine } from '../utils/primitives/mine.js';
@@ -40,6 +42,7 @@ import { itemFoodPoints } from '../utils/foodPoints.js';
 import { stepLabel } from '../utils/actLabel.js';
 import { ACT_CONDITION, conditionHolds, conditionMetText, type ActCondition } from '../utils/actConditions.js';
 import { noteHand } from '../utils/handHistory.js';
+import { DEN_DIRECTIONS, endermanDenProblem } from '../utils/huntEndermanDen.js';
 
 export { stepLabel };
 
@@ -61,7 +64,7 @@ const Pos = z.object({ x: z.number().optional(), y: z.number().optional(), z: z.
   front: z.number().optional(), right: z.number().optional(), up: z.number().optional() }).strict();
 const ItemCount = z.object({ item: z.string(), count: z.number().optional() }).strict();
 export const HAND_KINDS = ['walk', 'go', 'dig', 'place', 'pillarUp', 'use', 'look', 'jump', 'sneak', 'equip', 'craft', 'furnace', 'chest',
-  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'obsidian', 'portal', 'fight', 'mine', 'make', 'smelt', 'vertical'] as const;
+  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'obsidian', 'portal', 'fight', 'mine', 'make', 'smelt', 'vertical', 'fill'] as const;
 const Face = z.enum(['up', 'down', 'north', 'south', 'east', 'west']);
 /** One hand: every field of the head's ActHand (the body takes whatever the head's schema takes), and a few more it can read. */
 const Hand = z.object({
@@ -71,6 +74,10 @@ const Hand = z.object({
   at: z.array(Pos).max(16).optional().describe('dig・place は順に全部、use・furnace・chest・shoot・drop は 1 つ、mine は鉱脈のマス（1〜4）、smelt は使うかまど（最大4）'),
   face: Face.optional().describe('place・use: 当てる面'),
   block: z.string().optional(),
+  groups: z.array(z.object({
+    stand: z.object({ x: z.number().finite(), y: z.number().finite(), z: z.number().finite() }).strict(),
+    at: z.array(z.object({ x: z.number().finite(), y: z.number().finite(), z: z.number().finite() }).strict()).min(1).max(8),
+  }).strict()).min(1).max(12).optional().describe('fill: 各組の立つ足のマス stand と、そこから順に置く at（絶対座標）'),
   item: z.string().optional(),
   count: z.number().optional(),
   items: z.array(ItemCount).max(16).optional(),
@@ -79,8 +86,16 @@ const Hand = z.object({
   furnaces: z.number().int().min(1).max(4).optional().describe('smelt: 何基に分けるか（1〜4）'),
   op: z.enum(['put', 'take', 'look', 'takeAll']).optional(),
   target: z.union([z.string(), z.number()]).optional().describe('#id か名前'),
+  den: z.object({ entrance: z.object({ x: z.number().int(), y: z.number().int(), z: z.number().int() }).strict(),
+    direction: z.enum(DEN_DIRECTIONS) }).strict().optional().describe('fight enderman 専用: 観測から選んだ横穴の入口（絶対整数マス）と壁の奥への東西南北。指定4マスだけ掘る・設置0。完成してから指定 #id を誘い、奥で脚を打つ。rel は適用しない'),
   untilDead: z.boolean().optional(),
   hold: z.boolean().optional().describe('attack: その場で待ち、手の届く所に来たら打つ（追わない）'),
+  style: z.enum(['shield_rush']).optional().describe('attack: 指定した blaze 1体へ盾を構えて詰め、拾って指定先へ戻る'),
+  retreatTo: z.object({ x: z.number(), y: z.number(), z: z.number() }).strict().optional(),
+  area: z.object({ center: z.object({ x: z.number(), y: z.number(), z: z.number() }).strict(), radius: z.number().min(1).max(16), maxDrop: z.number().int().min(0).max(3) }).strict().optional(),
+  shieldReserve: z.number().min(0).max(335).optional(),
+  onCrossfire: z.enum(['retreat', 'continue']).optional(),
+  pickup: z.enum(['target_drops', 'none']).optional(),
   goals: z.array(Pos).min(2).max(8).optional().describe('go: 行き先の候補（どれか1つに着けば済み）'),
   canDig: z.array(z.string().max(40)).min(1).max(12).optional().describe('go・mine: 掘ってよい物（stone・dirt・sand・wood か ブロック id）'),
   canPlace: z.array(z.string().max(40)).min(1).max(6).optional().describe('go・obsidian・portal: 置いてよい物（持っている物だけ使う）'),
@@ -152,7 +167,7 @@ export function handContinuesOnFail(hand: Pick<ActHand, 'do' | 'onFail'>): boole
 /** Reflex kinds in the ledger that do not stop an act (the shield is part of a fight; the budget is a notice). */
 /** Reflex kinds in the ledger that do not stop an act: the shield and the fireball struck back are part of a fight (the contract's 1.4); the budget is a notice. */
 const LEDGER_QUIET = new Set(['shield', 'fireball', 'budget', 'pickup', 'armor', 'cover_none', 'melee_none']);
-const REFLEX_NAMES: Record<string, string> = { 'floor-eat': '食事（飢え・瀕死）', 'floor-retreat': '退避（点火したクリーパー・矢）', 'floor-flee': '低体力の逃走', 'floor-last-stand': '逃げ道が無い時の最後の手', 'floor-cover': '燃えて射手から見えている時に射線を切る', 'floor-melee': '近接の敵が近い時の最小の 1 手（打ち返す・間にブロック・2 段上がる・空所の縁から離れる）',
+const REFLEX_NAMES: Record<string, string> = { 'floor-eat': '食事（飢え・瀕死）', 'floor-retreat': '退避（点火したクリーパー・矢）', 'floor-dragon': '竜の息・火の玉・止まり木の体から離れる（エンド）', 'floor-flee': '低体力の逃走', 'floor-last-stand': '逃げ道が無い時の最後の手', 'floor-cover': '燃えて射手から見えている時に射線を切る', 'floor-melee': '近接の敵が近い時の最小の 1 手（打ち返す・間にブロック・2 段上がる・空所の縁から離れる）',
   'floor-shelter': '逃げ道が無い時の囲い', 'auto-swim': '泳ぎ（呼吸）', 'constant:auto-swim': '泳ぎ（呼吸）', 'lava-escape': '溶岩からの脱出', 'floor-armor': '防具' };
 const reflexName = (reason: unknown) => { const text = String(reason ?? ''); return REFLEX_NAMES[text] ?? REFLEX_NAMES[text.replace(/^constant:/u, '')] ?? text; };
 
@@ -165,10 +180,13 @@ const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は
   + 'obsidian: 挙げた溶岩の源（at、8 まで）に水を注いで黒曜石にして掘り、水を汲み戻す（立ち位置・注ぐ所・待ちは体。count・seconds・canPlace・maxPlace）。'
   + 'portal: at（枠の内側の左下）と axis（x か z）の枠 10 個を組み、火打ち金で点け、enter なら入る（足場は canPlace の物）。止まる時は「<手> 止まった <code>」の行で理由を返す。'
   + 'fight: 挙げた相手 target を戦い（stance=flee なら range m 離れるまで逃げ）、狙い・間合い・盾・クリティカル・低体力で食べる/退くは体がこなす。反射が優先。'
+  + 'enderman は den:{entrance:{x,y,z},direction:north|east|south|west}（入口の絶対整数マス・壁の奥へ進む向き）と target:#id を渡すと、2高×1幅×2奥の横穴を4マスだけ掘り、天井・床・液体・空洞を確認してから入口外で目を合わせ、奥の2マス目へ戻り脚を打つ。待ちは20秒まで、被弾・hp<8で中止。倒せば入口外3mの落とし物だけ短く拾う（他の個体が近ければ拾わない）。denなしは従来の屋根方式。'
   + 'mine(block: 掘る種類 id, at: その鉱脈のマス1〜4, count, tool, collect, seconds, canDig・maxDig: 鉱脈へ行く道を掘ってよい物) は at のマスにつながった同じ種類だけを近い順に掘って拾う（ほかの鉱石は探さない）。'
   + 'make(item, count) は途中の物（板・棒など）を持ち物から順に作る（足りなければ何も作らず足りない物の一覧を返す。3x3 は近くの作業台、無ければ持っている物を置く）。'
   + 'smelt(items: [{item,count}], fuel, fuelCount, furnaces: 何基に分けるか, at: かまど, seconds) はかまどに分けて入れて燃料を足すまで（焼き上がりは待たず、取り出しは furnace op=take）。'
-  + '座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。';
+  + '座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。'
+  + SHIELD_RUSH_DESCRIPTION
+  + FILL_DESCRIPTION;
 
 class Act extends InstantSkill {
   constructor(bot: CustomBot) {
@@ -212,13 +230,14 @@ const bad = (text: string): StepOutcome => ({ ok: false, reason: 'invalid_input'
 /** A creature named as the contract does ("#41" an id, else a name), or a plain id. */
 const targetOf = (value: string | number | undefined) => value === undefined ? undefined : typeof value === 'number' ? value
   : /^#\d+$/u.test(value.trim()) ? Number(value.trim().slice(1)) : value;
-const PILLAR_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack'];
-/** The fields a fight hand takes (with `do`): the head's rules, minecraftActHandRules.ts. */
-const FIGHT_FIELDS = new Set(['do', 'target', 'stance', 'item', 'retreatHp', 'range', 'seconds', 'rel', 'note', 'onFail', 'dependsOn']);
+const PILLAR_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'end_stone', 'obsidian'];
+/** Body fight fields. `den` is the body extension; the head's separate contract is updated by S3. */
+const FIGHT_FIELDS = new Set(['do', 'target', 'den', 'stance', 'item', 'retreatHp', 'range', 'seconds', 'rel', 'note', 'onFail', 'dependsOn']);
 const SLOTS: Record<string, string> = { hand: 'hand', offhand: 'off-hand', 'off-hand': 'off-hand', head: 'head', chest: 'torso', torso: 'torso', legs: 'legs', feet: 'feet' };
 
 async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
   const bot = ctx.bot;
+  if (hand.den !== undefined && hand.do !== 'fight') return { ok: false, reason: 'invalid_input', text: 'den は fight enderman だけで使う' };
   const cells = cellsOf(ctx, hand, hand.at);
   if (cells === null) return bad('at のマスが読めない（{x,y,z} か {front,right,up}）');
   const one = cells[0];
@@ -231,7 +250,7 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       const to = hand.to ? cellOf(ctx, hand, hand.to) : null;
       const path = hand.path ? cellsOf(ctx, hand, hand.path) : null;
       if ((hand.to && !to) || (hand.path && !path)) return bad('walk のマスが読めない');
-      return walk(ctx, { to: to ?? undefined, path: path ?? undefined, range: hand.range ?? 0.5, sprint: hand.sprint ?? false });
+      return walk(ctx, { to: to ?? undefined, path: path ?? undefined, range: hand.range ?? 0.5, sprint: hand.sprint ?? (bot.game?.dimension === 'overworld') });
     }
     case 'go': {
       // Where to go is the planner's, as cells; the way (what to tread, dig, lay, and drawing it again) is the body's (utils/primitives/go).
@@ -247,6 +266,11 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
         maxPlace: hand.maxPlace, liquid: hand.liquid!, range: hand.range, seconds: hand.seconds });
     }
     case 'dig': return dig(ctx, { at: cells, tool: hand.tool, collect: hand.collect, take: hand.takeOk, exposeOk: hand.exposeOk, openSight: true });
+    case 'fill': {
+      const issue = fillProblem(hand);
+      if (issue) return bad(`fill: ${issue}`);
+      return fill(ctx, { block: hand.block!, groups: hand.groups!, retreatHp: hand.retreatHp!, retreatTo: hand.retreatTo!, seconds: hand.seconds! });
+    }
     case 'obsidian': {
       // The lava sources are the planner's, as cells; where to stand, where to pour, the wait, the dig and the water back are the body's (utils/primitives/obsidian).
       const problem = obsidianProblem(hand as Record<string, unknown>, spec => cellOf(ctx, hand, spec) !== null);
@@ -289,6 +313,12 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       return chest(ctx, { at: one });
     }
     case 'attack': {
+      if (hand.style === 'shield_rush') {
+        const issue = shieldRushProblem(hand);
+        if (issue) return bad(`shield_rush: ${issue}`);
+        return shieldRush(ctx, { target: hand.target as string, seconds: hand.seconds!, retreatHp: hand.retreatHp!, retreatTo: hand.retreatTo!,
+          area: hand.area!, shieldReserve: hand.shieldReserve!, onCrossfire: hand.onCrossfire!, pickup: hand.pickup! });
+      }
       if (hand.hold) return attack(ctx, { mode: 'hold', target, maxSeconds: hand.seconds ?? 20 });
       if (target === undefined) return bad('attack には target（#id か名前）が要る');
       const untilDead = hand.untilDead !== false;
@@ -298,11 +328,18 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       // The hand's own fields and ranges (the head's minecraftActHandRules.ts HAND_FIELDS / KIND_CHECKS for fight).
       if (target === undefined) return bad('fight には target（#id か名前）が要る');
       const extra = Object.keys(hand).filter(key => !FIGHT_FIELDS.has(key));
-      if (extra.length) return bad(`${extra.join('・')} は fight では使えない（fight の欄: target・stance・item・retreatHp・range・seconds・rel・note・onFail・dependsOn）`);
+      if (extra.length) return bad(`${extra.join('・')} は fight では使えない（fight の欄: target・den・stance・item・retreatHp・range・seconds・rel・note・onFail・dependsOn）`);
       if (hand.seconds !== undefined && (hand.seconds < 5 || hand.seconds > 60)) return bad('fight の seconds は 5〜60');
       if (hand.range !== undefined && (hand.range < 0 || hand.range > 16)) return bad('fight の range は 0〜16');
       if (hand.retreatHp !== undefined && (!Number.isInteger(hand.retreatHp) || hand.retreatHp < 1 || hand.retreatHp > 19)) return bad('fight の retreatHp は 1〜19 の整数');
-      return fight(ctx, { target, stance: hand.stance, item: hand.item, retreatHp: hand.retreatHp, range: hand.range, seconds: hand.seconds });
+      if (hand.den !== undefined) {
+        const problem = endermanDenProblem(hand.den);
+        if (problem) return bad(problem);
+        if (typeof target !== 'number' || !Number.isSafeInteger(target) || target < 0) return bad('den の fight には観測した target:#id が要る（種類名では選ばない）');
+        if (hand.stance === 'flee') return bad('den は stance=fight だけ');
+        if (hand.rel === true) return bad('den.entrance は絶対整数マス（rel:true は使えない）');
+      }
+      return fight(ctx, { target, den: hand.den, stance: hand.stance, item: hand.item, retreatHp: hand.retreatHp, range: hand.range, seconds: hand.seconds });
     }
     case 'shoot': return shoot(ctx, { target, at: one, charge: hand.charge, weapon: hand.item === 'crossbow' ? 'crossbow' : hand.item === 'bow' ? 'bow' : undefined, shots: hand.n });
     case 'eat': {
@@ -464,7 +501,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     && accepted.has(String(entity.name ?? '').toLowerCase()) && entity.position.distanceTo(bot.entity.position) <= 6);
   const hurtOrFall = () => {
     const health = Number(bot.health ?? 20);
-    highWater = acceptedNear() ? health : Math.max(highWater, health);
+    // fill owns its HP floor and return budget, including during its go; a damage notice must not cut that return short.
+    highWater = handNow?.do === 'fill' || acceptedNear() ? health : Math.max(highWater, health);
     if (highWater - health >= 4) {
       hurtAt ??= Date.now();
       if (Date.now() - hurtAt >= HURT_GRACE_MS && !reflexHeld(bot)) return stopWith(`被弾: 体力 ${Math.round(highWater)} → ${Math.round(health)}`, 'damage_taken');
@@ -481,11 +519,11 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if ((bot.health ?? 20) <= 0) return stopWith('体が死んだ', 'died');
       if (doneWhen && !doneMet && holdsDone()) return finishDone();
       // A walk into a portal says the crossing itself (its arrival) and the act ends after it (below): not a stop in the middle of the hand.
-      if (String(bot.game?.dimension ?? '') !== startDimension && !((host.actHandNow === 'walk' || host.actHandNow === 'portal') && portalWalks.has(bot)) && !crossedByWalk) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
+      if (String(bot.game?.dimension ?? '') !== startDimension && !(host.actHandNow === 'portal' || (host.actHandNow === 'walk' && portalWalks.has(bot))) && !crossedByWalk) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
       const entries = ledger?.entriesSince(mark).filter(entry => !LEDGER_QUIET.has(entry.kind)) ?? [];
       // r6 (run 29): a reflex's note does not stop a hand that is laying blocks (it may be what walls the threat off); the act stops when
       // that hand is over. A reflex that takes the body still cuts it at once (its lease aborts the action: onCut).
-      if (entries.length && !LAYING_HANDS.has(String(host.actHandNow ?? ''))) return stopWith(entries.map(entry => entry.detail).join('、'), 'reflex');
+      if (entries.length && handNow?.do !== 'fill' && !LAYING_HANDS.has(String(host.actHandNow ?? ''))) return stopWith(entries.map(entry => entry.detail).join('、'), 'reflex');
       // An accepted kind is not counted (the contract's 1.4): the act is there to fight it.
       const near = typeof stopIf?.hostileWithin === 'number' ? (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity?.position && entity !== bot.entity
         && !accepted.has(String(entity.name ?? '').toLowerCase()) && entity.position.distanceTo(bot.entity.position) <= stopIf.hostileWithin! && isThreat(bot, entity) && !sealed(entity)) : [];
@@ -516,6 +554,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const onCut = () => {
     const reason = String(signal?.reason ?? '');
     if (/^(floor-|constant:|auto-|lava|breath)/u.test(reason) || REFLEX_NAMES[reason]) stopWith(`${reflexName(reason)}`, 'interrupted_by_reflex');
+    // A tool that broke with no spare of its kind in the pack (types/skills.ts cuts the command there): said as that, with the way on (S2 lab, a 125 m Nether walk, one iron pickaxe).
+    else if (reason === 'tool_broke') stopWith('道具が壊れて止まった（同じ種類以上の予備が荷に無い）。作るか拾って持ってから、同じ手をもう一度', 'cancelled');
     else stopWith(`命令が止められた（${reason || 'cancel'}）`, reason === 'deadline' || reason === 'timeout' ? 'timeout' : 'cancelled');
   };
   signal?.addEventListener('abort', onCut, { once: true });
@@ -537,7 +577,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const nextObsSeq = () => { try { return Number((host as { nextObsSeq?: () => number }).nextObsSeq?.() ?? 0); } catch { return 0; } };
   /** The cut reason of an act stopped from outside its hands. */
   const outsideCut = () => cutByOf(report.failureType, report.stoppedBy, signal?.reason);
-  const pushLine = (index: number, status: HandStatus, line: string, verdict: HandVerdict, motorOps: number, extra: Partial<HandLine> = {}, events: InventoryEvent[] = []) => {
+  const pushLine = (index: number, status: HandStatus, line: string, verdict: HandVerdict, motorOps: number, extra: Partial<HandLine> & { shieldRush?: ShieldRushResult; fill?: FillResult } = {}, events: InventoryEvent[] = []) => {
     handResults.set(index + 1, { goal: verdict.goal, end: verdict.end });
     handRuns.push({ goal: verdict.goal, motorOps, ran: status !== 'skipped' });
     report.lines.push({ i: index + 1, do: hands[index].do, status, line, ...extra, goal: verdict.goal, end: verdict.end, ...(status !== 'skipped' ? { motorOps } : {}),
@@ -600,11 +640,12 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       const dugBefore = hand.do === 'dig' ? (cellsOf(ctx, hand, hand.at) ?? []).map(cell => ({ cell, name: String(blockAt(bot, cell)?.name ?? '') })) : [];
       // A fight hand is a fight the planner chose against its target's kind, in either stance: for the length of the hand the kind counts as accepted
       // (the hurt stop and stopIf's hostileWithin leave it alone), and the blows it cost are not held against the next hand.
-      const fightKind = hand.do === 'fight' && hand.target !== undefined ? String(findEntity(bot, targetOf(hand.target) ?? '', 32)?.name ?? '').toLowerCase() : '';
+      const rushing = hand.do === 'attack' && hand.style === 'shield_rush';
+      const fightKind = (hand.do === 'fight' || rushing) && hand.target !== undefined ? String(findEntity(bot, targetOf(hand.target) ?? '', 32)?.name ?? '').toLowerCase() : '';
       const fightAccepted = fightKind !== '' && !accepted.has(fightKind);
       if (fightAccepted) accepted.add(fightKind);
       // Continue contracts (4): a fight or an attack hand hands the shield to the resident shield for as long as it runs (the right stays with the owner, this act).
-      const delegates = hand.do === 'fight' || hand.do === 'attack';
+      const delegates = !rushing && (hand.do === 'fight' || hand.do === 'attack');
       if (delegates) delegateShield(bot, true);
       const endFight = () => { if (delegates) delegateShield(bot, false); if (fightAccepted) accepted.delete(fightKind); if (hand.do === 'fight') { highWater = Number(bot.health ?? 20); hurtAt = null; } };
       // Continue contracts (3): what the hand changed in the pack is told, with the reason its kind gives (craft and make say their own).
@@ -628,6 +669,19 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         }
         if (error instanceof StepStopped || control.signal.aborted || /Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) {
           if (!control.signal.aborted && signal?.aborted) onCut();
+          // A walk or a portal hand cut by a reflex in the very moment the body crossed: the old world's lava under the End portal's sheet reads as lava as the body leaves it, the lava reflex
+          // takes the act, and the body is in the End all the same (the PC lab and S4's c1 run: "walk stopped: lava_escape" with the dimension the_end). The hand did what it was sent for.
+          if ((hand.do === 'walk' || hand.do === 'portal') && report.stoppedBy === 'reflex' && dimensionOf(bot) !== dimension0) {
+            const there = dimensionWords(dimensionOf(bot)), end = feetCell(bot);
+            report.stoppedBy = undefined; report.stoppedWhy = undefined; report.failureType = undefined;
+            crossed = true; crossedByWalk = true; report.done++;
+            const line = clip(`${there}へ移った${end ? ` ${cellText(end)}` : ''}（反射が手を止めたのと同じ時に次元が変わった）`);
+            pushLine(index, 'done', line, { goal: 'done', end: 'finished' }, handOps, {}, eventsOf(index, made));
+            remember(hand, 'done', line, end, base);
+            emit(index, 'completed', line);
+            skip(index + 1, '次元が変わった（前の次元の座標の手は送らない）');
+            return false;
+          }
           const word = closedWord(report.failureType ?? 'reflex');
           // A hand that was cut tells what it had done (fight: the blows, the health lost, who held the body).
           // Run 46 (hold 7): a dig under water stopped by the swim reflex says why, and what to do next.
@@ -654,11 +708,24 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (outcome.data?.eye) report.eye = outcome.data.eye;
       if (outcome.data?.container) report.container = outcome.data.container;
       if (typeof outcome.data?.arrowsLeft === 'number') report.arrowsLeft = outcome.data.arrowsLeft;
+      const rush = (outcome as Partial<ShieldRushOutcome>).shieldRush;
+      const filling = (outcome as Partial<FillOutcome>).fill;
+      const rushExtra = { ...(rush ? { shieldRush: rush } : {}), ...(filling ? { fill: filling } : {}) };
+      if (filling?.status === 'cut' || filling?.code === 'DEAD') {
+        if (!control.signal.aborted) stopWith(outcome.text, filling.code === 'DEAD' ? 'died' : filling.code === 'REFLEX' ? 'reflex' : 'timeout');
+        pushLine(index, 'stopped', clip(outcome.text), { goal: filling.placed ? 'partial' : 'failed', end: 'cut', cutBy: outsideCut(), code: filling.code ?? undefined, progress: outcome.progress }, handOps, rushExtra, delta);
+        remember(hand, 'stopped', outcome.text, outcome.at, base); skip(index + 1); return false;
+      }
+      if (rush?.status === 'cut' || rush?.code === 'DEAD') {
+        if (!control.signal.aborted) stopWith(outcome.text, rush.code === 'DEAD' ? 'died' : rush.code === 'REFLEX' ? 'reflex' : 'timeout');
+        pushLine(index, 'stopped', clip(outcome.text), { goal: rush.targetDead ? 'partial' : 'unknown', end: 'cut', cutBy: outsideCut(), code: rush.code ?? undefined, progress: outcome.progress }, handOps, rushExtra, delta);
+        remember(hand, 'stopped', outcome.text, outcome.at, base); skip(index + 1); return false;
+      }
       if (outcome.ok) {
         if ((hand.do === 'walk' || hand.do === 'portal') && outcome.data?.crossedDimension) crossedByWalk = true;
         report.done++;
         const line = clip(`${outcome.text}（${((Date.now() - began) / 1000).toFixed(1)}秒）`);
-        pushLine(index, 'done', line, finishedVerdict(outcome, handOps), handOps, {}, delta);
+        pushLine(index, 'done', line, finishedVerdict(outcome, handOps), handOps, rushExtra, delta);
         remember(hand, 'done', line, outcome.at, base);
         emit(index, 'completed', outcome.text);
         continue;
@@ -683,10 +750,10 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       try { if (outcome.at) around = aroundText(bodyReader(bot), outcome.at, feetCell(bot)); } catch { /* the line stands without it */ }
       // go's, obsidian's and portal's lines are the contract's own ("<手> 止まった <code>: ...", the counts in it): the code is the closed word.
       const own = hand.do === 'obsidian' || hand.do === 'portal' || hand.do === 'vertical';
-      const line = hand.do === 'go' ? clip(outcome.text) : own ? clip(outcome.text.startsWith(`${hand.do} 止まった`) ? outcome.text : `${hand.do} 止まった ${outcome.reason ?? 'failed'}: ${outcome.text}`) : stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
+      const line = rush || filling || hand.do === 'go' ? clip(outcome.text) : own ? clip(outcome.text.startsWith(`${hand.do} 止まった`) ? outcome.text : `${hand.do} 止まった ${outcome.reason ?? 'failed'}: ${outcome.text}`) : stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
       // A hand that stops the act by itself ended (finished) on its own: a cut is only what comes from outside.
       pushLine(index, goesOn ? 'failed' : 'stopped', line, finishedVerdict(outcome, handOps), handOps,
-        { ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) }, delta);
+        { ...rushExtra, ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) }, delta);
       remember(hand, goesOn ? 'failed' : 'stopped', line, outcome.at, base);
       emit(index, 'error', outcome.text);
       if (goesOn) continue;

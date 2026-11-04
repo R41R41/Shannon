@@ -32,10 +32,16 @@ function isWater(block: EdgeGuardBlock): boolean { return holdsWater(block); }
  * water down a cave and came out of it 35 blocks above a lava lake. Lava or no
  * landing within reach is Infinity; unknown (unloaded) blocks count as safe,
  * so the guard never acts on missing data.
+ *
+ * The scan begins with the floor cell itself (`floorY`), not the cell under it: lava that lies level with
+ * the ground (a pool in the Nether floor, the floor of a cell a diagonal step dug open) is a fall into lava,
+ * not a one-block step down onto what lies under the lava. The lab (S5, c1, 2026-11-04) walked a body
+ * whose floor cell was lava with stone under it: the drop read 1, the guard let it step in, it sank into a
+ * one-wide pit and burned to death in eight seconds.
  */
 function columnFall(bot: Pick<EdgeGuardBot, 'blockAt'>, cx: number, cz: number, y: number, floorY: number): { top: number; drop: number } {
   let from = y;
-  for (let depth = 1; depth <= SCAN_DEPTH; depth++) {
+  for (let depth = 0; depth <= SCAN_DEPTH; depth++) {
     const blockY = floorY - depth;
     const block = bot.blockAt(new Vec3(cx, blockY, cz));
     if (!block) return { top: blockY + 1, drop: 0 };

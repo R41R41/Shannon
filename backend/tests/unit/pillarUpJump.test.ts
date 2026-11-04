@@ -3,7 +3,7 @@ import { Vec3 } from 'vec3';
 import minecraftData from 'minecraft-data';
 import blockLoader from 'prismarine-block';
 import { createRequire } from 'node:module';
-import { pillarUp, PILLAR_FEET_OVER_FLOOR } from '../../src/services/minebot/utils/primitives/pillarUp.js';
+import { climbBlocker, pillarUp, PILLAR_FEET_OVER_FLOOR } from '../../src/services/minebot/utils/primitives/pillarUp.js';
 
 // pillarUp against the client physics (prismarine-physics, the engine mineflayer moves the body with), run 39: pillarUp was called 9 times
 // and every time said "1段目が積めなかった（足元は今 air、足は y=N.00）", with no error text. It waited for the feet to be 1.26 over the floor
@@ -168,4 +168,34 @@ describe('a place the server never answers (run 48, hold 5)', () => {
     expect(stopped.ok).toBe(false);
     expect(stopped.text).toContain('積めなかった');
   }, 40_000);
+});
+
+describe('run 59 hold 3: a rail in the feet cell (a mineshaft) is named before any jump', () => {
+  const withBlock = (name: string) => {
+    const world = makeWorld();
+    const block = new Block(mcData.blocksByName[name].id, 0, 0); block.position = new Vec3(0, 64, 0);
+    const inner = world.getBlock;
+    const getBlock = (position: Vec3) => (Math.floor(position.x) === 0 && Math.floor(position.y) === 64 && Math.floor(position.z) === 0
+      && !world.placed.has('0,64,0') ? block : inner(position));
+    return { ...world, getBlock, blockAt: getBlock };
+  };
+  it('a rail: the level stops at once, by the rail, with no jump and no place (before: two jumps, "跳びが届かない")', async () => {
+    const world = withBlock('rail');
+    expect(world.getBlock(new Vec3(0, 64, 0)).boundingBox).toBe('empty');
+    const body = makeBody(world as unknown as World, cobble(8));
+    const outcome = await live(body, () => pillarUp(ctx(body.bot), { n: 1, block: 'cobblestone' }));
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toBe('not_placed');
+    expect(outcome.text).toContain('足のマス (0,64,0) に rail があり、そこへはブロックを積めない');
+    expect(body.bot.placeCalls).toHaveLength(0);
+    expect(climbBlocker(body.bot, { x: 0, y: 64, z: 0 })).toMatchObject({ name: 'rail', cell: { x: 0, y: 64, z: 0 } });
+  }, 20_000);
+  it('air, short grass and a torch-free cell climb as before; a torch is named too', async () => {
+    for (const name of ['short_grass']) {
+      const body = makeBody(withBlock(name) as unknown as World, cobble(8));
+      expect(climbBlocker(body.bot, { x: 0, y: 64, z: 0 }), name).toBeNull();
+    }
+    expect(climbBlocker(makeBody(makeWorld(), cobble(8)).bot, { x: 0, y: 64, z: 0 })).toBeNull();
+    expect(climbBlocker(makeBody(withBlock('torch') as unknown as World, cobble(8)).bot, { x: 0, y: 64, z: 0 })).toMatchObject({ name: 'torch' });
+  });
 });

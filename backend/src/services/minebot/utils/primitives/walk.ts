@@ -1,6 +1,7 @@
 import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { buildMovements } from '../setMovements.js';
+import { installGroundSprint, watchGroundSprint } from '../groundSprint.js';
 import { nextLeg, FAR_LEG_M } from '../farLegs.js';
 import { bodyReader, feetCell, relativeWords, type Cell, type MapBlock } from '../localMap.js';
 import { probePath } from '../probeTools.js';
@@ -166,6 +167,7 @@ export function walkMovements(bot: any, sprint = true): any {
   // this file says; the search is given the same. The safe-parkour bound (a gap's drop) stays at MAX_DROP: it was set above, in its closure.
   movements.maxDropDown = MAX_DROP + 1;
   installWalkRules(movements);
+  installGroundSprint(movements);
   return movements;
 }
 
@@ -201,12 +203,14 @@ export interface GoWithOptions {
  */
 export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, notes: WayNotes, options: GoWithOptions = {}): Promise<GoOutcome> {
   const bot = ctx.bot;
+  const sprint = watchGroundSprint(bot);
   let route: any[] = [];
   let search: SearchSaid | null = null;
   const onRoute = (results: any) => {
     route = Array.isArray(results?.path) ? results.path : [];
     search = { status: String(results?.status ?? '?'), nodes: route.length };
     try { options.onRoute?.(route, search.status); } catch { /* a look at the route never stops the walk */ }
+    sprint.route(route);
   };
   const onDug = (block: any) => { if (block?.name && isLeaves(String(block.name))) notes.leaves++; };
   const opening = new Map<string, number>();
@@ -277,7 +281,7 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
     // which digs): a pick-up that restored it dug a vein cell the mine hand was digging, a dig twice, found by a unit test that failed 1 in 2 under load.
     try { bot.pathfinder.setGoal(null); } catch { /* the walk's result stands */ }
   }
-  function detach() { bot.removeListener?.('path_update', onRoute); bot.removeListener?.('diggingCompleted', onDug); }
+  function detach() { bot.removeListener?.('path_update', onRoute); bot.removeListener?.('diggingCompleted', onDug); sprint.close(); }
   if (!crossed && portalWalks.has(bot) && dimensionOf(bot) !== dimension0) crossed = true;
   return { reached: !crossed && atGoal(bot, goal), timedOut: timedOut && !crossed, stuck: stuck && !crossed, error: crossed ? null : error, search, opens, crossed };
 }
@@ -465,6 +469,37 @@ async function walkTo(ctx: StepContext, target: Cell, range: number, notes: WayN
 const PORTAL_WAIT_MS = 10_000;
 
 /**
+ * The End portal is a sheet over lava that a body falls through (it is three cells of `end_portal` inside a ring of frames, whose tops are a step above it): the route search will
+ * not path onto cells with no floor, so the walk goes to within this many blocks of it (a cell of the ring) and the last step is made by hand (stepIntoEndPortal).
+ * Lab (the stronghold of a staged world): `go` and `walk` straight at the portal's middle stopped with no_floor / "4秒進めず" while 12 eyes had opened it.
+ */
+const END_PORTAL_APPROACH = 2.5;
+const STEP_IN_MS = 4_000;
+/** The last step into an End portal: face the middle of its cell and walk forward off the ring until the dimension changes (or STEP_IN_MS). */
+export async function stepIntoEndPortal(ctx: StepContext, cell: Cell): Promise<void> {
+  const bot = ctx.bot;
+  const dimension = dimensionOf(bot);
+  const middle = new Vec3(cell.x + 0.5, cell.y + 0.4, cell.z + 0.5);
+  const until = Date.now() + STEP_IN_MS;
+  // The edge guard holds the body back from a drop of lava or the void ("崖際で停止"); the step off the ring into the portal is the point here, so it is let off for these few seconds.
+  const edge = (bot as { edgeGuard?: { enabled: boolean } }).edgeGuard;
+  const edgeWas = edge?.enabled;
+  if (edge) edge.enabled = false;
+  try {
+    try { bot.pathfinder?.stop?.(); bot.pathfinder?.setGoal?.(null); } catch { /* standing */ }
+    while (Date.now() < until && dimensionOf(bot) === dimension) {
+      try { await guard(ctx, Promise.resolve(bot.lookAt(middle, true)), 500); } catch (error) { if (error instanceof StepStopped) throw error; }
+      bot.setControlState('sprint', false);
+      bot.setControlState('forward', true);
+      await wait(ctx, 100);
+    }
+  } finally {
+    try { bot.setControlState('forward', false); } catch { /* released */ }
+    if (edge && edgeWas !== undefined) edge.enabled = edgeWas;
+  }
+}
+
+/**
  * The walk ended in another dimension (a portal entered, as the target or on the way): that is the arrival (mb-llmc-cand 4, run 37: walking
  * into a lit portal is the way over). The cell is the one the body stands in there, after the position packet of the new dimension.
  */
@@ -541,7 +576,8 @@ async function walkInner(ctx: StepContext, args: WalkArgs): Promise<StepOutcome>
     for (let i = 0; i < targets.length; i++) {
       const final = i === targets.length - 1;
       const target = final && lastAim?.kind === 'enter' ? lastAim.cell : targets[i];
-      const range = final ? Math.max(0, args.range ?? 0) : 0;
+      const endPortal = final && lastAim?.kind === 'enter' && lastAim.name === 'end_portal';
+      const range = endPortal ? END_PORTAL_APPROACH : final ? Math.max(0, args.range ?? 0) : 0;
       // r9: a range under one is the cell itself (the route search floors the goal; act's default is 0.5): a cell no body can stand in is refused
       // at the start with its fact. It was only `range === 0`, and act walks with 0.5, so five walks in run 33 went to the cell below it and
       // stopped, and the stop quoted probe path's answer for a neighbour.
@@ -557,6 +593,7 @@ async function walkInner(ctx: StepContext, args: WalkArgs): Promise<StepOutcome>
   } finally {
     try { if (previous) navigator.setMovements(previous); } catch { /* the walk's profile stays */ }
   }
+  if (lastAim?.kind === 'enter' && lastAim.name === 'end_portal') await stepIntoEndPortal(ctx, lastAim.cell);
   if (portal) {
     const left = Math.max(1000, Math.min(PORTAL_WAIT_MS, ctx.deadline - Date.now()));
     const changed = await waitUntil(ctx, () => dimensionOf(bot) !== notes.from!.dimension, left, 250);

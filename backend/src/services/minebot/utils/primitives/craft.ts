@@ -3,6 +3,10 @@ import { feetCell, relativeWords, type Cell } from '../localMap.js';
 import { cellText, eyeDistance, guard, inventoryCount, stopped, StepStopped, USE_REACH, wait, type StepContext, type StepOutcome } from './common.js';
 import { withProgress } from './progressUnits.js';
 import { craftEvents } from './craftEvents.js';
+import { withWoodForms } from './woodRecipes.js';
+
+/** Between two rounds of a craft in the hand the server's answer is let settle this long (see the loop below). */
+const ROUND_SETTLE_MS = 250;
 
 /**
  * craft: `count` of an item (design mb-llm-centric 2.3). A recipe of the 2x2 grid is made in the hand; one that needs the 3x3 uses a
@@ -60,7 +64,7 @@ async function craftItem(ctx: StepContext, args: CraftArgs): Promise<StepOutcome
   if (!item) return stopped(bot, 'invalid_item', `${args.item} は物の名前ではない`);
   const count = Math.max(1, Math.min(64 * 9, Math.round(args.count ?? 1)));
   const table = tableInReach(bot);
-  const all: any[] = [...(bot.recipesAll?.(item.id, null, null) ?? []), ...(table ? bot.recipesAll?.(item.id, null, table) ?? [] : [])];
+  const all: any[] = withWoodForms(bot, args.item, [...(bot.recipesAll?.(item.id, null, null) ?? []), ...(table ? bot.recipesAll?.(item.id, null, table) ?? [] : [])]);
   if (!all.length) {
     const needsTable = (bot.recipesAll?.(item.id, null, true) ?? []).length > 0;
     if (needsTable) {
@@ -84,8 +88,20 @@ async function craftItem(ctx: StepContext, args: CraftArgs): Promise<StepOutcome
   const record = craftEvents(ctx, ready, args.item, false);
   try {
     try {
-      const made = await guard(ctx, Promise.resolve(bot.craft(ready, times, usesTable ? table : undefined)), 4000 + times * 400);
-      if (!made) return stopped(bot, 'timeout', `${args.item} を作る途中で時間切れ（今 ${inventoryCount(bot, args.item)} 個）`);
+      if (usesTable || times === 1) {
+        const made = await guard(ctx, Promise.resolve(bot.craft(ready, times, usesTable ? table : undefined)), 4000 + times * 400);
+        if (!made) return stopped(bot, 'timeout', `${args.item} を作る途中で時間切れ（今 ${inventoryCount(bot, args.item)} 個）`);
+      } else {
+        // In the hand, one round at a time: mineflayer's own loop starts the next round before the first one's result has settled, and a second round of a recipe of two
+        // ingredients lost its materials and the results (lab: ender_eye x6 took two pairs of pearl and powder, left no eye and ended "missing ingredient"; rounds of one made every eye).
+        for (let round = 0; round < times; round++) {
+          const roundStart = inventoryCount(bot, args.item);
+          const made = await guard(ctx, Promise.resolve(bot.craft(ready, 1, undefined)), 4000);
+          if (!made) return stopped(bot, 'timeout', `${args.item} を作る途中で時間切れ（${round}/${times} 回目まで。今 ${inventoryCount(bot, args.item)} 個）`);
+          if (round + 1 < times) await wait(ctx, ROUND_SETTLE_MS);
+          if (inventoryCount(bot, args.item) <= roundStart && round + 1 < times) await wait(ctx, ROUND_SETTLE_MS);
+        }
+      }
     } catch (error) {
       if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
       return stopped(bot, 'craft_failed', `${args.item} を作れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}`);

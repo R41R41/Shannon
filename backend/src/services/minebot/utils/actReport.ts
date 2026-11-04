@@ -3,6 +3,7 @@ import { MINE_MAKE_SMELT_WORDS } from './handCodes.js';
 import { feetCell, localMapFor, symbolFor, type BlockReader, type Cell } from './localMap.js';
 import type { ActOutcome, CutBy, GoalOutcome, Handover, InventoryEvent, Progress, RunEnd } from '../integration/commonFca/continueContract.js';
 import { lifeOf } from './life.js';
+import type { EyeReport } from './huntEyeFlight.js';
 
 /**
  * What an `act` returns (the head's contract: minecraftActContract.ts `ActResult`, mb-llm-centric-contract.md 1.3): a JSON object in the
@@ -53,7 +54,7 @@ export interface ActReport {
   stoppedWhy?: string;
   /** The first failure's code (the receipt's failureType). */
   failureType?: string;
-  eye?: { from: Cell; bearingDeg: number; flew: number; to: Cell; broke: boolean };
+  eye?: EyeReport;
   container?: { at: Cell; kind: string; items: string[] };
   arrowsLeft?: number;
   /** With `repeat`: the passes finished and the most asked. */
@@ -89,6 +90,8 @@ export function takeActReport(bot: object, since: number): ActReport | null {
  */
 const CLOSED: Record<string, string> = {
   out_of_reach: '届かない', cannot_reach: '届かない', not_opened: '届かない',
+  // the End (2026-11-02): the dragon is not on its perch / the perch ended; a crystal too near or too far to shoot, or no clear line to it.
+  not_perched: '届かない', perch_over: '時間切れ', too_close: '届かない', too_far: '届かない', line_blocked: '届かない', perched_immune: '届かない',
   wall: '一歩ではない', low_ceiling: '一歩ではない', drop: '一歩ではない', lava: '一歩ではない', no_path: '一歩ではない', stuck: '一歩ではない',
   target_solid: '一歩ではない', walk_failed: '一歩ではない', ceiling: '一歩ではない', unloaded: '一歩ではない',
   // r5 (2026-10-22): a walk that ended short of its target, a target no body stands in, a shut iron door in the way; a dig the eye cannot see.
@@ -101,6 +104,7 @@ const CLOSED: Record<string, string> = {
   inventory_full: '満杯', threat_exposed: '見られる', protected: '守られた物', last_pickaxe_kept: '守られた物', lava_behind: '溶岩が流れ込む', footing: '足場が無い',
   timeout: '時間切れ', time_up: '時間切れ', reflex: '反射', interrupted_by_reflex: '反射', stop_if: 'stopIf',
   no_progress: '進まない', damage_taken: '被弾', fell: '落下',
+  breathing_work: '呼吸不足',
   // go (2026-10-26): its stops carry the contract's own code in the line; these words only count where it stopped.
   no_tool: '掘れない', limit_dig: '掘れない', no_blocks: '置けない', limit_place: '置けない', limit_time: '時間切れ', dead_end: '一歩ではない', unsafe: '一歩ではない', not_loaded: '一歩ではない',
   // run 41 fixes (2026-10-27): the search ran out of its time (no way known, nor none); a floor lower than the feet cell; a dig under a block that falls.

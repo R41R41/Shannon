@@ -33,6 +33,8 @@ import { incidentsOf, withIncidentText, type HoldRelease } from '../../utils/inc
 import { createHash, randomUUID } from 'node:crypto';
 import { installLife, type LifeKeeper } from '../../utils/life.js';
 import { freeSlots } from '../../utils/primitives/common.js';
+import { findEntity, isDying } from '../../utils/primitives/use.js';
+import { FIGHT_THREAT_RANGE_M } from './bodyQueue.js';
 import { deathLedgerOf } from '../../utils/deathLedger.js';
 import { lapseOf, madenessOf, type BodyNow, type Lapse } from './lapse.js';
 import type { BodyTimes, BodyVersion, HandStart, ItemOutcome } from './continueContract.js';
@@ -48,6 +50,7 @@ import { feetCell } from '../../utils/localMap.js';
 import { installPackTap, setReflexEventPrefix } from '../../utils/packEvents.js';
 import { utilitiesOf } from '../../utils/utilitiesScan.js';
 import { installHitRecord, recentHitsOf } from '../../utils/hitRecord.js';
+import { endObservation } from '../../utils/dragonState.js';
 
 /** The body process's start-up id: a new one at each start. A command made for another start is not run (continue contracts, 2). */
 const BODY_BOOT = `bb-${randomUUID().slice(0, 8)}`;
@@ -179,9 +182,11 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     if (options.events ?? process.env.MINEBOT_BODY_EVENTS !== 'off') this.events = new BodyEventWatcher(bot, () => this.now());
     bot.on('end', this.onEnd); bot.on('minebotActionProgress', this.onProgress); bot.on('minebotActStep', this.onStep);
     // Continue contracts: the body counts its own lives (5), records every effective operation from the start (8) and asks for the server's tick.
-    // Built before login: bot.username arrives later. Keep one configured identity for both loading and saving.
-    const lifeName = bot.username ?? bot._client?.username ?? 'body';
-    this.life = installLife(bot, { key: () => `${options.serverId}|${lifeName}`, note: (what, data) => { try { blackBoxOf(bot)?.note(what, data); } catch { /* a note is a help */ } } });
+    // Built before login: bot.username arrives later. The entry is the body's own name's (read once it is known, and kept): never a shared
+    // "body" entry, which the next login (the name known at once) would leave for another count in the same epoch (run 59 leg 2).
+    let lifeName: string | null = bot.username ?? bot._client?.username ?? null;
+    const lifeKey = () => { lifeName ??= bot.username ?? bot._client?.username ?? null; return lifeName ? `${options.serverId}|${lifeName}` : null; };
+    this.life = installLife(bot, { key: lifeKey, note: (what, data) => { try { blackBoxOf(bot)?.note(what, data); } catch { /* a note is a help */ } } });
     this.opLog = opLogOf(bot) ?? installOpLog(bot, new OpLog(opLogDirectory()));
     setMotorOpSink(bot, op => this.opLog.op(op));
     setShieldNoteSink(bot, (_kind, data) => this.opLog.motorState(data));
@@ -234,6 +239,25 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   }
   private controlView() {
     return controlViewOf(this.bot, { commands: this.tags, cleanup: this.cleaning, waiting: this.waits }, this.now());
+  }
+  /**
+   * R3-2 (the safety cut): the target of a fight or attack hand of an act that is alive within FIGHT_THREAT_RANGE_M of the body now (its name), else null. A target named by its kind is the nearest of the kind;
+   * one named by its id is that creature; a creature that is dying does not count. The loop asks it when an item has ended without a done, before anything waiting behind it may start.
+   */
+  fightTargetNear(command: Command): string | null {
+    try {
+      if (command.kind !== 'skill' || command.skill !== 'act') return null;
+      const hands = (command.arguments as { hands?: unknown } | undefined)?.hands;
+      if (!Array.isArray(hands)) return null;
+      for (const hand of hands as Array<{ do?: unknown; target?: unknown }>) {
+        if ((hand?.do !== 'fight' && hand?.do !== 'attack') || (typeof hand.target !== 'string' && typeof hand.target !== 'number')) continue;
+        const spec = typeof hand.target === 'string' && /^#\d+$/u.test(hand.target.trim()) ? Number(hand.target.trim().slice(1)) : hand.target;
+        const entity = typeof spec === 'number' ? (this.bot as { entities?: Record<number, any> }).entities?.[spec] : findEntity(this.bot, spec, FIGHT_THREAT_RANGE_M);
+        const at = this.bot.entity?.position;
+        if (entity?.position && at && entity.position.distanceTo(at) <= FIGHT_THREAT_RANGE_M && !isDying(this.bot, entity)) return String(entity.name ?? hand.target);
+      }
+    } catch { /* a judgement that cannot be made is no danger: the item's own end decides */ }
+    return null;
   }
   /** Task queue: whether an item's condition holds now, and in words what is lacking when it does not. */
   check(condition: ActCondition): { ok: boolean; words: string; unknown?: boolean } {
@@ -300,7 +324,10 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       stateAt: new Date(now).toISOString(), receivedAt: new Date(now).toISOString(), connected: facts.connected === true,
       // Run 44: the hold the body keeps (its file survives a restart), for the head to compare with its own (a hold of a task that is gone is ended).
       // Continue contracts (3): the benches, furnaces, chests and beds near, with the proof of the scan (the head's `near` is judged from it).
-      state: JSON.parse(JSON.stringify({ world: { ...world, utilities: utilitiesOf(this.bot, this.sequence, now), freeSlots: freeSlots(this.bot) }, primitives: primitives.state, activeCapabilities: activeActionCapabilities(this.bot), localSafety: this.lastSafety,
+      state: JSON.parse(JSON.stringify({ world: { ...world, utilities: utilitiesOf(this.bot, this.sequence, now), freeSlots: freeSlots(this.bot),
+        // The End fight (2026-11-02), under the names the head reads: the dragon's phase and health, the crystals left, the perch's pillar, the breath lying about. Only in the End.
+        ...(() => { try { return endObservation(this.bot, now) ?? {}; } catch { return {}; } })() },
+        primitives: primitives.state, activeCapabilities: activeActionCapabilities(this.bot), localSafety: this.lastSafety,
         incidentHold: incidentsOf(this.bot)?.held() ?? null,
         // Continue contracts: the life (5), the start-up and connection ids (5), who holds the body (4).
         combat: { recentHits: recentHitsOf(this.bot) },

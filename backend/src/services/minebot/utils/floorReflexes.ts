@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { actionLeaseStatus, actionSignal, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
+import { actionLeaseStatus, actionSignal, activeActionCapabilities, cancelCapability, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, reservationOf, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
 import { isHeadCombatActive, isHeadCombatRunning } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
@@ -14,12 +14,17 @@ import { openSightLines, seesBodyAt, threatExposure } from './threatExposure.js'
 import { holdsWater } from './waterBlocks.js';
 import { bodyReader, feetCell } from './localMap.js';
 import { climbRise, enterable, MAX_CLIMB, passable, standable } from './walkRules.js';
+import { standableAt } from './standability.js';
 import { footingAt, footingWords, type Footing } from './voidFooting.js';
 import { isBurning, lavaReleasedBy } from './lavaSafety.js';
 import { engagedWithAny } from './engagement.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
+import { canHarvest } from './toolChoice.js';
 import { entityHealth } from './mapMarks.js';
 import { eyeOf, probeSight } from './probeTools.js';
+import { cloudReaches, dragonHazards, exitsFireballLine, hazardCentres, type Hazard } from './dragonDanger.js';
+import { isEnd } from './dragonState.js';
+import { clutchWanted, runFallClutch, scoopBack, scoopWanted, type FallMemory } from './fallClutch.js';
 
 const log = createLogger('Minebot:FloorReflexes');
 
@@ -32,6 +37,18 @@ const log = createLogger('Minebot:FloorReflexes');
  * it back by ending; the one above decides again from a fresh observation.
  */
 export const FLOOR_RETREAT_PRIORITY = 350;
+/** The water-bucket clutch of a fall is over the dragon's retreat and the rest of the floor: a body in the air has nothing else to do. */
+export const FLOOR_CLUTCH_PRIORITY = 380;
+/**
+ * The one switch of the water-bucket clutch (and with it the taking-up of the water it pours, which has nothing to take up when no clutch ran): false and `clutchTick` starts nothing, in every mode. A
+ * decision of the release, not of the environment: nothing reads it from the env (the switch for the second rollout, independent review 2026-11-02, round 8).
+ */
+export const FALL_CLUTCH_ENABLED = false;
+const FALL_TIMEOUT_MS = 8000;
+const FALL_DETAIL_MAX = 160;
+/** The taking-up of water a clutch left behind: under every reflex (each may cut it), over the planner's own acts. */
+export const FLOOR_SCOOP_PRIORITY = 100;
+const SCOOP_TIMEOUT_MS = 3000;
 export const FLOOR_EAT_PRIORITY = 200;
 /** Between the retreat (350) and the meal (200): the low-health flee (default mode, P8). */
 export const FLOOR_FLEE_PRIORITY = 250;
@@ -162,6 +179,10 @@ export interface FloorState {
   retreat: RetreatState; busy: 'eat' | 'armor' | 'flee' | null; retryAt: number; engagements: { eat: number; armor: number; flee?: number; fleeRefused?: number };
   /** When each flee episode of the last 20 s began (the flee's own allowance). */
   fleeStarts?: number[];
+  /** The meal being eaten: whether it is a mending one (its danger rule, `mealDanger`) and whether the dragon's danger has cut it. */
+  meal?: { mend: boolean; cut?: string };
+  /** When the dragon's danger last cut a meal (one cut in MEAL_CUT_GAP_MS). */
+  mealCutAt?: number;
   fleeEpisode?: FleeEpisode;
   /** No new episode before this (the rest after one) and no ground reading before this (the cache after a refusal). */
   fleeRestUntil?: number;
@@ -174,12 +195,14 @@ export interface FloorState {
   clock?: () => number;
   /** The kind of the last stand that failed: the next one tries another way. */
   lastStandFailed?: LastStand['kind'];
+  /** When the floor's own digs down (the cover's and the last stand's) were begun, for ESCAPE_DIGS_MAX in ESCAPE_DIG_WINDOW_MS. */
+  escapeDigs?: number[];
   /** When the retreat from a lit creeper found no way away: the creeper's last stand is wanted until CORNERED_WAIT_MS after. */
   creeperCornered?: number;
   /** Cooldowns, the allowance and the stuck latch of the arrow step-aside, the meal and the armour change (`floorBudget.ts`); absent when denied. */
   budget?: FloorBudget;
   /** r7, the cover: the episode (its digs, when its last hand ended), the next look, the last "no hand" note, and the health seen. */
-  cover?: { since: number; digs: number; lastEnd: number; /** r10: the blocks put on a shooter's line in this episode. */ lines?: number };
+  cover?: { since: number; digs: number; lastEnd: number; /** r10: the blocks put on a shooter's line in this episode. */ lines?: number; /** A dig of the episode did not lower the body: no dig again. */ digFailed?: boolean };
   coverNextAt?: number;
   coverNotedAt?: number;
   healthSeen?: { last: number; fellAt: number };
@@ -201,6 +224,13 @@ export interface FloorState {
   bridge?: ReflexBridge;
   meleeNextAt?: number;
   meleeNotedAt?: number;
+  /** The End: the dragon reflex's next look, and when it last said it found no way out. */
+  dragonNextAt?: number;
+  dragonNotedAt?: number;
+  /** The End: when the body put a block under itself to rise out of a cloud it could not walk out of, newest last. */
+  dragonRises?: number[];
+  /** The End: the highest y since the body last stood, when the water-bucket clutch last began, and the water it poured and has not yet taken up (utils/fallClutch). */
+  fall?: FallMemory;
 }
 
 /** Continue contracts (4): what the reflex goes on with after its cap; the holder in the control view while it lasts. */
@@ -381,23 +411,60 @@ const SELF_EAT_HEALTH = 6;
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple']);
 // (Whether a meal is critical, `eatIsCritical`, is floorBudget.ts's one definition: this choice, the tick's cut rule and the budget's exemption share it.)
 /**
+ * The mending meal: hurt and not full, nothing about to strike. A meal at food 18 or 19 gains almost no food, but it refills the saturation (cooked beef: +12.8, kept to the
+ * food level): with the bar full and saturation left the body mends one health point every half second, at 18 or 19 without saturation one every four seconds (lab: the dragon stage
+ * waited at food 17 to 19 for minutes, hurt; the body ate 0.5 times a run). The 1.6 s of the meal must not be struck: no hostile within MEND_HOSTILE_NEAR, no dragon danger, no
+ * dragon fireball flying within MEND_FIREBALL_NEAR, no meal in lava. Cooked food only (raw meat and rotten flesh keep their own rules).
+ */
+const MEND_HOSTILE_NEAR = 8;
+const MEND_FIREBALL_NEAR = 40;
+const TOP_UP_FOOD = 14;
+/** The shortest time between two meals the dragon's danger cuts (`installFloorReflexes`). */
+const MEAL_CUT_GAP_MS = 5000;
+function mendingMeal(bot: FloorBody, health: number, food: number): boolean {
+  // Unhurt too, once the bar is down to TOP_UP_FOOD: autoEat skips a walking body until food 6 (and sprint needs food above 6), so the walk would spend the run hungry.
+  if (!((health < 20 && food < 20) || food <= TOP_UP_FOOD)) return false;
+  return mealDanger(bot, true) === null;
+}
+/**
+ * What of the dragon would strike a meal now, or null: its breath, a fireball's line or its boxes reaching the body (`dragonHazards`), and for a
+ * mending meal also a dragon fireball flying within MEND_FIREBALL_NEAR. Read when a meal is chosen and again on every tick while it is eaten
+ * (`installFloorReflexes`: the meal is cut and the dragon's retreat comes next).
+ */
+export function mealDanger(bot: FloorBody, mend: boolean): string | null {
+  try {
+    const hazards = dragonHazards(bot);
+    if (hazards.length) return hazards.map(hazard => hazard.why).join('・');
+    if (!mend) return null;
+    const at = bot.entity?.position;
+    for (const entity of Object.values((bot as unknown as { entities?: Record<string, any> }).entities ?? {})) {
+      if (entity?.name === 'dragon_fireball' && at && entity.position?.distanceTo?.(at) <= MEND_FIREBALL_NEAR) return `竜の火の玉が${MEND_FIREBALL_NEAR}m内`;
+    }
+  } catch { return mend ? '竜の危険が読めない' : null; }
+  return null;
+}
+/** A meal that cannot wait (starving, or nearly dead with hunger to fill), by the mode's own test; every other meal of the body is a mending one. */
+function criticalMeal(health: number, food: number, wide: boolean): boolean {
+  return (food <= SELF_EAT_FOOD || health <= SELF_EAT_HEALTH) && (wide ? eatIsCritical(health, food) : (food <= 6 || (health <= 12 && food < 18)));
+}
+/**
  * Food to eat now, or null; never with an enemy at arm's length (standing to eat there killed the body, L18).
  *
- * The body eats by itself only starving (food 3 or less) or nearly dead (health 6 or less, with hunger to fill: `eatIsCritical`); every
- * other meal is the planner's (design mb-llm-centric 2.4). `wide` is the default mode (`FloorConfig.wideThreats`): cooked before raw, raw
+ * The body eats by itself starving (food 3 or less), nearly dead (health 6 or less, with hunger to fill: `eatIsCritical`), or, cooked food
+ * with no enemy near, hurt and not full or down to food 14 (`mendingMeal`); every other meal is the planner's (design mb-llm-centric 2.4). `wide` is the default mode (`FloorConfig.wideThreats`): cooked before raw, raw
  * meat and rotten flesh only when nothing else is carried; "an enemy within 5 m" does not count one that is walled off (`threatExposure`,
  * as in the flee). `wide = false` is `floor` mode: the production floor's own test (food <= 6, or health <= 12 and food < 18) on top.
  */
 export function floorEatChoice(bot: FloorBody, wide = true): Item | null {
   const health = bot.health ?? 20, food = bot.food ?? 20;
-  if (!(food <= SELF_EAT_FOOD || health <= SELF_EAT_HEALTH)) return null;
-  if (wide) {
-    // Nearly dead with food 18 or more: a meal gains next to nothing.
-    if (!eatIsCritical(health, food)) return null;
-  } else if (!(food <= 6 || (health <= 12 && food < 18))) return null;
-  if (bot.entity?.isInLava || hostileWithin(bot, HOSTILE_NEAR, wide, wide)) return null;
+  // The critical meal first (nearly dead with food 18 or more gains next to nothing): it keeps its raw meat and rotten flesh, its 5 m and its
+  // danger rule; only a meal that is not critical is a mending one, cooked food only (the top-up at food 14 had taken the starving body's last raw meal away).
+  const critical = criticalMeal(health, food, wide);
+  const mend = wide && !critical && mendingMeal(bot, health, food);
+  if (!critical && !mend) return null;
+  if (bot.entity?.isInLava || hostileWithin(bot, mend ? MEND_HOSTILE_NEAR : HOSTILE_NEAR, wide, wide)) return null;
   let items = (bot.inventory?.items() ?? []).filter(item => (FALLBACK_FOOD_POINTS[item.name] ?? 0) > 0 && !NEVER_EAT.has(item.name)
-    && (item.name !== 'rotten_flesh' || food <= 6));
+    && (item.name !== 'rotten_flesh' || food <= 6) && !(mend && (RAW_FOOD.has(item.name) || item.name === 'rotten_flesh')));
   if (wide) {
     // Cooked (or anything not raw) first; raw meat only when that is all there is.
     // Rotten flesh (hunger) comes after raw meat, though it fills more: it is the last resort, not something ready to eat.
@@ -471,6 +538,8 @@ const isLethalToStandIn = (name: unknown) => LETHAL_TO_STAND_IN.has(String(name)
 const LETHAL_TO_STAND_ON = new Set(['lava', 'magma_block', 'fire', 'soul_fire', 'campfire', 'soul_campfire', 'pointed_dripstone']);
 /** The directions the flee may take around the one it prefers, nearest first: no further round than a right angle. */
 const FLEE_TURNS = [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2];
+/** The dragon's retreat may turn further (a cloud on the body has no "away"): a heading that runs toward a source is still left out. */
+const FLEE_TURNS_WIDE = [...FLEE_TURNS, 3 * Math.PI / 4, -3 * Math.PI / 4, Math.PI];
 /** A heading that brings the body more than this much nearer to a threat within TOWARD_RANGE than it is now runs toward it. */
 const TOWARD_RANGE = 10;
 const TOWARD_MARGIN = 0.75;
@@ -668,9 +737,10 @@ function scanHeading(bot: FloorBody, at: Vec3, yaw: number): { safe: boolean; ju
   return { safe: walkHeading(bot, at, yaw, at.y + JUMP_APEX).safe, jump: true };
 }
 
-function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number): { safe: boolean; jump: boolean } {
+/** `route` asks for a complete, loaded walking trace to that distance, rejecting jumps and walls along its whole length. */
+function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number, route?: { distance: number; path: Vec3[] }): { safe: boolean; jump: boolean } {
   const terrain = bot as unknown as TerrainBody;
-  if (typeof terrain.blockAt !== 'function') return { safe: true, jump: false };
+  if (typeof terrain.blockAt !== 'function') return { safe: !route, jump: false };
   const dx = -Math.sin(yaw), dz = -Math.cos(yaw), heading: Heading = { dx, dz };
   let jump = false;
   try {
@@ -678,10 +748,16 @@ function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number): { sa
     const here = terrain.blockAt(new Vec3(Math.floor(at.x), start, Math.floor(at.z)));
     const swimmingNow = holdsWater(here) || (here?.boundingBox !== 'block' && holdsWater(terrain.blockAt(new Vec3(Math.floor(at.x), start + 1, Math.floor(at.z)))));
     let reachesShallow = false, feetY = at.y, fromX = Math.floor(at.x), fromZ = Math.floor(at.z);
+    let traced = 0;
+    const traceTo = (until: number) => {
+      if (!route) return;
+      for (let d = traced + SCAN_SAMPLE; d < until - EDGE; d += SCAN_SAMPLE) route.path.push(new Vec3(at.x + dx * d, feetY, at.z + dz * d));
+    };
     // The cells the line crosses, in order, how far along it each is entered, and the cells beside it that the body's width reaches there.
     const cells: Array<{ cx: number; cz: number; x: number; z: number; d: number; beside: Map<string, [number, number]> }> = [];
     let lastX = fromX, lastZ = fromZ;
-    for (let d = SCAN_SAMPLE; d <= FLEE_LOOKAHEAD + 1e-9; d += SCAN_SAMPLE) {
+    const distance = route?.distance ?? FLEE_LOOKAHEAD;
+    for (let d = SCAN_SAMPLE; d <= distance + 1e-9; d += SCAN_SAMPLE) {
       const x = at.x + dx * d, z = at.z + dz * d, cx = Math.floor(x), cz = Math.floor(z);
       if (cx !== lastX || cz !== lastZ) { cells.push({ cx, cz, x, z, d, beside: new Map() }); lastX = cx; lastZ = cz; }
       const current = cells[cells.length - 1];
@@ -694,8 +770,10 @@ function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number): { sa
     // The height of the feet in each cell passed (the first is where the body is).
     const passed = [{ d: 0, y: at.y }];
     for (const { cx, cz, x, z, d, beside } of cells) {
+      traceTo(d);
       const stand = Math.floor(feetY - 0.01);
       const floor = terrain.blockAt(new Vec3(cx, stand, cz)), feet = terrain.blockAt(new Vec3(cx, stand + 1, cz)), head = terrain.blockAt(new Vec3(cx, stand + 2, cz));
+      if (route && [floor, feet, head].some(block => !block)) return { safe: false, jump };
       if ([floor, feet, head].some(block => isLethalToStandIn(block?.name))) return { safe: false, jump };
       // What the feet would rest on: the floor cell, or the one under it when that is open (a step down).
       const resting = floor && floor.boundingBox === 'block' ? floor : terrain.blockAt(new Vec3(cx, stand - 1, cz));
@@ -707,11 +785,12 @@ function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number): { sa
       if (!swim) reachesShallow = true;
       // A wall in the first two blocks: the run would be into it. (Further on the flee has stopped by then, and the frame is left as it is.)
       const column = readColumn(terrain, cx, cz, fromX, fromZ, stand, feetY, [floor, feet, head], heading);
-      if (column.kind === 'wall' && d <= 2) return { safe: false, jump };
+      if (column.kind === 'wall' && (route || d <= 2)) return { safe: false, jump };
       // Any drop that would cost health (more than three blocks, or lava below), judged as the edge guard does with one point to spare,
       // from the floor the body stands on at the cell before: a slope is a row of small drops, not one big one.
       if (!blockSpan(floor, heading) && edgeRisk(bot as any, x, feetY, z, 1) !== null) return { safe: false, jump };
       if (column.kind === 'ground') {
+        if (route && column.jump) return { safe: false, jump: true };
         if (!groundIsSafe(terrain, cx, cz, column.top) || descentIsDangerous(passed, d, column.top, apex)) return { safe: false, jump };
         if (column.jump && d <= 2) jump = true;
         feetY = column.top;
@@ -723,10 +802,14 @@ function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number): { sa
         if (down.top !== null) feetY = down.top;
       }
       passed.push({ d, y: feetY });
+      route?.path.push(new Vec3(x, feetY, z));
+      traced = d;
       fromX = cx; fromZ = cz;
     }
     if (swimmingNow && !reachesShallow) return { safe: false, jump };
-  } catch { return { safe: true, jump: false }; }
+    traceTo(distance);
+    if (route) route.path.push(new Vec3(at.x + dx * distance, feetY, at.z + dz * distance));
+  } catch { return { safe: !route, jump: false }; }
   return { safe: true, jump };
 }
 
@@ -799,21 +882,25 @@ export function fleeHeading(bot: FloorBody, from: Vec3 | Vec3[], previous?: numb
 /** With several threats the previous heading is kept while it is still safe and within this angle of the new push: no zigzag as the push shifts. */
 const HEADING_HOLD = Math.PI / 4 + 1e-9;
 const angleBetween = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
-/** `fleeHeading`, with whether the body must jump to follow it (a whole block to climb a step or two ahead). `previous` is the last heading of the run. */
-export function fleeHeadingPlan(bot: FloorBody, from: Vec3 | Vec3[], previous?: number): { yaw: number; jump: boolean } | null {
+/**
+ * `fleeHeading`, with whether the body must jump to follow it (a whole block to climb a step or two ahead). `previous` is the last heading of the run.
+ * `noJump` (the dragon's reach: a body in the air cannot step aside) takes only a heading that is walked on the level.
+ */
+export function fleeHeadingPlan(bot: FloorBody, from: Vec3 | Vec3[], previous?: number, options: { noJump?: boolean; wide?: boolean } = {}): { yaw: number; jump: boolean } | null {
   const at = bot.entity?.position; if (!at) return null;
   const sources = Array.isArray(from) ? from : [from];
   if (!sources.length) return null;
   const away = repulsionYaw(at, sources);
+  const allowed = (scan: { safe: boolean; jump: boolean }) => scan.safe && !(options.noJump && scan.jump);
   if (previous !== undefined && sources.length > 1 && angleBetween(previous, away) <= HEADING_HOLD && !runsToward(at, previous, sources)) {
     const held = scanHeading(bot, at, previous);
-    if (held.safe) return { yaw: previous, jump: held.jump };
+    if (allowed(held)) return { yaw: previous, jump: held.jump };
   }
-  for (const turn of FLEE_TURNS) {
+  for (const turn of options.wide ? FLEE_TURNS_WIDE : FLEE_TURNS) {
     const yaw = away + turn;
     if (turn !== 0 && runsToward(at, yaw, sources)) continue;
     const scan = scanHeading(bot, at, yaw);
-    if (scan.safe) return { yaw, jump: scan.jump };
+    if (allowed(scan)) return { yaw, jump: scan.jump };
   }
   return null;
 }
@@ -825,6 +912,15 @@ export interface FleeThreat { from: Vec3; threats: Vec3[]; nearest: number }
  * The threats to run from at low health: every `isThreat` entity that can get at the body (not walled off) within the flee's range, which is
  * wider for a kind that shoots, and wider once an episode is running (`keeping`: so that the body is not let go at 8.1 m). Null above FLEE_HEALTH.
  */
+/**
+ * Shooters that hold their place and fire only at what they see (utils/huntBlaze: a blaze goes after a body it has lost sight of for a fifth of a second and no longer; a ghast does not
+ * go after one at all). S2 (2026-11-02, the c1 hideout): at eight hearts the body rested in a corridor no blaze of the spawner can see, a blaze twelve metres off "could reach" it, and the flee
+ * found no way and the last stand dug the floor out from under it seven times. Out of such a shooter's sight, farther than this, it is no threat that can get at the body.
+ */
+const SIGHT_ONLY_SHOOTERS = new Set(['blaze', 'ghast']);
+const SIGHT_ONLY_NEAR_M = 6;
+const outOfSightOfAShooter = (name: string, exposure: string, distance: number): boolean => SIGHT_ONLY_SHOOTERS.has(name) && exposure !== 'seen' && distance > SIGHT_ONLY_NEAR_M;
+
 export function fleeThreat(bot: FloorBody, keeping = false): FleeThreat | null {
   const health = bot.health ?? 20, at = bot.entity?.position;
   if (!at || !(health > 0 && health <= FLEE_HEALTH) || bot.entity?.isInLava) return null;
@@ -836,7 +932,10 @@ export function fleeThreat(bot: FloorBody, keeping = false): FleeThreat | null {
     const distance = entity.position.distanceTo(at);
     if (distance > range) continue;
     let sealed = false;
-    try { sealed = threatExposure(bot as any, entity as any) === 'sealed'; } catch { sealed = false; }
+    try {
+      const exposure = threatExposure(bot as any, entity as any);
+      sealed = exposure === 'sealed' || outOfSightOfAShooter(name, exposure, distance);
+    } catch { sealed = false; }
     if (!sealed) found.push({ distance, position: entity.position });
   }
   if (!found.length) return null;
@@ -968,6 +1067,143 @@ export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs =
   return { success: true, result: ticks > 0 ? '低体力のため敵から離れた' : '離れる必要がなくなった（または安全な逃げ道がない）', moved, ended };
 }
 
+// ===== The dragon's reach =====
+
+/**
+ * Out of the dragon's breath, its fireball's line and the boxes of its perch (`dragonHazards`), one run on the level. Unlike the low-health
+ * flee it never jumps, never sprints and lays nothing: a body in the air cannot step aside from a fireball, a sprint ends a blow's wait, and a
+ * block laid in the End takes the seconds the cloud does not give. It goes on until the body is DRAGON_CLEARANCE clear of every zone, at most
+ * DRAGON_RETREAT_TICKS ticks or DRAGON_RETREAT_BLOCKS blocks; no heading that is safe and level is `blocked`.
+ */
+const DRAGON_RETREAT_TICKS = 60;
+const DRAGON_RETREAT_BLOCKS = 14;
+const DRAGON_CLEARANCE = 1.5;
+const DRAGON_GAP_MS = 150;
+const DRAGON_BLOCKED_GAP_MS = 1500;
+/**
+ * A ball in the air, or just down with its cloud not yet in the client's entities (a few ticks), decides at the next tick what is done: lab 2026-11-02 (w4), the blocked gap set at the ball's flight held the
+ * rise back 1.5 s, into the cloud's first harm (it comes 20 ticks after the cloud is laid) and the knock of it.
+ */
+const DRAGON_COMING_GAP_MS = 60;
+const DRAGON_NOTE_GAP_MS = 5000;
+/**
+ * A block under the feet to rise out of a cloud: a cloud a fireball lays is put on whatever stands within 4 blocks of where it fell, at that thing's height (DragonFireball.onHit), so a body that rose before
+ * the ball came is under the cloud again; the rise is for a cloud that lies, or that a ball gone from sight has just laid (it is laid in the tick the ball goes, the client sees it a few ticks later, and its
+ * first harm comes 20 ticks after). Another a moment later is for the cloud laid at the new height; at most DRAGON_RISE_MAX in DRAGON_RISE_WINDOW_MS.
+ */
+const DRAGON_RISE_GAP_MS = 1200;
+const DRAGON_RISE_MAX = 3;
+const DRAGON_RISE_WINDOW_MS = 20_000;
+const DRAGON_DETAIL_MAX = 160;
+/**
+ * Only after the ordinary retreat has no heading, and only inside an existing cloud: walk to the nearest reachable horizontal edge.
+ * The usual centre repulsion can veto every turn (including a turn through a wing); it is not a test of the hazards along a route.
+ * Here wings may be crossed, but head/neck contact, predicted breath and any newly entered cloud or fireball line may not.
+ * A fireball line already on the body may only be left, never approached.
+ * The whole route is read at its ground height, without jumping, to the cloud's edge plus the usual clearance (not just the 5 m look-ahead).
+ */
+export function dragonCloudEscapePlan(bot: FloorBody, hazards: Hazard[], previous?: number, continuing?: readonly Hazard[]): { yaw: number; jump: false; cloudEscape: readonly Hazard[] } | null {
+  const at = bot.entity?.position;
+  if (!at) return null;
+  const sameCloud = (a: Hazard, b: Hazard) => a.centre.x === b.centre.x && a.centre.y === b.centre.y && a.centre.z === b.centre.z;
+  const clouds = hazards.filter(h => h.kind === 'breath' && !h.pending && (continuing ? continuing.some(c => sameCloud(c, h)) : cloudReaches(h.centre, h.radius, at)));
+  if (!clouds.length) return null;
+  const headings = clouds.flatMap(cloud => {
+    const away = Math.atan2(cloud.centre.x - at.x, cloud.centre.z - at.z);
+    return Array.from({ length: 16 }, (_, i) => away + i * Math.PI / 8);
+  });
+  if (previous !== undefined) headings.push(previous);
+  const candidates = headings.map(yaw => {
+    const dx = -Math.sin(yaw), dz = -Math.cos(yaw);
+    const distance = Math.max(...clouds.map(cloud => {
+      const x = at.x - cloud.centre.x, z = at.z - cloud.centre.z, along = x * dx + z * dz;
+      return -along + Math.sqrt(along * along + (cloud.radius + DRAGON_CLEARANCE) ** 2 - x * x - z * z);
+    }));
+    return { yaw, distance };
+  }).filter(c => c.distance <= DRAGON_RETREAT_BLOCKS)
+    .sort((a, b) => a.distance - b.distance || (previous === undefined ? 0 : angleBetween(a.yaw, previous) - angleBetween(b.yaw, previous)));
+  let best: { yaw: number; distance: number; wings: number } | null = null;
+  for (const candidate of candidates) {
+    if (best && candidate.distance > best.distance + 1e-6) break;
+    const path: Vec3[] = [at.clone()];
+    const distance = Math.ceil((candidate.distance + SCAN_SAMPLE) / SCAN_SAMPLE) * SCAN_SAMPLE;
+    const ground = walkHeading(bot, at, candidate.yaw, undefined, { distance, path });
+    if (!ground.safe || ground.jump) continue;
+    const crossed = dragonHazards(bot, { along: path });
+    if (crossed.some(h => {
+      if (h.kind === 'wing') return false;
+      if (h.kind === 'fireball') return !exitsFireballLine(h, path);
+      return !(h.kind === 'breath' && !h.pending && clouds.some(c => sameCloud(c, h)));
+    })) continue;
+    const wings = crossed.filter(h => h.kind === 'wing').length;
+    if (!best || wings < best.wings) best = { yaw: candidate.yaw, distance: candidate.distance, wings };
+    if (!wings) break;
+  }
+  return best ? { yaw: best.yaw, jump: false, cloudEscape: clouds } : null;
+}
+/** Preserve a successful ordinary retreat; use the cloud escape only when it would otherwise stop. */
+function dragonRetreatPlan(bot: FloorBody, hazards: Hazard[], previous?: number, continuing?: readonly Hazard[]): { yaw: number; jump: boolean; cloudEscape?: readonly Hazard[] } | null {
+  if (continuing) {
+    const escape = dragonCloudEscapePlan(bot, hazards, previous, continuing);
+    if (escape) return escape;
+    // A newly blocked route must stop; do not substitute an unchecked ordinary turn while still in the cloud.
+    if (hazards.some(h => h.kind === 'breath')) return null;
+  }
+  return fleeHeadingPlan(bot, hazardCentres(hazards), previous, { noJump: true, wide: true }) ?? dragonCloudEscapePlan(bot, hazards, previous);
+}
+export async function runDragonRetreat(bot: FloorBody, port: FloorBody, tickMs = 50): Promise<{ success: boolean; result: string; moved: number; ended: 'clear' | 'blocked' | 'cap' }> {
+  const origin = bot.entity!.position.clone(), memory: { heading?: number; cloudEscape?: readonly Hazard[] } = {};
+  let ticks = 0, ended: 'clear' | 'blocked' | 'cap' = 'cap';
+  try {
+    for (; ticks < DRAGON_RETREAT_TICKS; ticks++) {
+      const body = bot.entity;
+      const hazards = body && bot.lavaReflex?.engaged !== true && bot.breathingReflex?.engaged !== true ? dragonHazards(bot, { clearance: ticks === 0 ? 0 : DRAGON_CLEARANCE }) : [];
+      if (!hazards.length) { ended = 'clear'; break; }
+      if (body!.position.distanceTo(origin) >= DRAGON_RETREAT_BLOCKS) break;
+      const plan = dragonRetreatPlan(bot, hazards, memory.heading, memory.cloudEscape);
+      if (!plan) { ended = 'blocked'; break; }
+      memory.heading = plan.yaw;
+      memory.cloudEscape = plan.cloudEscape;
+      port.look?.(plan.yaw, 0, true);
+      port.setControlState('forward', true); port.setControlState('sprint', false); port.setControlState('jump', false);
+      await new Promise(resolve => setTimeout(resolve, tickMs));
+    }
+  } finally {
+    try { releaseKeys(port); } catch { /* ownership lost: the new owner holds the keys */ }
+  }
+  const moved = bot.entity ? bot.entity.position.distanceTo(origin) : 0;
+  return { success: true, result: ended === 'blocked' ? '竜の危険から離れる安全な道が無かった' : ticks > 0 ? '竜の危険から離れた' : '離れる必要がなくなった', moved, ended };
+}
+
+/**
+ * A body at the front edge of a bridge (lab 2026-11-02, w12: the go had it leaning over the cell in front of the last block it laid) stands on the block behind with its middle over a cell that has no
+ * floor: the feet cell reads air under it, and no block can be laid there. It is moved onto the cell that holds it (half a block at most) before it rises. Nothing is done where the feet cell has a floor.
+ */
+async function settleOnFloor(bot: FloorBody, port: FloorBody): Promise<void> {
+  const feet = feetCell(bot as never), body = bot.entity;
+  if (!feet || !body) return;
+  const read = bodyReader(bot as never);
+  const solid = (x: number, y: number, z: number) => read(x, y, z)?.solid === true;
+  if (solid(feet.x, feet.y - 1, feet.z)) return;
+  const here = body.position;
+  const aside = ([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).map(([dx, dz]) => ({ x: feet.x + dx, z: feet.z + dz }))
+    .filter(cell => solid(cell.x, feet.y - 1, cell.z) && !solid(cell.x, feet.y, cell.z) && !solid(cell.x, feet.y + 1, cell.z))
+    .sort((a, b) => Math.hypot(a.x + 0.5 - here.x, a.z + 0.5 - here.z) - Math.hypot(b.x + 0.5 - here.x, b.z + 0.5 - here.z))[0];
+  if (!aside) return;
+  try {
+    port.look?.(Math.atan2(-(aside.x + 0.5 - here.x), -(aside.z + 0.5 - here.z)), 0, true);
+    port.setControlState('forward', true); port.setControlState('sprint', false); port.setControlState('jump', false);
+    for (let tick = 0; tick < SETTLE_TICKS; tick++) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const now = feetCell(bot as never);
+      if (now && now.x === aside.x && now.z === aside.z) break;
+    }
+  } finally {
+    try { releaseKeys(port); } catch { /* ownership lost: the new owner holds the keys */ }
+  }
+}
+const SETTLE_TICKS = 8;
+
 // ===== The last stand =====
 
 /**
@@ -981,6 +1217,12 @@ const LAST_STAND_RANGE = 3.2;
 const LAST_STAND_HITS = 2;
 const LAST_STAND_HIT_GAP_MS = 600;
 const LAST_STAND_GAP_MS = 1500;
+/**
+ * S2 (2026-11-02, the c1 fortress): at low health the cover (three digs an episode) and the last stand (one a second and a half, no end) dug a shaft six deep under a bridge in ten seconds, and the
+ * body fell out of it to its death. The floor's own digs down are at most this many in this long, the two kinds together.
+ */
+const ESCAPE_DIGS_MAX = 3, ESCAPE_DIG_WINDOW_MS = 30_000;
+export const recentEscapeDigs = (state: { escapeDigs?: number[] }, at: number): number => (state.escapeDigs = (state.escapeDigs ?? []).filter(when => at - when <= ESCAPE_DIG_WINDOW_MS)).length;
 /** r10: `reflexHeld` holds this long past the gap (the next hand comes on the first tick after it). */
 const LAST_STAND_HOLD_MARGIN_MS = 150;
 /** A creeper's fuse is a second and a half: a cornered body that cannot make its stand by then has no stand to make. */
@@ -1014,7 +1256,9 @@ export type LastStand =
 
 /** Whole blocks a wall or a pillar can be made of (build-around-self's BUILDING_BLOCKS, without importing the skill here). */
 const WALL_BLOCKS = new Set(['cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'blackstone',
-  'tuff', 'basalt', 'nether_bricks', 'stone_bricks', 'end_stone', 'dirt', 'netherrack']);
+  'tuff', 'basalt', 'nether_bricks', 'stone_bricks', 'end_stone', 'obsidian', 'dirt', 'netherrack']);
+/** The End's own: the dragon flies through every other block, and cannot break these two. A body with both uses them before the rest. */
+const DRAGON_PROOF_BLOCKS = ['obsidian', 'end_stone'];
 /** Whole blocks a last-stand pillar is made of: those and any planks. */
 const isPillarBlock = (name: string) => WALL_BLOCKS.has(name) || name.endsWith('_planks');
 const isFluid = (name: unknown) => name === 'water' || name === 'lava';
@@ -1040,7 +1284,7 @@ export function reachingThreats(bot: FloorBody): Array<{ entity: FloorEntity; di
     if (distance > (shooter ? FLEE_RANGE_SHOOTER : FLEE_RANGE)) continue;
     let exposure: ReturnType<typeof threatExposure>;
     try { exposure = threatExposure(bot as any, entity as any, Date.now(), { fresh: true }); } catch { exposure = 'reachable'; }
-    if (exposure !== 'sealed') out.push({ entity, distance, exposure });
+    if (exposure !== 'sealed' && !outOfSightOfAShooter(name, exposure, distance)) out.push({ entity, distance, exposure });
   }
   return out.sort((a, b) => a.distance - b.distance);
 }
@@ -1067,6 +1311,8 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
     if (!(under && below && under.boundingBox === 'block' && under.diggable !== false && !isFluid(under.name) && !isHazardousToStandOn(under.name)
       && !['bedrock', 'barrier', 'end_portal_frame', 'reinforced_deepslate'].includes(String(under.name)) && !PROTECTED_UTILITY_BLOCKS.has(String(under.name))
       && below.boundingBox === 'block' && !isHazardousToStandOn(below.name))) return null;
+    // S2 (2026-11-02, S4's c1 trial: the fortress's nether bricks and no pickaxe carried): the dig hand refuses a block that nothing carried can harvest at once, and the one stand in 1.5 s was spent on it.
+    if (!creeper && (under as { harvestTools?: unknown }).harvestTools && !items.some(item => canHarvest(under as never, item as never))) return null;
     if (creeper) {
       // Too slow to be a hole before the blast (stone by hand is seconds): not this way. Unknown (no digTime): taken.
       let ms: number | null = null;
@@ -1110,14 +1356,25 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
   }
   // (c) One block up: a full block carried, and the two cells over the head are air.
   if (skip !== 'pillar') {
-    const block = items.filter(item => isPillarBlock(item.name)).reduce<{ name: string; count: number } | null>((best, item) => {
-      const count = (item as { count?: number }).count ?? 1;
-      return !best || count > best.count ? { name: item.name, count } : best;
-    }, null);
-    const open = (dy: number) => { const cell = read(dy); return !!cell && cell.boundingBox !== 'block' && !isFluid(cell.name) && !isHazardousToStandOn(cell.name); };
-    if (block && open(2) && open(3)) return { kind: 'pillar', block: block.name, detail: `${lead} 1段積んで上がった ${where}${fact}` };
+    const block = pillarBlockAt(bot, feet, items);
+    if (block) return { kind: 'pillar', block, detail: `${lead} 1段積んで上がった ${where}${fact}` };
   }
   return null;
+}
+
+/**
+ * The block a pillar of one is made of: a full block carried, with the two cells over the head open. In the End the dragon's own two (obsidian, end stone) go first: it flies
+ * through every other block and breaks it. Null: none carried, or no room.
+ */
+export function pillarBlockAt(bot: FloorBody, feet: { x: number; y: number; z: number }, items: Item[] = bot.inventory?.items() ?? []): string | null {
+  const inEnd = isEnd(bot);
+  const block = items.filter(item => isPillarBlock(item.name)).reduce<{ name: string; count: number; rank: number } | null>((best, item) => {
+    const count = (item as { count?: number }).count ?? 1, rank = (inEnd && DRAGON_PROOF_BLOCKS.includes(item.name) ? 1_000_000 : 0) + count;
+    return !best || rank > best.rank ? { name: item.name, count, rank } : best;
+  }, null);
+  const read = (dy: number) => (bot as unknown as TerrainBody).blockAt?.(new Vec3(feet.x, feet.y + dy, feet.z)) as FleeBlock | null | undefined;
+  const open = (dy: number) => { const cell = read(dy); return !!cell && cell.boundingBox !== 'block' && !isFluid(cell.name) && !isHazardousToStandOn(cell.name); };
+  return block && open(2) && open(3) ? block.name : null;
 }
 
 /** Runs a last stand as the work of a safety-lease action: `port` is the body's motor port, so a stronger reflex taking the body ends it. */
@@ -1166,7 +1423,8 @@ export async function runLastStand(bot: FloorBody, port: FloorBody, stand: LastS
  * keeps losing health and is still seen:
  *   (a) a step of one or two cells (walked as the walk walks) to a cell no shooter in reach sees;
  *   (b) a block over the head, when the body stands in a hole and that block is what the lines come through (a full block carried);
- *   (c) the cell under the feet dug, when the cell under it holds the body and no lava runs in (at most three in a row).
+ *   (c) the cell under the feet dug, when the landing holds the body, a safe climb back exists, fewer sight lines remain and no lava runs in (at most three in a row);
+ *   (r) S2: burning with a shooter within COVER_RUN_NEAR, or after a dig that did not lower the body, a run away along the flee's safe heading (before the dig).
  * No way round, no place chosen further than two cells. The act running stops (its lease is taken), and the ledger says what the body did
  * and whether the line is cut, with the shooters still seeing it.
  */
@@ -1180,8 +1438,19 @@ const COVER_EPISODE_MS = 4000;
 const COVER_MAX_DIGS = 3;
 /** "No hand to make" is told at most this often. */
 const COVER_NOTE_GAP_MS = 5000;
-const COVER_TIMEOUT_MS: Record<Cover['kind'], number> = { step: 3000, seal: 3000, line: 3000, dig: 5000 };
+const COVER_TIMEOUT_MS: Record<Cover['kind'], number> = { step: 3000, seal: 3000, line: 3000, dig: 5000, run: 3500 };
 const COVER_DETAIL_MAX = 160;
+/**
+ * S2 (2026-11-04, lab c1 blaze_raid): burning among three blazes 0.5 to 5 m off, the cover dug the floor; a fireball threw the body 1.3 cells off
+ * the dug column, the drop was not there (did_not_drop), and the next hand dug again beside it. 12.8 to 0 in 4.6 s. Blazes that near hover over
+ * a pit and look into it. Burning with a shooter within COVER_RUN_NEAR, or once a dig of the episode did not lower the body, the hand is a run
+ * (the flee's safe heading, away from every shooter in reach) of COVER_RUN_BLOCKS at most, until no shooter sees the body; a dig is not made
+ * again in that episode. A dig that leaves the body beside its hole steps it back in (COVER_STEP_IN_REACH at most).
+ */
+const COVER_RUN_NEAR = 6;
+const COVER_RUN_BLOCKS = 10;
+const COVER_RUN_TICKS = 60;
+const COVER_STEP_IN_REACH = 1.6;
 /**
  * r10 (run 34, +488 to +502): a piglin with a crossbow stood 5.9 to 7 m off, in sight of a body in a rock tunnel, and hit it six times in 14 s
  * (health 20 to 11.3). The cover moved only for a burning body, the melee hand only for an enemy within 4 m; the line was cut 29 s after the
@@ -1207,7 +1476,9 @@ export type Cover =
   | { kind: 'seal'; cell: { x: number; y: number; z: number }; block: string; detail: string }
   /** r10: a block in a cell on the shooters' line, a cell or two from the body (shot at from afar). */
   | { kind: 'line'; cell: { x: number; y: number; z: number }; block: string; detail: string }
-  | { kind: 'dig'; cell: { x: number; y: number; z: number }; detail: string };
+  | { kind: 'dig'; cell: { x: number; y: number; z: number }; detail: string }
+  /** S2 (lab c1): burning with a shooter within COVER_RUN_NEAR, or after a dig that did not lower the body: a sprint away along the flee's safe heading. */
+  | { kind: 'run'; ids: number[]; detail: string };
 
 const centreOf = (cell: { x: number; y: number; z: number }) => new Vec3(cell.x + 0.5, cell.y, cell.z + 0.5);
 const cellWords = (cell: { x: number; y: number; z: number }) => `(${cell.x},${cell.y},${cell.z})`;
@@ -1288,7 +1559,7 @@ export function recentShots(bot: FloorBody, state: FloorState, feet: Vec3, t: nu
  * feet not to be dug. `digs` is how many the episode has made. With `options.line` (the body is being shot at from afar), a block on the
  * line that closes every open sight line is taken before the dig; one that closes some, only when no dig can be made.
  */
-export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, options: { line?: boolean; lines?: number } = {}): { cover: Cover | null; why: string } {
+export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, options: { line?: boolean; lines?: number; burning?: boolean; noDig?: boolean } = {}): { cover: Cover | null; why: string } {
   const feet = feetCell(bot as never);
   if (!feet || !shooters.length) return { cover: null, why: '射手がいない' };
   const read = bodyReader(bot as never);
@@ -1358,13 +1629,31 @@ export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, 
       if (!found) lineWhy = '線上の 1 マスでは見える線が減らない（当てる面が無いか、すでに塞がっている）';
     }
   }
-  // (c) The cell under the feet dug: the body goes down one, onto the cell under it (solid, not lava or magma); no lava beside or under
-  // the dug cell (it would run in onto the body); at most COVER_MAX_DIGS in an episode.
+  // (r) S2: burning with a shooter that near (it hovers over a pit and looks in), or a dig of the episode that did not lower the body: away
+  // along the flee's safe heading (no lava, no drop), before any dig.
+  let runWhy = '';
+  const nearest = watching[0];
+  if (options.burning || options.noDig) {
+    if (!options.noDig && nearest.distance > COVER_RUN_NEAR) runWhy = `一番近い射手まで ${nearest.distance.toFixed(1)}m（走らない）`;
+    else {
+      let plan: { yaw: number; jump: boolean } | null = null;
+      try { plan = fleeHeadingPlan(bot, watching.map(({ entity }) => entity.position)); } catch { plan = null; }
+      if (plan) {
+        const ids = watching.map(({ entity }) => entity.id).filter((id): id is number => typeof id === 'number');
+        const reason = options.noDig ? '掘っても下がれなかったので' : `燃えて射手が ${nearest.distance.toFixed(1)}m にいるので`;
+        return { cover: { kind: 'run', ids, detail: `${reason}走って離れた ${cellWords(feet)}から` }, why: '' };
+      }
+      runWhy = '走って離れる安全な向きが無い';
+    }
+  }
+  // (c) One step down, judged with that floor removed: a loaded, safe landing, a one-step climb back to the original height, and fewer
+  // open sight lines. No lava may run in, and at most COVER_MAX_DIGS in an episode. Other escape/last-stand digs keep their own rules.
   const terrain = bot as unknown as TerrainBody;
   const under = terrain.blockAt?.(new Vec3(feet.x, feet.y - 1, feet.z)) as (FleeBlock & { diggable?: boolean }) | null | undefined;
   const below = terrain.blockAt?.(new Vec3(feet.x, feet.y - 2, feet.z));
   let digWhy = '';
-  if (digs >= COVER_MAX_DIGS) digWhy = `足元はもう ${digs} 段掘った`;
+  if (options.noDig) digWhy = 'この間に掘ったが下がれなかった（もう掘らない）';
+  else if (digs >= COVER_MAX_DIGS) digWhy = `足元はもう ${digs} 段掘った`;
   else if (!(under && under.boundingBox === 'block' && under.diggable !== false && !isFluid(under.name) && !isHazardousToStandOn(under.name)
     && !['bedrock', 'barrier', 'end_portal_frame', 'reinforced_deepslate'].includes(String(under.name)) && !PROTECTED_UTILITY_BLOCKS.has(String(under.name)))) {
     digWhy = `足元 ${cellWords({ ...feet, y: feet.y - 1 })} は ${under?.name ?? '未ロード'}（掘らない）`;
@@ -1373,12 +1662,51 @@ export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, 
     let lava: Vec3 | null = null;
     try { lava = lavaReleasedBy(bot as never, new Vec3(feet.x, feet.y - 1, feet.z)); } catch { lava = null; }
     if (lava) digWhy = `足元の隣 ${cellWords(lava)} が溶岩`;
-    else return { cover: { kind: 'dig', cell: { x: feet.x, y: feet.y - 1, z: feet.z }, detail: `足元を掘って下がった ${cellWords(feet)}` }, why: '' };
+    else {
+      const down = { ...feet, y: feet.y - 1 };
+      const after: typeof read = (x, y, z) => x === down.x && y === down.y && z === down.z ? { name: 'air', solid: false } : read(x, y, z);
+      const afterClosed = (x: number, y: number, z: number) => { const b = after(x, y, z); return !b || b.solid === true; };
+      const landing = standableAt(after, down);
+      if (!landing.ok || !standable(after, down.x, down.y, down.z)) digWhy = `掘った先 ${cellWords(down)} に立てない（${landing.ok ? '床の形が足場にならない' : landing.why}）`;
+      else {
+        // A direct cardinal climb needs head room above the pit and an actual floor at the old height; no new dig/place is assumed.
+        const back = enterable(after(down.x, down.y + 2, down.z)) && COVER_STEP_DIRS.some(([dx, dz]) => {
+          if (dx !== 0 && dz !== 0) return false;
+          const to = { x: feet.x + dx, y: feet.y, z: feet.z + dz };
+          return standableAt(after, to).ok && standable(after, to.x, to.y, to.z)
+            && climbRise(after, down.x, down.y, down.z, to.x, to.z) <= MAX_CLIMB + 1e-9;
+        });
+        if (!back) digWhy = '掘った先から元の高さの安全な足場へ戻れない';
+        else {
+          const count = (at: Vec3, solidAt: typeof closed) => watching.reduce((sum, { entity }) => sum + openSightLines(bot as any, entity as any, at, solidAt), 0);
+          const before = count(centreOf(feet), closed), left = count(centreOf(down), afterClosed);
+          if (left >= before) digWhy = `下がっても見える線が減らない（${before}→${left}）`;
+          else {
+            // Standing across two cells, the other one holds the body up after the dig: the hand centres it in the dug column first (runCover).
+            const holds = supportCells(bot, feet.y, closed).length;
+            const across = holds > 1 ? `・${holds} マスにまたがって立っていたので真ん中に寄ってから` : '';
+            return { cover: { kind: 'dig', cell: down, detail: `足元を掘って下がった ${cellWords(feet)}（見える線 ${before}→${left}${across}）` }, why: '' };
+          }
+        }
+      }
+    }
   }
   if (partial && block) {
     return { cover: { kind: 'line', cell: partial.cell, block: block.name, detail: `線上の ${cellWords(partial.cell)} を ${block.name} で塞いだ（見える線 ${partial.before}→${partial.left}）` }, why: '' };
   }
-  return { cover: null, why: `周り 2 マスに見えない立つ所が無い・${sealWhy}${lineWhy && lineWhy !== sealWhy ? `・${lineWhy}` : ''}・${digWhy}` };
+  return { cover: null, why: `周り 2 マスに見えない立つ所が無い・${sealWhy}${lineWhy && lineWhy !== sealWhy ? `・${lineWhy}` : ''}${runWhy ? `・${runWhy}` : ''}・${digWhy}` };
+}
+
+/** The solid cells one level under `feetY` that the body's box (half-width 0.3) stands on: what holds it up when its own floor is dug. */
+export function supportCells(bot: FloorBody, feetY: number, closed = solidReader(bot)): Array<{ x: number; y: number; z: number }> {
+  const at = bot.entity?.position;
+  if (!at) return [];
+  const out: Array<{ x: number; y: number; z: number }> = [];
+  for (const dx of [-0.299, 0.299]) for (const dz of [-0.299, 0.299]) {
+    const x = Math.floor(at.x + dx), z = Math.floor(at.z + dz);
+    if (!out.some(cell => cell.x === x && cell.z === z) && closed(x, feetY - 1, z)) out.push({ x, y: feetY - 1, z });
+  }
+  return out;
 }
 
 /**
@@ -1391,6 +1719,11 @@ function lineChoice(bot: FloorBody, read: ReturnType<typeof bodyReader>, closed:
   const at = centreOf(feet);
   const origins = [at.offset(0, 1.62, 0), at.offset(0, 0.9, 0)];
   const cells = new Map<string, { cell: { x: number; y: number; z: number }; near: number }>();
+  // The body's own cells, its box sampled as the place hand does (utils/primitives/place bodyCells): standing across two cells, the other one is its own too
+  // (S2 lab raid2: the line tried the feet's neighbour four times, the place hand refused it each time, and the body burned).
+  const pos = bot.entity?.position ?? at;
+  const own = new Set<string>();
+  for (const dx of [-0.3, 0.3]) for (const dz of [-0.3, 0.3]) for (const dy of [0, 0.9, 1.79]) own.add(`${Math.floor(pos.x + dx)},${Math.floor(pos.y + dy)},${Math.floor(pos.z + dz)}`);
   for (const { entity } of watching) {
     const eyes = entity.position.offset(0, (entity.height ?? 1.8) * 0.85, 0);
     for (const from of origins) {
@@ -1400,8 +1733,8 @@ function lineChoice(bot: FloorBody, read: ReturnType<typeof bodyReader>, closed:
       for (let s = 0.25; s <= LINE_REACH && s < span; s += 0.25) {
         const p = from.plus(step.scaled(s));
         const cell = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
-        if (cell.x === feet.x && cell.z === feet.z && (cell.y === feet.y || cell.y === feet.y + 1)) continue;
         const key = `${cell.x},${cell.y},${cell.z}`, old = cells.get(key);
+        if (own.has(key) || (cell.x === feet.x && cell.z === feet.z && (cell.y === feet.y || cell.y === feet.y + 1))) continue;
         if (!old || s < old.near) cells.set(key, { cell, near: s });
       }
     }
@@ -1426,7 +1759,8 @@ function lineChoice(bot: FloorBody, read: ReturnType<typeof bodyReader>, closed:
 }
 
 /** Runs one hand of the cover as the work of a safety-lease action (`port` is the body's motor port). */
-export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, timeoutMs = COVER_TIMEOUT_MS[cover.kind]): Promise<{ success: boolean; result: string }> {
+export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, timeoutMs = COVER_TIMEOUT_MS[cover.kind], tickMs = 50): Promise<{ success: boolean; result: string }> {
+  if (cover.kind === 'run') return runCoverRun(bot, port, cover, tickMs);
   const base = feetCell(bot as never) ?? { x: 0, y: 0, z: 0 };
   const ctx = { bot: port, stop: new AbortController().signal, deadline: Date.now() + timeoutMs, facing: 'north' as const, base };
   if (cover.kind === 'step') {
@@ -1445,16 +1779,80 @@ export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, ti
   if (cover.cell.x !== base.x || cover.cell.z !== base.z || cover.cell.y !== base.y - 1) {
     return { success: false, result: '足元を掘る前に体が別のマスへ移った（掘らない）' };
   }
-  const { centreInColumn, waitDropOne } = await import('./tunnelWalk.js');
+  const { centreInColumn } = await import('./tunnelWalk.js');
   const feet = new Vec3(base.x, base.y, base.z);
   const centred = await centreInColumn(port as never, feet);
   if (centred) return { success: false, result: `足元の真ん中に立てない（${centred}。掘らない）` };
+  // Every cell that holds the body up: one other than the dug one leaves it standing on the rim.
+  const rim = supportCells(bot, base.y).filter(cell => cell.x !== cover.cell.x || cell.z !== cover.cell.z);
+  if (rim.length) return { success: false, result: `足元の隣 ${rim.map(cellWords).join('・')} にも乗っている（掘らない）` };
   const outcome = await dig(ctx as never, { at: [cover.cell], collect: false, exposeOk: true });
   if (outcome.ok) {
-    const dropped = await waitDropOne(port as never, feet);
+    const dropped = await dropIntoHole(bot, port, feet);
     if (dropped) return { success: false, result: `足元を掘ったが一段下がっていない（${dropped}）` };
   }
   return { success: outcome.ok, result: outcome.text };
+}
+
+/**
+ * S2 (lab c1): waits (1.5 s at most) for the body to drop into the dug column under `feet`; a body thrown off it (a fireball's knock) but still
+ * on the old level within COVER_STEP_IN_REACH walks back over it (no sneak, which would hold it on the rim). Null when it dropped, else why not.
+ */
+async function dropIntoHole(bot: FloorBody, port: FloorBody, feet: Vec3): Promise<string | null> {
+  const centre = feet.offset(0.5, 0, 0.5);
+  const deadline = Date.now() + 1500;
+  let walking = false, stepped = false;
+  try {
+    while (Date.now() < deadline) {
+      const body = bot.entity;
+      if (!body || actionSignal(port as never)?.aborted) break;
+      const at = body.position;
+      if (Math.floor(at.y) < feet.y && body.onGround !== false) break;
+      const dx = centre.x - at.x, dz = centre.z - at.z;
+      const want = Math.max(Math.abs(dx), Math.abs(dz)) > 0.15 && Math.floor(at.y) === feet.y && Math.hypot(dx, dz) <= COVER_STEP_IN_REACH;
+      if (want) { port.look?.(Math.atan2(-dx, -dz), 0, true); stepped = true; }
+      if (want !== walking) { walking = want; port.setControlState('forward', want); }
+      await abortableDelay(port, 50);
+    }
+  } finally {
+    if (walking) { try { port.setControlState('forward', false); } catch { /* ownership lost: the new owner holds the keys */ } }
+  }
+  const y = bot.entity ? Math.floor(bot.entity.position.y) : feet.y;
+  return y === feet.y - 1 ? null : stepped ? 'did_not_drop・穴へ戻れなかった' : 'did_not_drop';
+}
+
+/**
+ * S2: the cover's run, a sprint along the flee's safe heading away from the shooters it was chosen against (their ids; those gone are left
+ * out), until none of them sees the body, at most COVER_RUN_BLOCKS blocks or COVER_RUN_TICKS ticks, or no safe heading is left.
+ */
+async function runCoverRun(bot: FloorBody, port: FloorBody, cover: Extract<Cover, { kind: 'run' }>, tickMs: number): Promise<{ success: boolean; result: string }> {
+  const origin = bot.entity?.position.clone();
+  if (!origin) return { success: false, result: '体が無い' };
+  const memory: { heading?: number } = {};
+  let ticks = 0, jumping = false, ended = '走れる時間いっぱい';
+  try {
+    for (; ticks < COVER_RUN_TICKS; ticks++) {
+      const body = bot.entity;
+      if (!body || actionSignal(port as never)?.aborted || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) { ended = '止められた'; break; }
+      if (body.position.distanceTo(origin) >= COVER_RUN_BLOCKS) { ended = `${COVER_RUN_BLOCKS} ブロック離れた`; break; }
+      const from: CoverShooter[] = [];
+      for (const id of cover.ids) {
+        const entity = bot.entities?.[id];
+        if (entity?.position && entity !== body) from.push({ entity, distance: entity.position.distanceTo(body.position) });
+      }
+      if (!from.length || (ticks > 0 && !shootersSeeing(bot, from, body.position).length)) { ended = '射線が切れた'; break; }
+      const keys = fleeKeys(bot, from.map(({ entity }) => entity.position), memory);
+      if (keys === null) { ended = '安全な向きが無くなった'; break; }
+      port.look?.(keys.yaw, 0, true);
+      port.setControlState('forward', true); port.setControlState('sprint', true);
+      if (keys.jump !== jumping) { jumping = keys.jump; port.setControlState('jump', jumping); }
+      await abortableDelay(port, tickMs);
+    }
+  } finally {
+    try { releaseKeys(port); } catch { /* ownership lost: the new owner holds the keys */ }
+  }
+  const moved = bot.entity ? bot.entity.position.distanceTo(origin) : 0;
+  return { success: moved >= 1.5 || ended === '射線が切れた', result: `${moved.toFixed(1)} ブロック走った（${ended}）` };
 }
 
 // ===== r8: a melee enemy near, and the rim of a drop at the feet =====
@@ -1824,11 +2222,12 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     let stand: LastStand | null = null;
     try {
       stand = !hasActiveSafetyLease(bot) && !escapeRunning(bot) && (bot.health ?? 20) > 0 && now() - (state.lastStandAt ?? -Infinity) >= LAST_STAND_GAP_MS
-        ? lastStandChoice(bot, state.lastStandFailed, cause) : null;
+        ? lastStandChoice(bot, recentEscapeDigs(state, now()) >= ESCAPE_DIGS_MAX ? 'dig' : state.lastStandFailed, cause) : null;
     } catch { stand = null; }
     if (!stand) return false;
     const chosen = stand;
     state.lastStandAt = now(); state.busy = 'flee';
+    if (chosen.kind === 'dig') (state.escapeDigs ??= []).push(now());
     if (chosen.kind === 'hit' && typeof chosen.target?.id === 'number') state.handTarget = { capability: 'floor-last-stand', target: chosen.target.id, at: now() };
     log.warn(`🧱 ${cause === 'creeper' ? '点火したクリーパーから' : '低体力で'}逃げ道なし、最後の手: ${chosen.kind}`);
     void takeNoted(cause === 'creeper' ? 'retreat' : 'flee', chosen.detail, 'floor-last-stand', cause === 'creeper' ? FLOOR_RETREAT_PRIORITY : FLOOR_FLEE_PRIORITY,
@@ -1874,7 +2273,12 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     } catch { return false; }
     if (!seeing.length) return false;
     let choice: ReturnType<typeof coverChoice>;
-    try { choice = coverChoice(bot, shooters, episode?.digs ?? 0, shot ? { line: true, lines: episode?.lines ?? 0 } : {}); } catch { return false; }
+    // S2: a dig of this episode that did not lower the body is not made again; a block on the line or a run is taken instead.
+    const noDig = episode?.digFailed === true;
+    try {
+      choice = coverChoice(bot, shooters, Math.max(episode?.digs ?? 0, recentEscapeDigs(state, t)),
+        { ...(shot || noDig ? { line: true, lines: episode?.lines ?? 0 } : {}), burning, noDig });
+    } catch { return false; }
     const lead = burning ? '燃えて射手から見えている:' : shot ? `${shooterWords(body.position, seeing)} に${SHOT_WINDOW_MS / 1000}秒で${shot.hits}回撃たれた:` : '体力が減り続け射手から見えている:';
     if (!choice.cover) {
       if (t - (state.coverNotedAt ?? -Infinity) >= COVER_NOTE_GAP_MS) {
@@ -1886,13 +2290,14 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     const cover = choice.cover;
     const shotShooters: CoverShooter[] = shot ? shot.shooters : [];
     const run = state.cover = episode ?? { since: t, digs: 0, lastEnd: t };
-    if (cover.kind === 'dig') run.digs++;
+    if (cover.kind === 'dig') { run.digs++; (state.escapeDigs ??= []).push(t); }
     if (cover.kind === 'line') run.lines = (run.lines ?? 0) + 1;
     state.busy = 'flee';
     log.warn(`🔥 ${lead} ${cover.kind}（${shooterWords(body.position, seeing)}）`);
     const handle = ledger.begin('cover', `${lead} ${cover.detail}`, COVER_DETAIL_MAX);
-    void take('floor-cover', FLOOR_FLEE_PRIORITY, COVER_TIMEOUT_MS[cover.kind] + 500, () => runCover(bot, createMotorPort(bot), cover))
+    void take('floor-cover', FLOOR_FLEE_PRIORITY, COVER_TIMEOUT_MS[cover.kind] + 500, () => runCover(bot, createMotorPort(bot), cover, COVER_TIMEOUT_MS[cover.kind], options.fleeTickMs))
       .then(result => {
+        if (cover.kind === 'dig' && !(result as { success?: boolean } | undefined)?.success) run.digFailed = true;
         // What it did, and whether the line is cut now (read after the hand: the shooters move too).
         const after = bot.entity?.position;
         let still: CoverShooter[] = [];
@@ -1907,7 +2312,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         const failed = done ? '' : `（できなかった: ${String((result as { result?: string } | undefined)?.result ?? '').slice(0, 50)}）`;
         handle.detail = `${lead} ${cover.detail}${failed}。${still.length ? `まだ見えている: ${shooterWords(after!, still)}` : '射線が切れた'} 体力${Math.round((bot.health ?? 0) * 10) / 10}`.slice(0, COVER_DETAIL_MAX);
         ledger.end(handle, done ? 'done' : (result as { failureType?: string } | undefined)?.failureType === 'interrupted' ? 'cut' : 'failed');
-      }, () => { ledger.end(handle, 'failed'); })
+      }, () => { if (cover.kind === 'dig') run.digFailed = true; ledger.end(handle, 'failed'); })
       .catch(() => undefined)
       .finally(() => {
         state.busy = null;
@@ -2016,6 +2421,135 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       });
     return true;
   };
+  /** The block a rise would put under the feet (obsidian or end stone first), or null when there is none to put or no room over the head for the rise. */
+  const riseBlock = (): string | null => {
+    try { const feet = feetCell(bot as never); return feet ? pillarBlockAt(bot, feet) : null; } catch { return null; }
+  };
+  /** One block under the feet, obsidian or end stone first, not again before DRAGON_RISE_GAP_MS and at most DRAGON_RISE_MAX in DRAGON_RISE_WINDOW_MS, and never while the planner's own hand is laying blocks. True when it was started. */
+  const riseFromCloud = (said: string, t: number): boolean => {
+    const rises = (state.dragonRises ?? []).filter(when => t - when <= DRAGON_RISE_WINDOW_MS);
+    if (rises.length >= DRAGON_RISE_MAX || (rises.length && t - rises[rises.length - 1] < DRAGON_RISE_GAP_MS)) return false;
+    if (LAYING_HANDS.has(String((bot as { actHandNow?: string }).actHandNow ?? ''))) return false;
+    const block = riseBlock();
+    if (!block) return false;
+    state.dragonRises = [...rises, t]; state.busy = 'flee';
+    log.warn(`🐉 ${said}: 歩いて離れる道が無い。${block} を足元に積んで 1 段上がる`);
+    const handle = ledger.begin('retreat', `竜の雲から歩いて離れる道が無く、${block} を足元に積んで 1 段上がる: ${said}`, DRAGON_DETAIL_MAX);
+    void take('floor-dragon', FLOOR_RETREAT_PRIORITY, LAST_STAND_TIMEOUT_MS.pillar + 1000, async () => { const port = createMotorPort(bot); await settleOnFloor(bot, port); return runLastStand(bot, port, { kind: 'pillar', block, detail: '' }); })
+      .then(result => {
+        const done = result as { success?: boolean; result?: string } | undefined;
+        handle.detail = `竜の雲から歩いて離れる道が無く、${block} を足元に積んだ（${done?.result ?? ''}）: ${said}`.slice(0, DRAGON_DETAIL_MAX);
+        ledger.end(handle, done?.success ? 'done' : 'failed');
+      }, () => { ledger.end(handle, 'failed'); })
+      .catch(() => undefined)
+      .finally(() => { state.busy = null; state.dragonNextAt = Math.max(state.dragonNextAt ?? 0, now() + DRAGON_GAP_MS); });
+    return true;
+  };
+  /**
+   * The End: the dragon's breath, a fireball's line or the boxes of its perch reach the body (`dragonHazards`): one run out of them
+   * (`runDragonRetreat`), over the planner's act (it is cut as a reflex) and any lower lease, never over lava or breath. Told in the ledger as a
+   * retreat with what reached the body. True when a run was started.
+   */
+  const dragonTick = (): boolean => {
+    if (!config.retreat) return false;
+    const t = now();
+    if (t < (state.dragonNextAt ?? 0)) return false;
+    if (!isEnd(bot) || (bot.health ?? 20) <= 0) return false;
+    if (hasActiveSafetyLease(bot) || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) return false;
+    let hazards: ReturnType<typeof dragonHazards> = [];
+    try { hazards = dragonHazards(bot, { now: t }); } catch { return false; }
+    if (!hazards.length) return false;
+    const said = hazards.map(hazard => hazard.why).join('・');
+    // No level, safe way out: nothing is started (a run that ends where it began would cut the planner's act for nothing, every time). Told once in a while, as a fact only.
+    let way: ReturnType<typeof fleeHeadingPlan> = null;
+    try { way = dragonRetreatPlan(bot, hazards); } catch { way = null; }
+    if (!way) {
+      // A ball in the air, or one just down whose cloud is not yet in sight: look again at the next tick (the cloud decides, and its first harm is 20 ticks after it is laid).
+      state.dragonNextAt = t + (hazards.some(hazard => hazard.kind === 'fireball' || hazard.pending) ? DRAGON_COMING_GAP_MS : DRAGON_BLOCKED_GAP_MS);
+      // A cloud that lies is a slab half a block high: a body one block up is clear of it. Where no way out can be walked (the End's arrival is a 5 x 5 platform in the void), a block under
+      // the feet; not for a ball still in the air (the cloud is put on the body at its height), and not where the dragon's head, neck or wings reach the body (the block takes it into their boxes).
+      const lying = hazards.every(hazard => hazard.kind === 'breath' || hazard.kind === 'flame');
+      if (lying && riseFromCloud(said, t)) return true;
+      if (t - (state.dragonNotedAt ?? -Infinity) >= DRAGON_NOTE_GAP_MS) {
+        state.dragonNotedAt = t;
+        // The word the planner can act on: a cloud and no block to put under the feet is a body that was sent to the End without them.
+        const next = lying && !riseBlock() ? '（足元に積めるブロックが無い。次: 黒曜石か丸石を手に入れる）' : '';
+        try { ledger.end(Object.assign(ledger.begin('cover_none', '', DRAGON_DETAIL_MAX), { detail: `竜の危険の中で、置かず跳ばず走らずに離れる安全な道が無い${next}: ${said}`.slice(0, DRAGON_DETAIL_MAX) }), 'failed'); } catch { /* a report */ }
+      }
+      return false;
+    }
+    state.dragonNextAt = t + DRAGON_GAP_MS;
+    state.busy = 'flee';
+    log.warn(`🐉 ${said}: 離れる`);
+    const handle = ledger.begin('retreat', `竜の危険から離れた: ${said}`, DRAGON_DETAIL_MAX);
+    void take('floor-dragon', FLOOR_RETREAT_PRIORITY, DRAGON_RETREAT_TICKS * 50 + 1500, () => runDragonRetreat(bot, createMotorPort(bot), options.fleeTickMs))
+      .then(result => {
+        const done = result as { success?: boolean; failureType?: string; ended?: string; moved?: number } | undefined;
+        if (done?.ended === 'blocked') {
+          state.dragonNextAt = now() + DRAGON_BLOCKED_GAP_MS;
+          handle.detail = `竜の危険から離れる安全な道が無かった: ${said}`.slice(0, DRAGON_DETAIL_MAX);
+          ledger.end(handle, 'failed');
+        } else {
+          handle.detail = `竜の危険から${(done?.moved ?? 0).toFixed(1)}m離れた: ${said}`.slice(0, DRAGON_DETAIL_MAX);
+          ledger.end(handle, done?.success ? 'done' : done?.failureType === 'interrupted' ? 'cut' : 'failed');
+        }
+      }, () => { ledger.end(handle, 'failed'); })
+      .catch(() => undefined)
+      .finally(() => { state.busy = null; state.dragonNextAt = Math.max(state.dragonNextAt ?? 0, now() + DRAGON_GAP_MS); });
+    return true;
+  };
+  /**
+   * The End: a fall that would cripple (the whole fall less three, at least CLUTCH_MIN_DAMAGE) is stopped with a bucket of water carried, poured on the ground in the tick it comes within reach
+   * (utils/fallClutch). Over every other floor hand: a body in the air has nothing else to do.
+   */
+  const clutchTick = (): boolean => {
+    if (!FALL_CLUTCH_ENABLED || !config.retreat || !isEnd(bot)) return false;
+    const t = now(), memory = state.fall ??= {};
+    let why: string | null = null;
+    try { why = clutchWanted(bot as never, memory, t); } catch { why = null; }
+    if (!why) return false;
+    memory.clutchAt = t;
+    state.busy = 'flee';
+    log.warn(`🪣 ${why}: 水バケツで落下を止める`);
+    const handle = ledger.begin('retreat', `落下を水バケツで止める: ${why}`, FALL_DETAIL_MAX);
+    void take('floor-clutch', FLOOR_CLUTCH_PRIORITY, FALL_TIMEOUT_MS, () => runFallClutch(bot as never, createMotorPort(bot) as never, memory, now))
+      .then(result => {
+        const done = result as { success?: boolean; failureType?: string; result?: string } | undefined;
+        // Taken from the clutch by a stronger reflex: the action's own word is only "interrupted"; whether the water was already poured is in the note the clutch leaves for the floor (`scoopTick`).
+        const cut = done?.failureType === 'interrupted';
+        handle.detail = (cut ? `落下を水バケツで止める途中で操作を取られた（${memory.scoop ? '水はあけた：あとで汲み直す' : '水はあけていない'}）: ${why}` : `落下を水バケツで止めた（${done?.result ?? ''}）: ${why}`).slice(0, FALL_DETAIL_MAX);
+        ledger.end(handle, done?.success ? 'done' : cut ? 'cut' : 'failed');
+      }, () => { ledger.end(handle, 'failed'); })
+      .catch(() => undefined)
+      .finally(() => { state.busy = null; });
+    return true;
+  };
+  /**
+   * The End: the water a clutch poured and was cut off before taking up again (a stronger reflex took the body) is taken up in a quiet moment, so that the next fall has its bucket. Nothing else runs, none of
+   * the dragon's hazards reaches the body, the body stands near the water with the empty bucket in the hand or the hotbar. A new hold on the body that is held with no safety lease and no `busy` mark: every reflex
+   * (the dragon's retreat, the flee, the meal, the next clutch) cuts it, and the planner's act that comes meanwhile waits no longer than its few seconds. True when it was started.
+   */
+  const scoopTick = (): boolean => {
+    const memory = state.fall;
+    if (!memory?.scoop) return false;
+    if (!config.retreat || !isEnd(bot)) { delete memory.scoop; return false; }
+    const t = now();
+    // No reflex holds the body or is between two hands (a flee, a fight with a melee enemy, the continuation of a shield or a step back), and no handover is reserved for the act that is to come.
+    if (reflexHeld(bot) || bridgeOf(bot, t) || meleeEpisode(bot, t) || reservationOf(bot)) return false;
+    let wanted = false;
+    try { wanted = scoopWanted(bot as never, memory, t); } catch { wanted = false; }
+    if (!wanted || !memory.scoop) return false;
+    // Nothing holds the body and nothing waits for it (a query that runs holds nothing: it is no reason to wait).
+    if (physicalActionBusy(bot) || (actionLeaseStatus(bot)?.waitQueue ?? 0) > 0) return false;
+    try { if (dragonHazards(bot, { now: t }).length) return false; } catch { return false; }
+    const pending = memory.scoop;
+    pending.tries++; pending.lastAt = t;
+    log.info(`🪣 あけた水を汲み直す（${pending.tries}回目）`);
+    void executeAction(bot as any, 'floor-scoop', SCOOP_TIMEOUT_MS, (() => scoopBack(bot as never, createMotorPort(bot) as never, memory)) as never,
+      { priority: FLOOR_SCOOP_PRIORITY, safetyLease: false, waitForQuiescence: false, legacyExecutingSkill: true })
+      .catch(() => undefined);
+    return true;
+  };
   bot.on('physicsTick', () => {
     // r7: the health seen tick by tick (the cover goes on while it falls).
     const health = bot.health ?? 20, seen = state.healthSeen;
@@ -2027,6 +2561,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       }
       seen.last = health;
     }
+    if (clutchTick()) return;
     let outcome: ReturnType<typeof floorRetreatTick> = null;
     try { outcome = config.retreat ? floorRetreatTick(bot, state.retreat, retreatAllow) : null; } catch { return; }
     // A lit creeper and no way away: the retreat let go (its action ends), and the last stand is made as soon as no
@@ -2049,7 +2584,21 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       return;
     }
     if (outcome === 'released') { state.retreat.done = true; state.retreat.release?.(); return; }
+    // A meal under way gives way to the dragon: its breath, a fireball's line or its boxes come (or, for a mending meal, a fireball flies near)
+    // after the meal was chosen, and the meal is cut, so the dragon's retreat runs at the next tick (Codex review of the 4th release, 4).
+    // At most one cut in MEAL_CUT_GAP_MS: a starving body with no way out of the danger eats its next meal to the end (as before) instead of
+    // being cut on every tick.
+    if (state.busy === 'eat' && state.meal && !state.meal.cut && config.retreat && isEnd(bot) && now() - (state.mealCutAt ?? -Infinity) >= MEAL_CUT_GAP_MS) {
+      const danger = mealDanger(bot, state.meal.mend);
+      if (danger) {
+        state.meal.cut = danger; state.mealCutAt = now();
+        log.warn(`🐉 食事を止める: ${danger}`);
+        cancelCapability(bot, 'floor-eat', 'floor-dragon');
+      }
+    }
     if (state.retreat.engaged || state.busy) return;
+    // The End: out of the dragon's breath, fireball line and perch boxes, whatever the planner is doing (a fight with the dragon included).
+    if (dragonTick()) return;
     // The planner's own fight (combat, combat-engage, attack-nearest, attack-continuously) holds the body: the floor neither runs from it
     // nor walls the body in, whatever the health (down to the yield limit of combatOwner). Run 21: three fights chosen in a cave were
     // each dropped by this flee, and for 140 s nobody attacked. A flee already under way is ended, not carried on.
@@ -2097,6 +2646,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         if (lastStand('low-health')) return;
       }
     }
+    // The End: the last of the floor's hands, in a quiet moment: the water a clutch poured and was cut off before taking up again.
+    if (scoopTick()) return;
     if (!budget && Date.now() < state.retryAt) return;
     // The body puts on no armour by itself (equip is a step of act).
     let food: Item | null = null;
@@ -2115,10 +2666,21 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       // Starving or at 6 health or less the meal is not metered (floorBudget.ts): only a short backoff after one that failed.
       if (budget && !budget.allow('eat', bot.health ?? 20, bot.food ?? 20)) return;
       state.busy = 'eat'; state.engagements.eat++;
+      const meal = state.meal = { mend: !criticalMeal(bot.health ?? 20, bot.food ?? 20, config.wideThreats) } as NonNullable<FloorState['meal']>;
       log.info(`🍖 食べる: ${food.name}（体力 ${bot.health} / 満腹度 ${bot.food}）`);
       const held = bot.heldItem;
       void takeNoted('eat', `食事（${food.name}）`, 'floor-eat', FLOOR_EAT_PRIORITY, 6000, async () => {
-        try { await bot.equip!(food!, 'hand'); await bot.consume!(); }
+        try {
+          await bot.equip!(food!, 'hand');
+          // A cut meal lets go of the body at once (the abort lowers the food: deactivateItem), not when mineflayer's consume times out 2.5 s later.
+          const signal = actionSignal(bot);
+          const eating = bot.consume!();
+          eating.catch(() => undefined);
+          await (signal ? Promise.race([eating, new Promise<never>((_, reject) => {
+            if (signal.aborted) reject(new Error('meal cut'));
+            else signal.addEventListener('abort', () => reject(new Error('meal cut')), { once: true });
+          })]) : eating);
+        }
         finally {
           // What was in hand before the meal goes back, also when the meal was cut off: a fight went on with mutton in hand (run 16).
           // Found again by name: the stack the body held may have moved slots while the food was in hand.
@@ -2129,7 +2691,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         }
         return { success: true, result: `${food!.name}を食べた` };
       }, 'eat').then(result => { if (!result?.success) failed(); })
-        .catch(() => failed()).finally(() => { state.busy = null; });
+        .catch(() => failed()).finally(() => { state.busy = null; if (state.meal === meal) state.meal = undefined; });
     }
   });
 }

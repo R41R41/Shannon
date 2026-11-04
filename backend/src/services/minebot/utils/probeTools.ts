@@ -361,6 +361,9 @@ export interface SightAnswer { v: 1; kind: 'sight'; text: string; visible: boole
   between: Array<{ at: Cell; name: string }>; target: { at: Cell; name: string } }
 export { BLOCK_REACH };
 export const HIT_REACH = 3;
+/** The longest line `probeSight` walks. The line is sampled every 0.05 m on the event loop, and the world it crosses is not loaded much
+ * beyond this (the scan's largest radius is 16 chunks): a target farther than this is told as too far, not walked. */
+export const SIGHT_LIMIT = 256;
 
 /** The eye of a body standing at a feet position (a cell's centre when `cell`). */
 export function eyeOf(position: { x: number; y: number; z: number }, cell = false): [number, number, number] {
@@ -384,9 +387,13 @@ export function probeSight(read: BlockReader, eye: [number, number, number], tar
     const nx = Math.max(c.position.x - w, Math.min(eye[0], c.position.x + w)), ny = Math.max(c.position.y, Math.min(eye[1], c.position.y + h)), nz = Math.max(c.position.z - w, Math.min(eye[2], c.position.z + w));
     distance = Math.hypot(nx - eye[0], ny - eye[1], nz - eye[2]);
   }
+  const what = 'block' in target ? `${at(cell)} ${name}` : `${name} ${at(cell)}`;
+  if (!(distance <= SIGHT_LIMIT)) {
+    return { v: 1, kind: 'sight', text: `${what}：遠すぎて見通しを調べない（目から ${Number.isFinite(distance) ? round1(distance) : '?'}m、調べるのは ${SIGHT_LIMIT}m まで）。見えるとも届くとも言えない。`,
+      visible: false, reach: false, reachLimit, distance: Number.isFinite(distance) ? round1(distance) : -1, between: [], target: { at: cell, name } };
+  }
   const between = solidBetween(read, eye, point).slice(0, 8).map(c => ({ at: c, name: nameOf(read(c.x, c.y, c.z)) }));
   const visible = between.length === 0, reach = distance <= reachLimit;
-  const what = 'block' in target ? `${at(cell)} ${name}` : `${name} ${at(cell)}`;
   const text = `${what}：${visible ? '見える（間に固いブロックは無い）' : `見えない。間に固いブロック ${between.length}${between.length >= 8 ? ' 以上' : ''}：${between.slice(0, 4).map(b => `${at(b.at)} ${b.name}`).join('、')}${between.length > 4 ? ' ほか' : ''}`}。`
     + `目から ${round1(distance)}m（${reach ? '届く' : '届かない'}、${'block' in target ? `掘る・使う・置くは ${BLOCK_REACH}m まで` : '打てるのは 3m まで'}）`;
   return { v: 1, kind: 'sight', text, visible, reach, reachLimit, distance: round1(distance), between, target: { at: cell, name } };

@@ -31,8 +31,8 @@ describe('the LLM-centric body', () => {
       const act = on.definitions.find(skill => skill.name === 'act')!;
       expect(JSON.stringify(act.inputSchema).length).toBeLessThan(16_000);
       expect((act.inputSchema as any).properties.hands.maxItems).toBe(12);
-      // The wire allows 56 properties to a hand (the head's SKILL_SCHEMA_PROPERTIES, raised from 32 for the run 39 hands: go, obsidian, fight, mine, make, portal, smelt, and from 48 for the continue contracts' 49 fields: dependsOn and vertical's dir, shape, toward, toY, liquid; contract 2).
-      expect(Object.keys((act.inputSchema as any).properties.hands.items.properties).length).toBeLessThanOrEqual(56);
+      // The wire allows 64 properties to a hand (the head's SKILL_SCHEMA_PROPERTIES, raised from 32 for the run 39 hands: go, obsidian, fight, mine, make, portal, smelt, and from 48 for the continue contracts' 49 fields: dependsOn and vertical's dir, shape, toward, toY, liquid; contract 2).
+      expect(Object.keys((act.inputSchema as any).properties.hands.items.properties).length).toBeLessThanOrEqual(64);
       // The planner's call (the head's ActInput) reaches the skill as parsed hands.
       const resolved = on.resolve('act', { hands: [{ do: 'dig', at: [{ x: 1, y: 2, z: 3 }, { front: 1 }], exposeOk: ['blaze'] }], stopIf: { hpBelow: 8 }, why: '棒を取る' });
       expect(resolved.args[0]).toEqual([{ do: 'dig', at: [{ x: 1, y: 2, z: 3 }, { front: 1 }], exposeOk: ['blaze'] }]);
@@ -55,10 +55,11 @@ describe('the LLM-centric body', () => {
     } finally { network.mockRestore(); }
   });
 
-  it('the floor eats only starving or nearly dead', () => {
+  it('the floor eats starving, nearly dead, or (no enemy near) hurt or down to food 14', () => {
     const fed = (food: number, health: number): any => ({ food, health, entity: { position: new Vec3(0, 64, 0) }, entities: {},
       inventory: { items: () => [{ name: 'bread', count: 3 }] }, setControlState: () => undefined, on: () => undefined });
-    expect(floorEatChoice(fed(12, 20))).toBeNull();
+    expect(floorEatChoice(fed(15, 20))).toBeNull();
+    expect(floorEatChoice(fed(14, 20))?.name).toBe('bread');
     expect(floorEatChoice(fed(3, 20))?.name).toBe('bread');
     expect(floorEatChoice(fed(10, 6))?.name).toBe('bread');
   });

@@ -29,8 +29,7 @@ const log = createLogger('Minebot:ShieldBlock');
  * ghast's ball is left to the reflex that strikes it back, while that one is on.
  *
  * And in a fight the planner chose, between the body's own blows: a hostile within a blow's reach is met with
- * the shield up, and the shield comes down for the tick the body strikes (the server refuses a blow from
- * behind a raised shield). Two wither skeletons took an iron-clad body from full health to dead in sixteen
+ * the shield up, and the body strikes from behind it (a blow lands with the shield raised: lab, 2026-11-03). Two wither skeletons took an iron-clad body from full health to dead in sixteen
  * seconds while its shield hung on its arm (lab). Not outside such a fight: a raised shield slows the body to
  * a crawl, and one running away needs its legs.
  */
@@ -137,11 +136,8 @@ function bridgeHoldsShield(bot: ShieldBot): boolean {
 export function installShieldBlock(bot: ShieldBot): void {
   if (bot.shieldBlock || typeof bot.on !== 'function') return;
   const state: ShieldBlockState = bot.shieldBlock = { enabled: true, guard: true, raised: 0, guards: 0, upTicks: 0, up: false };
-  // The body's own blow goes out from behind a lowered shield: down for the blow, up again on the next tick.
-  if (typeof bot.attack === 'function') {
-    const strike = bot.attack.bind(bot);
-    bot.attack = (...args: unknown[]) => { if (state.up) { state.up = false; state.lowered = (state.lowered ?? 0) + 1; try { shieldHand(bot).deactivateItem?.(); } catch { /* nothing held */ } } return strike(...args); };
-  }
+  // The body's own blow goes out from behind the raised shield (S2, 2026-11-03, lab: a still golem struck eight times with the shield up, down and up again lost 40 of 100 each way; the old
+  // note that the server refuses such a blow was wrong). Lowering it for the blow left a five-tick gap at each blow.
   installToldVelocity(bot as any);
   // Said to the threat watch: with a shield on the arm, a kind that has hit the body with shots is answered here.
   answerWith(bot, kind => state.enabled && bot.inventory?.slots?.[bot.getEquipmentDestSlot?.('off-hand') ?? 45]?.name === 'shield'

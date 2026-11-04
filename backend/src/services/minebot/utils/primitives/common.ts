@@ -3,6 +3,7 @@ import { actionSignal } from '../../execution/ActionExecution.js';
 import { feetCell, isOpenBlock, relativeCell, relativeWords, type Cell, type Facing } from '../localMap.js';
 import { BLOCK_REACH } from '../blockReach.js';
 import type { GoalOutcome, InventoryEvent, Progress } from '../../integration/commonFca/continueContract.js';
+import type { EyeReport } from '../huntEyeFlight.js';
 
 /**
  * What every part of `act` shares (design mb-llm-centric 2.3, 4: utils/primitives). A part does what its arguments say and nothing
@@ -57,13 +58,17 @@ export interface StepOutcome {
   events?: InventoryEvent[];
   /** What the act's result carries beside the line (the contract's ActResult): a thrown eye, a container's contents, arrows left. */
   data?: {
-    eye?: { from: Cell; bearingDeg: number; flew: number; to: Cell; broke: boolean };
+    eye?: EyeReport;
     container?: { at: Cell; kind: string; items: string[] };
     arrowsLeft?: number;
     /** A walk that entered a portal and ended in the other dimension (the act ends there). */
     crossedDimension?: true;
     /** A go: what it dug and laid and how far it walked (the hands that use go for the way, `mine`, count on it). */
     work?: { dug: number; placed: number; steps: number; redraws: number };
+    /** The End (2026-11-02), kept in the body's records only (the act's line says it in words): blows at the dragon, a crystal shot or struck, a bed that blew. */
+    dragon?: { blows: number; landed: number; parts: Record<string, number>; dead?: boolean };
+    crystal?: { id: number; destroyed: boolean; distance: number };
+    bed?: { exploded: boolean; distance: number | null; damage: number | null };
     /** A vertical: the ores that showed on its way (told, never followed), 8 at most. */
   };
 }

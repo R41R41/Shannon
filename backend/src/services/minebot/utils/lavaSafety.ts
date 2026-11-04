@@ -3,6 +3,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { executeAction, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
 import { activateItemFacing } from './activateItemFacing.js';
 import { digRefusedAt, noteRefusedDig } from './refusedDigs.js';
+import { fallIsDangerous, stepOffDrop } from './edgeGuard.js';
 
 const log = createLogger('Minebot:LavaSafety');
 
@@ -53,6 +54,37 @@ export function assertNoLavaRelease(body: LavaBody, block: { name?: string; posi
   if (lava) throw new LavaReleaseError(block, lava);
 }
 
+/**
+ * The fall that breaking `target` would drop the body into, when the body stands on it and nothing else holds it up: the drop (blocks,
+ * Infinity onto lava or nothing) when it is a dangerous one (edgeGuard's measure: three points of damage or more, or what the health
+ * cannot take), else null. A block the footprint does not rest on, or one with another block still under a corner of the footprint, is no fall.
+ * The lab (S5, c1, 2026-11-04, the Nether at y=110): the path executor broke the netherrack the body stood on while a reset path still held it as
+ * the next step's cell; there was air for 58 blocks under it and the body fell to its death.
+ */
+export function supportDropIfDug(body: LavaBody & { health?: number }, target: Vec3): number | null {
+  const position = body.entity?.position;
+  if (!position || !target) return null;
+  const floorY = Math.floor(position.y - 0.01);
+  if (target.y !== floorY) return null;
+  const rests = [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]].some(([dx, dz]) => Math.floor(position.x + dx) === target.x && Math.floor(position.z + dz) === target.z);
+  if (!rests) return null;
+  const without = { blockAt: (cell: Vec3) => (Math.floor(cell.x) === target.x && Math.floor(cell.y) === target.y && Math.floor(cell.z) === target.z
+    ? { name: 'air', boundingBox: 'empty' } : body.blockAt(cell)) };
+  let drop = 0;
+  try { drop = stepOffDrop(without, position.x, position.y, position.z); } catch { return null; }
+  return fallIsDangerous(drop, body.health ?? 20) ? drop : null;
+}
+
+/** A dig refused because the block is what holds the body up over a dangerous fall. */
+export class SupportDigError extends Error {
+  readonly failureType = 'support_dig';
+  constructor(block: { name?: string; position: Vec3 }, readonly drop: number) {
+    super(`掘削中止: ${block.name ?? 'ブロック'}(${block.position.x}, ${block.position.y}, ${block.position.z})は今立っている床で、掘ると${Number.isFinite(drop) ? `${Math.round(drop)} ブロック下へ落ちる` : '溶岩か底の無い所へ落ちる'}。`
+      + '先に横の固い床へ移るか、足元を残して別の向きから掘ってください');
+    this.name = 'SupportDigError';
+  }
+}
+
 interface DigBody extends LavaBody { dig?: (block: any, ...rest: any[]) => Promise<unknown>; lavaDigGuard?: { refused: number; last?: string } }
 
 /**
@@ -68,11 +100,15 @@ export function installLavaDigGuard(bot: DigBody): void {
   if (!dig || bot.lavaDigGuard) return;
   const state: NonNullable<DigBody['lavaDigGuard']> = bot.lavaDigGuard = { refused: 0 };
   bot.dig = async (block: any, ...rest: any[]) => {
-    try { assertNoLavaRelease(bot, block); }
+    try {
+      assertNoLavaRelease(bot, block);
+      const drop = block?.position ? supportDropIfDug(bot as DigBody & { health?: number }, block.position) : null;
+      if (drop !== null) throw new SupportDigError(block, drop);
+    }
     catch (error) {
       state.refused++;
       state.last = (error as Error).message;
-      // Lava stays where it is: the route planner leaves this block alone for a minute.
+      // Lava stays where it is (and a floor over a fall stays a floor): the route planner leaves this block alone for a minute.
       const repeated = block?.position ? digRefusedAt(bot, block.position) : false;
       if (block?.position) noteRefusedDig(bot, block.position, 60_000);
       if (!repeated) log.warn(`🌋 ${(error as Error).message}`);
@@ -173,8 +209,20 @@ interface ReflexBody extends LavaBody {
   look?(yaw: number, pitch: number, force?: boolean): unknown;
   on(event: 'physicsTick', listener: () => void): unknown;
   lavaReflex?: LavaReflexState;
+  /** Puts out the fire in the cells the body stands in (a quick dig); installed with the reflex. False: nothing was put out. */
+  punchOutFire?: () => Promise<boolean>;
 }
-export interface LavaReflexState { engaged: boolean; engagements: number; clearTicks: number; in?: 'lava' | 'fire' | 'magma' }
+export interface LavaReflexState {
+  engaged: boolean; engagements: number; clearTicks: number; in?: 'lava' | 'fire' | 'magma';
+  /** The putting out of fire: one at a time, and given up on after PUNCH_FAILURES_MAX failures or PUNCH_EPISODE_MS of the same fire. */
+  punch?: { running: boolean; startedAt: number; failures: number; episodeStart: number; lastFireAt: number };
+}
+/**
+ * S2 (2026-11-02, the c1 blaze camp): a blaze's fireball leaves fire in the cells round the body, the body stands in it, and the reflex took the body out of its place and the act
+ * out of its hands ('lava_escape' stops, one every few seconds). A body in fire that is not lava is first given a quick dig at the fire it stands in; only when that does not
+ * put it out (it failed twice, or the fire stood for PUNCH_EPISODE_MS) is it walked out as before. Lava is never punched at.
+ */
+export const PUNCH_GRACE_MS = 700, PUNCH_FAILURES_MAX = 2, PUNCH_EPISODE_MS = 2000;
 
 /** Ticks out of lava before the reflex lets go of the keys. */
 const RELEASE_TICKS = 6;
@@ -218,6 +266,20 @@ export function lavaReflexTick(bot: ReflexBody, state: LavaReflexState): 'engage
   }
   state.clearTicks = 0;
   state.in = inLava ? 'lava' : 'fire';
+  if (inFire && !state.engaged && bot.punchOutFire) {
+    const now = Date.now();
+    const punch = state.punch ??= { running: false, startedAt: 0, failures: 0, episodeStart: now, lastFireAt: now };
+    if (now - punch.lastFireAt > 1500) { punch.episodeStart = now; punch.failures = 0; }
+    punch.lastFireAt = now;
+    if (punch.failures < PUNCH_FAILURES_MAX && now - punch.episodeStart < PUNCH_EPISODE_MS) {
+      if (!punch.running) {
+        punch.running = true; punch.startedAt = now;
+        void bot.punchOutFire().then(ok => { punch.failures = ok ? 0 : punch.failures + 1; }, () => { punch.failures++; }).finally(() => { punch.running = false; });
+      }
+      // The body is left where it is while the dig has its moment.
+      if (now - punch.startedAt < PUNCH_GRACE_MS) return null;
+    }
+  }
   let route: Vec3[] | null = null;
   try { route = routeOutOfLava(bot, entity.position); } catch { route = null; }
   // In fire with nowhere clear in reach, the keys are left to whoever holds them.
@@ -244,6 +306,31 @@ export function installLavaReflex(bot: ReflexBody): void {
   if (bot.lavaReflex) return;
   const state: LavaReflexState = bot.lavaReflex = { engaged: false, engagements: 0, clearTicks: 0 };
   let release: (() => void) | null = null;
+  // The fire the body stands in, put out by a dig at it (looked at, instant: a fire has no hardness). The body's own dig is the guarded one.
+  const digger = bot as unknown as { dig?: (block: unknown, forceLook?: boolean) => Promise<unknown> };
+  if (!bot.punchOutFire && typeof digger.dig === 'function') {
+    bot.punchOutFire = async () => {
+      const at = bot.entity?.position;
+      if (!at) return false;
+      const y = Math.floor(at.y + 0.01), done = new Set<string>();
+      let dug = 0;
+      for (const dy of [0, 1]) for (const [dx, dz] of [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]) {
+        const cell = new Vec3(Math.floor(at.x + dx), y + dy, Math.floor(at.z + dz)), id = `${cell.x},${cell.y},${cell.z}`;
+        if (done.has(id)) continue;
+        done.add(id);
+        let block: any = null;
+        try { block = bot.blockAt(cell); } catch { block = null; }
+        if (!isFire(block)) continue;
+        // (review 2026-11-03: the punch holds no lease; once this reflex (a wall escape, the lava climb) has taken the body, or the body is gone, no further dig is sent over its work)
+        if (state.engaged || !bot.entity) break;
+        let timer: NodeJS.Timeout | undefined;
+        try { await Promise.race([digger.dig!(block, true), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('punch timeout')), PUNCH_GRACE_MS); })]); }
+        finally { if (timer) clearTimeout(timer); }
+        dug++;
+      }
+      return dug > 0;
+    };
+  }
   bot.on('physicsTick', () => {
     let outcome: ReturnType<typeof lavaReflexTick> = null;
     try { outcome = lavaReflexTick(bot, state); } catch { return; }

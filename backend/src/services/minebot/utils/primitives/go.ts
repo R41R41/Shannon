@@ -3,6 +3,7 @@ import { Vec3 } from 'vec3';
 import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { buildMovements } from '../setMovements.js';
+import { installGroundSprint } from '../groundSprint.js';
 import { FAR_LEG_M, nextLeg } from '../farLegs.js';
 import { feetCell, type BlockReader, type Cell } from '../localMap.js';
 import { chooseTool, canHarvest, nearlyBroken } from '../toolChoice.js';
@@ -11,7 +12,7 @@ import { clip } from '../actReport.js';
 import { blockAt, cellText, fullPackWatch, inventoryCount, isAirLike, letGo, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
 import { dig } from './dig.js';
-import { pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
+import { climbBlocker, pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
 import { bodyOverlap, placeFacts } from '../placeFacts.js';
 import { blackBoxOf } from '../blackbox.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
@@ -19,6 +20,10 @@ import { meterProgress, round1 } from './progressUnits.js';
 import { ThreatExposedError } from '../exposureGuard.js';
 import { swimControls, swimPulse } from './swim.js';
 import { waterExitWords } from './waterExit.js';
+import { cloudReaches, cloudZoneAtCell, lyingCloudZones } from '../dragonDanger.js';
+import { perchClearance } from '../dragonApproach.js';
+import { dragonPhaseOf, endDragonOf, isEnd } from '../dragonState.js';
+import { isPerched } from '../dragonParts.js';
 
 const waterExitText = (bot: any, feet: Cell) => { const exit = waterExitWords(bot, feet); return exit ? `。${exit}` : ''; };
 
@@ -86,7 +91,9 @@ export const GO_AVOID_COST = 20;
  */
 export const GO_REDO_COST = 60;
 /** The most times one go walks the part of a way a search found before its time ran out (each must come 2 m nearer). */
-export const GO_PARTIAL_WALKS = 6;
+export const GO_PARTIAL_WALKS = 12;
+/** A search of the road is cut after this long when the caller gave no `searchMs`: the part of the way it found (nearest the goal) is walked and the search goes on from there (S2, 2026-11-03: a Nether walk of 196 m in 11 minutes was 5 s searches each ending as search_timeout; S4's lab: the best part found in the first seconds is as good as the one at five). */
+const SEARCH_SLICE_MS = 1500;
 /**
  * Run 46 (hold 4, q15 go at the amethyst-side deepslate: 120 s, 50 digs refused, a 3 m box): the exposure guard refuses a dig that would open a way to the body for a
  * hostile behind the rock (a zombie 8 to 16 m off), the route is drawn at the next cell, which the guard refuses too, and so on. A cell refused is closed to the routes for as long as
@@ -147,6 +154,22 @@ export function digRuleOf(registry: any, words: string[] | undefined): DigRule {
   return { names, ignored };
 }
 
+/** Cheap building blocks: what a pack that dug through a mountain or the Nether holds in numbers, and may be told to lay (never ores, obsidian, planks or a crafting block). */
+const BRIDGE_BLOCKS = /^(?:cobblestone|stone|cobbled_deepslate|deepslate|dirt|coarse_dirt|netherrack|basalt|smooth_basalt|blackstone|andesite|diorite|granite|tuff|calcite|end_stone|sandstone|red_sandstone|terracotta|nether_bricks|stone_bricks)$/u;
+/**
+ * The cheap blocks the pack holds that `canPlace` does not name, most first ("netherrack×99・basalt×7"), or '' when there are none (at least 4 of a kind).
+ * S2 lab (c4, 244 m): a go with 64 stones stopped on `no_blocks` with 99 netherrack, dug on the way, in the pack; the stop said only "canPlace に足す".
+ */
+export function bridgeBlocksHeld(bot: any, given: readonly string[] | undefined): string {
+  const named = new Set((given ?? []).map(name => String(name).replace(/^minecraft:/u, '').toLowerCase()));
+  const counts = new Map<string, number>();
+  for (const item of (bot.inventory?.items?.() ?? []) as any[]) {
+    const name = String(item?.name ?? '');
+    if (BRIDGE_BLOCKS.test(name) && !named.has(name)) counts.set(name, (counts.get(name) ?? 0) + Number(item.count ?? 0));
+  }
+  return [...counts.entries()].filter(([, count]) => count >= 4).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([name, count]) => `${name}×${count}`).join('・');
+}
+
 /** The blocks of `canPlace` that are whole blocks, are held, and stay where they are put (sand and gravel fall), in the order given. */
 export function placeNamesOf(bot: any, words: string[] | undefined): { held: string[]; missing: string[]; refused: string[] } {
   const held: string[] = [], missing: string[] = [], refused: string[] = [];
@@ -193,6 +216,17 @@ const isWaterName = (name: string | null) => name === 'water' || name === 'bubbl
 /** Why a body must not stand with its feet at this cell (the contract's hazards that cannot be lifted), or null. */
 export function hazardAtFeet(bot: any, x: number, y: number, z: number): string | null {
   return hazardAtFeetWith((cx, cy, cz) => nameAt(bot, cx, cy, cz), x, y, z);
+}
+/**
+ * The fire that makes a place unsafe, or null: in the cell of the feet or the head, or beside them (a blaze's fireball leaves one on the floor of its spawner's room).
+ * The dig hand puts a fire out in 0.2 s (S2 lab, 2026-11-02: `dig` at the fire's cell, the block was air after), so the line says where it is.
+ */
+export function fireNear(bot: any, x: number, y: number, z: number): Cell | null {
+  for (const [dx, dy, dz] of [[0, 0, 0], [0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1]]) {
+    const name = nameAt(bot, x + dx, y + dy, z + dz);
+    if (name === 'fire' || name === 'soul_fire') return { x: x + dx, y: y + dy, z: z + dz };
+  }
+  return null;
 }
 /** The same, reading the cells through `read` (the route search's own reader, which keeps what it has read during a search). */
 export function hazardAtFeetWith(read: (x: number, y: number, z: number) => string | null, x: number, y: number, z: number): string | null {
@@ -265,7 +299,7 @@ export function keepReads(movements: any, watch: WorldWatch): (x: number, y: num
 interface Plan { status: string; path: any[]; digs: Map<string, number>; places: number; visited: number }
 const yieldNow = () => new Promise<void>(resolve => setImmediate(resolve));
 
-interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean; upstream?: boolean }
+interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean; upstream?: boolean; dragon?: boolean }
 export interface GoState {
   steps: number; dug: number; placed: number; redraws: number;
   veto: { code: string; text: string; hint?: string } | null;
@@ -285,10 +319,12 @@ export interface GoState {
 export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk' | 'maxDig' | 'maxPlace'>> & { sprint: boolean }, rule: DigRule, placeHeld: string[], state: GoState, relax: Relax = {}): any {
   const mayDigAny = rule.names.size > 0 || !!relax.permissions;
   const mayPlaceAny = placeHeld.length > 0 || !!relax.blocks || !!relax.permissions;
-  const movements = buildMovements(bot, false, args.sprint, true, true, mayDigAny, true, 1, false, args.waterOk, args.maxDrop, args.waterOk ? 4 : 10, mayPlaceAny, 2);
+  // (the library's exclusion lists are typed as one-element tuples; the rules below append to them)
+  const movements: any = buildMovements(bot, false, args.sprint, true, true, mayDigAny, true, 1, false, args.waterOk, args.maxDrop, args.waterOk ? 4 : 10, mayPlaceAny, 2);
   movements.maxDropDown = args.maxDrop + 1;
   movements.infiniteLiquidDropdownDistance = args.waterOk;
   installDoorRules(movements);
+  installGroundSprint(movements, state.avoid);
   const registry = bot.registry;
   // Hazards: never entered, never dug into, whatever else is allowed.
   // (The route search avoids lava and fire of itself; lifting the hazards, to find out whether they are what shuts the way, lifts that too.)
@@ -333,28 +369,92 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
   movements.exclusionAreasBreak = [...(movements.exclusionAreasBreak ?? []), (block: any) => redoCost(state.laidCells, block)];
   // (mineflayer-pathfinder's walk forward onto a laid floor asks the place's exclusion of the cell above the one it lays: both are asked.)
   movements.exclusionAreasPlace = [...(movements.exclusionAreasPlace ?? []), (block: any) => redoCost(state.dugCells, block, true)];
+  // The End: the dragon's breath that lies in the world is not stepped into (a cell of it is no move: it hurts 6 a second and pushes the body off a bridge), unless the body stands in it now (the way out is then the first thing to find).
+  // A body one block up (on a laid floor) is over the cloud's slab and is not in it.
+  let clouds = relax.hazards || relax.dragon ? [] : lyingCloudZones(bot);
+  if (clouds.length && bot.entity?.position && clouds.some(zone => cloudReaches(zone.centre, zone.radius, bot.entity.position, 0))) clouds = [];
+  const perched = isEnd(bot) ? endDragonOf(bot) : null;
+  // r105 windows 4/5: wing push was observed with HP 20 throughout the basin kill. Only the walking exclusion changes;
+  // head/neck contact and existing/forecast breath stay excluded, and the floor reflex still interrupts this go.
+  let clearPerch = !relax.hazards && !relax.dragon && perched && isPerched(dragonPhaseOf(bot, perched)) ? perchClearance(bot, perched, 0, false) : null;
+  // Preserve the existing way OUT when already inside a danger; the floor reflex keeps ownership of urgent retreat.
+  if (clearPerch && bot.entity?.position && !clearPerch(bot.entity.position)) clearPerch = null;
   // Moves that end in a hazard (beside lava, on magma...), or in water when it is not allowed, are not moves.
   if (relax.upstream) (movements as { __upstream?: boolean }).__upstream = true;
   const getNeighbors = movements.getNeighbors.bind(movements);
   const inWater = isWaterName(nameAt(bot, Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z)));
-  movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => {
-    // A diagonal ascent sweeps both orthogonal corners before reaching its landing.
-    // Upstream clears the cheaper corner but does not check its footing: a failed
-    // jump can then walk into a shaft (run 54). Keep supported diagonal stairs,
-    // but make an exposed ascent approach cardinally or build its floor first.
-    const dx = move.x - node.x, dz = move.z - node.z;
-    if (move.y > node.y && Math.abs(dx) === 1 && Math.abs(dz) === 1) {
-      const supported = (x: number, z: number) => movements.getBlock(node, x, 0, z).physical || movements.getBlock(node, x, -1, z).physical;
-      if (!supported(dx, 0) || !supported(0, dz)) return false;
-    }
-    if (!relax.hazards && hazardAtFeetWith(read, move.x, move.y, move.z)) return false;
-    if (!args.waterOk && !inWater && (isWaterName(read(move.x, move.y, move.z)) || isWaterName(read(move.x, move.y + 1, move.z)))) return false;
-    return true;
-  });
+  movements.getNeighbors = (node: any) => {
+    const body = bodyCellKeys(bot);
+    return (getNeighbors(node) as any[]).filter(move => {
+      // A diagonal ascent sweeps both orthogonal corners before reaching its landing.
+      // Upstream clears the cheaper corner but does not check its footing: a failed
+      // jump can then walk into a shaft (run 54). Keep supported diagonal stairs,
+      // but make an exposed ascent approach cardinally or build its floor first.
+      const dx = move.x - node.x, dz = move.z - node.z;
+      if (move.y > node.y && Math.abs(dx) === 1 && Math.abs(dz) === 1) {
+        const supported = (x: number, z: number) => movements.getBlock(node, x, 0, z).physical || movements.getBlock(node, x, -1, z).physical;
+        if (!supported(dx, 0) || !supported(0, dz)) return false;
+      }
+      if (move.y <= node.y && Math.abs(dx) === 1 && Math.abs(dz) === 1 && !diagonalFooting(movements, node, dx, dz, move.toBreak)) return false;
+      if (body && laysIn(move, body)) return false;
+      if (!relax.hazards && hazardAtFeetWith(read, move.x, move.y, move.z)) return false;
+      if (clouds.length && cloudZoneAtCell(clouds, move.x, move.y, move.z)) return false;
+      if (clearPerch && !clearPerch({ x: move.x + 0.5, y: move.y, z: move.z + 0.5 })) return false;
+      if (!args.waterOk && !inWater && (isWaterName(read(move.x, move.y, move.z)) || isWaterName(read(move.x, move.y + 1, move.z)))) return false;
+      return true;
+    });
+  };
   return movements;
 }
 
+/**
+ * Run 59 (leg 2, task 4 holds 2 and 3, the Nether at (25,65,4)): whether a level or falling diagonal from `node` by (dx, dz) keeps the body over ground. A corner that is a wall
+ * (a block at the feet or the head that the move does not break) turns the body aside, and it goes through the other corner: that corner needs a floor. In the run the wall was
+ * basalt and the other corner the edge of the lava sea (33 down): the body slid to the edge and stopped there, the executor's 3.5 s ran out and the way was drawn again. With both
+ * corners open the body is over its own floor or its landing all the way, and the diagonal stays.
+ */
+export function diagonalFooting(movements: any, node: any, dx: number, dz: number, toBreak: readonly any[] = []): boolean {
+  const broken = (x: number, y: number, z: number) => toBreak.some((p: any) => p && p.x === node.x + x && p.y === node.y + y && p.z === node.z + z);
+  const wall = (x: number, z: number) => [0, 1].some(y => movements.getBlock(node, x, y, z).physical && !broken(x, y, z));
+  const wallX = wall(dx, 0), wallZ = wall(0, dz);
+  if (wallX === wallZ) return true;
+  return wallX ? movements.getBlock(node, 0, -1, dz).physical : movements.getBlock(node, dx, -1, 0).physical;
+}
+
+/** "x,y,z" of the cells the body is in now by its middle (its feet and its head), or null. */
+function bodyCellKeys(bot: any): string[] | null {
+  const p = bot.entity?.position;
+  if (!p) return null;
+  const x = Math.floor(p.x), y = Math.floor(p.y + 1e-3), z = Math.floor(p.z);
+  return [`${x},${y},${z}`, `${x},${y + 1},${z}`];
+}
+
+/**
+ * Run 59 (leg 2, the same holds): the way stepped back out of the body's cell, laid a block in it and climbed onto it ((25,65,3), a block in (25,65,4), up to (25,66,4)). The
+ * executor counts the step back as made when the body is nearer the cell after it (it trims the path from the player), so the block was sent with the body still in the cell: the
+ * place guard held it back (`mayLayAt`), the same way was drawn again, 12 times, and the go stopped. A move that lays a block in one of `cells` is not a move.
+ */
+export function laysIn(move: any, cells: readonly string[]): boolean {
+  return (move?.toPlace ?? []).some((p: any) => !p.useOne && cells.includes(`${p.x + p.dx},${p.y + p.dy},${p.z + p.dz}`));
+}
+
 // ---- the work ----------------------------------------------------------------------------------------------------------------------------
+/** Verify a proposed route with go's real rules, without moving, digging or placing. */
+export function goWalkRouteChecker(bot: any, deadline = Infinity): (route: Cell[]) => boolean {
+  const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0,
+    exposed: new Map(), avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
+  const movements = goMovements(bot, { maxDrop: 1, waterOk: false, maxDig: 0, maxPlace: 0, sprint: false }, digRuleOf(bot.registry, []), [], state);
+  return route => {
+    for (let i = 1; i < route.length; i++) {
+      if (performance.now() >= deadline) return false;
+      const from = route[i - 1], to = route[i];
+      const moves = movements.getNeighbors({ ...from, remainingBlocks: 0 }) as any[];
+      if (!moves.some(m => m.x === to.x && m.y === to.y && m.z === to.z && !(m.toBreak?.length) && !(m.toPlace?.length))) return false;
+    }
+    return route.length > 0;
+  };
+}
+
 
 const distanceTo = (bot: any, cell: Cell) => Math.hypot(bot.entity.position.x - (cell.x + 0.5), bot.entity.position.y - cell.y, bot.entity.position.z - (cell.z + 0.5));
 const goalOf = (cell: Cell, range: number) => range > 0 ? new goals.GoalNear(cell.x + 0.5, cell.y, cell.z + 0.5, range) : new goals.GoalBlock(cell.x, cell.y, cell.z);
@@ -537,7 +637,7 @@ export function sealedGoalWords(bot: any, cell: Cell, range: number, rule: Pick<
   let count = 0;
   for (let dx = -radius; dx <= radius; dx++) for (let dy = -radius; dy <= radius; dy++) for (let dz = -radius; dz <= radius; dz++) {
     const candidate = { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz };
-    if (!goal.isEnd(new Vec3(candidate.x, candidate.y, candidate.z))) continue;
+    if (!goal.isEnd(new Vec3(candidate.x, candidate.y, candidate.z) as any)) continue;
     if (!sealedAtWords(bot, candidate, rule, false, allowWater)) return null;
     count++;
   }
@@ -608,6 +708,19 @@ async function laidAt(host: any, reference: any, face: any): Promise<boolean> {
   }
   return false;
 }
+/** How long a place whose answer is overdue (promptPlace gives up at 1.5 s) is waited for before it is called refused (S2 lab: a server 2.2 s late with the block). */
+const LATE_ANSWER_MS = 3500;
+/** The block the hand held shows in the cell a place was made for within LATE_ANSWER_MS: the server was only slow. False when the cell is still not it, or the act is stopped. */
+async function laidLate(host: any, cell: Cell | null, blockName: string, stopped: () => boolean): Promise<boolean> {
+  if (!cell || !blockName) return false;
+  const at = new Vec3(cell.x, cell.y, cell.z);
+  const until = Date.now() + LATE_ANSWER_MS;
+  while (Date.now() < until && !stopped()) {
+    if (String(host.blockAt?.(at, false)?.name ?? '') === blockName) return true;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  return String(host.blockAt?.(at, false)?.name ?? '') === blockName;
+}
 
 /**
  * Continue contracts (1, 12 decision on go): the cells round a place that shut the way, for the stop's `lastSearch.blockedAround`. The cells the body would stand in or pass
@@ -636,12 +749,14 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   if (!cells.length) return stopped(bot, 'invalid_input', 'go には to か goals が要る');
   const limits = {
     range: args.range ?? GO_DEFAULTS.range, maxDrop: args.maxDrop ?? GO_DEFAULTS.maxDrop, waterOk: args.waterOk === true, maxDig: args.maxDig ?? GO_DEFAULTS.maxDig,
-    maxPlace: args.maxPlace ?? GO_DEFAULTS.maxPlace, sprint: args.sprint === true,
+    maxPlace: args.maxPlace ?? GO_DEFAULTS.maxPlace, sprint: args.sprint ?? bot.game?.dimension === 'overworld',
   };
   const startedAt = Date.now();
   const deadline = Math.min(ctx.deadline, startedAt + (args.seconds ?? GO_DEFAULTS.seconds) * 1000);
   const rule = digRuleOf(bot.registry, args.canDig);
   const searchCap = args.searchMs ?? 5000;
+  /** What one search of the road is given (the stop says this long). */
+  const searchSlice = args.searchMs === undefined ? Math.min(searchCap, SEARCH_SLICE_MS) : searchCap;
   const place = placeNamesOf(bot, args.canPlace);
   const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, exposed: new Map(), avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
   const start = feetCell(bot)!;
@@ -666,19 +781,28 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
 
   // ---- how a line ends (the contract's result lines) ----
   const packNote = fullPackWatch(bot);
+  /** Fires this go put out beside or in its place (a blaze camp's cells burn again and again). */
+  let doused = 0;
   const tail = () => `${cellText(feetCell(bot) ?? start)} 道 ${state.steps} 歩・掘 ${state.dug}・置 ${state.placed}・引き直し ${state.redraws} 回`;
-  const fail = (code: string, why: string, hint: string): StepOutcome => {
+  const fail = (code: string, reason: string, hint: string): StepOutcome => {
     const at = feetCell(bot) ?? start;
     const head = `go 止まった ${code}: `;
+    // S2 lab (a Nether walk of 244 m on 64 stones, 63 of them laid in the leg before): the stop said "not_loaded" while the real reason was the stones being gone.
+    // When the go laid blocks and the pack holds none of the kinds it was given to lay, the stop says so (whatever else it says), so the head fetches more.
+    const spent = place.held.length > 0 && state.placed > 0 && code !== 'limit_place' && code !== 'no_blocks' && place.held.every(name => inventoryCount(bot, name) === 0);
+    const why = spent ? `${reason}（置く物 ${place.held.join('・')} を ${state.placed} 個置いて使い切った）` : reason;
+    const advice = spent && (code === 'not_loaded' || code === 'dead_end') ? '置く物を集めてからもう一度' : hint;
     const full = packNote();
-    const fixed = ` ${tail()}${full ? `。${full}` : ''}`;
+    const fixed = ` ${tail()}${doused ? `。火を ${doused} 個消した` : ''}${full ? `。${full}` : ''}`;
     // The contract's line: the code, the reason, where and the counts, then the hint; what does not fit of the 160 is cut from the back (the hint first).
     const room = 160 - head.length - fixed.length;
-    const withHint = hint ? `。${hint}` : '';
+    const withHint = advice ? `。${advice}` : '';
     const text = why.length + withHint.length <= room ? `${head}${why}${fixed}${withHint}` : `${head}${clip(why, Math.max(24, room))}${fixed}`;
     return { ...stopped(bot, code, text, at, start), progress: progressNow(), data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } };
   };
-  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
+  /** What a stop for want of blocks to lay says to do: name the cheap blocks the pack holds (dug netherrack, stone ...), else gather some. */
+  const noBlocksHint = (fallback = '置ける物を集めるか、canPlace を足す'): string => { const held = bridgeBlocksHeld(bot, args.canPlace); return held ? `荷の ${held} を canPlace に足すか、集める` : fallback; };
+  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${doused ? `。火を ${doused} 個消した` : ''}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
   /** The stop at the time limit: when the body is held in flowing water, that is in the line (whatever the length of `seconds`). */
@@ -688,10 +812,25 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     return fail('limit_time', `${args.seconds ?? GO_DEFAULTS.seconds} 秒の上限に着いた（行き先まで あと ${left}m）${held}`, wet ? '上流の水源を汲むかブロックで塞ぐか、別の道を' : 'seconds を増やすか、行き先を近くに');
   };
 
+  // ---- fire in or beside a place is put out where the body can reach it (S2, S4's c1 camp: a blaze's fireballs light the cells round its camp again and again, each refusal was a dig of the planner's own) ----
+  for (const cell of cells) {
+    for (let round = 0; round < 4 && doused < 8; round++) {
+      const why = hazardAtFeet(bot, cell.x, cell.y, cell.z);
+      if (!why || !/^(?:soul_)?fire /u.test(why)) break;
+      const fire = fireNear(bot, cell.x, cell.y, cell.z);
+      if (!fire || distanceTo(bot, fire) > 4.2 || ctx.stop?.aborted) break;
+      const out = await dig(ctx, { at: [fire], collect: false });
+      if (!out.ok) break;
+      doused++;
+    }
+  }
   // ---- the places: the ones nobody may stand in are dropped; none left is `unsafe` ----
   const safeCells = cells.filter(cell => !hazardAtFeet(bot, cell.x, cell.y, cell.z));
   if (!safeCells.length) {
     const why = hazardAtFeet(bot, cells[0].x, cells[0].y, cells[0].z) ?? '危ない';
+    // A fire is what the dig hand puts out (0.2 s): a spawner room's floor is dotted with them, and the place beside one is the place to fight from.
+    const fire = /^(?:soul_)?fire /u.test(why) ? fireNear(bot, cells[0].x, cells[0].y, cells[0].z) : null;
+    if (fire) return fail('unsafe', `行き先 ${cellText(cells[0])} は${why}（火の中・隣には行かない）`, `火 ${cellText(fire)} は dig で消せる。または別の行き先を`);
     return fail('unsafe', `行き先 ${cellText(cells[0])} は${why}（溶岩・火・マグマ・サボテン・ベリー・ウィザーローズとその隣には行かない）`, '別の行き先を');
   }
   // Run 44 (hold 1): a place over a plant nobody stands on is said at once (`floorlessAt`); one place of several that is such is dropped.
@@ -699,6 +838,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const placing = place.held.length > 0;
   const grounded = limits.range < 1 ? safeCells.filter(cell => !floorlessAt(bot, cell, rule, placing)) : safeCells;
   if (!grounded.length) {
+    // A portal's cell has no floor to ask for (an End portal is a sheet over lava): it is entered with walk, as its target, not with go.
+    const portalCell = safeCells.find(cell => /^(end_portal|nether_portal|end_gateway)$/u.test(String(nameAt(bot, cell.x, cell.y, cell.z) ?? '')));
+    if (portalCell) return fail('no_floor', `行き先 ${cellText(portalCell)} は ${nameAt(bot, portalCell.x, portalCell.y, portalCell.z)}（ポータルのマス。足場は要らない）`, 'ポータルは go でなく walk の的にして入る');
     const why = floorlessAt(bot, safeCells[0], rule, placing)!;
     return fail('no_floor', why, /なら .* の上に立てる$/u.test(why) ? 'その 1 つ下を行き先に' : /^行き先 .* は宙/u.test(why) ? '立てる所を行き先に（宙へ渡るなら canPlace）' : '別の行き先を');
   }
@@ -836,10 +978,22 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     if (target) await blockInHand(host, place.held);
     const at = host.entity?.position?.clone?.() ?? null;
     const facts = () => { const cell = placedCell(rest[0], rest[1]); return cell ? placeFacts(host, cell, topOfJump(), at ?? undefined) : ''; };
+    const heldName = String(host.heldItem?.name ?? '');
     try { result = await originalPlace.apply(host, rest); }
     catch (error) {
       // The library gives up when the server's update does not come: that too is a place the server did not take (an interruption is not).
-      if (counting && !/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) refusedPlace(facts(), placedCell(rest[0], rest[1]));
+      if (counting && !/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) {
+        // S2 lab (c4, the Nether, a busy machine): the server answered 2.2 s late, the block showed 0.7 s after the 1.5 s wait ended, and the go had already been stopped as refused
+        // (three of four such stops in a leg were this). An answer that is only late is waited for, up to LATE_ANSWER_MS; a block that shows is a block laid.
+        const lateCell = placedCell(rest[0], rest[1]);
+        if (/did not answer within|did not fire within/u.test(String((error as Error)?.message)) && await laidLate(host, lateCell, heldName, () => ctx.stop?.aborted === true)) {
+          blackBoxOf(host)?.note('place_late', { at: lateCell ? [lateCell.x, lateCell.y, lateCell.z] : null });
+          state.placed++; lastWork = Date.now(); state.refused = 0;
+          if (lateCell) state.laidCells.add(keyOf(lateCell));
+          return undefined;
+        }
+        refusedPlace(facts(), placedCell(rest[0], rest[1]));
+      }
       throw error;
     }
     if (!counting) return result;
@@ -919,11 +1073,18 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const plan = async (movements: any, goal: any, ms: number, track = true): Promise<Plan> => {
     toolKept.clear();
     const searchStarted = Date.now();
-    const generator = nav.getPathFromTo(movements, bot.entity.position, goal, { timeout: Math.max(300, Math.min(ms, searchCap)) });
+    const generator = nav.getPathFromTo(movements, bot.entity.position, goal, { timeout: Math.max(300, Math.min(ms, searchSlice)) });
     let result = generator.next().value?.result ?? { status: 'noPath', path: [] };
     // The search answers a tick (40 ms) at a time while it is still going; here it is let finish (its own time bounds it), the body's other work
     // (its packets, its physics, the act's watch) getting its turn between the ticks.
-    for (let rounds = 0; result.status === 'partial' && rounds < 2000; rounds++) { await yieldNow(); result = generator.next().value?.result ?? result; }
+    // A stop (a reflex's, the stopIf's, the end of the command) ends the search at once: a cancelled act that goes on searching holds the body still (lab r54: five seconds of a search
+    // for a way nobody wanted any more, a dragon's fireball on the body that stood waiting for the reflex to be let in).
+    for (let rounds = 0; result.status === 'partial' && rounds < 2000; rounds++) {
+      if (ctx.stop.aborted) throw new StepStopped(String(ctx.stop.reason ?? 'stopped'));
+      await yieldNow();
+      result = generator.next().value?.result ?? result;
+    }
+    if (ctx.stop.aborted) throw new StepStopped(String(ctx.stop.reason ?? 'stopped'));
     const digs = new Map<string, number>();
     let places = 0;
     for (const node of result.path ?? []) {
@@ -951,7 +1112,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const tip = found.path.length ? found.path[found.path.length - 1] : null;
     const tipCell = tip ? nodeCell(tip) : null;
     const reach = tipCell ? `、${cellText(tipCell)} まで・あと ${Math.hypot(tipCell.x - aim.x, tipCell.y - aim.y, tipCell.z - aim.z).toFixed(0)}m` : '';
-    return fail('search_timeout', `道探しが ${(searchCap / 1000).toFixed(searchCap < 1000 ? 2 : 0)} 秒で終わらない（道の有無は不明。${found.visited.toLocaleString('en-US')} マス調べた${reach}）`,
+    return fail('search_timeout', `道探しが ${(searchSlice / 1000).toFixed(searchSlice < 1000 ? 2 : searchSlice % 1000 ? 1 : 0)} 秒で終わらない（道の有無は不明。${found.visited.toLocaleString('en-US')} マス調べた${reach}）`,
       '10m 以内の中継点へ go か、dig と walk の階段・縦穴で');
   };
 
@@ -960,6 +1121,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const shown = (map: Map<string, number>) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${name}×${count}`).join('・');
     const ignored = rule.ignored.length ? `（無視した canDig: ${rule.ignored.slice(0, 3).join('・')}）` : '';
     const lifts: Array<[Relax, (found: Plan) => StepOutcome]> = [
+      ...(lyingCloudZones(bot).length || (endDragonOf(bot) && isPerched(dragonPhaseOf(bot, endDragonOf(bot)))) ? [[{ dragon: true }, () => fail('dead_end', '道の先が竜の息の雲・止まり木の接触か息の予告の中で、避けると道が無い', '現在の phase・dragonBreath・approach を見て別の行き先か、別の側から')] as [Relax, (found: Plan) => StepOutcome]] : []),
       [{ hazards: true }, () => fail('lava', '道の先が溶岩・火・マグマ・サボテンなどで、避けると道が無い', '別の行き先か、別の側から')],
       ...(state.dug >= limits.maxDig || state.placed >= limits.maxPlace ? [[{ limits: true }, () => state.dug >= limits.maxDig
         ? fail('limit_dig', `掘る数の上限 ${limits.maxDig} に着いた（この先にも掘る所がある）`, 'maxDig を増やすか、別の道を')
@@ -968,7 +1130,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       [{ tool: true }, found => fail('no_tool', `${shown(found.digs) || '掘る所'} を掘る道だが、持っている道具では掘れない`, 'ツルハシなどを手に入れるか、別の道を')],
       ...(args.canPlace?.length ? [[{ blocks: true }, (found: Plan) => fail('no_blocks',
         `置く物が足りない（置く所 ${found.places}、持っている ${place.held.map(name => `${name}×${inventoryCount(bot, name)}`).join('・') || '無し'}${place.missing.length ? `、持っていない ${place.missing.join('・')}` : ''}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`,
-        '置ける物を集めるか、canPlace を足す')] as [Relax, (found: Plan) => StepOutcome]] : []),
+        noBlocksHint())] as [Relax, (found: Plan) => StepOutcome]] : []),
       [{ permissions: true }, found => fail('dead_end', `許した手では道が無い。${found.digs.size ? `canDig に ${[...found.digs.keys()].slice(0, 3).join('・')} を許せば掘 ${[...found.digs.values()].reduce((a, b) => a + b, 0)} で` : ''}${found.places ? `canPlace を許せば置 ${found.places} で` : ''}道がある${ignored}`, '許すか、別の行き先を')],
     ];
     // The way with the rules as given was searched to its end and is shut (a search that ran out of time never comes here); a lifted search
@@ -989,7 +1151,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (timeLeft() <= 0) break;
       if (state.placed >= limits.maxPlace) return { levels, stop: fail('limit_place', `置く数の上限 ${limits.maxPlace} に着いた`, 'maxPlace を増やすか、別の道を') };
       const block = place.held.find(name => inventoryCount(bot, name) > 0);
-      if (!block) return { levels, stop: fail('no_blocks', `登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : 'canPlace に置ける物が無い'}）`, '置ける物を集めるか、canPlace を足す') };
+      if (!block) return { levels, stop: fail('no_blocks', `登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : 'canPlace に置ける物が無い'}）`, noBlocksHint()) };
       // Run 44 (hold 1): the feet are read standing. The climb began while the walk before it still jumped (its last point was lifted onto a
       // trapdoor), the feet read a cell up at y 65.17, and the level was laid for a cell the body was half in (0.80) and no jump reaches.
       if (bot.entity?.onGround === false) await waitUntil(ctx, () => bot.entity?.onGround !== false, 1500);
@@ -1042,6 +1204,18 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         let dug: StepOutcome;
         try { dug = await dig(ctx, { at: [roof], collect: false }); } finally { manualBusy = false; }
         if (!dug.ok) return { levels, stop: fail(dug.reason === 'lava_behind' ? 'lava' : 'dead_end', dug.text.slice(0, 90), '別の場所から') };
+      }
+      // Run 59 (hold 3): a rail (or a torch, a flower) in the feet cell takes the level's block: it is dug like the roof when canDig allows,
+      // otherwise the climb says which block stops it (it once jumped twice over a mineshaft's rail and said only that the jump fell short).
+      const blocker = climbBlocker(bot, feetCell(bot)!);
+      if (blocker) {
+        if (!rule.names.has(blocker.name) || state.dug >= limits.maxDig) {
+          return { levels, stop: fail(state.dug >= limits.maxDig ? 'limit_dig' : 'dead_end', `${blocker.words}（掘ってよい物に無い）`, `canDig に ${blocker.name} を足すか、別の場所から`) };
+        }
+        manualBusy = true;
+        let dug: StepOutcome;
+        try { dug = await dig(ctx, { at: [blocker.cell], collect: false }); } finally { manualBusy = false; }
+        if (!dug.ok || climbBlocker(bot, feetCell(bot)!)) return { levels, stop: fail('dead_end', dug.ok ? `${blocker.words}（掘っても残った）` : dug.text.slice(0, 90), '別の場所から') };
       }
       manualBusy = true;
       let up: StepOutcome;
@@ -1196,8 +1370,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         // The place is higher than the nearest the way goes: a climb. The route search's own towers are off; a block is laid at the top of each jump.
         if (!place.held.length) {
           return args.canPlace?.length
-            ? fail('no_blocks', `行き先は ${lowest - closestY} 段上で、登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : '置ける物が無い'}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`, '置ける物を集めるか、canPlace を足す')
-            : fail('dead_end', `行き先は ${lowest - closestY} 段上で、道は途中までしか無い。登るには canPlace が要る`, 'canPlace に置ける物を足す');
+            ? fail('no_blocks', `行き先は ${lowest - closestY} 段上で、登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : '置ける物が無い'}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`, noBlocksHint())
+            : fail('dead_end', `行き先は ${lowest - closestY} 段上で、道は途中までしか無い。登るには canPlace が要る`, noBlocksHint('canPlace に置ける物を足す'));
         }
         // To the foot of the climb along the level: an end the way found high up (a search cut by its time ends where it got to) is not walked to,
         // the executor has no towers (run 41 replay: 12 redraws at a goal 17 up, stuck in 10 s); the climb starts here.
@@ -1220,7 +1394,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         // not walked, and the stop said search_timeout (道探しが終わらない). It is the limit: said as such, with what is left and what the part needs.
         const over = tip ? budgetOf(countOf(found), found.places) : null;
         if (over && partialWalks < GO_PARTIAL_WALKS) {
-          return fail(over.code, `道探しは ${(searchCap / 1000).toFixed(searchCap < 1000 ? 2 : 0)} 秒で終わらず、見つかった途中までの道（${cellText(nodeCell(tip!))} まで）でも${over.text.replace(/^この道は/u, '')}`,
+          return fail(over.code, `道探しは ${(searchSlice / 1000).toFixed(searchSlice < 1000 ? 2 : searchSlice % 1000 ? 1 : 0)} 秒で終わらず、見つかった途中までの道（${cellText(nodeCell(tip!))} まで）でも${over.text.replace(/^この道は/u, '')}`,
             over.code === 'limit_dig' ? 'maxDig を増やして出し直す（下りは 1 段に 2 前後掘る）' : 'maxPlace を増やして出し直す');
         }
         if (tip && partialWalks < GO_PARTIAL_WALKS) {

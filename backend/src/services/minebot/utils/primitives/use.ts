@@ -7,6 +7,12 @@ import { noteSpawnBed } from '../ownedBlocks.js';
 import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, findItem, guard, inventoryCount, isAirLike, placeText, stopped,
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { BED_HALF_WAIT_MS } from './place.js';
+import { compassOf, eyeReportOf, EYE_FATE_MS, EYE_WATCH_MS, watchEyeFlight } from '../huntEyeFlight.js';
+import { barterWithPiglin } from '../huntBarter.js';
+import { blastAt } from '../crystalBlast.js';
+import { entityHealth } from '../mapMarks.js';
+import { boxDistance, partBox } from '../dragonParts.js';
+import { endDragonOf } from '../dragonState.js';
 
 /**
  * use: the right hand on a block, a creature, or the air (design mb-llm-centric 2.3 and the owner's dragon list, 2026-10-21).
@@ -15,9 +21,11 @@ import { BED_HALF_WAIT_MS } from './place.js';
  *   - flint and steel lights the cell given (a portal frame's inside, a block's top);
  *   - a bed sleeps (what stops it is the game's: not night, monsters near);
  *   - a door, gate, trapdoor, lever or button is worked;
- *   - an eye of ender in the air is thrown, and where it flew is measured (bearing, how far); on an end portal frame it is set in, and
+ *   - an eye of ender in the air is thrown, and where it flew is measured (the exact line: the body's position, the horizontal unit vector, the bearing, how far;
+ *     and how the eye ended); on an end portal frame it is set in, and
  *     the frames filled are counted;
- *   - seeds, bone meal and the like on the block given; anything else on a creature (`entity`), or in the air.
+ *   - seeds, bone meal and the like on the block given; a gold ingot on a piglin is one whole exchange (offer, wait, gather what comes back);
+ *     anything else on a creature (`entity`), or in the air.
  * The item is the one asked for (`item`), else what the hand holds. What came of it is read back from the world.
  */
 export interface UseArgs { item?: string; at?: Cell; against?: string; entity?: string }
@@ -53,40 +61,38 @@ function liquidLevel(block: any): number {
   try { return Number(block?.getProperties?.().level ?? block?.metadata ?? 0); } catch { return -1; }
 }
 
-/** The eye's flight, read until it falls or breaks (about three seconds): its bearing and how far it went (the owner's list). */
+/**
+ * The eye's flight, followed by the connection's own words (utils/huntEyeFlight): the eye that appears within three blocks of the body is
+ * followed by entityMoved to entityGone (ten seconds at most), its horizontal direction is a unit vector and a bearing, and how it ended
+ * (the item fell, or it shattered) is read from what the connection says next, not guessed from the pack. The body's exact position is
+ * told with it: the line is that position and that vector, and where two lines cross is for whoever reads the two results (the head).
+ */
 async function throwEye(ctx: StepContext): Promise<StepOutcome> {
   const bot = ctx.bot;
-  const eyes = () => Object.values(bot.entities ?? {}).filter((entity: any) => entity?.name === 'eye_of_ender' && entity.position?.distanceTo(bot.entity.position) < 8) as any[];
-  const before = new Set(eyes().map(entity => entity.id));
   const from = feetCell(bot)!;
-  const throwFrom = bot.entity.position.clone();
-  const left = inventoryCount(bot, 'ender_eye');
-  bot.activateItem();
-  let eye: any = null;
-  await waitUntil(ctx, () => !!(eye = eyes().find(entity => !before.has(entity.id))), 2000);
-  try { bot.deactivateItem(); } catch { /* released */ }
-  if (!eye) return stopped(bot, 'eye_not_thrown', 'エンダーアイは飛ばなかった（要塞の無い次元か、エンドポータルの枠を見ている）', from);
-  const start = eye.position.clone();
-  let end = start.clone(), last = Date.now();
-  const id = eye.id;
-  for (const until = Date.now() + 4000; Date.now() < until;) {
-    await wait(ctx, 100);
-    const now = bot.entities?.[id];
-    if (!now) break;
-    if (now.position.distanceTo(end) > 0.02) last = Date.now();
-    end = now.position.clone();
-    if (Date.now() - last > 600) break;
-  }
-  const dx = end.x - throwFrom.x, dz = end.z - throwFrom.z, flat = Math.hypot(dx, dz);
-  const kept = inventoryCount(bot, 'ender_eye');
-  const broke = !bot.entities?.[id] && kept < left;
-  if (flat < 0.5) return { ok: true, text: `エンダーアイを ${cellText(from)} で投げたが、横にほとんど動かなかった（要塞はほぼ真下）。残り${kept}`, at: from };
-  const bearing = (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360;
-  const compass = ['北', '北東', '東', '南東', '南', '南西', '西', '北西'][Math.round(bearing / 45) % 8];
-  const to = { x: Math.floor(end.x), y: Math.floor(end.y), z: Math.floor(end.z) };
-  const flight = { from, bearingDeg: Math.round(bearing * 10) / 10, flew: Math.round(flat * 10) / 10, to, broke };
-  return { ok: true, at: from, data: { eye: flight }, text: `エンダーアイを ${cellText(from)} で投げた: 方位 ${bearing.toFixed(1)}°（北0°・東90°、${compass}）、水平に ${flat.toFixed(1)} ブロック先まで飛んだ`
-    + `（向き x=${(dx / flat).toFixed(3)} z=${(dz / flat).toFixed(3)}）。${broke ? '目玉は割れた' : bot.entities?.[id] ? '目玉は落ちて残っている（拾える）' : '目玉は消えた'}。残り${kept}` };
+  const origin = bot.entity.position.clone();
+  const watcher = watchEyeFlight(bot, { origin });
+  try {
+    bot.activateItem();
+    const appeared = await guard(ctx, watcher.spawned, 2_200);
+    try { bot.deactivateItem(); } catch { /* released */ }
+    if (!appeared?.value) return stopped(bot, 'eye_not_thrown', 'エンダーアイは飛ばなかった（要塞の無い次元か、エンドポータルの枠を見ている）', from);
+    const seen = await guard(ctx, watcher.flight, EYE_WATCH_MS + EYE_FATE_MS + 1_000);
+    const flight = seen?.value ?? null;
+    const kept = inventoryCount(bot, 'ender_eye');
+    if (!flight) return { ok: true, at: from, text: `目玉を${cellText(from)}で投げたが、飛びを追えなかった。残り${kept}` };
+    // The act's line is clipped at 160 characters: the direction and the end of the eye come first; the exact numbers are in `eye` (the result's structure).
+    const cellOf = (p: { x: number; y: number; z: number }) => cellText({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
+    const how = flight.fate === 'dropped' ? `落ちて残る${flight.drop ? `#${flight.drop.id}${cellOf(flight.drop.at)}` : ''}`
+      : flight.fate === 'shattered' ? '割れた' : flight.gone ? '落ちたか割れたか不明' : `${Math.round(EYE_WATCH_MS / 1000)}秒見ても消えず`;
+    const report = eyeReportOf(flight, from);
+    if (!report) return { ok: true, at: from, text: `目玉を${cellText(from)}で投げた: 横に${flight.flat.toFixed(1)}しか動かず、要塞は真下かすぐ近く。${how}。残り${kept}` };
+    if (report.down) {
+      return { ok: true, at: from, data: { eye: report }, text: `目玉を${cellText(from)}で投げた: 横に${flight.flat.toFixed(1)}しか動かず${(-flight.rise).toFixed(1)}落ちた=要塞はほぼ真下（終点${cellOf(flight.end)}）。${how}。残り${kept}` };
+    }
+    return { ok: true, at: from, data: { eye: report }, text: `目玉を${cellText(from)}で投げた: 方位${report.bearingDeg.toFixed(2)}°${compassOf(report.bearingDeg)}・水平${report.flew.toFixed(1)}・上${report.rise.toFixed(1)}`
+      + `・向き x${report.unit!.x.toFixed(3)} z${report.unit!.z.toFixed(3)}。${how}${report.arrived ? '。短い飛び=終点のx,zが要塞の起点' : ''}。残り${kept}` };
+  } finally { watcher.cancel(); }
 }
 
 /** Frames of the portal round `cell` (within 4), and how many have their eye. */
@@ -137,6 +143,77 @@ async function sleepInBed(ctx: StepContext, cell: Cell, asked: any): Promise<Ste
   return { ok: true, text: `${cellText(cell)} のベッドで寝た${woke ? '（朝になって起きた）' : '（15秒で起きた。夜はまだ）'}。リスポーン地点はこのベッド${late >= 20 ? `（頭のブロックが来るまで ${late}ms 待った）` : ''}`, at: cell };
 }
 
+/** A bed's blast: power 5 at the bed's middle. */
+const BED_POWER = 5;
+/**
+ * The blast is waited for this long after the click (the server blows it in the same tick), and its harm this long more (the health packet follows within a tick or two).
+ * The act stops a body that lost 4 health or more a quarter of a second after (`damage_taken`), and at once when a floor reflex takes the body (the blast's fire sent the lava escape
+ * about a tenth of a second after, lab 2026-11-02), so the hand answers before that, or the planner is told "hit" or "reflex" and not what the bed did (a bed blown 4.4 blocks off in the open
+ * took 15 and the answer was "被弾: 体力 20 → 6"). The server sends the health in the tick of the blast or the next: a little over a tick.
+ */
+const BLAST_WAIT_MS = 1500;
+const HARM_SETTLE_MS = 80;
+
+/**
+ * A bed right-clicked in the Nether or the End (the planner asked: a use hand at the bed's cell): it blows, power 5, fire, and is gone. Said in
+ * numbers: whether it blew, how far the body was from its centre, the health the body lost, and the dragon's, when one is in sight (its head's
+ * distance to the centre and its health before and after). Refused beforehand, with the numbers, when the blast would leave the body less than
+ * its health (an estimate: distance, the part of the body in its sight, difficulty and armour; the shield, enchantments and resistance are not
+ * counted). The click is `bot.activateBlock`, never a sleep (the body's evidence reads it as the bed it used).
+ */
+async function blowBed(ctx: StepContext, cell: Cell, block: any): Promise<StepOutcome> {
+  const bot = ctx.bot;
+  // The click on the foot is passed to the head (BedBlock): the blast is centred on the HEAD half whichever half was clicked. Both halves are gone when it blows: neither shuts the blast out.
+  const halves = bedHalves(block, cell);
+  const blastCell = halves?.head ?? cell;
+  const centre = { x: blastCell.x + 0.5, y: blastCell.y + 0.5, z: blastCell.z + 0.5 };
+  const guess = blastAt(bot, centre, bot.entity.position, BED_POWER, halves ? [halves.foot, halves.head] : []);
+  if (!guess.safe) {
+    return stopped(bot, 'blast_unsafe', `${placeText(bot, cell)} のベッドを使うと爆発（威力${BED_POWER}）が自分に当たる見込み: 中心まで ${guess.distance}m・見える割合 ${guess.seen}・素の被害 ${guess.raw}→防具後 ${guess.expected}`
+      + `（体力 ${guess.health}。盾・エンチャント・耐性は数えない）。離れるか、間にブロックを置く`, cell);
+  }
+  const healthBefore = Number(bot.health ?? 20);
+  const dragon = endDragonOf(bot);
+  const dragonBefore = dragon ? entityHealth(bot, dragon) : null;
+  let blast: { x: number; y: number; z: number } | null = null;
+  const onBlast = (packet: any) => {
+    const c = packet?.center ?? (typeof packet?.x === 'number' ? { x: packet.x, y: packet.y, z: packet.z } : null);
+    if (c && Math.hypot(c.x - centre.x, c.y - centre.y, c.z - centre.z) <= 3) blast = { x: c.x, y: c.y, z: c.z };
+  };
+  /** What the bed did, as far as it has been seen now (the blast is told by the server's explosion packet, not by the bed being gone). */
+  const account = () => {
+    const gone = !isBedName(blockAt(bot, cell)?.name);
+    const exploded = blast !== null;
+    const at = blast ?? centre;
+    const distance = Math.round(Math.hypot(bot.entity.position.x - at.x, bot.entity.position.y - at.y, bot.entity.position.z - at.z) * 10) / 10;
+    const lost = Math.max(0, Math.round((healthBefore - Number(bot.health ?? healthBefore)) * 10) / 10);
+    const live = dragon ? bot.entities?.[dragon.id] : null;
+    const dragonAfter = live ? entityHealth(bot, live) : null;
+    const toHead = live ? Math.round(boxDistance(at, partBox({ position: live.position, yaw: live.yaw }, 'head')) * 10) / 10 : null;
+    const dragonText = live ? `。竜: 頭の箱まで爆発の中心から ${toHead}m・体力 ${dragonBefore ?? '?'}→${dragonAfter ?? '?'}` : '';
+    const blew = `爆発した（威力${BED_POWER}）: 自分まで ${distance}m・見込み ${guess.expected}・失った体力 ${lost}（体力 ${healthBefore}→${Number(bot.health ?? healthBefore)}）${dragonText}`;
+    return { gone, exploded, distance, lost, blew, data: { bed: { exploded, distance: exploded ? distance : null, damage: exploded ? lost : null } } };
+  };
+  try { bot._client?.on?.('explosion', onBlast); } catch { /* the packet is a help */ }
+  try {
+    await guard(ctx, Promise.resolve(bot.activateBlock(block)), 3000);
+    await waitUntil(ctx, () => blast !== null || !isBedName(blockAt(bot, cell)?.name), BLAST_WAIT_MS, 25);
+    await wait(ctx, HARM_SETTLE_MS);
+  } catch (error) {
+    if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) {
+      // The act or a floor reflex ended the hand after the click (the blast's fire sent the lava escape within a tenth of a second, lab 2026-11-02): the act says the stop, and this says what the bed did.
+      // HandCut is the act's own word for it; fight.ts imports this file, so it is loaded when it is needed.
+      const cutAt = account();
+      const { HandCut } = await import('./fight.js');
+      throw new HandCut(error instanceof StepStopped ? error.why : String((error as Error).message), `ベッド ${cellText(cell)}: ${cutAt.exploded ? cutAt.blew : `爆発の知らせはまだ受けていない（今 ${cellNow(bot, cell)}）`}`);
+    }
+  } finally { try { bot._client?.removeListener?.('explosion', onBlast); } catch { /* gone */ } }
+  const seen = account();
+  // A bed that is merely gone (someone mined it, the cell is not loaded) is not a bed that blew: the server's blast is what says so.
+  if (!seen.exploded) return { ...stopped(bot, 'not_exploded', `${placeText(bot, cell)} のベッドを右クリックしたが爆発の知らせは受けていない（今 ${cellNow(bot, cell)}${seen.gone ? '。ベッドは消えたが、爆発したかは分からない' : ''}）。次: ベッドの足と頭の両方のマスが揃っているか見て、置き直してからもう一度`, cell), data: seen.data };
+  return { ok: true, at: cell, data: seen.data, text: `${cellText(cell)} のベッドが${seen.blew}` };
+}
+
 export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const name = args.item ?? bot.heldItem?.name ?? null;
@@ -147,6 +224,8 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
   if (args.entity) {
     const target = findEntity(bot, args.entity);
     if (!target) return stopped(bot, 'target_not_found', `${args.entity} が近く（16m）にいない`);
+    // Gold to a piglin is an exchange, one whole: the offer, the six seconds of looking, and what comes back taken (utils/huntBarter).
+    if (name === 'gold_ingot' && target.name === 'piglin') return barterWithPiglin(ctx, target);
     if (target.position.distanceTo(bot.entity.position) > 4) return stopped(bot, 'out_of_reach', `${target.name}（${cellText(cellOf(target.position))}）に届かない（${target.position.distanceTo(bot.entity.position).toFixed(1)}m）`, cellOf(target.position));
     await guard(ctx, Promise.resolve(bot.lookAt(target.position.offset(0, (target.height ?? 1) * 0.6, 0), true)), 1000);
     bot.useOn(target);
@@ -168,8 +247,9 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
   if (!block) return stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell);
   const distance = eyeDistance(bot, cell);
   if (distance > USE_REACH) return stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell);
-  // A bed (r8: before any item is looked at; the bed is slept in with an empty hand).
-  if (BEDS.test(block.name)) return sleepInBed(ctx, cell, block);
+  // A bed (r8: before any item is looked at; the bed is slept in with an empty hand). In the Nether and the End it cannot be slept in: the right click is a blast, and a use hand
+  // at a bed there is the planner asking for it (the body never does it by itself).
+  if (BEDS.test(block.name)) return /(^|:)(the_end|the_nether)$/u.test(String(bot.game?.dimension ?? '')) ? blowBed(ctx, cell, block) : sleepInBed(ctx, cell, block);
   // A bucket on a source.
   if (name === 'bucket') {
     if (block.name !== 'water' && block.name !== 'lava') return stopped(bot, 'not_liquid', `${placeText(bot, cell)} は ${cellNow(bot, cell)}（水や溶岩ではない）`, cell);
@@ -265,6 +345,14 @@ export function lineBlocker(bot: any, cell: Cell): { cell: Cell; name: string } 
 const oppositeOf = (side: string) => ({ down: 'up', up: 'down', north: 'south', south: 'north', east: 'west', west: 'east' } as Record<string, string>)[side];
 const cellOf = (position: { x: number; y: number; z: number }): Cell => ({ x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) });
 
+/** A creature at 0 health that the game still shows for its death (about a second): the registry names a health datum for its kind and it reads 0 or less. */
+export function isDying(bot: any, entity: any): boolean {
+  const keys: string[] | undefined = bot.registry?.entitiesByName?.[String(entity.name ?? '')]?.metadataKeys;
+  if (!keys || keys.indexOf('health') < 0) return false;
+  const health = entityHealth(bot, entity);
+  return health !== null && health <= 0;
+}
+
 /** A creature by id ("123") or by name, the nearest within 16 m. */
 export function findEntity(bot: any, spec: string | number, range = 16): any {
   const at = bot.entity?.position;
@@ -272,7 +360,8 @@ export function findEntity(bot: any, spec: string | number, range = 16): any {
   const id = typeof spec === 'number' ? spec : /^\d+$/u.test(String(spec).trim()) ? Number(spec) : null;
   if (id !== null) return bot.entities?.[id] ?? null;
   const wanted = String(spec).trim().toLowerCase().replace(/^minecraft:/u, '');
+  // A kind named by its name is not the one that is dying (a corpse that is still shown was taken for "the nearest blaze" again after its kill); one named by its id is whatever is there.
   return (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity && entity !== bot.entity && entity.position
-    && (String(entity.name ?? '').toLowerCase() === wanted || String(entity.username ?? '').toLowerCase() === wanted) && entity.position.distanceTo(at) <= range)
+    && (String(entity.name ?? '').toLowerCase() === wanted || String(entity.username ?? '').toLowerCase() === wanted) && entity.position.distanceTo(at) <= range && !isDying(bot, entity))
     .sort((a, b) => a.position.distanceTo(at) - b.position.distanceTo(at))[0] ?? null;
 }
