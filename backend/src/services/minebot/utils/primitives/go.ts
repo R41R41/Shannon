@@ -676,8 +676,24 @@ export function blockedAroundPlace(bot: any, aim: Cell, rule: Pick<DigRule, 'nam
   return found.sort((a, b) => a.order - b.order).slice(0, 8).map(({ at, block, diggable }) => ({ at, block, diggable }));
 }
 
+/**
+ * Where one go's seconds went (S8, 2026-11-05: the Nether walks ran 0.6 to 0.7 m a second and nobody knew whether the digging, the road searches or
+ * the walking took the time). `searchMs`: this hand's own road searches (the route executor's searches while it walks are in `walkMs`); `walkMs`:
+ * the route executor walking (its digs and places included); `digMs`, `placeMs`: the digs and places of the go (executor's and the hand's own);
+ * `sprintMs`: the time the sprint key was down; `metres`: straight from where it began to where it ended.
+ */
+export interface GoTiming { totalMs: number; searchMs: number; walkMs: number; digMs: number; placeMs: number; climbMs: number; mendMs: number; sprintMs: number; digs: number; places: number; searches: number; metres: number }
+const goTimings = new WeakMap<object, GoTiming>();
+/** The timing of the last go this body made (for the lab's measures), or null. */
+export function lastGoTiming(host: object): GoTiming | null { return goTimings.get(host) ?? null; }
+
 export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
+  const timing: GoTiming = { totalMs: 0, searchMs: 0, walkMs: 0, digMs: 0, placeMs: 0, climbMs: 0, mendMs: 0, sprintMs: 0, digs: 0, places: 0, searches: 0, metres: 0 };
+  const timed = async <T>(key: 'searchMs' | 'walkMs' | 'climbMs' | 'mendMs', work: () => Promise<T>): Promise<T> => {
+    const began = Date.now();
+    try { return await work(); } finally { timing[key] += Date.now() - began; }
+  };
   const nav = bot.pathfinder as any;
   if (!nav) return stopped(bot, 'no_pathfinder', '経路探索が無い体');
   const cells = (args.goals ?? []).slice(0, 8);
@@ -804,8 +820,12 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const recent = heights.filter(([at]) => at >= since).map(([, y]) => y);
     return recent.length ? Math.max(...recent) : null;
   };
+  let lastTickAt = Date.now();
   const onTick = () => {
     try {
+      const tickAt = Date.now();
+      if (bot.controlState?.sprint) timing.sprintMs += Math.min(200, tickAt - lastTickAt);
+      lastTickAt = tickAt;
       const y = Number(bot.entity?.position?.y);
       if (Number.isFinite(y)) { heights.push([Date.now(), y]); if (heights.length > 40) heights.shift(); }
       const feet = feetCell(bot);
@@ -850,8 +870,10 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const countingDig = async function (this: unknown, ...rest: unknown[]) {
     const at = (rest[0] as { position?: { x: number; y: number; z: number } } | undefined)?.position;
     let result: unknown;
+    const digBegan = Date.now();
     try { result = await originalDig.apply(host, rest); }
     catch (error) { if (counting && error instanceof ThreatExposedError) noteExposed(at, error); throw error; }
+    finally { if (counting) { timing.digMs += Date.now() - digBegan; timing.digs++; } }
     if (counting) { state.dug++; lastWork = Date.now(); if (at) { state.dugCells.add(`${at.x},${at.y},${at.z}`); lastDugKey = `${at.x},${at.y},${at.z}`; } }
     return result;
   };
@@ -884,6 +906,10 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     letGo(bot);
   };
   const countingPlace = async function (this: unknown, ...rest: unknown[]) {
+    const placeBegan = Date.now();
+    try { return await countingPlaceTimed(...rest); } finally { if (counting) { timing.placeMs += Date.now() - placeBegan; timing.places++; } }
+  };
+  const countingPlaceTimed = async function (...rest: unknown[]) {
     let result: unknown;
     // Run 45 (hold 2, the lab, three times out of three): the route laid a block to step up onto in the cell before the feet while the body
     // stood 0.1 into that cell (overlap 0.91): the server refused it and the go stopped. The body steps back out of the cell first.
@@ -1008,6 +1034,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const plan = async (movements: any, goal: any, ms: number, track = true): Promise<Plan> => {
     toolKept.clear();
     const searchStarted = Date.now();
+    timing.searches++;
     const generator = nav.getPathFromTo(movements, bot.entity.position, goal, { timeout: Math.max(300, Math.min(ms, searchSlice)) });
     let result = generator.next().value?.result ?? { status: 'noPath', path: [] };
     // The search answers a tick (40 ms) at a time while it is still going; here it is let finish (its own time bounds it), the body's other work
@@ -1019,6 +1046,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       for (const cell of node?.toBreak ?? []) { const name = nameAt(bot, cell.x, cell.y, cell.z) ?? '?'; digs.set(name, (digs.get(name) ?? 0) + 1); }
       places += node?.toPlace?.length ?? 0;
     }
+    timing.searchMs += Date.now() - searchStarted;
     const found: Plan = { status: String(result.status), path: result.path ?? [], digs, places, visited: Number(result.visitedNodes ?? 0) };
     // The route searches that decide the stop are kept (the lifted-rule searches that only name a reason are not): its status, the cells of the way, the nodes, the time, and
     // how far from the places the way's end was (the "あと 10m" of a search that ran out).
@@ -1225,7 +1253,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (drawn.status === 'success') {
         const over = budgetOf(countOf(drawn), drawn.places);
         if (over) return fail(over.code, over.text, over.code === 'limit_dig' ? 'maxDig を増やすか、別の道を' : 'maxPlace を増やすか、別の道を');
-        out = await goWith(ctx, legGoal, timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true });
+        out = await timed('walkMs', () => goWith(ctx, legGoal, timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true }));
       }
       const blocked = vetoed();
       if (blocked) { letGo(bot); return blocked; }
@@ -1248,7 +1276,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         if (end && Math.hypot(end.x - bot.entity.position.x, end.z - bot.entity.position.z) > 1.5) {
           state.redraws++;
           const cell = nodeCell(end);
-          await goWith(ctx, new goals.GoalBlock(cell.x, cell.y, cell.z), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true });
+          await timed('walkMs', () => goWith(ctx, new goals.GoalBlock(cell.x, cell.y, cell.z), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true }));
           letGo(bot);
           continue;
         }
@@ -1280,7 +1308,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
           return fail('stuck', `${GO_STUCK_MS / 1000}秒位置が変わらず、直しを ${GO_REPAIRS} 回しても進まない（今 ${cellText(feet)}）`, 'view で周りを見て別の手を');
         }
         state.redraws++;
-        await mend(mends, aim);
+        await timed('mendMs', () => mend(mends, aim));
         continue;
       }
       // The way is not found. The first time may be the ground still arriving: a new drawing. Then a climb, then the reason.
@@ -1306,12 +1334,12 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         const here = feetCell(bot);
         if (end && endCell && Math.hypot(end.x - bot.entity.position.x, end.z - bot.entity.position.z) > 1.2 && (!here || endCell.y <= here.y + 1)) {
           state.redraws++;
-          await goWith(ctx, new goals.GoalBlock(endCell.x, endCell.y, endCell.z), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true });
+          await timed('walkMs', () => goWith(ctx, new goals.GoalBlock(endCell.x, endCell.y, endCell.z), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true }));
           letGo(bot);
           const again = vetoed();
           if (again) return again;
         }
-        const climbed = await climb(lowest);
+        const climbed = await timed('climbMs', () => climb(lowest));
         if (climbed.levels > 0) { noway = 0; state.redraws++; continue; }
         if (climbed.stop) return climbed.stop;
       }
@@ -1330,7 +1358,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
           const gain = distanceTo(bot, aim) - Math.hypot(cell.x - aim.x, cell.y - aim.y, cell.z - aim.z);
           if (gain >= 2) {
             partialWalks++; state.redraws++;
-            await goWith(ctx, new goals.GoalBlock(cell.x, cell.y, cell.z), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true });
+            await timed('walkMs', () => goWith(ctx, new goals.GoalBlock(cell.x, cell.y, cell.z), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true }));
             letGo(bot);
             const again = vetoed();
             if (again) return again;
@@ -1349,6 +1377,13 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     if (error && typeof error === 'object' && !(error as { progress?: unknown }).progress) { try { (error as { progress?: Progress }).progress = progressNow(); } catch { /* the cut stands without it */ } }
     throw error;
   } finally {
+    try {
+      timing.totalMs = Date.now() - startedAt;
+      const p = bot.entity?.position;
+      timing.metres = p && startPosition ? round1(Math.hypot(p.x - startPosition.x, p.y - startPosition.y, p.z - startPosition.z)) : 0;
+      goTimings.set(host, { ...timing });
+      blackBoxOf(host)?.note('go_time', { ...timing });
+    } catch { /* a measure is never the stop */ }
     bot.removeListener?.('physicsTick', onTick);
     // Put back by identity on the host; a wrapper another module put over ours meanwhile stays (it reaches ours, which then counts nothing).
     counting = false;
