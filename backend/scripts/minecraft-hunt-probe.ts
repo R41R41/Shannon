@@ -10,7 +10,7 @@
 //   MINECRAFT_HUNT_SCENES=blaze_hold,barter    names or prefixes (default: all)
 //   MINECRAFT_HUNT_SECONDS=<n>         the length of the timed scenes (blaze camps: default 240)
 //   MINECRAFT_HUNT_REPORT=<file>       the whole report as JSON
-//   HUNT_ROOF_STAND=overworld,X,Y,Z        optional ender_roof_natural stand (or the_nether,X,Y,Z); Y is feet height
+//   MINECRAFT_HUNT_ROOF_STAND= (lab runner: HUNT_ROOF_STAND=)overworld,X,Y,Z        optional ender_roof_natural stand (or the_nether,X,Y,Z); Y is feet height
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -1240,7 +1240,7 @@ scene('ender_warped', 'enderman: the warped forest itself, four endermen', note 
 // ===== natural roof hunt: ONLY this scene stands in for the head's choices; no site/target policy is installed in the body ===================
 scene('ender_roof_natural', '自然湧き25分: 森の小空地・下面2mの3×3屋根・中央固定。召喚なし、観測から場所と #id を選ぶ', async note => {
   if (timedSeconds && timedSeconds !== 1500 && timedSeconds < 60) throw new Error('ENDER_ROOF_NATURAL_REQUIRES_MINECRAFT_HUNT_SECONDS_1500_OR_A_DIAGNOSTIC_OF_60_OR_MORE');
-  const override = (process.env.HUNT_ROOF_STAND ?? process.env.ROOF_STAND)?.split(',').map(part => part.trim());
+  const override = (process.env.MINECRAFT_HUNT_ROOF_STAND ?? process.env.ROOF_STAND)?.split(',').map(part => part.trim());
   if (override && (override.length !== 4 || !['overworld', 'the_nether'].includes(override[0])
     || override.slice(1).some(part => !part || !Number.isFinite(Number(part))))) throw new Error('INVALID_ROOF_STAND: expected overworld,X,Y,Z or the_nether,X,Y,Z');
   const dimension = override?.[0] === 'overworld' ? 'overworld' : 'the_nether';
