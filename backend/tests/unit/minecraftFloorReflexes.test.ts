@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { executeAction, physicalActionBusy } from '../../src/services/minebot/execution/ActionExecution.js';
-import { coverChoice, supportCells, creeperLit, floorEatChoice, floorRetreatTick, retreatThreat, shootersInReach, type FloorBody, type RetreatState } from '../../src/services/minebot/utils/floorReflexes.js';
+import { coverChoice, supportCells, creeperLit, floorEatChoice, floorRetreatTick, retreatThreat, shootersInReach, shootersSeeing, flyingShooterAbove, burningInSight, lastStandChoice, fleeThreat, fleeStart, unseenHeadingPlan, weaklyArmoured, type FloorBody, type FloorState, type RetreatState } from '../../src/services/minebot/utils/floorReflexes.js';
 
 function body(patch: Partial<FloorBody> & { items?: { name: string }[]; slots?: ({ name: string } | null)[] } = {}) {
   const keys: Record<string, boolean> = {}, looks: number[] = [];
@@ -244,5 +244,98 @@ describe('floor reflexes (ADR-0010 D8, defence only)', () => {
     expect(retreatThreat(bot, arrows)).toBeNull();
     bot.entities![2].position = new Vec3(6, 65, 0);
     expect(retreatThreat(bot, arrows)?.kind).toBe('arrow');
+  });
+});
+
+describe('run62 #14 #17 #11: the floor among shooters', () => {
+  /** Stone floor under y 64, air above, with optional walls. */
+  const field = (walls: Array<[number, number, number]> = []) => {
+    const solid = new Set(walls.map(([x, y, z]) => `${x},${y},${z}`));
+    const bot = body({
+      health: 6, food: 10, items: [{ name: 'golden_carrot', count: 4 }, { name: 'cobblestone', count: 32 }] as any,
+      blockAt: (p: Vec3) => {
+        const at = p.floored(), name = at.y < 64 || solid.has(`${at.x},${at.y},${at.z}`) ? 'stone' : 'air';
+        return { name, boundingBox: name === 'stone' ? 'block' : 'empty', position: at };
+      },
+    } as Partial<FloorBody>);
+    bot.entity!.position = new Vec3(0.5, 64, 0.5);
+    (bot.entity as any).metadata = [0];
+    return bot;
+  };
+  const burn = (bot: FloorBody) => { (bot.entity as any).metadata = [1]; };
+
+  it('#14: a blaze 2.5 above and in sight stops the pillar of the last stand; level with the body, or out of sight, it does not', () => {
+    const bot = field();
+    bot.entities![9] = { id: 9, name: 'zombie', type: 'hostile', position: new Vec3(5.5, 64, 0.5), height: 1.95 } as any;
+    expect(lastStandChoice(bot, 'dig')?.kind).toBe('pillar');
+    add(bot, 20475, { name: 'blaze', position: new Vec3(3.5, 66.5, 0.5), height: 1.8 });
+    expect(flyingShooterAbove(bot)).toBe('blaze #20475');
+    expect(lastStandChoice(bot, 'dig')).toBeNull();
+    bot.entities![20475].position = new Vec3(0.5, 64, 5.5);
+    expect(flyingShooterAbove(bot)).toBeNull();
+    expect(lastStandChoice(bot, 'dig')?.kind).toBe('pillar');
+    const walled = field([[2, 64, 0], [2, 65, 0], [2, 66, 0], [2, 67, 0], [2, 68, 0], [2, 69, 0]]);
+    add(walled, 20475, { name: 'blaze', position: new Vec3(3.5, 66.5, 0.5), height: 1.8 });
+    expect(flyingShooterAbove(walled)).toBeNull();
+  });
+
+  it('#14: burning in sight of a blaze the floor does not eat above 5; at 5 or less it does; not burning it does', () => {
+    const bot = field();
+    add(bot, 20475, { name: 'blaze', position: new Vec3(5.5, 66, 0.5), height: 1.8 });
+    expect(floorEatChoice(bot)?.name).toBe('golden_carrot');
+    burn(bot);
+    expect(burningInSight(bot)).toBe(true);
+    expect(floorEatChoice(bot)).toBeNull();
+    bot.health = 4.95;
+    expect(floorEatChoice(bot)?.name).toBe('golden_carrot');
+  });
+
+  it('#11: armour 4 or less and no shield is a body the first arrow moves; a shield in the off hand or iron on the chest is not', () => {
+    expect(weaklyArmoured(field())).toBe(true);
+    const shielded = field(); shielded.inventory!.slots![45] = { name: 'shield' } as any;
+    expect(weaklyArmoured(shielded)).toBe(false);
+    const iron = field(); iron.inventory!.slots![6] = { name: 'iron_chestplate' } as any;
+    expect(weaklyArmoured(iron)).toBe(false);
+    const leather = field(); leather.inventory!.slots![6] = { name: 'leather_chestplate' } as any; leather.inventory!.slots![5] = { name: 'leather_helmet' } as any;
+    expect(weaklyArmoured(leather)).toBe(true);
+  });
+
+  it('#17: a skeleton that cannot see the body is no threat to run from; one that sees it is', () => {
+    const bot = field([[2, 64, 0], [2, 65, 0], [2, 66, 0]]);
+    bot.health = 4;
+    add(bot, 9727, { name: 'skeleton', type: 'hostile', position: new Vec3(5.5, 64, 0.5), height: 1.99 });
+    expect(fleeThreat(bot)).toBeNull();
+    delete bot.entities![9727];
+    add(bot, 9728, { name: 'skeleton', type: 'hostile', position: new Vec3(0.5, 64, 6.5), height: 1.99 });
+    expect(fleeThreat(bot)?.threats).toHaveLength(1);
+  });
+
+  it('#17: for 4 s after the cover cut the line, the low-health flee does not start (unless a melee enemy is within 4 m)', () => {
+    const bot = field();
+    bot.health = 4;
+    add(bot, 9727, { name: 'skeleton', type: 'hostile', position: new Vec3(0.5, 64, 6.5), height: 1.99 });
+    const now = 1_000_000;
+    const state = { retreat: { engaged: false, ticks: 0, cooldown: 0, engagements: 0 }, busy: null, retryAt: 0, engagements: { eat: 0, armor: 0, flee: 0 }, fleeStarts: [] } as FloorState;
+    state.coverCutAt = now - 1000;
+    expect(fleeStart(bot, state, now)).toBeNull();
+    add(bot, 5, { name: 'zombie', type: 'hostile', position: new Vec3(-2.5, 64, 0.5), height: 1.95 });
+    expect(fleeStart(bot, state, now)).not.toBeNull();
+    delete bot.entities![5];
+    expect(fleeStart(bot, { ...state, fleeEpisode: undefined, coverCutAt: now - 4500 }, now)).not.toBeNull();
+  });
+
+  it('#17: the flee takes a heading whose next cells the shooter cannot see, when there is one', () => {
+    // A wall along x = 2 from z = -6 to z = 1: the skeleton at (6.5, 64, 0.5) sees the body; north (z < 0) behind the wall is out of its sight.
+    const wall: Array<[number, number, number]> = [];
+    for (let z = -6; z <= 0; z++) for (const y of [64, 65, 66]) wall.push([2, y, z]);
+    const bot = field(wall);
+    bot.entity!.position = new Vec3(0.5, 64, 2.5);
+    add(bot, 9727, { name: 'skeleton', type: 'hostile', position: new Vec3(6.5, 64, 3.5), height: 1.99 });
+    const seeing = shootersSeeing(bot, shootersInReach(bot, bot.entity!.position), bot.entity!.position);
+    expect(seeing).toHaveLength(1);
+    const plan = unseenHeadingPlan(bot, [bot.entities![9727].position], undefined, seeing);
+    expect(plan).not.toBeNull();
+    const ahead = new Vec3(Math.floor(0.5 - Math.sin(plan!.yaw) * 3) + 0.5, 64, Math.floor(2.5 - Math.cos(plan!.yaw) * 3) + 0.5);
+    expect(ahead.z).toBeLessThan(2);
   });
 });

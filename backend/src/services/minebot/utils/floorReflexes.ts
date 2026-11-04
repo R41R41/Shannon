@@ -1,7 +1,7 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { actionLeaseStatus, actionSignal, activeActionCapabilities, cancelCapability, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, reservationOf, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
-import { isHeadCombatActive, isHeadCombatRunning } from './combatOwner.js';
+import { armourWorn, isHeadCombatActive, isHeadCombatRunning } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
 import { edgeRisk, fallIsDangerous } from './edgeGuard.js';
@@ -77,6 +77,8 @@ const FLEE_LOOKAHEAD = 5;
 const FLEE_EPISODE_BLOCKS = 32;
 const FLEE_EPISODE_MS = 6000;
 const FLEE_REST_MS = 2000;
+/** run62 #17: cover が射線を切った後、低体力の逃走を始めない間。 */
+const COVER_HOLD_MS = 4000;
 /** A segment that moved less than this made no headway; two in a row end the episode. */
 const FLEE_MIN_HEADWAY = 1.5;
 /** After a refusal (no safe way) the ground is not read again for this long. */
@@ -214,6 +216,10 @@ export interface FloorState {
   shots?: Array<{ at: number; shooter: number }>;
   damageAt?: number[];
   falls?: number[];
+  /** run62 #11: 体力が減った時刻と、その 1 回の減り（1 発の重さ）。 */
+  fallSizes?: Array<{ at: number; amount: number }>;
+  /** run62 #17: cover が「射線が切れた」で終わった時刻（その後しばらく低体力の逃走は陰から出ない）。 */
+  coverCutAt?: number;
   /** r8, the melee hand: the episode (hands made, when the last ended), the next look, the last "no hand" note. */
   melee?: { since: number; hands: number; lastEnd: number; /** r9: the hands that were blows (their own allowance). */ hits?: number;
     /** Continue contracts (4): the enemy of the episode's latest hand, the kind of that hand, and when the cap was told (once per episode). */
@@ -443,6 +449,16 @@ export function mealDanger(bot: FloorBody, mend: boolean): string | null {
   } catch { return mend ? '竜の危険が読めない' : null; }
   return null;
 }
+/** 燃えて射線の中でも床が食べる体力（これ以下は、食べないと次の 1 発で死ぬ）。 */
+const BURNING_MEAL_HEALTH = 5;
+/** 燃えていて、射手（blaze・ghast・スケルトンの類）が体を見ている。 */
+export function burningInSight(bot: FloorBody): boolean {
+  let burning = false;
+  try { burning = isBurning(bot as never); } catch { burning = false; }
+  const at = bot.entity?.position;
+  if (!burning || !at) return false;
+  try { return shootersSeeing(bot, shootersInReach(bot, at).slice(0, 8), at).length > 0; } catch { return false; }
+}
 /** A meal that cannot wait (starving, or nearly dead with hunger to fill), by the mode's own test; every other meal of the body is a mending one. */
 function criticalMeal(health: number, food: number, wide: boolean): boolean {
   return (food <= SELF_EAT_FOOD || health <= SELF_EAT_HEALTH) && (wide ? eatIsCritical(health, food) : (food <= 6 || (health <= 12 && food < 18)));
@@ -462,6 +478,11 @@ export function floorEatChoice(bot: FloorBody, wide = true): Item | null {
   const critical = criticalMeal(health, food, wide);
   const mend = wide && !critical && mendingMeal(bot, health, food);
   if (!critical && !mend) return null;
+  // 75bb25b8（S2、lab rra 11/5）: 戦う印がある間は cover/flee と同じく体力 5 より上で待つ。射線の中の食事で退きを切らず、隠れた先の食事は頭が選ぶ。
+  // 印は敵対の相手との戦いの時だけ立つ（combatOwner の fightsAHostile）ので、豚や羊の狩りの間の食事は止めない。
+  if (isHeadCombatActive(bot)) return null;
+  // run62 #14（03:39:28〜30）: 燃えて射手の射線の中で 1.6 秒立ち止まって食べ、4.95→2.95。燃えて見られている間は、体力 5 以下を除いて食べない（射線を切るのが先）。
+  if (health > BURNING_MEAL_HEALTH && burningInSight(bot)) return null;
   if (bot.entity?.isInLava || hostileWithin(bot, mend ? MEND_HOSTILE_NEAR : HOSTILE_NEAR, wide, wide)) return null;
   let items = (bot.inventory?.items() ?? []).filter(item => (FALLBACK_FOOD_POINTS[item.name] ?? 0) > 0 && !NEVER_EAT.has(item.name)
     && (item.name !== 'rotten_flesh' || food <= 6) && !(mend && (RAW_FOOD.has(item.name) || item.name === 'rotten_flesh')));
@@ -919,7 +940,13 @@ export interface FleeThreat { from: Vec3; threats: Vec3[]; nearest: number }
  */
 const SIGHT_ONLY_SHOOTERS = new Set(['blaze', 'ghast']);
 const SIGHT_ONLY_NEAR_M = 6;
-const outOfSightOfAShooter = (name: string, exposure: string, distance: number): boolean => SIGHT_ONLY_SHOOTERS.has(name) && exposure !== 'seen' && distance > SIGHT_ONLY_NEAR_M;
+/**
+ * run62 #17（02:34:35）: cover が射線を切った 58ms 後、低体力の逃走が見えていないスケルトンから離れる向きへ走り、見える所へ出て 5 発目で死んだ。
+ * スケルトンの類は弓で撃つだけで、見えない体には何もできない。見えていない間は、距離にかかわらず逃げる相手に数えない。
+ */
+const BOW_SHOOTERS = new Set(['skeleton', 'stray', 'bogged']);
+const outOfSightOfAShooter = (name: string, exposure: string, distance: number): boolean => exposure !== 'seen'
+  && ((SIGHT_ONLY_SHOOTERS.has(name) && distance > SIGHT_ONLY_NEAR_M) || BOW_SHOOTERS.has(name));
 
 export function fleeThreat(bot: FloorBody, keeping = false): FleeThreat | null {
   const health = bot.health ?? 20, at = bot.entity?.position;
@@ -969,6 +996,12 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeS
   if (escapeRunning(bot)) return null;
   // After a refusal the ground is not read again for half a second: a body that cannot run must not cost the tick a search every 50 ms.
   if (now < (state.fleeRefusedUntil ?? 0)) return null;
+  // run62 #17: cover が射線を切った後 COVER_HOLD_MS は、近接の敵が 4m 内に来ていない限り走らない（陰から出ると撃たれる）。
+  if (now - (state.coverCutAt ?? -Infinity) < COVER_HOLD_MS) {
+    let melee = false;
+    try { melee = meleeCandidates(bot).length > 0 && meleeThreatsNear(bot).length > 0; } catch { melee = true; }
+    if (!melee) return null;
+  }
   const at = bot.entity?.position;
   let episode = state.fleeEpisode;
   if (episode) {
@@ -1013,17 +1046,42 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeS
  *    would be a wall for ever (the physics: pressing jump at the shore gets out of the water onto a bank flush with it; without, it
  *    sticks there).
  */
-export function fleeKeys(bot: FloorBody, threats: Vec3[], memory: { heading?: number }): { yaw: number; jump: boolean } | null {
+export function fleeKeys(bot: FloorBody, threats: Vec3[], memory: { heading?: number }, seeing: CoverShooter[] = []): { yaw: number; jump: boolean } | null {
   const body = bot.entity;
   const swimming = body?.isInWater === true;
   if (body && body.onGround === false && !swimming && body.isInLava !== true && memory.heading !== undefined) return { yaw: memory.heading, jump: false };
-  const plan = fleeHeadingPlan(bot, threats, memory.heading);
+  const plan = (seeing.length ? unseenHeadingPlan(bot, threats, memory.heading, seeing) : null) ?? fleeHeadingPlan(bot, threats, memory.heading);
   if (plan === null) return null;
   memory.heading = plan.yaw;
   // A jump carries the speed the body has into the air, and it is judged for a flight along the heading: it is pressed once the body runs
   // that way (a few ticks after a turn), or from a standstill (open-loop: a jump pressed right after a 40 degree turn flew 15 degrees off the
   // line it was judged for and came down on lava).
   return { yaw: plan.yaw, jump: plan.jump && (swimming || (body?.onGround !== false && runsAlong(body, plan.yaw))) };
+}
+
+/** How far along a heading the cell that must be out of the shooters' sight is read. */
+const UNSEEN_AHEAD = [2, 3];
+/**
+ * run62 #17: 射手に見られている体の逃走は、見えないマスへ着く向きを先に取る。前の向きがそうならそれを保ち、無ければ fleeHeadingPlan と同じ安全な向き
+ * （まっすぐ離れる・45/90 度の曲がり、敵へ寄らない）のうち 2〜3 マス先が誰からも見えない物。どれも見える時は null（ふだんの向き）。
+ */
+export function unseenHeadingPlan(bot: FloorBody, threats: Vec3[], previous: number | undefined, seeing: CoverShooter[]): { yaw: number; jump: boolean } | null {
+  const at = bot.entity?.position; if (!at || !threats.length || !seeing.length) return null;
+  const closed = solidReader(bot);
+  const hidden = (yaw: number) => UNSEEN_AHEAD.some(ahead => {
+    const x = Math.floor(at.x - Math.sin(yaw) * ahead), z = Math.floor(at.z - Math.cos(yaw) * ahead);
+    const feet = new Vec3(x + 0.5, Math.floor(at.y + 1e-3), z + 0.5);
+    return !seeing.some(shooter => { try { return seesBodyAt(bot as any, shooter.entity as any, feet, closed); } catch { return true; } });
+  });
+  const away = repulsionYaw(at, threats);
+  const tries = previous !== undefined ? [previous, ...FLEE_TURNS.map(turn => away + turn)] : FLEE_TURNS.map(turn => away + turn);
+  for (const yaw of tries) {
+    if (yaw !== away && runsToward(at, yaw, threats)) continue;
+    if (!hidden(yaw)) continue;
+    const scan = scanHeading(bot, at, yaw);
+    if (scan.safe) return { yaw, jump: scan.jump };
+  }
+  return null;
 }
 
 /** Whether the body's own speed over the ground is (nearly) along `yaw`, or too small to matter. */
@@ -1051,7 +1109,9 @@ export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs =
       if (ticks >= FLEE_YIELD_AFTER_TICKS && commandWaiting(bot)) { ended = 'yield'; break; }
       // Away from all of them, or the nearest turn that does not lead to lava or a drop (and none: it stops here). The edge guard
       // still has the final say over the keys at the physics tick.
-      const keys = fleeKeys(bot, threat.threats, memory);
+      let seeing: CoverShooter[] = [];
+      try { seeing = shootersSeeing(bot, shootersInReach(bot, body.position).slice(0, 3), body.position); } catch { seeing = []; }
+      const keys = fleeKeys(bot, threat.threats, memory, seeing);
       if (keys === null) { ended = 'blocked'; break; }
       port.look?.(keys.yaw, 0, true);
       port.setControlState('forward', true); port.setControlState('sprint', true);
@@ -1355,9 +1415,26 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
     return null;
   }
   // (c) One block up: a full block carried, and the two cells over the head are air.
-  if (skip !== 'pillar') {
+  // run62 #14（03:39:27〜37）: 上 2〜3 に浮くブレイズへ向かって柱を 4 回積み、自分から射線の高さへ上がって焼け死んだ。目より上に見えている飛ぶ射手がいる時は積まない。
+  if (skip !== 'pillar' && !flyingShooterAbove(bot)) {
     const block = pillarBlockAt(bot, feet, items);
     if (block) return { kind: 'pillar', block, detail: `${lead} 1段積んで上がった ${where}${fact}` };
+  }
+  return null;
+}
+
+/** 飛ぶ射手（上から撃つ）と、柱を止める距離。 */
+const FLYING_SHOOTERS = new Set(['blaze', 'ghast']);
+const FLYING_SHOOTER_NEAR = 8;
+/** run62 #14: 8m 内に、体の目より上（相手の体の真ん中で読む）にいて体を見ている飛ぶ射手。柱で上がると射線へ近づくだけになる。 */
+export function flyingShooterAbove(bot: FloorBody): string | null {
+  const at = bot.entity?.position; if (!at) return null;
+  const eye = at.y + 1.62;
+  for (const entity of others(bot)) {
+    const name = String(entity.name ?? '').toLowerCase();
+    if (!FLYING_SHOOTERS.has(name) || entity.position.distanceTo(at) > FLYING_SHOOTER_NEAR) continue;
+    if (entity.position.y + (entity.height ?? 1.8) / 2 <= eye) continue;
+    try { if (seesBodyAt(bot as any, entity as any, at, solidReader(bot))) return `${name} #${entity.id}`; } catch { /* unread: not counted */ }
   }
   return null;
 }
@@ -1458,8 +1535,16 @@ const COVER_STEP_IN_REACH = 1.6;
  * names a projectile and who shot it) and a shooter that sees it stands in reach: the same one minimal hand, and (only then) one more, a
  * block put on the line a cell or two from the body (`line`), counted by the sight lines it closes.
  */
-const SHOT_WINDOW_MS = 5000;
+// run62 #11（02:34:22〜37）: 防具 0・盾なしのスケルトンの矢は 1 発 4〜5 で、4 発で死ぬ。間は 3.1・6.1・2.9 秒で、5 秒の窓では 2 発目と 3 発目が数えられなかった。
+// 窓は 8 秒。防具の点が WEAK_ARMOUR_POINTS 以下で盾が無い時、または 1 発で BIG_HIT 以上減った時は、1 発で動く。
+const SHOT_WINDOW_MS = 8000;
 const SHOT_HITS = 2;
+const WEAK_ARMOUR_POINTS = 4;
+const BIG_HIT = 4;
+/** run62 #11: 防具の点が WEAK_ARMOUR_POINTS 以下で、盾を持っていない（矢 1 発が 4〜5、4 発で死ぬ体）。 */
+export function weaklyArmoured(bot: FloorBody): boolean {
+  return armourWorn(bot as never).points <= WEAK_ARMOUR_POINTS && !holdsShield(bot);
+}
 /** A hit the server named nothing for is a shot only when it lands within this of the fall in health. */
 const SHOT_NAMED_WITHIN_MS = 400;
 const SHOT_NAMED_WAIT_MS = 150;
@@ -1521,11 +1606,13 @@ export function projectileShooter(packet: { sourceCauseId?: number; sourceDirect
  * counts with that shooter. A fall in health the server named nothing for (no packet, an older server) counts only when a shooter (the
  * cover's kinds, a piglin or a pillager) that sees the body stands out of a blow's reach and no melee enemy is within it.
  */
-export function recentShots(bot: FloorBody, state: FloorState, feet: Vec3, t: number, fought?: (name: string) => boolean): { hits: number; shooters: CoverShooter[] } {
+export function recentShots(bot: FloorBody, state: FloorState, feet: Vec3, t: number, fought?: (name: string) => boolean): { hits: number; shooters: CoverShooter[]; biggest: number } {
   const shots = (state.shots ?? []).filter(shot => t - shot.at <= SHOT_WINDOW_MS);
   // (A fall younger than the wait may still have its packet on the way.)
   const unnamed = (state.falls ?? []).filter(at => t - at <= SHOT_WINDOW_MS && t - at >= SHOT_NAMED_WAIT_MS && !(state.damageAt ?? []).some(named => Math.abs(named - at) <= SHOT_NAMED_WITHIN_MS));
-  if (!shots.length && !unnamed.length) return { hits: 0, shooters: [] };
+  if (!shots.length && !unnamed.length) return { hits: 0, shooters: [], biggest: 0 };
+  /** The fall in health that a hit at `at` made (the health packet comes with the damage event, the fall is read at the next physics tick). */
+  const sizeAt = (at: number) => Math.max(0, ...(state.fallSizes ?? []).filter(fall => Math.abs(fall.at - at) <= SHOT_NAMED_WITHIN_MS).map(fall => fall.amount));
   const found = new Map<number, CoverShooter>();
   const keep = (entity: FloorEntity | undefined) => {
     if (!entity?.position || entity === bot.entity || entity.id === undefined) return;
@@ -1534,7 +1621,7 @@ export function recentShots(bot: FloorBody, state: FloorState, feet: Vec3, t: nu
     found.set(entity.id, { entity, distance: entity.position.distanceTo(feet) });
   };
   for (const shot of shots) keep(bot.entities?.[shot.shooter]);
-  let hits = shots.length;
+  let hits = shots.length, biggest = Math.max(0, ...shots.map(shot => sizeAt(shot.at)));
   if (unnamed.length) {
     const near = others(bot).some(entity => entity.position.distanceTo(feet) <= MELEE_RANGE && isThreat(bot, entity) && COVER_SHOOTERS[String(entity.name ?? '').toLowerCase()] === undefined
       && SHOT_EXTRA_KINDS[String(entity.name ?? '').toLowerCase()] === undefined);
@@ -1548,9 +1635,9 @@ export function recentShots(bot: FloorBody, state: FloorState, feet: Vec3, t: nu
       }
     }
     const seeing = watchers.length ? shootersSeeing(bot, watchers, feet) : [];
-    if (seeing.length) { hits += unnamed.length; for (const { entity } of seeing) keep(entity); }
+    if (seeing.length) { hits += unnamed.length; biggest = Math.max(biggest, ...unnamed.map(sizeAt)); for (const { entity } of seeing) keep(entity); }
   }
-  return { hits, shooters: [...found.values()].sort((a, b) => a.distance - b.distance) };
+  return { hits, shooters: [...found.values()].sort((a, b) => a.distance - b.distance), biggest };
 }
 
 /**
@@ -2037,7 +2124,8 @@ export function meleeChoice(bot: FloorBody, threats: MeleeThreat[], options: { h
     }
     const placed = blockBetween();
     if (placed) return { hand: placed, why: '', footing: here, quiet: false };
-    const up = pillarOver(read, feet, items, why);
+    const flier = flyingShooterAbove(bot);
+    const up = flier ? (why.push(`上に ${flier} が見えていて積まない`), null) : pillarOver(read, feet, items, why);
     if (up) return { hand: up, why: '', footing: here, quiet: false };
     // Nothing to put: at the flee's health the flee is the one that runs; above it a step away (r8's) is the last of the hands.
     if ((bot.health ?? 20) <= FLEE_HEALTH) return { hand: null, why: why.join('・'), footing: here, quiet: true };
@@ -2257,10 +2345,16 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     if (hasActiveSafetyLease(bot) || escapeRunning(bot) || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) return false;
     if (LAYING_HANDS.has(String((bot as { actHandNow?: string }).actHandNow ?? ''))) return false;
     const body = bot.entity; if (!body) return false;
-    const fought = health > FLEE_HEALTH ? (name: string) => engagedWithAny(bot, [name]) : undefined;
-    let shot: { hits: number; shooters: CoverShooter[] } | null = null;
+    // run62 #9: 頭の戦いの間も cover は動く。外すのは、頭が戦うと選んだ種類の射手だけ（体力が逃走の境より上か、戦いの印がある間：ブレイズ狩りの退きは fight の手が持つ）。
+    const fought = health > FLEE_HEALTH || isHeadCombatActive(bot) ? (name: string) => engagedWithAny(bot, [name]) : undefined;
+    let shot: { hits: number; shooters: CoverShooter[]; biggest: number } | null = null;
     if (mayBeShot) {
-      try { const found = recentShots(bot, state, body.position, t, fought); if (found.hits >= SHOT_HITS && found.shooters.length) shot = found; } catch { shot = null; }
+      try {
+        const found = recentShots(bot, state, body.position, t, fought);
+        // run62 #11: 1 発で動く時（防具が薄く盾が無い、または 1 発が重い）。
+        const needed = found.biggest >= BIG_HIT - 1e-6 || weaklyArmoured(bot) ? 1 : SHOT_HITS;
+        if (found.hits >= needed && found.shooters.length) shot = found;
+      } catch { shot = null; }
     }
     if (!burning && !(episode && falling) && !shot) return false;
     state.coverNextAt = t + COVER_GAP_MS;
@@ -2311,6 +2405,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         const done = !!(result as { success?: boolean } | undefined)?.success;
         const failed = done ? '' : `（できなかった: ${String((result as { result?: string } | undefined)?.result ?? '').slice(0, 50)}）`;
         handle.detail = `${lead} ${cover.detail}${failed}。${still.length ? `まだ見えている: ${shooterWords(after!, still)}` : '射線が切れた'} 体力${Math.round((bot.health ?? 0) * 10) / 10}`.slice(0, COVER_DETAIL_MAX);
+        // run62 #17: 切れた射線を、低体力の逃走がすぐ開け直さない（fleeStart の COVER_HOLD_MS）。
+        if (after && !still.length) state.coverCutAt = now();
         ledger.end(handle, done ? 'done' : (result as { failureType?: string } | undefined)?.failureType === 'interrupted' ? 'cut' : 'failed');
       }, () => { if (cover.kind === 'dig') run.digFailed = true; ledger.end(handle, 'failed'); })
       .catch(() => undefined)
@@ -2558,6 +2654,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       if (health < seen.last - 1e-6) {
         const at = seen.fellAt = now();
         state.falls = [...(state.falls ?? []).filter(when => at - when <= 2 * SHOT_WINDOW_MS), at];
+        state.fallSizes = [...(state.fallSizes ?? []).filter(fall => at - fall.at <= 2 * SHOT_WINDOW_MS), { at, amount: seen.last - health }];
       }
       seen.last = health;
     }
@@ -2608,7 +2705,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       if (episode) { state.fleeEpisode = undefined; try { episode.end?.('cut'); } catch { /* a report must not change what the reflex did */ } }
     }
     // r7: burning in a shooter's line, the cover first (before the low-health flee and the last stand, which read the threats in reach).
-    if (!headFight && coverTick()) return;
+    // run62 #9: 頭の戦いの間も動く（豚との fight の印が cover を止め、スケルトンの矢で死んだ）。頭が戦う種類は coverTick の fought が外す。
+    if (coverTick()) return;
     // r8: a melee enemy near, at the rim of a drop (or hurting the body on a floor): one minimal hand, before the flee and the last stand.
     // Run 43: the melee hand waits only for a fight that runs (`isHeadCombatRunning`), not for the grace after one ended.
     if (!isHeadCombatRunning(bot) && meleeTick()) return;

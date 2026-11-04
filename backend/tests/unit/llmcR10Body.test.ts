@@ -52,7 +52,7 @@ function tunnelWith(piglin: Vec3) {
 }
 
 /** A fake body that is not burning, with a protocol client that can say what hit it. */
-function shotBody(shape: (x: number, y: number, z: number) => Cell, options: { feet?: Vec3; health?: number; items?: any[]; mobs?: Record<string, any>; now?: () => number; client?: boolean } = {}) {
+function shotBody(shape: (x: number, y: number, z: number) => Cell, options: { feet?: Vec3; health?: number; items?: any[]; mobs?: Record<string, any>; now?: () => number; client?: boolean; bare?: boolean } = {}) {
   const blocks = new Map<string, Cell>();
   const bot: any = Object.assign(new EventEmitter(), {
     __blocks: blocks, __dug: [] as string[], __fakeMovements: true, __placed: [] as string[],
@@ -60,7 +60,7 @@ function shotBody(shape: (x: number, y: number, z: number) => Cell, options: { f
     health: options.health ?? 20, food: 17, game: { dimension: 'the_nether' },
     entities: options.mobs ?? {},
     registry: { blocksByName: { cobblestone: { id: 1 }, stone: { id: 2 } }, entitiesByName: { piglin: { type: 'hostile' }, zombie: { type: 'hostile' } }, itemsByName: {}, items: {} },
-    heldItem: null, inventory: { items: () => options.items ?? [], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,
+    heldItem: null, inventory: { items: () => options.items ?? [], slots: Object.assign(new Array(46).fill(null), options.bare ? {} : { 6: { name: 'iron_chestplate' } }) }, controlState: {} as Record<string, boolean>,
     executingSkill: false, interruptExecution: false, clearControlStates: vi.fn(), look: vi.fn(async () => undefined), lookAt: vi.fn(async () => undefined),
     equip: vi.fn(async (item: any) => { bot.heldItem = item; }), consume: vi.fn(async () => undefined), attack: vi.fn(), setControlState: vi.fn(), stopDigging: () => undefined,
     placeBlock: vi.fn(async (reference: any, face: Vec3) => { const at = reference.position.plus(face); bot.__placed.push(`${at.x},${at.y},${at.z}`); blocks.set(`${at.x},${at.y},${at.z}`, { name: 'cobblestone', boundingBox: 'block' }); }),
@@ -123,7 +123,7 @@ describe('B1: shot at from afar (run 34 +488 to +502: a piglin\'s crossbow at 5.
     const [line] = covers(ledger);
     console.log('[r10 cover step]', line.detail);
     expect(line).toMatchObject({ kind: 'cover', outcome: 'done' });
-    expect(line.detail).toMatch(/^piglin #848 上3・6\.\dm に5秒で2回撃たれた: .+。射線が切れた 体力16\.2$/u);
+    expect(line.detail).toMatch(/^piglin #848 上3・6\.\dm に8秒で2回撃たれた: .+。射線が切れた 体力16\.2$/u);
     expect(sees(bot, piglin)).toBe(false);
     // Out of the line: no more hands.
     await quiet(bot, clock, 4);
@@ -145,11 +145,11 @@ describe('B1: shot at from afar (run 34 +488 to +502: a piglin\'s crossbow at 5.
     expect(reflexes.projectileShooter({ sourceCauseId: 849, sourceDirectId: 9848 })).toBe(848);
   });
 
-  it('two hits more than 5 s apart: nothing', async () => {
+  it('two hits more than 8 s apart: nothing (run62 #11: the window is 8 s; 3.1, 6.1 and 2.9 s apart were all one episode)', async () => {
     const { bot, ledger, clock } = scene();
     tick(bot);
     clock.at += 1000; shotBy(bot, 848); tick(bot);
-    clock.at += 6000; shotBy(bot, 848); tick(bot);
+    clock.at += 9000; shotBy(bot, 848); tick(bot);
     await quiet(bot, clock, 2);
     expect(covers(ledger)).toHaveLength(0);
   });
@@ -195,7 +195,7 @@ describe('B1: shot at from afar (run 34 +488 to +502: a piglin\'s crossbow at 5.
     const json = JSON.parse((await acting).result);
     console.log('[r10 act stoppedWhy]', json.stoppedWhy);
     expect(json).toMatchObject({ ok: false, stoppedBy: 'reflex' });
-    expect(json.stoppedWhy).toMatch(/^piglin #848 .+に5秒で2回撃たれた: .+。射線が切れた/u);
+    expect(json.stoppedWhy).toMatch(/^piglin #848 .+に8秒で2回撃たれた: .+。射線が切れた/u);
   });
 });
 
@@ -221,7 +221,7 @@ describe('B1: the line hand (a block on the shooters\' line when no step, no sea
     expect(bot.__placed).toHaveLength(1);
     const lines = covers(ledger).map(entry => entry.detail);
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/^piglin #70 7\.0m に5秒で2回撃たれた: 線上の \(0,65,1\) を cobblestone で塞いだ。射線が切れた 体力16\.2$/u);
+    expect(lines[0]).toMatch(/^piglin #70 7\.0m に8秒で2回撃たれた: 線上の \(0,65,1\) を cobblestone で塞いだ。射線が切れた 体力16\.2$/u);
     expect(sees(bot, piglin)).toBe(false);
   });
 
@@ -259,3 +259,90 @@ describe('B1: the line hand (a block on the shooters\' line when no step, no sea
   });
 });
 
+
+describe('run62 #11 #9: a skeleton\'s arrows at a bare body (02:34:22 to 37: 4, 4, 5, 5, 4 at 3.1, 6.1, 2.9 and 3.1 s apart, dead in 15 s)', () => {
+  const skeletonAt = new Vec3(4.5, 58, -3.5);
+  const scene = (bare: boolean, items: any[] = [COBBLE]) => {
+    const clock = { at: 30_000_000 };
+    const skeleton = mob(9727, 'skeleton', skeletonAt.x, skeletonAt.y, skeletonAt.z, 1.99);
+    const pig = { id: 256, name: 'pig', type: 'passive', height: 0.9, width: 0.9, position: new Vec3(-2.5, 56, 0.5) };
+    const made = shotBody(tunnelWith(skeletonAt), { mobs: { 9727: skeleton, 256: pig }, items, now: () => clock.at, bare });
+    made.bot.heldItem = items[0] ?? null;
+    return { ...made, clock, skeleton };
+  };
+
+  it('armour 0 and no shield: the first arrow is enough, and the line is cut at 16', async () => {
+    const { bot, ledger, clock, skeleton } = scene(true);
+    tick(bot);
+    clock.at += 1000; shotBy(bot, 9727, 4); tick(bot);
+    await vi.waitFor(() => expect(covers(ledger)).toHaveLength(1), { timeout: 4000, interval: 5 });
+    await vi.waitFor(() => expect(bot.floorReflexes.busy).toBeNull(), { timeout: 4000, interval: 5 });
+    console.log('[run62 #11 bare]', covers(ledger)[0].detail);
+    expect(covers(ledger)[0].detail).toMatch(/^skeleton #9727 .+に8秒で1回撃たれた: .+。射線が切れた 体力16$/u);
+    expect(sees(bot, skeleton)).toBe(false);
+  });
+
+  it('armour on: one light arrow waits, one of 4 or more moves at once', async () => {
+    const light = scene(false);
+    tick(light.bot);
+    light.clock.at += 1000; shotBy(light.bot, 9727, 1.9); tick(light.bot);
+    await quiet(light.bot, light.clock, 2);
+    expect(covers(light.ledger)).toHaveLength(0);
+    const heavy = scene(false);
+    tick(heavy.bot);
+    heavy.clock.at += 1000; shotBy(heavy.bot, 9727, 4); tick(heavy.bot);
+    heavy.clock.at += 50; tick(heavy.bot);
+    await vi.waitFor(() => expect(covers(heavy.ledger)).toHaveLength(1), { timeout: 4000, interval: 5 });
+    expect(covers(heavy.ledger)[0].detail).toContain('8秒で1回撃たれた');
+  });
+
+  it('armour on: two light arrows 6.1 s apart are one episode (the 5 s window missed them)', async () => {
+    const { bot, ledger, clock } = scene(false);
+    tick(bot);
+    clock.at += 1000; shotBy(bot, 9727, 1.9); tick(bot);
+    clock.at += 6100; shotBy(bot, 9727, 1.9); tick(bot);
+    await vi.waitFor(() => expect(covers(ledger)).toHaveLength(1), { timeout: 4000, interval: 5 });
+    expect(covers(ledger)[0].detail).toContain('8秒で2回撃たれた');
+  });
+
+  it('#9: a fight with a pig puts no combat mark, and the cover still moves at the first arrow', async () => {
+    const { markHeadCombat, isHeadCombatActive } = await import('../../src/services/minebot/utils/combatOwner.js');
+    const { beginEngagement } = await import('../../src/services/minebot/utils/engagement.js');
+    const { bot, ledger, clock } = scene(true);
+    const end = markHeadCombat(bot, 'fight', ['pig'], Date.now(), 256);
+    const endEngagement = beginEngagement(bot, ['pig']);
+    expect(isHeadCombatActive(bot)).toBe(false);
+    tick(bot);
+    clock.at += 1000; shotBy(bot, 9727, 4); tick(bot);
+    await vi.waitFor(() => expect(covers(ledger)).toHaveLength(1), { timeout: 4000, interval: 5 });
+    end(); endEngagement();
+  });
+
+  it('#9: a fight with a zombie marks the body, and still the cover moves for a skeleton nobody chose to fight', async () => {
+    const { markHeadCombat, isHeadCombatActive } = await import('../../src/services/minebot/utils/combatOwner.js');
+    const { beginEngagement } = await import('../../src/services/minebot/utils/engagement.js');
+    const { bot, ledger, clock } = scene(true);
+    bot.entities[77] = mob(77, 'zombie', -6.5, 56, 0.5);
+    const end = markHeadCombat(bot, 'fight', ['zombie'], Date.now(), 77);
+    const endEngagement = beginEngagement(bot, ['zombie']);
+    expect(isHeadCombatActive(bot)).toBe(true);
+    tick(bot);
+    clock.at += 1000; shotBy(bot, 9727, 4); tick(bot);
+    await vi.waitFor(() => expect(covers(ledger)).toHaveLength(1), { timeout: 4000, interval: 5 });
+    end(); endEngagement();
+  });
+
+  it('#9: a fight the head chose with the skeleton itself is left to the fight (no cover for its arrows)', async () => {
+    const { markHeadCombat } = await import('../../src/services/minebot/utils/combatOwner.js');
+    const { beginEngagement } = await import('../../src/services/minebot/utils/engagement.js');
+    const { bot, ledger, clock } = scene(true);
+    const end = markHeadCombat(bot, 'fight', ['skeleton'], Date.now(), 9727);
+    const endEngagement = beginEngagement(bot, ['skeleton']);
+    tick(bot);
+    clock.at += 1000; shotBy(bot, 9727, 4); tick(bot);
+    clock.at += 1000; shotBy(bot, 9727, 4); tick(bot);
+    await quiet(bot, clock, 2);
+    expect(covers(ledger)).toHaveLength(0);
+    end(); endEngagement();
+  });
+});
