@@ -3,6 +3,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { executeAction, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
 import { activateItemFacing } from './activateItemFacing.js';
 import { digRefusedAt, noteRefusedDig } from './refusedDigs.js';
+import { fallIsDangerous, stepOffDrop } from './edgeGuard.js';
 
 const log = createLogger('Minebot:LavaSafety');
 
@@ -53,6 +54,37 @@ export function assertNoLavaRelease(body: LavaBody, block: { name?: string; posi
   if (lava) throw new LavaReleaseError(block, lava);
 }
 
+/**
+ * The fall that breaking `target` would drop the body into, when the body stands on it and nothing else holds it up: the drop (blocks,
+ * Infinity onto lava or nothing) when it is a dangerous one (edgeGuard's measure: three points of damage or more, or what the health
+ * cannot take), else null. A block the footprint does not rest on, or one with another block still under a corner of the footprint, is no fall.
+ * The lab (S5, c1, 2026-11-04, the Nether at y=110): the path executor broke the netherrack the body stood on while a reset path still held it as
+ * the next step's cell; there was air for 58 blocks under it and the body fell to its death.
+ */
+export function supportDropIfDug(body: LavaBody & { health?: number }, target: Vec3): number | null {
+  const position = body.entity?.position;
+  if (!position || !target) return null;
+  const floorY = Math.floor(position.y - 0.01);
+  if (target.y !== floorY) return null;
+  const rests = [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]].some(([dx, dz]) => Math.floor(position.x + dx) === target.x && Math.floor(position.z + dz) === target.z);
+  if (!rests) return null;
+  const without = { blockAt: (cell: Vec3) => (Math.floor(cell.x) === target.x && Math.floor(cell.y) === target.y && Math.floor(cell.z) === target.z
+    ? { name: 'air', boundingBox: 'empty' } : body.blockAt(cell)) };
+  let drop = 0;
+  try { drop = stepOffDrop(without, position.x, position.y, position.z); } catch { return null; }
+  return fallIsDangerous(drop, body.health ?? 20) ? drop : null;
+}
+
+/** A dig refused because the block is what holds the body up over a dangerous fall. */
+export class SupportDigError extends Error {
+  readonly failureType = 'support_dig';
+  constructor(block: { name?: string; position: Vec3 }, readonly drop: number) {
+    super(`掘削中止: ${block.name ?? 'ブロック'}(${block.position.x}, ${block.position.y}, ${block.position.z})は今立っている床で、掘ると${Number.isFinite(drop) ? `${Math.round(drop)} ブロック下へ落ちる` : '溶岩か底の無い所へ落ちる'}。`
+      + '先に横の固い床へ移るか、足元を残して別の向きから掘ってください');
+    this.name = 'SupportDigError';
+  }
+}
+
 interface DigBody extends LavaBody { dig?: (block: any, ...rest: any[]) => Promise<unknown>; lavaDigGuard?: { refused: number; last?: string } }
 
 /**
@@ -68,11 +100,15 @@ export function installLavaDigGuard(bot: DigBody): void {
   if (!dig || bot.lavaDigGuard) return;
   const state: NonNullable<DigBody['lavaDigGuard']> = bot.lavaDigGuard = { refused: 0 };
   bot.dig = async (block: any, ...rest: any[]) => {
-    try { assertNoLavaRelease(bot, block); }
+    try {
+      assertNoLavaRelease(bot, block);
+      const drop = block?.position ? supportDropIfDug(bot as DigBody & { health?: number }, block.position) : null;
+      if (drop !== null) throw new SupportDigError(block, drop);
+    }
     catch (error) {
       state.refused++;
       state.last = (error as Error).message;
-      // Lava stays where it is: the route planner leaves this block alone for a minute.
+      // Lava stays where it is (and a floor over a fall stays a floor): the route planner leaves this block alone for a minute.
       const repeated = block?.position ? digRefusedAt(bot, block.position) : false;
       if (block?.position) noteRefusedDig(bot, block.position, 60_000);
       if (!repeated) log.warn(`🌋 ${(error as Error).message}`);
