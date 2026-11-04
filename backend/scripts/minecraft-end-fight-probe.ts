@@ -2656,7 +2656,7 @@ for (const [name, policy] of Object.entries(cageComparePolicies)) scenes[name] =
 type KillStyle = 'sword_stage' | 'bed' | 'bow';
 type KillNookBuilder = 'operator' | 'body';
 const KILL_LIMIT_MS = 25 * 60 * 1000;
-const killEntries = ['end_bed_kill', 'dragon_head_model', 'dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_far', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain', 'cage_descent_compare', 'cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'];
+const killEntries = ['end_bed_kill', 'end_bed_crystals', 'dragon_head_model', 'dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow', 'dragon_kill_sword_nook', 'dragon_kill_bed_nook', 'dragon_kill_sword_assist', 'dragon_kill_sword_assist_walk', 'dragon_kill_basin_assist', 'dragon_kill_basin_walk', 'dragon_kill_basin_walk_pumpkin', 'dragon_kill_basin_far', 'dragon_kill_basin_crystals_all', 'dragon_kill_basin_crystals_caged', 'end_full_chain', 'cage_descent_compare', 'cage_descent_compare_water_fast', 'cage_descent_compare_water_guard', 'cage_descent_compare_shaft_fast', 'cage_descent_compare_shaft_guard'];
 const killCell = (p: P3): P3 => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
 const packCount = (name: string): number => actor.inventory.items().filter((item: any) => item.name === name).reduce((n: number, item: any) => n + item.count, 0);
 let killArena: { ground: P3; perch: P3; yaw: number } | null = null;
@@ -2666,7 +2666,7 @@ const killBlasts: P3[] = [];
 let killCrystalSnapshot: Array<{ id: number; x: number; y: number; z: number; caged: boolean | null }> = [];
 
 /** Bootstrap only: choose real island support from the loaded terrain, relative to the observed fountain/head. */
-async function prepareKillRun(waitingSide = false, descendingBeds = false): Promise<{ dragonId: number; ground: P3 }> {
+async function prepareKillRun(waitingSide = false, descendingBeds = false, keepCrystals = false): Promise<{ dragonId: number; ground: P3 }> {
   const chosen = wanted.filter(name => name !== 'enter');
   if (chosen.length !== 1 || !killEntries.includes(chosen[0])) throw new Error('dragon_kill_compare entries must run alone');
   if (!actor.floorReflexes || !actor.reflexLedger?.counts) throw new Error('dragon_kill_compare requires floor reflexes ON and the full ledger counter');
@@ -2704,7 +2704,7 @@ async function prepareKillRun(waitingSide = false, descendingBeds = false): Prom
   await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`);
   await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
   killCrystalSnapshot = ((endView() as any)?.crystals?.list ?? []).map((c: any) => ({ id: c.id, x: c.position.x, y: c.position.y, z: c.position.z, caged: c.caged }));
-  await ask(`${END} kill @e[type=minecraft:end_crystal]`);
+  if (!keepCrystals) await ask(`${END} kill @e[type=minecraft:end_crystal]`); // keepCrystals: the dragon keeps its healing crystals (the end_bed_crystals scene), killCrystalSnapshot above still records them
   await ask(`${END} kill @e[type=minecraft:arrow]`);
   await ask(`${END} kill @e[type=minecraft:item]`);
   // A previous successful run removed its dragon. A timed-out dragon is reset only here, before the clock starts.
@@ -3511,8 +3511,8 @@ function bedWaitPlan(anchor: P3 | null, here: P3, centre: P3 | null, fallback: P
   return to ? { kind: 'move' as const, to } : null;
 }
 
-async function endBedKill() {
-  const initial = await prepareKillRun(true, true);
+async function endBedKill(keepCrystals = false) {
+  const initial = keepCrystals ? await prepareKillRun(true, true, true) : await prepareKillRun(true, true);
   const t0 = Date.now(), deadline = t0 + KILL_LIMIT_MS, deaths0 = actorDeaths;
   const counts0 = actor.reflexLedger.counts(), lowest = trackMinHealth();
   const out: Record<string, any> = { scene: 'dragon_kill_compare', style: 'end_bed_kill', limitSeconds: KILL_LIMIT_MS / 1000,
@@ -4250,7 +4250,8 @@ async function endBedKill() {
   out.ok = out.deaths === 0 && out.killSeconds !== null && out.killSeconds <= KILL_LIMIT_MS / 1000 && out.bossVerified;
   return out;
 }
-scenes.end_bed_kill = endBedKill;
+scenes.end_bed_kill = () => endBedKill();
+scenes.end_bed_crystals = () => endBedKill(true);
 // ===== end end_bed_kill =====
 
 // ===== dragon_head_model: independent measurements, no combat hands =====
@@ -4433,7 +4434,7 @@ scenes.death = async () => {
 // ===== run =====
 let exitCode = 0;
 try {
-  const invalidKillSelection = wanted.some(name => name.startsWith('dragon_kill') || name.startsWith('cage_descent_compare') || name === 'end_full_chain' || name === 'end_bed_kill' || name === 'dragon_head_model') && (wanted.filter(name => name !== 'enter').length !== 1 || !killEntries.includes(wanted.find(name => name !== 'enter')!));
+  const invalidKillSelection = wanted.some(name => name.startsWith('dragon_kill') || name.startsWith('cage_descent_compare') || name === 'end_full_chain' || name === 'end_bed_kill' || name === 'end_bed_crystals' || name === 'dragon_head_model') && (wanted.filter(name => name !== 'enter').length !== 1 || !killEntries.includes(wanted.find(name => name !== 'enter')!));
   if (invalidKillSelection) { report.errors.push('choose exactly one standalone entry (dragon_kill_compare or end_full_chain, optionally after enter), without other scenes'); exitCode = 1; }
   for (const name of invalidKillSelection ? [] : Object.keys(scenes)) {
     if (killEntries.includes(name) && wanted.filter(n => n !== 'enter').join() !== name) continue;

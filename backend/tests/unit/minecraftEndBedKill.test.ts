@@ -794,6 +794,9 @@ describe('end_bed_kill scene with mocked I/O', () => {
     expect(commands).toContain('end data modify entity @dragon Health set value 200.0f');
     expect(protect.mock.calls.map(c => c[0])).toEqual([true, false]);
     expect(standAt).toHaveBeenCalledOnce(); expect(actor.floorReflexes).toBeTruthy();
+    commands.length = 0; await prepare(true, true, true); // end_bed_crystals: the crystals stay, everything else is the same
+    expect(commands).not.toContain('end kill @e[type=minecraft:end_crystal]');
+    expect(commands).toContain('end data modify entity @dragon Health set value 200.0f');
     actor.floorReflexes = null; await expect(prepare(true, true)).rejects.toThrow('requires floor reflexes ON');
   });
   it('reuses the same layout for three confirmed blasts, then evacuates without another attack', async () => {
