@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
-import { pickEnderman } from '../../src/services/minebot/utils/primitives/fight.js';
+import { endermenWithoutSight, pickEnderman } from '../../src/services/minebot/utils/primitives/fight.js';
 
 /**
  * `fight target=enderman` (the kind): the one picked is the one the roof hunts of 11/4 won with (S6): an angry one first, else the nearest whose
@@ -43,5 +43,19 @@ describe('fight picks the enderman of a roof hunt', () => {
 
   it('gives none when no eyes are in sight in 8-48 m (the caller keeps its own pick)', () => {
     expect(pickEnderman(body({}, [enderman(6, 4.5), enderman(8, 60.5)]))).toBeNull();
+  });
+
+  it('says at once that the endermen about all have their eyes hidden, the nearest and what hides it', () => {
+    const stem: Record<string, string> = {};
+    for (let y = 64; y <= 68; y++) stem['6,' + y + ',0'] = 'warped_stem';
+    const bot = body(stem, [enderman(1, 12.5)]);
+    expect(pickEnderman(bot)).toBeNull();
+    const words = endermenWithoutSight(bot)!;
+    expect(words).toContain('1 体はどれも目が見えない');
+    expect(words).toContain('#1 12.0m');
+    expect(words).toContain('warped_stem');
+    expect(endermenWithoutSight(body({}, []))).toBeNull();
+    // A near one in sight (under the 8 m band) is not "none in sight": the old pick takes it.
+    expect(endermenWithoutSight(body({}, [enderman(6, 4.5)]))).toBeNull();
   });
 });

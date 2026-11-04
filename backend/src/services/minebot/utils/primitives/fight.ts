@@ -23,7 +23,7 @@ import { itemIds, itemsSince } from '../huntBarter.js';
 import { itemFacts } from './pickup.js';
 import { EndermanCamp, moveToRoofSite } from '../huntEndermanCamp.js';
 import { huntCandidates } from '../huntEndermanProbe.js';
-import { endermanAngry } from '../huntEnderman.js';
+import { ENDERMAN_EYE, endermanAngry, endermanLine } from '../huntEnderman.js';
 import { hideoutsFrom } from '../huntCamp.js';
 import { scanLoadedBlocks } from '../loadedBlockScan.js';
 import { go } from './go.js';
@@ -116,6 +116,24 @@ export class HandCut extends StepStopped {
   constructor(why: string, readonly summary: string) { super(why); }
 }
 
+/** An angry enderman that gains no metre on the roof for this long is not coming (the roof hunts: angry to in reach took 4.8 s on average). */
+const ANGRY_STUCK_MS = 15_000;
+/** Endermen within ENDERMAN_PICK_RANGE but none with its eyes in sight: the words for it (how many, the nearest and what hides it), or null when there is none at all. */
+export function endermenWithoutSight(bot: any): string | null {
+  const at = bot.entity?.position;
+  if (!at) return null;
+  const near = (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity && entity !== bot.entity && entity.position && entity.isValid !== false
+    && String(entity.name ?? '').toLowerCase() === 'enderman' && entity.position.distanceTo(at) <= ENDERMAN_PICK_RANGE && !isDying(bot, entity))
+    .sort((a, b) => a.position.distanceTo(at) - b.position.distanceTo(at));
+  if (!near.length) return null;
+  // One in sight at any distance (a near one too, under the hunts' 8 m band) is the caller's to pick.
+  const read = bodyReader(bot);
+  if (near.some(entity => { try { return endermanLine(read, at, entity.position, ENDERMAN_EYE).clear; } catch { return true; } })) return null;
+  const first = near[0];
+  let hide = '';
+  try { const line = endermanLine(bodyReader(bot), at, first.position, ENDERMAN_EYE); const b = line.between[0]; if (b) hide = `、間に (${b.at.x},${b.at.y},${b.at.z}) ${b.name}`; } catch { hide = ''; }
+  return `${ENDERMAN_PICK_RANGE}m 内のエンダーマン ${near.length} 体はどれも目が見えない（最寄り #${first.id} ${first.position.distanceTo(at).toFixed(1)}m${hide}）`;
+}
 /** How far an enderman named by its kind is looked for (its gaze reaches 64 m; the roof hunts of 11/4 killed 7 of 34 that began 33-48 m off). */
 const ENDERMAN_PICK_RANGE = 48;
 /**
@@ -192,6 +210,8 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     if (typeof wanted === 'string' && stance === 'fight' && /^(minecraft:)?enderman$/u.test(wanted.trim().toLowerCase())) {
       const chosen = pickEnderman(bot);
       if (chosen) return chosen;
+      hiddenEyes = endermenWithoutSight(bot);
+      if (hiddenEyes) return null;
     }
     const first = findEntity(bot, wanted, 32);
     if (!first || typeof wanted === 'number') return first;
@@ -206,7 +226,10 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       && entity.position.distanceTo(bot.entity.position) <= 32 && !isDying(bot, entity)).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position)).slice(0, 8);
     return others.find(seen) ?? first;
   };
+  let hiddenEyes: string | null = null;
   const target = pickTarget();
+  // Endermen about, none with its eyes in sight (S6, 11/5, c1 lab: four fights in a row stared 8 s each at one behind the nylium): said at once, before any roof is laid.
+  if (!target && hiddenEyes) return { ...none('enderman_not_visible', `${hiddenEyes}。目の見える所（開けた所・高い所）へ動いてから呼ぶ`), code: 'enderman_not_visible' };
   // Continue contracts (1, decision 4): a creature named by its id that the body saw die a moment ago is already dead; one that is not there and was not seen to die is not found.
   const askedId = creatureIdOf(wanted);
   if (askedId !== null) { const dead = alreadyDead(bot, askedId, target); if (dead) return dead; }
@@ -524,6 +547,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       if (refusal) return { ...none(refusal.code, refusal.text), code: refusal.code };
     }
     const radius = Math.max(range, ZONE_IN + 0.5);
+    let angryBest = Infinity, angryBestAt = Date.now();
     let lastSwing = 0, backUntil = 0, farSince = 0, blindSince = 0, everNear = false, bestBox = Infinity, bestAt = Date.now();
     // The jump of a critical blow: pressed on the ground, in the air once the feet leave it, spent when they come down.
     let jump: 'idle' | 'pressed' | 'air' = 'idle', jumpAt = 0, noJumpUntil = 0, spent = false, struckInAir = false;
@@ -561,6 +585,15 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       }
       const risk = footingRisk(live);
       if (risk) { unfollow(); releaseKeys(); return fail('danger', footingWords(risk)); }
+      // An angry enderman that does not come to the roof (no way for it from where it stands: S6, 11/5, c1 lab: two 45 s fights, the target held at 10.7 m):
+      // said after ANGRY_STUCK_MS without a metre gained, with where it stands, so the planner moves the roof or calls another.
+      if (ender && endermanCamp && box > radius && endermanAngry(bot.registry, live)) {
+        if (box < angryBest - 1) { angryBest = box; angryBestAt = now; }
+        if (now - angryBestAt >= ANGRY_STUCK_MS) {
+          unfollow(); releaseKeys();
+          return fail('enderman_did_not_arrive', `は怒っているが ${ANGRY_STUCK_MS / 1000} 秒近づかない（${r1(box)}m 先の (${lastAt.x},${lastAt.y},${lastAt.z})。屋根まで歩ける道が無いらしい）。屋根をそちら側の開けた所に作り直すか、別の個体を呼ぶ`, lastAt);
+        }
+      } else { angryBest = Infinity; angryBestAt = now; }
       if (!ender && farSince && now - farSince >= OUT_OF_RANGE_MS) {
         unfollow(); releaseKeys();
         return everNear ? finish('逃げた', `（range ${r1(range)}m の外へ ${r1(box)}m。追わない）`) : fail('unreachable', `は range ${r1(range)}m の外のまま（${r1(box)}m）`, lastAt);
