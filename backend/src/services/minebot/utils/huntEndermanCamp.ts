@@ -6,6 +6,7 @@ import { ENDERMAN_EYE, ENDERMAN_LEGS, ENDERMAN_STARE_MS, atRoofCentre, endermanA
 import { bodyReader, feetCell, type Cell } from './localMap.js';
 import { nativeActionHost } from '../execution/ActionExecution.js';
 import { reflexHeld } from './floorReflexes.js';
+import { isHostileEntity } from './hostileMobHints.js';
 import { PLACE_REPLACEABLE, place } from './primitives/place.js';
 import { removeRoofSupport } from './huntEndermanSupport.js';
 import { cellText, guard, inventoryCount, letGo, stopped, wait, type StepContext, type StepOutcome } from './primitives/common.js';
@@ -38,6 +39,12 @@ const RECOVERY_LIMIT = 2, RECOVERY_MS = 3_000, RECOVERY_STEP_MS = 1_800;
 const ROOF_EXIT_LIMIT = 2;
 /** The exit crosses two cells in one segment, with the existing per-cell movement bound. This never renews SIGHT_MS. */
 const ROOF_EXIT_STEP_MS = 2 * RECOVERY_STEP_MS;
+/**
+ * The exterior stare's distances (Codex's pre-deploy review 5, 11/5). The step back is two cells at a sneak (about 1.5 s); an angry enderman walks some 4 m a
+ * second. Out only when the target is EXIT_MIN_GAP or more from the exit cell and nothing else hostile is within EXIT_CLEAR of it; back at once when the target
+ * comes within EXIT_ABORT of the body. A way back that is blocked or pushed off is walked round once (HOME_WALK_MS) before the hand stops.
+ */
+const EXIT_MIN_GAP = 10, EXIT_CLEAR = 8, EXIT_ABORT = 7, HOME_WALK_MS = 3_000;
 
 export interface CampObservation extends EndermanView {
   at: number;
@@ -53,7 +60,7 @@ export interface CampObservationRecord {
   latest: CampObservation | null;
   recovery: Array<{ from: Cell; to: Cell; at: number; result: 'moving' | 'arrived' | 'stopped' }>;
   exits: Array<{ from: Cell; to: Cell; at: number; result: 'moving' | 'staring' | 'returning' | 'returned' | 'stopped';
-    reason: 'angry' | 'stared' | 'not_visible' | null }>;
+    reason: 'angry' | 'stared' | 'not_visible' | 'near' | null; homeWalk?: 'arrived' | 'failed' }>;
   stareAt: number | null;
   stareEndedAt: number | null;
   angryAt: number | null;
@@ -301,13 +308,20 @@ export class EndermanCamp {
     if (view.eyes.clear) return false;
     const to = roofExitForSight(bodyReader(this.ctx.bot), this.cell, live.position, view.eyes, c => this.shiftOccupied(c))[0];
     if (!to) return false;
+    // Out from under the roof only while the way back is shorter than any coming (Codex's pre-deploy review 5, 11/5): the target at least EXIT_MIN_GAP off
+    // the exit cell, and no other enderman or hostile already near it.
+    const exitAt = new Vec3(to.x + 0.5, to.y, to.z + 0.5);
+    if (live.position.distanceTo(exitAt) < EXIT_MIN_GAP) return false;
+    const bot = this.ctx.bot;
+    if ((Object.values(bot.entities ?? {}) as any[]).some(e => e && e.id !== this.targetId && e !== bot.entity && e.position && e.isValid !== false
+      && (e.name === 'enderman' || isHostileEntity(e, bot)) && e.position.distanceTo(exitAt) < EXIT_CLEAR)) return false;
     this.exitStare = this.restares;
     this.exit = { to, stage: 'out', at: now };
     this.observation.exits.push({ from: { ...this.cell }, to, at: now, result: 'moving', reason: null });
     return true;
   }
 
-  private async returnFromExit(live: any, now: number, reason: 'angry' | 'stared' | 'not_visible'): Promise<void> {
+  private async returnFromExit(live: any, now: number, reason: 'angry' | 'stared' | 'not_visible' | 'near'): Promise<void> {
     if (!this.exit || this.exit.stage === 'back') return;
     this.stopExitMotion();
     this.exit.stage = 'back'; this.exit.at = now;
@@ -319,7 +333,32 @@ export class EndermanCamp {
   /** Out, a short stationary stare, then the same straight corridor back. Combat is withheld until the original centre is verified. */
   private async advanceExit(live: any, now: number): Promise<CampStep | null> {
     try { return await this.stepExit(live, now); }
-    catch { return this.failure('roof_failed', 'moved', '屋根外の注視から中央へ戻る操作を続けられなかった', feetCell(this.ctx.bot) ?? this.cell); }
+    catch { return this.exitStuck('屋根外の注視から中央へ戻る操作を続けられなかった'); }
+  }
+
+  /**
+   * The straight way back is gone (pushed off it, something in it, the step ran out): the roof centre is walked to once by the walk (no dig, no block laid,
+   * HOME_WALK_MS) before the hand stops; an angry enderman is not waited out in the open (Codex's pre-deploy review 5, 11/5). Null: home again, the camp goes on.
+   */
+  private async exitStuck(text: string): Promise<CampStep | null> {
+    const bot = this.ctx.bot, last = this.observation.exits[this.observation.exits.length - 1];
+    this.stopExitMotion(); this.guard(true);
+    if (!reflexHeld(bot) && !this.ctx.stop.aborted && Date.now() + 500 < this.ctx.deadline) {
+      const navigator = bot.pathfinder, previous = navigator?.movements;
+      try {
+        navigator?.setMovements(walkMovements(bot, false));
+        await goWith(this.ctx, new goals.GoalBlock(this.cell.x, this.cell.y, this.cell.z), Math.min(HOME_WALK_MS, Math.max(500, this.ctx.deadline - Date.now())), { opened: [], leaves: 0 });
+      } catch { /* judged by where the feet are */ }
+      finally { letGo(bot); try { if (previous) navigator.setMovements(previous); } catch { /* kept */ } }
+      const feet = feetCell(bot);
+      if (feet && feet.x === this.cell.x && feet.y === this.cell.y && feet.z === this.cell.z) {
+        if (last) { last.result = 'returned'; last.homeWalk = 'arrived'; }
+        this.stopExit(); this.standing = this.cell;
+        return null;
+      }
+    }
+    if (last) last.homeWalk = 'failed';
+    return this.failure('roof_failed', 'moved', `${text}。屋根の中央 ${cellText(this.cell)} へ歩いても戻れなかった`, feetCell(bot) ?? this.cell);
   }
 
   private async stepExit(live: any, now: number): Promise<CampStep | null> {
@@ -327,6 +366,8 @@ export class EndermanCamp {
     if (!exit) return null;
     const bot = this.ctx.bot, p = bot.entity.position;
     if (this.angeredAt) await this.returnFromExit(live, now, 'angry');
+    // The target coming near while the body is out: back at once, angry or not (the way back takes about 1.5 s).
+    else if (exit.stage !== 'back' && live.position.distanceTo(p) < EXIT_ABORT) await this.returnFromExit(live, now, 'near');
     if (exit.stage === 'out' && (now - exit.at >= ROOF_EXIT_STEP_MS || now - this.blindSince > SIGHT_MS)) {
       await this.returnFromExit(live, now, 'not_visible');
     }
@@ -338,7 +379,7 @@ export class EndermanCamp {
       || along < Math.min(a, b) - 0.15 || along > Math.max(a, b) + 0.15
       || Math.abs(across - ((alongX ? this.cell.z : this.cell.x) + 0.5)) > 0.2
       || !roofExitStep(bodyReader(bot), this.cell, exit.to) || this.exitOccupied(exit.to, destination)) {
-      return this.failure('roof_failed', 'moved', '屋根外の注視から中央へ戻る平らな道・立ち位置を確認できない', feetCell(bot) ?? this.cell);
+      return this.exitStuck('屋根外の注視から中央へ戻る平らな道・立ち位置を確認できない');
     }
     if (exit.stage === 'back' && atRoofCentre(p, this.cell)) {
       this.observation.exits[this.observation.exits.length - 1].result = 'returned';
@@ -370,12 +411,12 @@ export class EndermanCamp {
       }
     }
     destination = exit.stage === 'back' ? this.cell : exit.to;
-    if (now - exit.at >= ROOF_EXIT_STEP_MS) return this.failure('roof_failed', 'moved', '屋根外の注視の一歩を終えて中央へ戻れなかった', feetCell(bot) ?? this.cell);
+    if (now - exit.at >= ROOF_EXIT_STEP_MS) return this.exitStuck('屋根外の注視の一歩を終えて中央へ戻れなかった');
     this.guard(true);
     this.stopExitMotion();
     const turned = await guard(this.ctx, Promise.resolve(bot.lookAt(new Vec3(destination.x + 0.5, p.y + 1.62, destination.z + 0.5), true)), 300);
     if (!turned || reflexHeld(bot) || this.ctx.stop.aborted || Date.now() >= this.ctx.deadline
-      || !roofExitStep(bodyReader(bot), this.cell, exit.to) || this.exitOccupied(exit.to, destination)) return this.failure('roof_failed', 'moved', '屋根外の注視から中央へ向き直れなかったか、戻る道が変わった', feetCell(bot) ?? this.cell);
+      || !roofExitStep(bodyReader(bot), this.cell, exit.to) || this.exitOccupied(exit.to, destination)) return this.exitStuck('屋根外の注視から中央へ向き直れなかったか、戻る道が変わった');
     if (exit.stage === 'out' && endermanAngry(bot.registry, live)) {
       await this.returnFromExit(live, now, 'angry');
       return { kind: 'wait' };
@@ -558,8 +599,9 @@ export class EndermanCamp {
           }
         }
         this.blindSince ||= now;
-        if (now - this.blindSince <= SIGHT_MS && this.startExit(live, view, now)) return (await this.advanceExit(live, now)) ?? { kind: 'wait' };
+        // Under the roof first (a step inside it), out past its edge only when that finds no line (Codex's pre-deploy review 5, 11/5).
         if (now - this.blindSince <= SIGHT_MS && this.recover(live, view, now)) this.moveShift(now);
+        else if (now - this.blindSince <= SIGHT_MS && this.startExit(live, view, now)) return (await this.advanceExit(live, now)) ?? { kind: 'wait' };
         return this.notVisible(view, now, box);
       }
       if (this.observation.stareEndedAt !== null || (this.staredSince && now - this.staredSince >= ENDERMAN_STARE_MS)) {
