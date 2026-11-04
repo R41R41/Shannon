@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
-import { assertNoLavaRelease, installLavaDigGuard, isBurning, LavaReleaseError, lavaReflexTick, lavaReleasedBy, routeOutOfLava, shouldDouse, standsOnMagma } from '../../src/services/minebot/utils/lavaSafety.js';
+import { assertNoLavaRelease, installLavaDigGuard, SupportDigError, supportDropIfDug, isBurning, LavaReleaseError, lavaReflexTick, lavaReleasedBy, routeOutOfLava, shouldDouse, standsOnMagma } from '../../src/services/minebot/utils/lavaSafety.js';
 
 const stone = { name: 'stone', boundingBox: 'block' }, air = { name: 'air', boundingBox: 'empty' }, lava = { name: 'lava', boundingBox: 'empty' };
 /** Stone everywhere except the listed cells. */
@@ -45,6 +45,41 @@ describe('a dig is judged by what it would let onto the body (paid run L63 broke
     expect(bot.lavaDigGuard.refused).toBe(1);
     await expect(bot.dig({ name: 'stone', position: new Vec3(-1, 71, 0) })).resolves.toBe('dug');
     expect(dig).toHaveBeenCalledOnce();
+  });
+});
+
+describe('the floor the body stands on is not dug over a dangerous fall (S5 lab, c1: the path executor broke it at y=110 over 58 blocks of air)', () => {
+  // The body stands at (0.5, 110, 0.5) on netherrack (0, 109, 0); under it, air down to stone at y=50 (a 59-block fall).
+  const open: Record<string, any> = { '0,110,0': air, '0,111,0': air };
+  for (let y = 51; y <= 108; y++) open[`0,${y},0`] = air;
+  // The edge guard reads the footprint's corners (x ± 0.3): this world floors what it is asked, as the client's does.
+  const body = (cells: Record<string, any>, position: Vec3, extra: Record<string, unknown> = {}) => ({
+    blockAt: (p: Vec3) => cells[`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`] ?? stone, entity: { position, isInLava: false }, ...extra }) as any;
+
+  it('refuses the floor block over the void, and the guard on the body refuses the dig', async () => {
+    const bot = body(open, new Vec3(0.5, 110, 0.5), { health: 20 });
+    expect(supportDropIfDug(bot, new Vec3(0, 109, 0))).toBe(59);
+    const dig = vi.fn(async () => 'dug');
+    const guarded: any = { ...bot, dig };
+    installLavaDigGuard(guarded);
+    await expect(guarded.dig({ name: 'netherrack', position: new Vec3(0, 109, 0) })).rejects.toBeInstanceOf(SupportDigError);
+    expect(dig).not.toHaveBeenCalled();
+    // A block beside the feet, and the one over the head, are dug as before.
+    await guarded.dig({ name: 'netherrack', position: new Vec3(1, 110, 0) });
+    expect(dig).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the floor go when the body drops a block or two (a shaft dug a level at a time), or when another block still holds a corner', () => {
+    const shaft = body({ '0,110,0': air, '0,111,0': air, '0,108,0': air }, new Vec3(0.5, 110, 0.5), { health: 20 });
+    expect(supportDropIfDug(shaft, new Vec3(0, 109, 0))).toBeNull();
+    // Standing across two columns: the other one still holds the body.
+    const edge = body(open, new Vec3(0.9, 110, 0.5), { health: 20 });
+    expect(supportDropIfDug(edge, new Vec3(0, 109, 0))).toBeNull();
+  });
+
+  it('refuses the floor over lava however shallow', () => {
+    const pool = body({ '0,110,0': air, '0,111,0': air, '0,108,0': lava }, new Vec3(0.5, 110, 0.5), { health: 20 });
+    expect(supportDropIfDug(pool, new Vec3(0, 109, 0))).toBe(Infinity);
   });
 });
 
