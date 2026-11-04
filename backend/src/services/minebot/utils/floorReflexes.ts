@@ -14,6 +14,7 @@ import { openSightLines, seesBodyAt, threatExposure } from './threatExposure.js'
 import { holdsWater } from './waterBlocks.js';
 import { bodyReader, feetCell } from './localMap.js';
 import { climbRise, enterable, MAX_CLIMB, passable, standable } from './walkRules.js';
+import { standableAt } from './standability.js';
 import { footingAt, footingWords, type Footing } from './voidFooting.js';
 import { isBurning, lavaReleasedBy } from './lavaSafety.js';
 import { engagedWithAny } from './engagement.js';
@@ -1302,7 +1303,7 @@ export async function runLastStand(bot: FloorBody, port: FloorBody, stand: LastS
  * keeps losing health and is still seen:
  *   (a) a step of one or two cells (walked as the walk walks) to a cell no shooter in reach sees;
  *   (b) a block over the head, when the body stands in a hole and that block is what the lines come through (a full block carried);
- *   (c) the cell under the feet dug, when the cell under it holds the body and no lava runs in (at most three in a row).
+ *   (c) the cell under the feet dug, when the landing holds the body, a safe climb back exists, fewer sight lines remain and no lava runs in (at most three in a row).
  * No way round, no place chosen further than two cells. The act running stops (its lease is taken), and the ledger says what the body did
  * and whether the line is cut, with the shooters still seeing it.
  */
@@ -1494,8 +1495,8 @@ export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, 
       if (!found) lineWhy = '線上の 1 マスでは見える線が減らない（当てる面が無いか、すでに塞がっている）';
     }
   }
-  // (c) The cell under the feet dug: the body goes down one, onto the cell under it (solid, not lava or magma); no lava beside or under
-  // the dug cell (it would run in onto the body); at most COVER_MAX_DIGS in an episode.
+  // (c) One step down, judged with that floor removed: a loaded, safe landing, a one-step climb back to the original height, and fewer
+  // open sight lines. No lava may run in, and at most COVER_MAX_DIGS in an episode. Other escape/last-stand digs keep their own rules.
   const terrain = bot as unknown as TerrainBody;
   const under = terrain.blockAt?.(new Vec3(feet.x, feet.y - 1, feet.z)) as (FleeBlock & { diggable?: boolean }) | null | undefined;
   const below = terrain.blockAt?.(new Vec3(feet.x, feet.y - 2, feet.z));
@@ -1509,7 +1510,29 @@ export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, 
     let lava: Vec3 | null = null;
     try { lava = lavaReleasedBy(bot as never, new Vec3(feet.x, feet.y - 1, feet.z)); } catch { lava = null; }
     if (lava) digWhy = `足元の隣 ${cellWords(lava)} が溶岩`;
-    else return { cover: { kind: 'dig', cell: { x: feet.x, y: feet.y - 1, z: feet.z }, detail: `足元を掘って下がった ${cellWords(feet)}` }, why: '' };
+    else {
+      const down = { ...feet, y: feet.y - 1 };
+      const after: typeof read = (x, y, z) => x === down.x && y === down.y && z === down.z ? { name: 'air', solid: false } : read(x, y, z);
+      const afterClosed = (x: number, y: number, z: number) => { const b = after(x, y, z); return !b || b.solid === true; };
+      const landing = standableAt(after, down);
+      if (!landing.ok || !standable(after, down.x, down.y, down.z)) digWhy = `掘った先 ${cellWords(down)} に立てない（${landing.ok ? '床の形が足場にならない' : landing.why}）`;
+      else {
+        // A direct cardinal climb needs head room above the pit and an actual floor at the old height; no new dig/place is assumed.
+        const back = enterable(after(down.x, down.y + 2, down.z)) && COVER_STEP_DIRS.some(([dx, dz]) => {
+          if (dx !== 0 && dz !== 0) return false;
+          const to = { x: feet.x + dx, y: feet.y, z: feet.z + dz };
+          return standableAt(after, to).ok && standable(after, to.x, to.y, to.z)
+            && climbRise(after, down.x, down.y, down.z, to.x, to.z) <= MAX_CLIMB + 1e-9;
+        });
+        if (!back) digWhy = '掘った先から元の高さの安全な足場へ戻れない';
+        else {
+          const count = (at: Vec3, solidAt: typeof closed) => watching.reduce((sum, { entity }) => sum + openSightLines(bot as any, entity as any, at, solidAt), 0);
+          const before = count(centreOf(feet), closed), left = count(centreOf(down), afterClosed);
+          if (left >= before) digWhy = `下がっても見える線が減らない（${before}→${left}）`;
+          else return { cover: { kind: 'dig', cell: down, detail: `足元を掘って下がった ${cellWords(feet)}（見える線 ${before}→${left}）` }, why: '' };
+        }
+      }
+    }
   }
   if (partial && block) {
     return { cover: { kind: 'line', cell: partial.cell, block: block.name, detail: `線上の ${cellWords(partial.cell)} を ${block.name} で塞いだ（見える線 ${partial.before}→${partial.left}）` }, why: '' };

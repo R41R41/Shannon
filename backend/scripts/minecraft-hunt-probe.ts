@@ -1044,8 +1044,12 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   // (a burning body at the cover digs down under its feet (the cover reflex's last way out, floorReflexes (c)): the body is taken up again by the go hand, which sets the floor it climbs on; once, then the lane is read from the stand)
   if (options.ambush && !disconnected && hp() > 0 && Math.abs(actor.entity.position.y - stand[1]) > 0.7) {
     note(`the body stands at y ${r1(actor.entity.position.y)}, not on the stand (y ${stand[1]}): the go hand takes it up (it may set cobblestone)`);
-    const up = await act('back up to the stand', [{ do: 'go', to: { x: stand[0], y: stand[1], z: stand[2] }, range: 0.6, seconds: 25, canPlace: ['cobblestone'], maxPlace: 12 }], 40, { accept: ['blaze'] });
-    note(`back up to the stand: ${up.lines.join(' ').slice(0, 220)}`);
+    // (s2-thin5: the go hand refuses a stand with a fire next to it, so the fires around the stand are put out first; up to three tries)
+    for (let tryNo = 1; tryNo <= 3 && !disconnected && hp() > 0 && Math.abs(actor.entity.position.y - stand[1]) > 0.7; tryNo++) {
+      await putOutFiresAround({ x: stand[0], y: stand[1], z: stand[2] }, 'stand');
+      const up = await act('back up to the stand', [{ do: 'go', to: { x: stand[0], y: stand[1], z: stand[2] }, range: 0.6, seconds: 25, canPlace: ['cobblestone'], maxPlace: 12 }], 40, { accept: ['blaze'] });
+      note(`back up to the stand (try ${tryNo}): ${up.lines.join(' ').slice(0, 220)}`);
+    }
   }
   let json = await readLane();
   // (right after the return the spawner's chunk may not be loaded yet: no report at all; read again every 8 s, up to four times)
