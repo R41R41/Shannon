@@ -7,7 +7,7 @@
 // pre-generated; places in <key>.sites.json). Env (set by scripts/lab/run-hunt-lab.sh):
 //   MINECRAFT_HUNT_NO_LLM=true  MINECRAFT_HUNT_PORT=<25570..25599>  MINECRAFT_HUNT_WORLD_DIRECTORY=/home/azureuser/minecraft/progressive-lab-XXXX
 //   MINECRAFT_HUNT_SITES=<file>        the places of the world (x, y, z; the Nether's are the Nether's)
-//   MINECRAFT_HUNT_SCENES=blaze_hold,barter    names or prefixes (default: all)
+//   MINECRAFT_HUNT_SCENES=blaze_hold,barter    names or prefixes (default: all); =blaze_raid is that name only
 //   MINECRAFT_HUNT_SECONDS=<n>         the length of the timed scenes (blaze camps: default 240)
 //   MINECRAFT_HUNT_REPORT=<file>       the whole report as JSON
 import fs from 'node:fs';
@@ -2450,7 +2450,7 @@ scene('probe_kinds', 'probe kind=camp at the blaze spawner and kind=frames at th
 
 // ---- run -----------------------------------------------------------------------------------------------------------------------------------
 const wanted = (process.env.MINECRAFT_HUNT_SCENES ?? '').split(',').map(name => name.trim()).filter(Boolean);
-const chosen = scenes.filter(entry => !wanted.length || wanted.some(name => entry.name === name || entry.name.startsWith(name)));
+const chosen = scenes.filter(entry => !wanted.length || wanted.some(name => name.startsWith('=') ? entry.name === name.slice(1) : entry.name === name || entry.name.startsWith(name)));
 const startedAll = Date.now();
 let fatal: string | undefined;
 try {
