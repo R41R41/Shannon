@@ -119,7 +119,10 @@ export const bedBodyBox = (p: P3, width = 0.6, height = 1.8): Box =>
 
 export function bedSelfEstimate(read: BedBlockReader, head: P3, foot: P3, feet: P3, dimensions: { width?: number; height?: number } = {}) {
   const box = bedBodyBox(feet, dimensions.width, dimensions.height);
-  const centre = bedCentre(head), exposure = bedExposure(read, centre, box, [head, foot]);
+  // Cheap supports may be destroyed. Never depend on their shielding for SELF, including
+  // observed columns left by an earlier blast. Dragon damage still traces their real shapes.
+  const selfRead: BedBlockReader = p => { const b = read(p); return b?.name === 'cobblestone' ? { ...b, shapes: [] } : b; };
+  const centre = bedCentre(head), exposure = bedExposure(selfRead, centre, box, [head, foot]);
   const distance = Math.hypot(feet.x - centre.x, feet.y - centre.y, feet.z - centre.z);
   return { distance, exposure, shielded: 1 - exposure, box, expected: bedDamage(distance, exposure), model: 'normal_before_armour' };
 }
@@ -168,14 +171,12 @@ export function bedCellInDragon(dragon: SeatedBedPose, cell: P3): boolean {
   const boxes = dragonPlacementBoxes(dragon);
   return !boxes.length || boxes.some(box => boxesOverlap(cellBox(cell), box));
 }
-export function bedLayoutDragonRefusal(dragon: SeatedBedPose, layout: Pick<SeatedBedLayout, 'head' | 'foot' | 'screen'>): string | null {
+export function bedLayoutDragonRefusal(dragon: SeatedBedPose, layout: Pick<SeatedBedLayout, 'head' | 'foot' | 'screen' | 'supportBlocks'>): string | null {
   if (bedCellInDragon(dragon, layout.head)) return 'head_in_dragon';
   if (bedCellInDragon(dragon, layout.foot)) return 'foot_in_dragon';
   const supports = [layout.head, layout.foot].map(p => ({ ...p, y: p.y - 1 }));
-  if (supports.some(p => bedCellInDragon(dragon, p))) return 'support_in_dragon';
-  for (const cell of layout.screen) if (bedCellInDragon(dragon, cell)) {
-    return supports.some(p => p.x === cell.x && p.z === cell.z && cell.y <= p.y) ? 'support_in_dragon' : 'screen_in_dragon';
-  }
+  if ([...supports, ...layout.supportBlocks].some(p => bedCellInDragon(dragon, p))) return 'support_in_dragon';
+  if (layout.screen.some(p => bedCellInDragon(dragon, p))) return 'screen_in_dragon';
   return null;
 }
 
@@ -201,12 +202,12 @@ export function bedOperationClear(dragon: SeatedBedPose, feet: P3, clouds: reado
     && (['head', 'neck'] as const).every(part => !boxesOverlap(box, inflate(partBox(dragon, part), 1.1)));
 }
 
-export interface SeatedBedLayout extends DescentBedLayout { headDistance: number; headDamage: number; selfDamage: number }
+export interface SeatedBedLayout extends DescentBedLayout { supportBlocks: P3[]; headDistance: number; headDamage: number; selfDamage: number }
 /** Local, finite geometry search around the turned head, independent of fountain coordinates/seed.
  * The foot faces FROM the operating point TOWARD the pillow, matching placeBlock's look at its
- * bottom support. Supports and an optional two-high screen share the actual obsidian budget.
+ * bottom support. Columns use cobblestone; only the optional two-high screen uses obsidian.
  * This offers destinations; go and the unchanged reflexes still decide whether a walk is possible. */
-export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, budget: number, health = 20, diag?: Record<string, number>, reflexBot?: any): SeatedBedLayout[] {
+export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, budget: number, cobblestoneBudget: number, health = 20, diag?: Record<string, number>, reflexBot?: any): SeatedBedLayout[] {
   // Counts are a search tree, not a Cartesian product: every visited node is rejected,
   // expanded into the next stage, or accepted. Thus candidates = rejected + expanded + accepted.
   const add = (name: string) => { if (diag) diag[name] = (diag[name] ?? 0) + 1; };
@@ -216,16 +217,18 @@ export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, bu
   if (diag) for (const name of ['candidates', 'rejected', 'expanded', 'accepted', 'head_candidates', 'head_passed',
     'foot_candidates', 'foot_passed', 'stand_candidates', 'stand_passed', 'screen_candidates', 'head_not_air', 'head_far_or_weak',
     'foot_not_air', 'stand_not_open', 'stand_no_floor', 'stand_not_clear', 'stand_out_of_reach', 'screen_unsupported',
-    'screen_over_budget', 'screen_conflict', 'screen_out_of_reach', 'self_damage_too_high', 'head_damage_low',
+    'screen_over_budget', 'support_over_budget', 'screen_conflict', 'screen_out_of_reach', 'self_damage_too_high', 'head_damage_low',
     'head_in_dragon', 'foot_in_dragon', 'support_in_dragon', 'screen_in_dragon', 'stand_in_reflex_zone']) diag[name] ??= 0;
   const pose = seatedDragonHead(dragon);
-  if (!pose || !Number.isInteger(budget) || budget < 0 || !Number.isFinite(health)) { add('invalid_input'); return []; }
+  if (!pose || !Number.isInteger(budget) || budget < 0 || !Number.isInteger(cobblestoneBudget) || cobblestoneBudget < 0 || !Number.isFinite(health)) { add('invalid_input'); return []; }
   const found: SeatedBedLayout[] = [];
   const boxes = dragonPlacementBoxes(dragon), inDragon = (cell: P3) => boxes.some(box => boxesOverlap(cellBox(cell), box));
   const dangerBot = reflexBot ?? seatedDangerReader(dragon, read);
   const standDanger = new Map<string, boolean>();
-  const project = (cells: P3[]): BedBlockReader => p => cells.some(c => key(c) === key(p))
-    ? { name: 'obsidian', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : read(p);
+  const project = (supportBlocks: P3[], screen: P3[]): BedBlockReader => p => {
+    const name = screen.some(c => key(c) === key(p)) ? 'obsidian' : supportBlocks.some(c => key(c) === key(p)) ? 'cobblestone' : null;
+    return name ? { name, boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : read(p);
+  };
   for (let x = Math.floor(pose.feet.x) - 2; x <= Math.floor(pose.feet.x) + 2; x++)
     for (let z = Math.floor(pose.feet.z) - 2; z <= Math.floor(pose.feet.z) + 2; z++)
       for (let y = Math.floor(pose.feet.y) - 2; y <= Math.floor(pose.feet.y) + 2; y++) {
@@ -257,11 +260,15 @@ export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, bu
             if ([head, foot].some(p => bedEyeReach(stand, p) > 4.5)) { reject('stand_out_of_reach'); continue; }
             pass('stand');
             const wall = [0, 1].map(h => ({ x: x + dx * 2 + dz * side, y: sy + h, z: z + dz * 2 - dx * side }));
-            for (const targets of [supports, [...supports, ...wall]]) {
+            for (const walls of [[], wall]) {
               visit('screen');
-              const screen = supportedBedCells(targets, read, 3);
-              if (!screen) { reject('screen_unsupported'); continue; }
-              if (supports.some(inDragon) || screen.some(p => inDragon(p) && supports.some(s => s.x === p.x && s.z === p.z && p.y <= s.y))) { reject('support_in_dragon'); continue; }
+              const cells = supportedBedCells([...supports, ...walls], read, 3);
+              if (!cells) { reject('screen_unsupported'); continue; }
+              // Only the explicitly requested wall voxels are blast-resistant. Any foundations
+              // needed below them are cheap support too. Existing solids consume neither budget.
+              const wallKeys = new Set(walls.map(key));
+              const screen = cells.filter(p => wallKeys.has(key(p))), supportBlocks = cells.filter(p => !wallKeys.has(key(p)));
+              if ([...supports, ...supportBlocks].some(inDragon)) { reject('support_in_dragon'); continue; }
               if (screen.some(inDragon)) { reject('screen_in_dragon'); continue; }
               if (screen.length > budget) {
                 reject('screen_over_budget'); add(`screen_over_budget_required_${screen.length}`);
@@ -271,17 +278,18 @@ export function seatedBedLayouts(dragon: SeatedBedPose, read: BedBlockReader, bu
                 }
                 continue;
               }
-              if (screen.some(p => [head, foot].some(c => key(c) === key(p))
+              if (supportBlocks.length > cobblestoneBudget) { reject('support_over_budget'); continue; }
+              if (cells.some(p => [head, foot].some(c => key(c) === key(p))
                 || boxesOverlap(bedBodyBox(stand), { minX: p.x, minY: p.y, minZ: p.z, maxX: p.x + 1, maxY: p.y + 1, maxZ: p.z + 1 }))) { reject('screen_conflict'); continue; }
-              if (screen.some(p => bedEyeReach(stand, p) > 4.5)) { reject('screen_out_of_reach'); continue; }
-              const projected = project(screen);
+              if (cells.some(p => bedEyeReach(stand, p) > 4.5)) { reject('screen_out_of_reach'); continue; }
+              const projected = project(supportBlocks, screen);
               const selfDamage = bedSelfEstimate(projected, head, foot, stand).expected;
               if (!Number.isFinite(selfDamage) || selfDamage > 6 || selfDamage + 4 >= health) { reject('self_damage_too_high'); continue; }
               const headDamage = bedDamage(headDistance, bedExposure(projected, bedCentre(head), pose.box, [head, foot]));
               if (!Number.isFinite(headDamage) || headDamage < 50) { reject('head_damage_low'); continue; }
               add('accepted');
-              found.push({ head, foot, stand, screen, headDistance, headDamage, selfDamage,
-                score: -headDamage + screen.length * 0.25 + Math.abs(side) * 0.1 });
+              found.push({ head, foot, stand, supportBlocks, screen, headDistance, headDamage, selfDamage,
+                score: -headDamage + screen.length * 0.25 + supportBlocks.length * 0.01 + Math.abs(side) * 0.1 });
             }
           }
         }

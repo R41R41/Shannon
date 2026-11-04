@@ -979,3 +979,23 @@ Node v24.21.0でベッド93件、関連のhead model22＋比較66＋nook10＋ful
 さらに、水平の入力加速・再ノック・サーバー補正、部分shapeへの接地、読み込まれていない床、現実の水の反映遅延はこの簡易予測の保証外。8tick先まで水平速度一定とする誤差、着水後に隣セルへ出る場合、外側の8秒action timeoutで切られる場合をラボで確認する。`FALL_CLUTCH_ENABLED=false` は維持。変更はこの節、fallClutchと関係単体試験だけで未コミット。ラボはS1が担当し、VM／本体／DB／外部資料／環境変数設定を変更せず、`.codex-material/` と並行作業のprobe／geometry／knock recorderには触れない。
 
 検証結果：Node v24.21.0。新しいfallClutch試験57件（上記378通りを含む）、既存DragonFight試験69件成功、無効スイッチによる既存2件skip。既存priority380によるflee250の中断・pour成功と、priority500に所有権を取られた後の送信0件も実ActionExecution経由で確認した。通常のTypeScript設定から変更した3 TS rootだけの構文／semantic診断を収集し0件（依存先自身／全backendの型検査ではない）。`git diff --check` 成功。ラボは未実施。
+
+## 頼み23：ベッドの柱を丸石、壁だけ黒曜石にする（2026-11-04）
+
+r216の `bed_halves_missing_or_wrong_facing` は、設置時の向き違いとは確認できない。座り8／bedTrials 2は足 `(-1,67,-5)` → 枕 `(-2,67,-5)` のwest、座り13／trial 3は足 `(4,66,2)` → 枕 `(5,66,2)` のeastで、どちらも計画と設置handの成功文が一致する。枕は50ms後に届き、両半分を確認した `placedTick` は5400／8251。その後、use直前の5411／8262に `observedHalves:null` となり、`useTick:null`／`useRequested:false` のまま拒否されている。失敗箇所は **設置の後、use送信前の足側state読取り** まで絞れる。
+
+旧report／tailにはその時点の両セルのブロック名・part・facingや変更履歴が無い。空気／片側の消失、properties欠落、隣のベッドの半分、竜による破壊のどれかは確定できない。座り13では8257にraw yawも変わるが、これだけで破壊原因とは断定しない。旧記録の `bed_halves_missing_or_wrong_facing` を「向き間違い」と決めつけて照準や反射を変更しない。
+
+施工の例：単体試験の平地fixture（全地面top=70、body `(103.5,74,-39.5)`、yaw=0）には、枕 `(103,71,-35)`、足 `(103,71,-36)`、操作位置 `(103.5,70,-38.5)` の候補がある。必要4セルは、ベッド直下2セルを丸石、間の2段 `(103,70,-37)`／`(103,71,-37)` を黒曜石にする。**旧方式の黒曜石4個から、黒曜石2個＋丸石2個へ半減**。新しい保守的見積もりでも自傷1、竜の頭50.3011。これは架空地形の例であり、r216の配置が同じ被害で再利用できるという主張ではない。
+
+`SeatedBedLayout.supportBlocks` を追加し、`screen` は新規の黒曜石壁セルだけにした。`supportedBedCells` の汎用戻り値は既存のnook／比較場面との互換を維持し、着座探索で施工セルを役割別に分ける。壁の下に必要な基礎も丸石とする。探索は黒曜石数と丸石数を別に受け取り、`screen.length` と `supportBlocks.length` を各在庫に照合する。丸石不足は `support_over_budget`、黒曜石不足の `screen_over_budget_required_N` は壁の新規必要数だけを表す。既存の固体は新規消費数に含めない。
+
+投影readerは足場を `cobblestone`、壁を `obsidian` として読む。爆発の被害がブロック破壊より先に計算される前提で、竜の被害は丸石の実shapeも使う。一方、自傷の `bedSelfEstimate` は計画中／観測済みを問わず **すべての丸石を遮蔽に数えない**。したがって柱の遮蔽頼みだった候補は落ちうる。`selfDamage <= 6` と `selfDamage + 4 < health`、頭被害50以上は維持する。`bedExposure` 自体の通常のcollision shape契約は維持する。
+
+`end_bed_kill` は `packCount('cobblestone')` と黒曜石在庫を探索に渡す。足場は既存place handの `block:'cobblestone'`（記録label `place_cobblestone_support`）、壁は `block:'obsidian'`（`place_obsidian_screen`）で施工する。全セルの支持関係を保ち、観測済み支持があるものから順に置き、各回の200ms／4tick待機の直前・直後に資材・reach・支持・竜重なりを確認する。爆発後は足場の残存を観測し、失われた予定セルだけを同じ窓の施工期限内、または次の座りの再探索で積み直す。黒曜石を丸石不足の代用にしない。trialは `supportBlocks` と壁の `screen`、use時の `supportsAtUse`／`screenAtUse` を分けて保存する。
+
+設置／useの `perches[].steps[].bedHalvesDiag` に、待機前 `observed`、待機後・送信前 `checked`、処理後 `after` を記録する。各snapshotはtick、期待foot/head/facing、両セルのname/part/facing/解析したhalves、期待との一致、現在の竜重なり拒否理由を持つ。use前検査は両方のベッド名・foot/headの役割・facing・相互のセルを照合する。**送信前の拒否でもstepを保存**し、`tick` 未設定はhand未送信、`endTick` は拒否時刻として残す。trialには拒否時診断と、両セルの直近最大16件のblockUpdate前後も保存する。これにより次回は設置成功後に空気になったケースと状態／向き不整合を区別できる。
+
+仮定と残課題：既存の着座モデル・shape・クライアント受信tickを使う。丸石を除外した自傷見積もりは保守的なので、候補数が減る可能性がある。実地の資材寿命・起爆回数・r216相当のベッド消失原因は、S1がr220〜r223とは別の変更入りラボで診断する。この作業は指定コピーだけ、HEAD `843f814` のまま未コミット。ラボ／VM／本体／DB／外部資料更新は行わず、`.codex-material/`、反射、fallClutch、FALL_CLUTCH_ENABLED、floorReflexes、dragonDanger、gazeGuard、dragonStrike、hand一覧、環境変数設定は変更しない。
+
+最終検証：Node v24.21.0。ベッド105件（新規12件）、head model22＋比較66＋nook10＋full chain125＋knock39＝**6ファイル367件成功**。材質別の施工／消費、別予算／不足、丸石を除外した自傷と体力余裕、足場消失後の再施工、片側消失・向き違い・隣の半分・properties欠落の送信前拒否と診断を検査した。既存の隔離フラグとダミー値を試験子プロセスにだけ渡し、共有.env／DB／APIは使わない。`node tests/unit/checkEndBedKill.cjs` は変更3 TS root（**probe全体**・geometry・ベッド試験）の構文／semantic／compiler options診断0件。依存先自身のsemantic診断と全backend型検査は対象外。`git diff --check` 成功。

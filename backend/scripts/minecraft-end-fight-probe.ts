@@ -3499,7 +3499,7 @@ async function endBedKill() {
   const t0 = Date.now(), deadline = t0 + KILL_LIMIT_MS, deaths0 = actorDeaths;
   const counts0 = actor.reflexLedger.counts(), lowest = trackMinHealth();
   const out: Record<string, any> = { scene: 'dragon_kill_compare', style: 'end_bed_kill', limitSeconds: KILL_LIMIT_MS / 1000,
-    initial: { ...initial, dragonHealth: 200, actorHealth: Number(actor.health), food: Number(actor.food), beds: packCount('white_bed'), obsidian: packCount('obsidian'), cobblestone: 64, arrows: 0, sword: 'iron_sword', floorReflexes: true },
+    initial: { ...initial, dragonHealth: 200, actorHealth: Number(actor.health), food: Number(actor.food), beds: packCount('white_bed'), obsidian: packCount('obsidian'), cobblestone: packCount('cobblestone'), arrows: 0, sword: 'iron_sword', floorReflexes: true },
     tickBasis: 'actor physicsTick since timed start; confirmations are client receipt ticks, not server gameTime',
     headModel: 'phase-7 start: raw body position/yaw -> stationary partBox head; no client part or flight extrapolation required',
     operationBudget: { windowTicks: 240, approachByTick: 100, screenByTick: 160, placeByTick: 200, useByTick: 240, bedsPerPerch: 3, observationDelayTicks: 4, placeToUseTicks: 4, blastGapTicks: 11 },
@@ -3525,6 +3525,23 @@ async function endBedKill() {
   };
   const abortActive = (reason: string) => active?.controller.abort(reason);
   const read = (p: P3) => actor.blockAt(new Vec3(p.x, p.y, p.z)) ?? null;
+  const bedCellState = (cell: P3, block = read(cell)) => {
+    let props: Record<string, unknown> = {};
+    try { props = block?.getProperties?.() ?? {}; } catch { /* retain unknown properties */ }
+    return { cell: { ...cell }, name: block?.name ?? null, part: props.part ?? null, facing: props.facing ?? null,
+      halves: bedHalves(block, cell) };
+  };
+  const bedHalvesDiag = () => {
+    if (!layout) return null;
+    const foot = bedCellState(layout.foot), head = bedCellState(layout.head);
+    const dx = layout.head.x - layout.foot.x, dz = layout.head.z - layout.foot.z;
+    const facing = dx === 1 ? 'east' : dx === -1 ? 'west' : dz === 1 ? 'south' : 'north';
+    const matches = [foot, head].every((b, i) => String(b.name).endsWith('_bed') && b.part === (i ? 'head' : 'foot')
+      && b.facing === facing && !!b.halves && chainDistance(b.halves.foot, layout!.foot) === 0 && chainDistance(b.halves.head, layout!.head) === 0);
+    const raw = dragonEntity();
+    return { tick, expected: { foot: layout.foot, head: layout.head, facing }, foot, head, matches,
+      dragonRefusal: raw ? bedLayoutDragonRefusal({ position: raw.position, yaw: raw.yaw, phase: view?.dragon?.phase ?? null }, layout) : 'head_observation_missing' };
+  };
   const seconds = () => (Date.now() - t0) / 1000;
   let waitAnchor: P3 | null = null, anchorLastAt = 0, anchorLastBucket = -1, anchorLastDistance: number | null = null;
   const recordAnchor = (final = false) => {
@@ -3575,6 +3592,11 @@ async function endBedKill() {
   const onDead = (e: any) => { if (e?.id === initial.dragonId) stop('dragon_dead'); };
   const onDeath = () => stop('actor_dead');
   const onBlock = (_old: any, block: any) => {
+    if (pending && block?.position && [pending.foot, pending.head].some(cell => chainDistance(cell, block.position) === 0)) {
+      pending.bedBlockUpdates ??= [];
+      pending.bedBlockUpdates.push({ tick, before: bedCellState(block.position, _old), after: bedCellState(block.position, block) });
+      if (pending.bedBlockUpdates.length > 16) pending.bedBlockUpdates.shift();
+    }
     if (!pending || pending.placedTick !== null || !block?.position || !String(block.name).endsWith('_bed')) return;
     const h = bedHalves(block, block.position);
     const other = h && bedHalves(read(h.other), h.other);
@@ -3691,7 +3713,9 @@ async function endBedKill() {
         standHazards: stand ? dragonHazards(actor, { along: [stand] }) : [], bodyHazards: dragonHazards(actor) };
     };
     if (standObserved) row.approachObserved = approachSnapshot();
-    const samePerchRequired = ['approach_turned_head', 'place_obsidian_screen', 'place_seated_head_bed', 'use_seated_head_bed'].includes(label);
+    const bedStep = label === 'place_seated_head_bed' || label === 'use_seated_head_bed';
+    if (bedStep) row.bedHalvesDiag = { observed: bedHalvesDiag() };
+    const samePerchRequired = ['approach_turned_head', 'place_cobblestone_support', 'place_obsidian_screen', 'place_seated_head_bed', 'use_seated_head_bed'].includes(label);
     const allowedNow = () => {
       const ok = (!samePerchRequired || perch === actionPerch) && allowed();
       if (!ok && row.allowedFalseTick == null) {
@@ -3711,7 +3735,8 @@ async function endBedKill() {
       if (!await delay(observedTick, observedAt) || !allowedNow()) {
         refuse('phase_changed_before_action', { label }); row.ok = false; row.cancelled = terminal ?? 'observation_changed'; return false;
       }
-      if (check && !check(intent)) return false;
+      if (bedStep) row.bedHalvesDiag.checked = bedHalvesDiag();
+      if (check && !check(intent)) { row.ok = false; row.cancelled = pending?.notDetonatedReason ?? 'check_refused'; return false; }
       Object.assign(row, { tick, seconds: seconds(), phase: view?.dragon?.phase });
       ledgerMark = actor.reflexLedger.mark?.() ?? 0;
       active = { controller, allowed: allowedNow, observe: observeReflex };
@@ -3723,6 +3748,7 @@ async function endBedKill() {
       row.ok = false; row.error = String(error); row.cancelled = controller.signal.reason ?? null;
       throw error;
     } finally {
+      if (bedStep) row.bedHalvesDiag.after = bedHalvesDiag();
       if (standObserved) {
         observeReflex();
         row.approachEnd = approachSnapshot();
@@ -3735,8 +3761,8 @@ async function endBedKill() {
           row.interruption.allowedFalseTick = row.allowedFalseTick ?? null;
         }
       }
-      // Keep pre-dispatch approach vetoes, too; other labels retain the existing action record contract.
-      if (row.tick !== undefined || standObserved) { row.endTick = tick; out.actions.push(row); actionPerch?.steps.push(row); }
+      // Keep approach/bed vetoes before dispatch, so a failed pair check retains both raw cells.
+      if (row.tick !== undefined || standObserved || bedStep) { row.endTick = tick; out.actions.push(row); actionPerch?.steps.push(row); }
       active = null;
     }
   };
@@ -3749,12 +3775,12 @@ async function endBedKill() {
     initial.ground, ...islandFootings(actor, view?.perch ?? initial.ground)];
   const chooseLayout = () => {
     if (!perch?.body || !bedWindow()) return null;
-    const diag: Record<string, number> = {}, obsidian = packCount('obsidian');
-    const candidates = seatedBedLayouts(perch.body, plannedRead, obsidian, Number(actor.health), diag, actor);
+    const diag: Record<string, number> = {}, obsidian = packCount('obsidian'), cobblestone = packCount('cobblestone');
+    const candidates = seatedBedLayouts(perch.body, plannedRead, obsidian, cobblestone, Number(actor.health), diag, actor);
     const clear = candidates.filter(l => clearNow(l.stand));
     const selected = clear
       .filter(l => !pending || (JSON.stringify(l.foot) === JSON.stringify(pending.foot) && JSON.stringify(l.head) === JSON.stringify(pending.head)))
-      .sort((a, b) => b.headDamage - a.headDamage || a.screen.length - b.screen.length
+      .sort((a, b) => b.headDamage - a.headDamage || a.screen.length - b.screen.length || a.supportBlocks.length - b.supportBlocks.length
         || chainDistance(a.stand, actor.entity.position) - chainDistance(b.stand, actor.entity.position))[0] ?? null;
     if (perch.n <= 12 && !perch.layoutDiag) {
       const pose = seatedDragonHead(perch.body), columns: Array<Record<string, unknown>> = [];
@@ -3769,7 +3795,7 @@ async function endBedKill() {
           }
           columns.push({ x, z, y: top?.y ?? null, name: top?.name ?? null, unknownAbove });
         }
-      perch.layoutDiag = { tick, seconds: seconds(), diag, body: perch.body, seatedDragonHead: pose, obsidian,
+      perch.layoutDiag = { tick, seconds: seconds(), diag, body: perch.body, seatedDragonHead: pose, obsidian, cobblestone,
         geometryCandidates: candidates.length, clearNowRejected: candidates.length - clear.length,
         pendingRejected: clear.filter(l => pending && (JSON.stringify(l.foot) !== JSON.stringify(pending.foot) || JSON.stringify(l.head) !== JSON.stringify(pending.head))).length,
         groundScan: { minY, maxY, columns } };
@@ -3797,10 +3823,11 @@ async function endBedKill() {
   };
   const useCheck = (intent: HeadSample | undefined) => {
     if (!layout || !pending || !intent) { refuse('head_observation_missing'); return false; }
-    const halves = bedHalves(read(layout.foot), layout.foot), other = halves && bedHalves(read(halves.head), halves.head);
+    const halves = bedHalves(read(layout.foot), layout.foot), diag = bedHalvesDiag();
     pending.observedHalves = halves;
-    if (!halves || !other || JSON.stringify(halves.head) !== JSON.stringify(layout.head) || JSON.stringify(other.foot) !== JSON.stringify(layout.foot)) {
-      refuse('bed_halves_missing_or_wrong_facing'); return false;
+    pending.bedHalvesDiag = diag;
+    if (!halves || !diag?.matches) {
+      refuse('bed_halves_missing_or_wrong_facing', { bedHalvesDiag: diag }); return false;
     }
     const ahead = tick - intent.tick;
     if (ahead < 4 || ahead > 8) { refuse('head_motion_unknown'); return false; }
@@ -3827,7 +3854,9 @@ async function endBedKill() {
     pending.headAtUse = headOf(view?.dragon); pending.prediction = pending.latestEstimate; pending.healthBefore = Number(actor.health);
     pending.positionAtUse = { ...actor.entity.position };
     const supports = [layout.head, layout.foot].map(p => ({ ...p, y: p.y - 1 }));
-    pending.screenAtUse = [...supports, ...layout.screen].map(cell => ({ cell, name: read(cell)?.name ?? null }));
+    pending.supportsAtUse = [...new Map([...supports, ...layout.supportBlocks].map(cell => [`${cell.x},${cell.y},${cell.z}`, cell])).values()]
+      .map(cell => ({ cell, name: read(cell)?.name ?? null }));
+    pending.screenAtUse = layout.screen.map(cell => ({ cell, name: read(cell)?.name ?? null }));
     delete pending.notDetonatedReason;
     return true;
   };
@@ -3873,23 +3902,31 @@ async function endBedKill() {
           continue;
         }
         let built = true;
-        for (const cell of layout.screen) {
-          if (read(cell)?.name === 'obsidian') continue;
+        const construction = [...layout.supportBlocks.map(cell => ({ cell, block: 'cobblestone' })), ...layout.screen.map(cell => ({ cell, block: 'obsidian' }))]
+          .filter(({ cell, block }) => block === 'cobblestone' ? read(cell)?.boundingBox !== 'block' : read(cell)?.name !== 'obsidian')
+          .sort((a, b) => a.cell.y - b.cell.y);
+        while (construction.length) {
+          // A same-height neighbour may anchor the next cell. Keep dependencies across materials.
+          const next = construction.findIndex(({ cell }) => bedCellSupported(read, cell));
+          if (next < 0) { built = false; break; }
+          const { cell, block } = construction.splice(next, 1)[0];
           const raw = dragonEntity();
           if (!byTick(160) || !raw || bedLayoutDragonRefusal({ position: raw.position, yaw: raw.yaw, phase: view?.dragon?.phase ?? null }, layout)
-            || !clearNow(actor.entity.position) || packCount('obsidian') < 1 || bedEyeReach(actor.entity.position, cell) > 4.5 || !bedCellSupported(read, cell)) { built = false; break; }
+            || !clearNow(actor.entity.position) || packCount(block) < 1 || bedEyeReach(actor.entity.position, cell) > 4.5 || !bedCellSupported(read, cell)) { built = false; break; }
           killPlaced.set(`${cell.x},${cell.y},${cell.z}`, cell);
-          if (!await perform('place_obsidian_screen', [{ do: 'place', block: 'obsidian', at: [cell] }], () => byTick(160) && atStand() && clearNow(actor.entity.position), () => {
+          if (!await perform(block === 'cobblestone' ? 'place_cobblestone_support' : 'place_obsidian_screen', [{ do: 'place', block, at: [cell] }], () => byTick(160) && atStand() && clearNow(actor.entity.position), () => {
             const latest = dragonEntity();
-            return !!latest && bedLayoutDragonRefusal({ position: latest.position, yaw: latest.yaw, phase: view?.dragon?.phase ?? null }, layout!) === null;
-          }) || read(cell)?.name !== 'obsidian') { built = false; break; }
+            return !!latest && packCount(block) > 0 && bedEyeReach(actor.entity.position, cell) <= 4.5 && bedCellSupported(read, cell)
+              && /^(air|cave_air|void_air)$/u.test(read(cell)?.name ?? '')
+              && bedLayoutDragonRefusal({ position: latest.position, yaw: latest.yaw, phase: view?.dragon?.phase ?? null }, layout!) === null;
+          }) || read(cell)?.name !== block) { built = false; break; }
         }
         if (!built) { blockBeds('screen_build_unconfirmed'); layout = null; continue; }
         if (!pending) {
           if (!byTick(200)) { blockBeds('placement_time_budget'); continue; }
           if ([layout.foot, layout.head].some(p => bedEyeReach(actor.entity.position, p) > 4.5)) { blockBeds('placement_out_of_reach'); layout = null; continue; }
           if (!placementCheck()) { bedBlocked = true; perch!.bedUnavailableReason = out.refusals.at(-1)?.reason; continue; }
-          pending = { n: ++out.placementAttempts, perch: perch!.n, plannedTick: tick, phase7Head: perch!.head, foot: layout.foot, head: layout.head, stand: layout.stand, screen: layout.screen,
+          pending = { n: ++out.placementAttempts, perch: perch!.n, plannedTick: tick, phase7Head: perch!.head, foot: layout.foot, head: layout.head, stand: layout.stand, supportBlocks: layout.supportBlocks, screen: layout.screen,
             placeRequestTick: null, placedTick: null, useTick: null, detonationTick: null, useRequested: false, minHealth: Number(actor.health), healthBeforePlace: Number(actor.health),
             healthBefore: null, healthAfter: null, dragonBefore: null, dragonAfter: null, dragonHealthServerBefore: null, dragonHealthServerAfter: null, dragonLoss: null, selfDamage: null };
           out.bedTrials.push(pending);
@@ -3932,7 +3969,7 @@ async function endBedKill() {
             trial.dragonLoss = trial.dragonHealthServerBefore !== null && health !== null ? trial.dragonHealthServerBefore - health : null;
             if (trial.detonationTick !== null && trial.dragonLoss > 0) out.explosionsHit++;
           }).catch(error => { trial.serverAfterError = String(error); }).finally(() => { afterReadBusy = false; });
-          pending = null; // reuse the verified supports/screen after a CONFIRMED blast
+          pending = null; // after a CONFIRMED blast, observe/rebuild cheap supports and reuse surviving walls
           if (trial.detonationTick === null) { layout = null; leaveNeeded = true; perch!.endTick ??= tick; perch!.endReason = 'unconfirmed_use'; }
         } else if (['self_damage', 'out_of_reach', 'operating_position_changed', 'breath_or_contact_at_operation', 'seated_pose_changed'].includes(pending.notDetonatedReason)) {
           // A placed but unsafe bed is not a reason to switch to sword beside it. Leave this window.
