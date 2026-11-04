@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 // edge so these tests never read .env, load a live skill catalog or need credentials.
 vi.mock('../../src/services/minebot/config/MinebotConfig.js', () => ({ CONFIG: {} }));
 import { appendLandingObservation, dragonLandingTarget, interpolateLanding, landingBurstDue, landingDamageDistance,
-  landingHeadResidual, landingMode, landingPreparationCorridor, predictLandingPath, type LandingObservation } from '../../src/services/minebot/utils/dragonLandingPath.js';
+  landingEndHead, landingHeadResidual, landingMode, landingPreparationCorridor, landingReadiness, landingShotWindow, predictLandingPath, type LandingObservation } from '../../src/services/minebot/utils/dragonLandingPath.js';
 import { bedCentre, bedDamage, bedEyeReach, bedSelfEstimate, landingBedLayouts, landingBedRefusal, landingBedSelf } from '../../src/services/minebot/utils/dragonBedGeometry.js';
 import { dragonHeadVanilla } from '../../src/services/minebot/utils/dragonHeadVanilla.js';
 import type { P3 } from '../../src/services/minebot/utils/dragonParts.js';
@@ -119,5 +119,69 @@ describe('M2 cadence, radii and phase routing', () => {
     expect([2, 3, 6, 7, 5, 4, null].map(landingMode)).toEqual(['prepare', 'burst', 'seated', 'seated', 'seated', 'leave', 'wait']);
     for (const d of [0, 1, 2.07, 3.22]) expect(landingDamageDistance(bedDamage(d, 1))).toBeCloseTo(d);
     expect(landingDamageDistance(-1)).toBeNull();
+  });
+});
+
+describe('M2 r245 regression and near firing horizon', () => {
+  it('keeps phase-2 completion through a stale-packet veto; separates every entry predicate', () => {
+    const plan = { readyTick: 363, phaseStart: 228, target };
+    const h = observations(2);
+    // Same failure as r245 at 409: prediction empty at receipt age four.
+    expect(predictLandingPath(h, target, 19, 3)).toEqual([]);
+    expect(landingReadiness(plan, target, 691)).toEqual({ completedInPhase2: true, beforeEntry: true, targetObserved: true, sameTarget: true, ready: true });
+    expect(plan.readyTick).toBe(363);
+    expect(landingReadiness({ ...plan, readyTick: null }, target, 691).ready).toBe(false);
+    expect(landingReadiness({ ...plan, readyTick: 691 }, target, 691).beforeEntry).toBe(false);
+    expect(landingReadiness({ ...plan, readyTick: 227 }, target, 691).completedInPhase2).toBe(false);
+    expect(landingReadiness(plan, null, 691).targetObserved).toBe(false);
+    expect(landingReadiness(plan, { ...target, y: target.y + 1 }, 691).sameTarget).toBe(false);
+  });
+  it.each([4, 5] as const)('requires the observed head AND every +1..3 head, ignoring a +20 crossing (%s beds)', beds => {
+    const h = observations(), window = landingShotWindow(h, target, 15);
+    expect(window.map(p => p.tick)).toEqual([15, 16, 17, 18]);
+    expect(window[0].head).toEqual(predictLandingPath(h, target, 15, 0)[0].head);
+    const pillow = { ...window[3].head };
+    expect(window.every(p => landingBurstDue({ phase: 3, now: 15, lastBlast: null, head: p.head, pillow, beds, error: .5 }))).toBe(true);
+    const distant = predictLandingPath(h, target, 15, 20).at(-1)!.head;
+    expect(landingBurstDue({ phase: 3, now: 15, lastBlast: null, head: distant, pillow: distant, beds, error: 0 })).toBe(true);
+    expect(window.every(p => landingBurstDue({ phase: 3, now: 15, lastBlast: null, head: p.head, pillow: distant, beds, error: 0 }))).toBe(false);
+    expect(landingShotWindow(h, target, 19)).toEqual([]);
+    expect(landingShotWindow(observations(2), target, 15)).toEqual([]);
+    // The latest packet remains an observation, not an extrapolated 'now' pose.
+    expect(landingShotWindow(h, target, 16).map(p => p.tick)).toEqual([15, 17, 18, 19]);
+  });
+  it.each([0, Math.PI / 2, Math.PI, -Math.PI / 2])('calculates the terminal head from inbound progress and seated height, translated (yaw %s)', yaw => {
+    const dir = { x: Math.sin(yaw), z: Math.cos(yaw) };
+    const h: LandingObservation[] = [0, 3].map(tick => ({ tick, phase: 3, yaw: yaw + 1,
+      position: { x: target.x - dir.x * (8 - tick), y: target.y + 2, z: target.z - dir.z * (8 - tick) } }));
+    const end = landingEndHead(h, target)!;
+    expect(end.source).toBe('inbound_packet_progress');
+    expect(end.head.x).toBeCloseTo(target.x + dir.x * 6.5); expect(end.head.z).toBeCloseTo(target.z + dir.z * 6.5);
+    expect(end.head.y).toBe(target.y - 1);
+    expect(end.head).toEqual(dragonHeadVanilla({ position: target, yaw: end.yaw, p: 0, hy: -1, yRotA: 0 })!.feet);
+    const corridor = landingPreparationCorridor(h, target);
+    expect(corridor.some(p => Math.hypot(p.head.x - end.head.x, p.head.y - end.head.y, p.head.z - end.head.z) < .001)).toBe(true);
+  });
+  it('uses a target bearing while circling, and refuses an unknown direction at the target', () => {
+    const h = observations(2); h[5].position.z = h[4].position.z - 1;
+    expect(landingEndHead(h, target)?.source).toBe('target_bearing');
+    expect(landingEndHead([{ tick: 0, phase: 3, yaw: 1, position: target }], target)).toBeNull();
+  });
+  it('adds terminal pillows and midpoint hypotheses while retaining the collision and shielding vetoes', () => {
+    const h = observations(2).map(p => ({ ...p, yaw: Math.PI / 4, position: { ...p.position, x: target.x - 20 + p.tick * .2 } }));
+    const end = landingEndHead(h, target)!, corridor = landingPreparationCorridor(h, target);
+    // A translated, observed durable shelf, not a claim about r245 terrain.
+    const read = (p: P3) => p.y === target.y - 5
+      || (p.x === Math.floor(target.x) && p.z === Math.floor(target.z) && p.y < target.y) ? solid('bedrock') : air;
+    const layouts = landingBedLayouts(target, corridor, read, 16, 20, end.head);
+    expect(layouts.some(l => l.region === 'central')).toBe(true);
+    expect(layouts.some(l => l.region === 'terminal')).toBe(true);
+    const midpoint = { x: (target.x + end.head.x) / 2, y: target.y - 1, z: (target.z + end.head.z) / 2 };
+    expect(corridor.some(p => Math.hypot(p.head.x - midpoint.x, p.head.y - midpoint.y, p.head.z - midpoint.z) < .001)).toBe(true);
+    for (const l of layouts) {
+      const projected = (p: P3) => l.screen.some(c => key(c) === key(p)) ? solid() : read(p);
+      expect(landingBedSelf(projected, l.head, l.foot, l.stand).exposure).toBe(0);
+      expect(l.screen.some(p => p.x === Math.floor(target.x) && p.z === Math.floor(target.z))).toBe(false);
+    }
   });
 });

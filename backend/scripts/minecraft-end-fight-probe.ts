@@ -35,7 +35,7 @@ import { dragonNook, insideDragonNook, nookCellSupported, type DragonNook } from
 import { BLOCK_REACH } from '../src/services/minebot/utils/blockReach.js';
 import { isPerched, type P3 } from '../src/services/minebot/utils/dragonParts.js';
 import { appendDragonBody, predictDragonHead, forecastDragonHead, seatedDragonHead, dragonHeadCentre, observedDragonPart, type DragonBodySample } from '../src/services/minebot/utils/dragonHeadModel.js';
-import { appendLandingObservation, dragonLandingTarget, landingBurstDue, landingDamageDistance, landingDragonBoxes, landingHeadResidual, landingMode, landingPreparationCorridor, predictLandingPath, type LandingObservation, type LandingPoint } from '../src/services/minebot/utils/dragonLandingPath.js';
+import { appendLandingObservation, dragonLandingTarget, landingBurstDue, landingDamageDistance, landingDragonBoxes, landingEndHead, landingHeadResidual, landingMode, landingPreparationCorridor, landingReadiness, landingShotWindow, predictLandingPath, type LandingObservation, type LandingPoint } from '../src/services/minebot/utils/dragonLandingPath.js';
 import { bedBodyBox, landingBedFireClear, landingBedLayouts, landingBedRefusal, landingBedSelf, type LandingBedLayout } from '../src/services/minebot/utils/dragonBedGeometry.js';
 import { cageRoots, cageWall, cageGuardCells, cageGuardWork, cageRecoveryFootings, cageWaterLandings, cageWaterSource, cageWaterExit, cageDryFooting, cagePoolExits, cageShadowFootings, crystalShelterState, crystalShelterExits, islandFootings } from '../src/services/minebot/utils/endFightGeometry.js';
 import { CHAIN_LIMIT_MS, CRYSTAL_LIMIT_MS, CRYSTAL_WAIT_MS, CAGE_TRAVEL_WAIT_MS, FAST_CAGE_POLICY, chainCell, chainWalkRetry, chainShootSet, chainDescent, chainDragonSample, chainDragonRush, chainBasin, chainClear, chainCloudClear, chainCompareTravel, chainCrystal, chainDistance, chainHands, chainOnShaft, chainPause, chainRetreat, chainShot, chainSitting, chainTravel, chainWait, type ChainCrystal, type CagePolicy, type DragonMotionSample } from '../src/services/minebot/utils/endFullChainPlan.js';
@@ -3758,7 +3758,7 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
     Object.assign(out, { landing: [], landingPreparation: [], seatedBudget: [], predictionTruth: 'head_from_observed_body; no_independent_head_packet',
       crystalStart,
       assumptions: ['phase2 corridor is spatial preparation only; approach path nodes are unknown',
-        'phase3 target-following forecast is uncalibrated; yaw accumulator inferred, minimum error allowance 0.5m',
+        '20-tick forecast is preparation/telemetry only; firing requires packet head and 1..3 tick forecasts, minimum error allowance 0.5m',
         '10 client receipt ticks between bursts; server tick gaps require lab measurement',
         'explosion lift is observed, not assumed; extended landing duration alone does not establish causation'] });
   }
@@ -3994,6 +3994,7 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
         Object.assign(landingRow, { endTick: tick, ticks: tick - landingRow.startTick, nextPhase: p,
           durationExceedsEntryLinearEstimate: landingRow.entryLinearTicks === null ? null : tick - landingRow.startTick > landingRow.entryLinearTicks,
           pushExtendedLanding: null, pushCausality: 'requires matched no-blast lab baseline; observedRise is measured separately' });
+        for (const shot of landingRow.shots) if (shot.detonationTick !== null) shot.phase3RemainingTicks = tick - shot.detonationTick;
         if (perch?.kind === 'landing' && isPerched(p)) { perch.endTick = tick; perch.endReason = 'switch_to_seated_budget'; }
       }
       if (out.transitions.length) out.phaseDurations.push({ phase, fromTick: phaseStart, toTick: tick, ticks: tick - phaseStart, seconds: seconds() - phaseStartSeconds });
@@ -4025,9 +4026,11 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
       if (phase3 && p === 3) {
         landingTarget = observedLandingTarget(); // freeze phase-3 target; arms/walls never enter this column
         const raw = dragonEntity(), last = landingHistory.at(-1);
+        const readiness = landingReadiness(landingPlan, landingTarget, tick);
         landingRow = { n: out.landing.length + 1, startTick: tick, endTick: null, ticks: null, target: landingTarget,
           preparation: out.landingPreparation.at(-1) ?? null, candidates: landingPlan?.candidates ?? [],
-          readyBeforePhase3: landingPlan?.readyTick != null && landingPlan.readyTick < tick && !!landingTarget && chainDistance(landingPlan.target, landingTarget) === 0,
+          readyBeforePhase3: readiness.ready, readiness, readyTickAtEntry: landingPlan?.readyTick ?? null,
+          endHeadAtEntry: landingTarget ? landingEndHead(landingHistory, landingTarget) : null,
           predictions: [], observations: [], errors: [], shots: [], healing: [],
           entryLinearTicks: last?.velocity && landingTarget && last.velocity.y < 0 ? Math.max(0, (last.position.y - landingTarget.y - 1) / -last.velocity.y) : null };
         out.landing.push(landingRow);
@@ -4440,8 +4443,9 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
     preparationAttempt = phaseStart;
     const target = { ...landingTarget }, ownerPhase = phaseStart;
     const corridor = landingPreparationCorridor(landingHistory, target);
-    const candidates = landingBedLayouts(target, corridor, read, packCount('obsidian'), Number(actor.health));
-    const row: Record<string, any> = { tick, phase: 2, target, corridor, candidateCount: candidates.length,
+    const endHead = landingEndHead(landingHistory, target);
+    const candidates = landingBedLayouts(target, corridor, read, packCount('obsidian'), Number(actor.health), endHead?.head);
+    const row: Record<string, any> = { tick, phase: 2, target, corridor, endHead, candidateCount: candidates.length,
       candidates: [], readyTick: null, reason: null, construction: [] };
     out.landingPreparation.push(row);
     const first = candidates.find(c => landingClear(c.stand));
@@ -4498,13 +4502,12 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
       const ms = Number(actor.player?.ping);
       return Number.isFinite(ms) && ms >= 0 ? 1 + Math.ceil(ms / 50) : Infinity;
     };
-    if (lead() + 1 > 20) { refuse('landing_latency_unknown_or_over_horizon'); return false; }
+    if (lead() + 1 > 3) { refuse('landing_latency_unknown_or_over_near_horizon'); return false; }
     const select = (at = tick, only?: LandingBedLayout) => {
-      const ahead = lead(); if (ahead + 1 > 20) return null;
-      const horizon = at - tick + ahead + 1; if (horizon < 0 || horizon > 20) return null;
-      const path = landingPath(horizon), hits = path.filter(p => p.tick >= at + ahead);
-      if (hits.length !== 2 || hits.some(p => p.phase !== 3)) return null;
-      const error = Math.max(0.5, ...residuals.filter(e => tick - e.tick <= 60 && e.ahead >= ahead && e.ahead <= ahead + 1).map(e => e.metres + 0.35));
+      const ahead = lead(); if (ahead + 1 > 3 || at !== tick || !landingTarget) return null;
+      const hits = landingShotWindow(landingHistory, landingTarget, tick), path = landingPath(3);
+      if (hits.length !== 4 || hits.some(p => p.phase !== 3)) return null;
+      const error = Math.max(0.5, ...residuals.filter(e => tick - e.tick <= 60 && e.ahead >= 1 && e.ahead <= 3).map(e => e.metres + 0.35));
       for (const beds of (window.trainBeds ? [window.trainBeds] : [4, 5]) as Array<4 | 5>) {
         if (packCount('white_bed') < beds - window.shots.length) continue;
         for (const c of only ? [only] : plan.candidates) {
@@ -4538,7 +4541,7 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
       if (out.bedTrials.filter((b: any) => b.useRequested).length >= 8) return 'eight_bed_limit';
       if (chainDistance(actor.entity.position, plan.stand) > 0.7 || !landingClear(actor.entity.position)) return 'landing_stand_or_hazard_changed';
       if (actor.heldItem?.name !== 'white_bed') return 'bed_not_in_hand';
-      const path = landingPath(Math.min(20, lead() + 1));
+      const path = landingPath(3);
       return landingBedRefusal(chosen!, actor.entity.position, path, read, Number(actor.health), 0.5, actor.entity);
     };
     try {
@@ -4630,12 +4633,20 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
         await prepareLanding();
         const plan = preparedLanding();
         if (plan?.readyTick != null) {
-          if (chainDistance(actor.entity.position, plan.stand) > 0.7 || !landingClear(actor.entity.position)) {
-            plan.readyTick = null; refuse('landing_prepared_stand_lost');
-          } else { await sleep(25); continue; }
+          // r245: a four-tick packet gap emptied landingPath and permanently erased
+          // readyTick. Preserve completion; missing observations grant no movement/click.
+          if (!landingPath(3).length) refuse('landing_prepared_waiting_for_packet', { readyTick: plan.readyTick,
+            latestPacketTick: landingHistory.at(-1)?.tick ?? null, position: { ...actor.entity.position }, stand: plan.stand });
+          else if (!landingClear(plan.stand)) refuse('landing_prepared_stand_unsafe');
+          else if (chainDistance(actor.entity.position, plan.stand) > 0.7 && !landingBodyOwned()) {
+            await go('return_prepared_landing_stand', plan.stand,
+              () => live() && phase === 2 && phaseStart === plan.phaseStart && landingClear(plan.stand), 12);
+          }
+          await sleep(25); continue;
         }
       }
       if (phase3 && landingMode(phase) === 'burst') {
+        if (currentLanding()?.readyBeforePhase3 && !landingPath(3).length) { await sleep(10); continue; }
         if (currentLanding()?.readyBeforePhase3 && landingClear(actor.entity.position)) await landingBurst();
         else { refuse('landing_not_prepared_or_stand_unsafe'); requestLeave('landing_not_prepared_or_stand_unsafe'); }
         await sleep(10); continue;
@@ -4804,7 +4815,7 @@ async function endBedKill(keepCrystals = false, raw = false, phase3 = false) {
         nextOpenMove = tick + (returning ? 1200 : 60);
         if (returning) out.anchorReturnAttempts++;
         const ok = await go(plan.kind === 'move' ? 'open_wait' : `open_wait_${plan.kind}`, plan.to,
-          () => live() && !sitting() && tick < nextOpenMove, returning ? 60 : 5);
+          () => live() && !sitting() && (!phase3 || (phase !== 2 && phase !== 3)) && tick < nextOpenMove, returning ? 60 : 5);
         if (returning) {
           if (!ok || chainDistance(actor.entity.position, plan.to) > 1) out.anchorReturnFailures++;
           nextOpenMove = tick + 60;

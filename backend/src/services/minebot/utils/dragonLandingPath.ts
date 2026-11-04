@@ -121,7 +121,53 @@ export function landingPreparationCorridor(history: readonly LandingObservation[
     out.push({ tick: -1, observedTick: last.tick, forecastTick: -1, phase: 3, position, yaw, velocity: { x: 0, y: 0, z: 0 },
       p: 0, hy: 0, yRotA: 0, head: head.feet, headBox: head.box });
   }
+  // Add the end of the approach and its midpoint, rather than only the instant
+  // at which the flying head crosses the column. These remain spatial hypotheses.
+  const end = landingEndHead(history, target);
+  if (end) for (const back of [3.25, 0]) for (const height of [0, 1, 2]) {
+    const position = { x: target.x - end.direction.x * back, y: target.y + height, z: target.z - end.direction.z * back };
+    const head = dragonHeadVanilla({ position, yaw: end.yaw, yRotA: 0, p: 0, hy: -1 })!;
+    out.push({ tick: -1, observedTick: last.tick, forecastTick: -1, phase: 3, position, yaw: end.yaw,
+      velocity: { x: 0, y: 0, z: 0 }, p: 0, hy: -1, yRotA: 0, head: head.feet, headBox: head.box });
+  }
   return out;
+}
+
+/** A spatial hypothesis, never a shot forecast. Prefer measured horizontal progress
+ * when it points towards the target; phase-2 circling otherwise supplies only a bearing.
+ * Sitting placement uses p=0, hy=-1. Scanning can subsequently turn this head. */
+export function landingEndHead(history: readonly LandingObservation[], target: P3) {
+  const last = history.at(-1), before = history.at(-2);
+  if (!last || !finite(target) || !finite(last.position) || ![2, 3].includes(last.phase)) return null;
+  const dx = target.x - last.position.x, dz = target.z - last.position.z;
+  const v = before && last.tick > before.tick && last.tick - before.tick <= 6
+    ? { x: last.position.x - before.position.x, z: last.position.z - before.position.z } : null;
+  const measured = v && Math.hypot(v.x, v.z) > 1e-6 && v.x * dx + v.z * dz > 0;
+  const x = measured ? v.x : dx, z = measured ? v.z : dz, length = Math.hypot(x, z);
+  if (length < 1e-6) return null;
+  const direction = { x: x / length, y: 0, z: z / length }, yaw = Math.atan2(direction.x, direction.z);
+  return { direction, yaw, head: dragonHeadVanilla({ position: target, yaw, p: 0, hy: -1, yRotA: 0 })!.feet,
+    observedTick: last.tick, source: measured ? 'inbound_packet_progress' : 'target_bearing' };
+}
+
+/** Completion is durable evidence for this phase-2 plan, not current permission to fire.
+ * A missing fresh packet or reflex displacement must not erase its completion tick. */
+export function landingReadiness(plan: { readyTick: number | null; phaseStart: number; target: P3 } | null, target: P3 | null, entry: number) {
+  const completedInPhase2 = !!plan && Number.isInteger(plan.readyTick) && plan.readyTick! >= plan.phaseStart;
+  const beforeEntry = completedInPhase2 && plan!.readyTick! < entry;
+  const targetObserved = !!target && finite(target);
+  const sameTarget = !!plan && targetObserved && distance(plan.target, target!) === 0;
+  return { completedInPhase2, beforeEntry, targetObserved, sameTarget, ready: beforeEntry && sameTarget };
+}
+
+/** The packet-derived head plus ONLY now+1..3; never let a long forecast authorize
+ * a click. Requiring both stops a predicted crossing from firing before observation. */
+export function landingShotWindow(history: readonly LandingObservation[], target: P3, now: number): LandingPoint[] {
+  const last = history.at(-1);
+  if (!last || last.phase !== 3 || now < last.tick || now - last.tick > 3) return [];
+  const observed = predictLandingPath(history, target, last.tick, 0)[0];
+  const future = predictLandingPath(history, target, now, 3).filter(p => p.tick > now);
+  return observed && future.length === 3 ? [observed, ...future] : [];
 }
 
 /** Flight head/neck use the same history slope/rotation as the targeting formula. Include

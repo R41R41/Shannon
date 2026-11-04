@@ -204,6 +204,7 @@ export function landingBedFireClear(read: BedBlockReader, stand: P3): boolean {
 export interface LandingBedLayout {
   head: P3; foot: P3; stand: P3; screen: P3[]; supports: P3[];
   headDistance: number; selfExposure: number; headDamage: number; score: number;
+  region?: 'central' | 'midpoint' | 'terminal';
 }
 
 /** The full 45-ray, reach, fire, durable footing and flight-box checks are also run at dispatch,
@@ -232,20 +233,31 @@ export function landingBedRefusal(layout: LandingBedLayout, feet: P3, path: read
 }
 
 /** Bounded, translation-invariant search in the observed fountain. The spatial corridor is
- * a phase-2 preparation hypothesis; only future dated forecasts authorize bursts. All new
+ * a phase-2 preparation hypothesis; observed heads and near forecasts authorize bursts. All new
  * supports AND screens are obsidian; never add a block to the central heightmap column.
  * Return a row of pillows sharing a stand/build, so repeats require no walking/construction. */
 export function landingBedLayouts(target: P3, corridor: readonly LandingPoint[], read: BedBlockReader,
-  budget: number, health = 20): LandingBedLayout[] {
+  budget: number, health = 20, endHead?: P3): LandingBedLayout[] {
   if (!corridor.length || !Object.values(target).every(Number.isFinite) || !Number.isInteger(budget) || budget < 0) return [];
   const durable = (p: P3) => ['bedrock', 'obsidian'].includes(read(p)?.name ?? '');
   const pillows = new Map<string, P3>();
-  for (const p of corridor) for (const dx of [-1, 0, 1]) for (const dz of [-1, 0, 1]) {
-    const head = { x: Math.floor(p.head.x) + dx, y: Math.floor(p.head.y) - 1, z: Math.floor(p.head.z) + dz };
-    if (Math.hypot(head.x + 0.5 - target.x, head.z + 0.5 - target.z) <= 4 && head.y >= target.y && head.y <= target.y + 3 && air(read(head))) pillows.set(key(head), head);
+  for (const p of corridor) for (const dx of [-1, 0, 1]) for (const dz of [-1, 0, 1]) for (const dy of endHead ? [-1, 0] : [-1]) {
+    const head = { x: Math.floor(p.head.x) + dx, y: Math.floor(p.head.y) + dy, z: Math.floor(p.head.z) + dz };
+    if (Math.hypot(head.x + 0.5 - target.x, head.z + 0.5 - target.z) <= (endHead ? 8 : 4)
+      && head.y >= target.y - (endHead ? 1 : 0) && head.y <= target.y + 3 && air(read(head))) pillows.set(key(head), head);
   }
   const found: LandingBedLayout[] = [];
+  const limit = endHead ? 16 : 48;
+  const region = (head: P3): NonNullable<LandingBedLayout['region']> => {
+    if (!endHead) return 'central';
+    const along = ((head.x + 0.5 - target.x) * (endHead.x - target.x) + (head.z + 0.5 - target.z) * (endHead.z - target.z)) / 6.5;
+    return along > 4.875 ? 'terminal' : along > 1.625 ? 'midpoint' : 'central';
+  };
+  // Reserve capacity for every region: central candidates must not exhaust the cap
+  // before the terminal pillows are even inspected. Safety conditions are identical.
   for (const head of [...pillows.values()].sort((a, b) => distance(bedCentre(a), target) - distance(bedCentre(b), target))) {
+    const family = region(head);
+    if (found.filter(c => c.region === family).length >= limit) continue;
     const near = corridor.filter(p => distance(p.head, bedCentre(head)) <= 2);
     if (!near.length) continue;
     for (const [dx, dz] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
@@ -255,7 +267,7 @@ export function landingBedLayouts(target: P3, corridor: readonly LandingPoint[],
       for (const along of [1, 2, 3]) for (const side of [-1, 0, 1]) for (let y = Math.floor(target.y) - 4; y < target.y; y++) {
         const stand = { x: head.x + dx * along + dz * side + 0.5, y, z: head.z + dz * along - dx * side + 0.5 };
         const cell = { x: Math.floor(stand.x), y, z: Math.floor(stand.z) };
-        if (Math.hypot(stand.x - target.x, stand.z - target.z) > 4 || !durable({ ...cell, y: y - 1 })
+        if (Math.hypot(stand.x - target.x, stand.z - target.z) > (endHead ? 8 : 4) || !durable({ ...cell, y: y - 1 })
           || !air(read(cell)) || !air(read({ ...cell, y: y + 1 })) || bedStandFires(read, stand).length
           || [head, foot, supports[1]].some(p => bedEyeReach(stand, p) > 4.5)) continue;
         for (const wall of [[], bedWallCells(head, stand, y, y + 2, 1), bedWallCells(head, stand, y, y + 2, 3)]) {
@@ -273,8 +285,8 @@ export function landingBedLayouts(target: P3, corridor: readonly LandingPoint[],
             damage: bedDamage(distance(p.head, bedCentre(head)), bedExposure(projected, bedCentre(head), p.headBox, [head, foot])) }))
             .sort((a, b) => b.damage - a.damage)[0];
           if (best.damage < 50.75) continue;
-          found.push({ ...candidate, headDistance: best.distance, headDamage: best.damage, score: best.distance + screen.length * 0.05 });
-          if (found.length >= 48) return found.sort((a, b) => a.score - b.score);
+          if (found.filter(c => c.region === family).length >= limit) break;
+          found.push({ ...candidate, region: family, headDistance: best.distance, headDamage: best.damage, score: best.distance + screen.length * 0.05 });
           break;
         }
       }
