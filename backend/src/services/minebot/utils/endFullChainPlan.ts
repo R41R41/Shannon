@@ -8,6 +8,7 @@ export type ChainCrystal = EndObservation['crystals']['list'][number];
 export const CHAIN_LIMIT_MS = 40 * 60_000;
 export const CRYSTAL_LIMIT_MS = 15 * 60_000;
 export const CRYSTAL_WAIT_MS = 20_000;
+export const CAGE_TRAVEL_WAIT_MS = 30_000;
 /** Lab HEAD: do not send a reflex-cut island walk back out at ten health or less. */
 export function chainWalkRetry(result: { lines: string[]; parsed?: any }, retries: number, health: number): boolean {
   const cut = result.parsed?.outcome?.cutBy ?? result.parsed?.stoppedBy;
@@ -25,14 +26,22 @@ export const chainPause = (view: ChainView, paused: boolean): boolean => view?.d
 /** Stand-in HEAD judgement, not a reflex or a route planner. Only observation fields inform the timing.
  * Holding-pattern flight, >=48 m away and outside the forward cone at BOTH ends is an opportunity, not a safety guarantee. */
 export function chainTravel(view: ChainView, from: P3, to: P3) {
+  const timing = chainCompareTravel(view, from, to);
+  const reason = timing.reason === 'dragon_unknown' ? timing.reason :
+    view?.dragonFireballs !== 0 ? 'fireball' : !chainCloudClear(view, from, to) ? 'breath' :
+    view?.dragon?.phase !== 0 ? 'not_holding_pattern' : timing.reason;
+  return { ...timing, ok: reason === 'flight_away', reason };
+}
+/** Comparison HEAD: distance/yaw opportunity, without a phase or hazard-free-flight prerequisite.
+ * This only chooses when to ask go; normal hand refusals and resident reflexes still take priority. */
+export function chainCompareTravel(view: ChainView, from: P3, to: P3) {
   const d = view?.dragon;
   const facing = d && Number.isFinite(d.yaw) && d.position ? [from, to].map(p => {
     const dx = p.x - d.position.x, dz = p.z - d.position.z, r = Math.hypot(dx, dz);
     return r > 0 ? (dx * Math.sin(d.yaw) + dz * Math.cos(d.yaw)) / r : 1;
   }) : null;
   const reason = !d || !facing || !Number.isFinite(d.distance) ? 'dragon_unknown' :
-    view?.dragonFireballs !== 0 ? 'fireball' : !chainCloudClear(view, from, to) ? 'breath' :
-    d.phase !== 0 ? 'not_holding_pattern' : d.distance < 48 || chainDistance(d.position, to) < 48 ? 'dragon_near' :
+    d.distance < 48 || chainDistance(d.position, to) < 48 ? 'dragon_near' :
     Math.max(...facing) > 0.25 ? 'dragon_facing' : 'flight_away';
   return { ok: reason === 'flight_away', reason, phase: d?.phase ?? null, distance: d?.distance ?? null, yaw: d?.yaw ?? null, facing };
 }

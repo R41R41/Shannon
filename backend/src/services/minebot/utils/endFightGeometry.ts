@@ -128,13 +128,57 @@ export function crystalShelterCells(position: P3): P3[] {
   const f = { x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) };
   const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   const at = (dx: number, dy: number, dz: number) => ({ x: f.x + dx, y: f.y + dy, z: f.z + dz });
+  // Build the roof from one supported side BEFORE closing the other head-height walls.
   return [at(0, -1, 0), ...sides.map(([x, z]) => at(x, -1, z)),
-    ...[0, 1].flatMap(y => sides.map(([x, z]) => at(x, y, z))), at(1, 2, 0), at(0, 2, 0)];
+    at(1, 0, 0), at(1, 1, 0), at(1, 2, 0), at(0, 2, 0),
+    ...[0, 1].flatMap(y => sides.slice(1).map(([x, z]) => at(x, y, z)))];
 }
-export function crystalShelterWork(bot: any): P3[] | null {
+/** Read-only build/recheck facts. A missing offer is not a decision to end the scene. */
+export function crystalShelterState(bot: any): { at: P3; work: P3[] | null; reason: string; cell?: P3; block?: string; entity?: string } {
   const p = bot.entity.position, f = feetCentre({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
-  if (!bot.entity.onGround || !cageDryFooting(bot) || Math.abs(p.x - f.x) > 0.2 || Math.abs(p.z - f.z) > 0.2) return null;
-  return cageGuardWork(bot, crystalShelterCells(p));
+  const fail = (reason: string, cell?: P3, block?: string, entity?: string) => ({ at: f, work: null, reason, cell, block, entity });
+  if (!bot.entity.onGround) return fail('not_on_ground');
+  if (!cageDryFooting(bot)) return fail('no_dry_full_floor');
+  if (Math.abs(p.x - f.x) > 0.2 || Math.abs(p.z - f.z) > 0.2) return fail('off_centre');
+  const read = bodyReader(bot), work: P3[] = [];
+  for (const dy of [0, 1]) {
+    const cell = { x: Math.floor(p.x), y: Math.floor(p.y) + dy, z: Math.floor(p.z) };
+    if (!cageAir(read, cell)) return fail('body_space_changed', cell, read(cell.x, cell.y, cell.z)?.name);
+  }
+  for (const cell of crystalShelterCells(p)) {
+    const b = read(cell.x, cell.y, cell.z);
+    if (!b) return fail('unloaded', cell);
+    if (b.solid && (b.top === undefined || b.top === 1) && /^(cobblestone|end_stone|obsidian|bedrock)$/u.test(b.name)) continue;
+    if (!cageAir(read, cell)) return fail('occupied', cell, b.name);
+    for (const e of Object.values(bot.entities ?? {}) as any[]) {
+      if (!e?.position || e === bot.entity || ['item', 'experience_orb'].includes(e.name) || e.type === 'projectile') continue;
+      const half = (e.width ?? 0.6) / 2, q = e.position;
+      if (q.x + half > cell.x && q.x - half < cell.x + 1 && q.z + half > cell.z && q.z - half < cell.z + 1 &&
+        q.y < cell.y + 1 && q.y + (e.height ?? 1.8) > cell.y) return fail('creature_in_cell', cell, b.name, e.name);
+    }
+    work.push(cell);
+  }
+  return { at: f, work, reason: work.length ? 'missing_cells' : 'complete' };
+}
+export const crystalShelterWork = (bot: any): P3[] | null => crystalShelterState(bot).work;
+
+/** Supported doorways from inside the SAME enclosure. Only requested cobblestones may be removed;
+ * existing walls/floor/roof are preserved. Upper block first exposes the lower block to dig's ray. */
+export function crystalShelterExits(bot: any, centre: P3, owned: readonly P3[]): Array<{ at: P3; cells: P3[] }> {
+  const p = bot.entity.position, read = bodyReader(bot);
+  if (Math.floor(p.x) !== Math.floor(centre.x) || Math.floor(p.z) !== Math.floor(centre.z) || Math.abs(p.y - centre.y) > 0.35) return [];
+  return [[1, 0], [-1, 0], [0, 1], [0, -1]].flatMap(([dx, dz]) => {
+    const foot = { x: Math.floor(centre.x) + dx, y: Math.floor(centre.y), z: Math.floor(centre.z) + dz };
+    if (!cageFloor(read, foot)) return [];
+    const cells: P3[] = [];
+    for (const dy of [1, 0]) {
+      const cell = { ...foot, y: foot.y + dy }, b = read(cell.x, cell.y, cell.z);
+      if (cageAir(read, cell)) continue;
+      if (b?.name !== 'cobblestone' || !owned.some(q => q.x === cell.x && q.y === cell.y && q.z === cell.z)) return [];
+      cells.push(cell);
+    }
+    return [{ at: feetCentre(foot), cells }];
+  });
 }
 
 /** Read-only recovery offers, after landing. Walks use full support and <=1 m steps; no invented drop or obsidian shaft.
