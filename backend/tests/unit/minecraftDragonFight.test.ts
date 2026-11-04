@@ -631,7 +631,7 @@ describe('the water-bucket clutch of a fall in the End', () => {
     return f;
   }
   /**
-   * The body comes down half a block every 15 ms to the floor, as a falling body does tick by tick; the bucket pours water into the cell over the floor, and takes it up again. The hotbar is a sword (slot 36)
+   * The body comes down 0.9 blocks per emitted physics tick (15ms to keep this recovery fixture quick); the bucket pours water into the cell over the floor, and takes it up again. The hotbar is a sword (slot 36)
    * and the bucket (slot 37), the hand the sword: the bucket comes into the hand by selecting its slot (the game's `equip`, which is clicks of the window over several ticks, must stay unused).
    */
   function withBucket(f: ReturnType<typeof falling>, selected = 0) {
@@ -653,7 +653,12 @@ describe('the water-bucket clutch of a fall in the End', () => {
       else if (item.name === 'bucket') { hotbar[selected] = { name: 'water_bucket', slot: 36 + selected }; world.delete(key(0, 64, 0)); }
       bot.heldItem = hotbar[selected];
     });
-    const timer = setInterval(() => { if (self.position.y > 64) self.position.y = Math.max(64, self.position.y - 0.5); else { self.onGround = true; self.velocity = new Vec3(0, 0, 0); } }, 15);
+    const timer = setInterval(() => {
+      self.position.y = Math.max(64, self.position.y - 0.9);
+      self.onGround = self.position.y <= 64;
+      self.velocity = new Vec3(0, self.onGround ? 0 : -0.9, 0);
+      bot.emit('physicsTick');
+    }, 15);
     return { seen, hotbar, stop: () => clearInterval(timer) };
   }
   it('starts for a long fall over a floor with a bucket of water, and says how far and how much', () => {
@@ -704,8 +709,9 @@ describe('the water-bucket clutch of a fall in the End', () => {
     expect(f.bot.heldItem.name).toBe('diamond_sword');
     expect(f.bot.look).toHaveBeenCalledWith(expect.any(Number), -Math.PI / 2, true);
     expect(seen.rotations[0]).toBeCloseTo(90, 3); // the packet carries the downward look, not the library's level one
-    expect(seen.pourY + 1.62 - 64).toBeLessThanOrEqual(CLUTCH_REACH);
-    expect(seen.pourY + 1.62 - 64).toBeGreaterThan(CLUTCH_REACH - 0.6);
+    const projectedReach = seen.pourY + 1.62 - 64 + (-0.9 - 0.08) * 0.98;
+    expect(projectedReach).toBeLessThanOrEqual(CLUTCH_REACH);
+    expect(projectedReach).toBeGreaterThan(CLUTCH_REACH - 0.95);
     expect(seen.uses).toBe(2);
   });
   it('lets go of the body at once when a stronger reflex takes it, and sends nothing after (round 5 of the independent review: it waited on, holding the lease, and poured through the bare bot)', async () => {

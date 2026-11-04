@@ -2,14 +2,16 @@ import { Vec3 } from 'vec3';
 import { bodyReader, type BlockReader } from './localMap.js';
 import { dropUnder } from './voidFooting.js';
 import { isEnd } from './dragonState.js';
-import { actionSignal } from '../execution/ActionExecution.js';
+import { actionSignal, bindActionCallback } from '../execution/ActionExecution.js';
 
 /**
  * A fall that would cripple or kill, stopped with a bucket of water (the clutch every player knows). In the End a body that climbed a pillar for a caged crystal is up to 40 blocks over the ground, and
  * the dragon's wings push what is near: a fall of 30 blocks is 27 points of damage, and armour does not take any of it. Water laid on the ground under the body as it comes down takes the fall.
  *
- * The bucket reaches 4.5 blocks from the eye (4.2 is used). Up to a fall of about 80 blocks the body is slower than the 2.58 blocks that lie between the reach and the ground, so there is always a physics tick with the ground inside
- * the reach and the body not yet on it (checked tick by tick for falls of 10 to 120 blocks: no miss up to 80), and the pour is made in that tick (the use packet follows the position packet of the same tick). Only in the End, only with a bucket of water
+ * The bucket reaches 4.5 blocks from the eye (4.4 including the horizontal aim is used). The pour is decided synchronously on physicsTick, with one movement's lead: vyNext = (vy - 0.08) * 0.98.
+ * The old wall-clock poll and current-eye-only 4.2 test missed r214: eye distances 5.8668, 4.5025, then grounded. The centre column's surface was 64 but the body's 0.6-wide footprint landed at 65.
+ * There is no guaranteed airborne in-reach sample at high speed. The one-movement lead assumes the server resolves use at the predicted position; the local physics event precedes updatePosition, so this
+ * assumption needs packet/server validation in S1 (see docs/minecraft-end-fight.md). Only in the End, only with a bucket of water
  * in the hand or in the hotbar, only where the ground under the body is a solid floor (not water, lava, the void or what is not loaded) and the fall would cost at least CLUTCH_MIN_DAMAGE.
  *
  * The bucket is taken into the hand by selecting its hotbar slot: one packet, nothing to wait for (the game's own `equip` does just that for an item in the hotbar). For an item in the pack `equip` moves the
@@ -30,13 +32,13 @@ import { actionSignal } from '../execution/ActionExecution.js';
  */
 export const CLUTCH_FALLING_VY = -0.75;
 export const CLUTCH_MIN_DAMAGE = 5;
-/** Blocks from the eye to the ground at which the pour is made: the bucket reaches 4.5. */
-export const CLUTCH_REACH = 4.2;
+/** Euclidean eye-to-face distance predicted for use: 0.1m short of the bucket's 4.5m ray, allowing rounding and an off-centre aim. */
+export const CLUTCH_REACH = 4.4;
 const EYE_HEIGHT = 1.62;
 const LOOK_DOWN = 70;
 const GAP_MS = 6000;
-const POLLS = 400;
-const POLL_MS = 10;
+const CLUTCH_TICKS = 160;
+const CLUTCH_WAIT_MS = 8000;
 const SCOOP_TRIES = 3;
 /** A note of water left behind is kept this long, tried this many times (one try per SCOOP_GAP_MS at the most), and only while the body is within SCOOP_NEAR blocks of the water. */
 export const SCOOP_PENDING_MS = 90_000;
@@ -49,7 +51,7 @@ export const SCOOP_SAFE_DROP = 1;
 /** The slots of the hotbar in the player's window. */
 const HOTBAR_FIRST = 36, HOTBAR_LAST = 44;
 
-interface BodyEntity { position: Vec3; velocity?: Vec3; yaw?: number; pitch?: number; onGround?: boolean; isInWater?: boolean }
+interface BodyEntity { position: Vec3; velocity?: Vec3; yaw?: number; pitch?: number; onGround?: boolean; isInWater?: boolean; eyeHeight?: number; width?: number }
 type Item = { name: string; type?: number; slot?: number };
 export interface FallBody {
   entity?: BodyEntity;
@@ -65,6 +67,8 @@ export interface FallBody {
   activateItem?(offHand?: boolean): void;
   deactivateItem?(): void;
   blockAt?(position: Vec3): { name?: string; metadata?: number; shapes?: unknown } | null;
+  on?(event: string, listener: (...args: any[]) => void): unknown;
+  removeListener?(event: string, listener: (...args: any[]) => void): unknown;
   _client?: { write: (...args: any[]) => unknown };
 }
 /**
@@ -116,13 +120,13 @@ export function clutchWanted(bot: FallBody, memory: FallMemory, now: number): st
  * The bucket used along the look, now: the packet carries the body's rotation (activateItemFacing says why), and nothing waits for a look to settle. Through the motor `port`: a body whose owner has
  * been taken (a stronger reflex holds it) sends nothing, the port throws there (independent review 2026-11-02, round 5: after the interruption the pour still went out through the bare bot).
  */
-function pourNow(port: FallBody): void {
+function pourNow(port: FallBody, facing?: { yaw: number; pitch: number }): void {
   const client = port._client, entity = port.entity;
   if (!client || !entity || !port.activateItem) return;
   const original = client.write;
   client.write = function (this: unknown, name: string, data: any, ...rest: any[]) {
     if (name === 'use_item' && data?.rotation) {
-      data = { ...data, rotation: { x: (180 / Math.PI) * (Math.PI - (entity.yaw ?? 0)), y: (180 / Math.PI) * -(entity.pitch ?? 0) } };
+      data = { ...data, rotation: { x: (180 / Math.PI) * (Math.PI - (facing?.yaw ?? entity.yaw ?? 0)), y: (180 / Math.PI) * -(facing?.pitch ?? entity.pitch ?? 0) } };
     }
     return (original as any).call(this, name, data, ...rest);
   } as typeof client.write;
@@ -300,32 +304,110 @@ export function scoopWanted(bot: FallBody, memory: FallMemory, now: number): boo
   return Math.hypot(body.position.x - (pending.x + 0.5), body.position.y - pending.y, body.position.z - (pending.z + 0.5)) <= SCOOP_NEAR;
 }
 
+type PourTarget = { source: Vec3; yaw: number; pitch: number };
+
+/**
+ * A short ballistic forecast, with the observed horizontal velocity held constant (no steering).
+ * The first full-cube support across the landing footprint wins, including a higher adjacent cell.
+ * groundUnder deliberately remains a centre-column reader: its top is blockY + 1, not blockY.
+ * Water is aimed at the support's top-face centre, rather than the cell the body is leaving.
+ */
+function targetForPour(bot: FallBody, read: BlockReader, body: BodyEntity): PourTarget | null {
+  const v = body.velocity;
+  if (!v || ![v.x, v.y, v.z].every(Number.isFinite) || v.y > CLUTCH_FALLING_VY) return null;
+  const eyeHeight = body.eyeHeight ?? EYE_HEIGHT, half = (body.width ?? 0.6) / 2 - 1e-6;
+  let predicted = body.position.clone(), vy = v.y;
+  const useEye = body.position.offset(v.x, (v.y - 0.08) * 0.98 + eyeHeight, v.z);
+  // At the pour window even a slow eligible fall lands within eight ticks. No distant trajectory is trusted.
+  for (let tick = 0; tick < 8; tick++) {
+    vy = (vy - 0.08) * 0.98;
+    predicted = predicted.offset(v.x, vy, v.z);
+    let support: Vec3 | null = null, nearest = Infinity;
+    for (let x = Math.floor(predicted.x - half); x <= Math.floor(predicted.x + half); x++) {
+      for (let z = Math.floor(predicted.z - half); z <= Math.floor(predicted.z + half); z++) {
+        const ground = groundUnder(read, { x: x + 0.5, y: body.position.y, z: z + 0.5 });
+        if (ground.kind !== 'floor' || !fullCube(bot, new Vec3(x, ground.top - 1, z))) continue;
+        const distance = Math.hypot(x + 0.5 - predicted.x, z + 0.5 - predicted.z);
+        if (!support || ground.top > support.y || (ground.top === support.y && distance < nearest)) {
+          support = new Vec3(x, ground.top, z); nearest = distance;
+        }
+      }
+    }
+    if (!support || predicted.y > support.y) continue;
+    // The source must have room, and the eye must still be above the face at use time.
+    if (!AIR_NAMES.has(read(support.x, support.y, support.z)?.name ?? '') || useEye.y <= support.y) return null;
+    const aim = support.offset(0.5, 0, 0.5).minus(useEye);
+    if (aim.norm() > CLUTCH_REACH) return null;
+    // Reject a top face hidden by a nearer solid/unknown cell. Do not pour on a lower floor beside a raised rim.
+    const length = aim.norm(), direction = aim.scaled(1 / length);
+    for (let d = 0; d < length - 0.01; d += 0.1) {
+      const at = useEye.plus(direction.scaled(d));
+      const block = read(Math.floor(at.x), Math.floor(at.y), Math.floor(at.z));
+      if (!block || !AIR_NAMES.has(block.name)) return null;
+    }
+    return { source: support, yaw: Math.atan2(-aim.x, -aim.z), pitch: Math.atan2(aim.y, Math.hypot(aim.x, aim.z)) };
+  }
+  return null;
+}
+
+/** Every decision and the use itself run inside the physics event, even when many catch-up ticks share one JS turn. */
+function pourOnTick(bot: FallBody, port: FallBody, memory: FallMemory, clock: () => number, before: HandBack | undefined): Promise<Outcome | null> {
+  if (!bot.on || !bot.removeListener) return Promise.resolve({ success: false, result: '物理tickを監視できないため水をあけない' });
+  const read = bodyReader(bot as never), signal = actionSignal(port);
+  return new Promise((resolve, reject) => {
+    let ticks = 0, done = false;
+    const finish = (result: Outcome | null, error?: unknown) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      bot.removeListener?.('physicsTick', onTick);
+      bot.removeListener?.('end', ended);
+      signal?.removeEventListener('abort', aborted);
+      if (error !== undefined) reject(error); else resolve(result);
+    };
+    const ended = () => finish({ success: false, result: '水をあける前に落下が終わった' });
+    const aborted = () => finish(TAKEN);
+    const onTick = bindActionCallback(port, () => {
+      try {
+        if (signal?.aborted) { aborted(); return; }
+        const body = bot.entity;
+        if (!body || (bot.health ?? 20) <= 0 || body.onGround) { finish({ success: false, result: '水をあける前に着地した' }); return; }
+        if (body.isInWater || groundUnder(read, body.position).kind === 'water') { finish({ success: true, result: '落ちる先が水だった' }); return; }
+        const target = targetForPour(bot, read, body);
+        if (target) {
+          if (bot.heldItem?.name !== 'water_bucket') { finish({ success: false, result: '水をあける前に手のバケツが変わった' }); return; }
+          memory.scoop = { x: target.source.x, y: target.source.y, z: target.source.z, at: clock(), tries: 0, ...(before !== undefined ? { hand: before.slot, ...(before.name !== undefined ? { handName: before.name } : {}) } : {}) };
+          // No awaited look: in particular vy <= -2 can cross the entire window next tick.
+          // The packet carries its own aim even if look has not updated entity.pitch/yaw yet.
+          try { pourNow(port, target); } catch (error) { delete memory.scoop; throw error; }
+          finish(null); return;
+        }
+        if (++ticks >= CLUTCH_TICKS) ended();
+      } catch (error) { finish(null, error); }
+    });
+    // The timer only releases a stalled/disconnected body; it never decides to pour.
+    const timer = setTimeout(ended, CLUTCH_WAIT_MS);
+    bot.on?.('physicsTick', onTick);
+    bot.on?.('end', ended);
+    signal?.addEventListener('abort', aborted, { once: true });
+    if (signal?.aborted) aborted();
+  });
+}
+
 /** The clutch itself (`runFallClutch` gives the hand back after it). */
 async function clutch(bot: FallBody, port: FallBody, memory: FallMemory, clock: () => number, have: { held: boolean; slot: number }, before: HandBack | undefined): Promise<Outcome> {
   try {
+    if (interrupted(port)) return TAKEN;
     if (!have.held) port.setQuickBarSlot?.(have.slot);
     if (bot.heldItem?.name !== 'water_bucket') return { success: false, result: 'バケツを手に持てなかった' };
-    port.look?.(bot.entity?.yaw ?? 0, -Math.PI / 2, true);
+    // A visual preparation only: the eventual use has its own rotation and waits for no look promise.
+    void Promise.resolve(port.look?.(bot.entity?.yaw ?? 0, -Math.PI / 2, true)).catch(() => undefined);
   } catch (error) {
     if (lostOwnership(error)) throw error;
     return { success: false, result: `バケツを手に持てなかった（${String((error as Error)?.message ?? error).slice(0, 40)}）` };
   }
-  const read = bodyReader(bot as never);
-  let poured = false;
-  for (let poll = 0; poll < POLLS && !poured; poll++) {
-    if (interrupted(port)) return TAKEN;
-    const body = bot.entity;
-    if (!body || body.onGround || body.isInWater) break;
-    const ground = groundUnder(read, body.position);
-    if (ground.kind === 'floor' && body.position.y + EYE_HEIGHT - ground.top <= CLUTCH_REACH) {
-      memory.scoop = { x: Math.floor(body.position.x), y: ground.top, z: Math.floor(body.position.z), at: clock(), tries: 0, ...(before !== undefined ? { hand: before.slot, ...(before.name !== undefined ? { handName: before.name } : {}) } : {}) };
-      try { pourNow(port); } catch (error) { delete memory.scoop; throw error; }
-      poured = true; break;
-    }
-    if (ground.kind === 'water') return { success: true, result: '落ちる先が水だった' };
-    await abortableDelay(port, POLL_MS);
-  }
-  if (!poured) return interrupted(port) ? TAKEN : { success: false, result: bot.entity?.onGround ? '水をあける前に着地した' : '地面が届く所へ来る前に落下が終わった' };
+  const notPoured = await pourOnTick(bot, port, memory, clock, before);
+  if (notPoured) return notPoured;
   for (let waited = 0; waited < 1500 && bot.entity && !bot.entity.onGround && !bot.entity.isInWater && !interrupted(port); waited += 25) await abortableDelay(port, 25);
   if (!interrupted(port)) await abortableDelay(port, 150);
   // The server's word that the bucket is empty (the slot update) comes some ticks after the pour.
@@ -345,7 +427,7 @@ async function clutch(bot: FallBody, port: FallBody, memory: FallMemory, clock: 
 }
 
 /**
- * The clutch: the bucket in the hand, the look straight down, the pour in the tick the ground comes within reach, and the water taken up again once the body stands (a water source left on the island is
+ * The clutch: the bucket in the hand, a downward look prepared without waiting, the pour on the first physics tick whose next-position ray reaches the landing face, and water taken up again once the body stands (a water source left on the island is
  * harmless, but the bucket is wanted for the next fall). Returns what happened, in words the ledger can carry. Everything that acts on the body goes through `port`, and every wait ends when the action is taken.
  * The pour is noted in `memory.scoop` before it goes out and the note is dropped only when the water is taken up (or is not there to take): whatever cuts the clutch off after the pour leaves it for the floor.
  * The hand the bucket was taken from is given back when the clutch ends with the body still its own, and is in the note for a taking-up that comes later (`PendingScoop.hand`).
