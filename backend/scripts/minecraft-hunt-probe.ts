@@ -249,9 +249,42 @@ async function blazeProtocol(kind: 'hold' | 'fight', note: (text: string) => voi
   const hp = () => Number(actor.health);
   const readCamp = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'camp' }, 20); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
   const canPlace = ['cobblestone', 'netherrack'];
-  let failStreak = 0;
+  let failStreak = 0, hidden = false;
+  /**
+   * The head's rule in the body protocol (S2, 2026-11-05, the coordinator; raid3 sat at 6.1 with hunger 17, which mends nothing, and every go back was stopped by the low-health flight):
+   * below stopHp no sortie; out of the blazes' sight (the hideout `probe kind=camp` names, unless the fight hand's retreat line says it is already there), eat until the hunger is 18 or more,
+   * and wait until the health is over stopHp (60 s at most).
+   */
+  const recover = async (): Promise<void> => {
+    const lowAt = Date.now();
+    if (!hidden) {
+      const now = await readCamp();
+      const spot = now?.hideouts?.[0] as { x: number; y: number; z: number } | undefined;
+      if (!spot) { m.noHideout++; note(`no hideout in the answer: ${String(now?.text ?? '').slice(-160)}`); }
+      else {
+        const hpOut = hp();
+        const out = await act('to the hideout', [{ do: 'go', to: { x: spot.x, y: spot.y, z: spot.z }, range: 0.6, seconds: 25, canPlace, maxPlace: 30 }], 40, { accept: ['blaze'] });
+        m.hpLostOnTheWayOut += Math.max(0, hpOut - hp());
+        if (!out.ok) note(`to the hideout: ${(out.lines[0] ?? '').slice(0, 200)}`);
+      }
+    }
+    const waitUntil = Date.now() + 60_000;
+    while (Date.now() < waitUntil && hp() > 0 && hp() <= stopHp && !disconnected) {
+      if (hp() < 7 && packClient().golden_apple) { await act('apple', [{ do: 'eat', item: 'golden_apple' }], 15); m.eats++; }
+      else if (Number(actor.food) < 18) { await act('eat', [{ do: 'eat' }], 15); m.eats++; }
+      await sleep(1500);
+    }
+    if (hp() > stopHp) m.recovered++;
+    m.secondsAway += (Date.now() - lowAt) / 1000;
+  };
   try {
     while (Date.now() - start < seconds * 1000 && !disconnected && hp() > 0) {
+      if (bodyMode && hp() < stopHp) {
+        await recover();
+        if (hp() <= stopHp) { note(`health ${r1(hp())} after ${r1(m.secondsAway)} s away (hunger ${actor.food}): stop`); break; }
+        await sleep(thinkMs);
+      }
+      hidden = false;
       const camp = await readCamp();
       const cell = camp?.cells?.[0] as { x: number; y: number; z: number } | undefined;
       if (!cell) { note(`no camp cell: ${String(camp?.text ?? '').slice(0, 200)}`); break; }
@@ -265,7 +298,7 @@ async function blazeProtocol(kind: 'hold' | 'fight', note: (text: string) => voi
       m.sorties += (text.match(/出撃 (\d+)/gu) ?? []).reduce((sum, hit) => sum + Number(hit.replace(/\D+/gu, '')), 0);
       m.hpLostInActs += Math.max(0, before - hp());
       if (options.toRods && (await countServer('blaze_rod')) - rods0 >= options.toRods) { secondsToRods = r1((Date.now() - start) / 1000); note(`${options.toRods} rods at ${secondsToRods} s`); break; }
-      if (bodyMode && /退いた先/u.test(text)) { m.retreats++; if (hp() >= backHp) m.recovered++; }
+      if (bodyMode && /退いた先/u.test(text)) { m.retreats++; hidden = true; }
       if (!run.ok && run.stoppedBy !== 'stopIf' && !(bodyMode && /退いた先/u.test(text))) { failStreak++; await sleep(2000); if (failStreak >= 5) { note(`${failStreak} acts in a row failed: the camp is lost (${(run.lines[0] ?? '').slice(0, 160)})`); break; } } else failStreak = 0;
       if (hp() <= 0) break;
       if (!bodyMode && hp() < stopHp) {

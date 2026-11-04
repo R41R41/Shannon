@@ -98,9 +98,9 @@ const SHOT_HOLD_MS = 600;
 const MEAL_GAP = 8, MEAL_MIN_GAP = 6.5, MAX_MEALS = 4;
 /**
  * A hovering shooter's camp (S2, 2026-11-02, S4's c1 trials: a fight at the spawner ran the health down to 2 in one act, and the floor's own flight only begins at 8): the health below which the body leaves
- * its sight when the planner gave none, the health it rests up to (this much above), and the longest rest.
+ * its sight when the planner gave none, and the health a fight that fled without a hideout goes back in at (this much above).
  */
-const CAMP_RETREAT_HP = 12, REST_ABOVE = 6, REST_MIN_BACK = 18, REST_MAX_MS = 40_000;
+const CAMP_RETREAT_HP = 12, REST_ABOVE = 6, REST_MIN_BACK = 18;
 /** The health a camp's fight goes back in at: above the line it left at, and not under 18. */
 const backAt = (retreatHp: number) => Math.min(19, Math.max(REST_MIN_BACK, retreatHp + REST_ABOVE));
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple', 'rotten_flesh']);
@@ -381,12 +381,12 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   };
 
   /**
-   * Below retreatHp at a spawner's camp: a footing no blaze of it can see (utils/huntCamp, the one `probe kind=camp` names) within 40 steps: the body goes there with `go`, eats and rests until the
-   * health is back (REST_ABOVE over retreatHp), and the hand ends with the way back left to the planner (a `go` to the camp cell: the room has filled with blazes meanwhile, which is the
-   * planner's to look at). Null where no spawner or hideout is known or the way is not walkable: the flight below.
+   * Below retreatHp at a spawner's camp: a footing no blaze of it can see (utils/huntCamp, the one `probe kind=camp` names) within 40 steps: the body goes there with `go` and the hand ends there,
+   * telling the facts the planner chooses from (the health, the hunger, the food carried). Eating, waiting and the way back are the planner's (S2, 2026-11-05, the coordinator: raid3 sat at
+   * health 6.1 with hunger 17, which mends nothing, and went out again; that choice is the head's, not the body's). Null where no spawner or hideout is known or the way is not walkable: the flight below.
    */
   let hideoutNote = '';
-  async function restAtHideout(): Promise<StepOutcome | null> {
+  async function toHideout(): Promise<StepOutcome | null> {
     let spots: Array<{ x: number; y: number; z: number; steps: number }> = [];
     try {
       const hit = scanLoadedBlocks(bot, ['spawner'], { maxHits: 1, maxDistance: 24 }).hits[0];
@@ -394,7 +394,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       if (hit && feet) spots = hideoutsFrom(bodyReader(bot), hit.position, feet, 3);
     } catch { spots = []; }
     if (!spots.length) return null;
-    const hp0 = Number(bot.health ?? 0), began = Date.now();
+    const hp0 = Number(bot.health ?? 0);
     const laid = ['cobblestone', 'netherrack'].filter(name => !!findItem(bot, name));
     // The nearest first; one the way to which is shut (go says why) gives way to the next.
     let spot: { x: number; y: number; z: number; steps: number } | undefined;
@@ -408,38 +408,19 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     }
     if (!spot) return null;
     hideoutNote = '';
-    const resume = backAt(retreatHp as number), lostAtArrival = lost;
-    let ate = 0, lastMealAt = 0;
-    while (Date.now() - began < REST_MAX_MS) {
-      sample();
-      if (reflexHeld(bot)) return fail('reflex', `隠れ場所 (${spot.x},${spot.y},${spot.z}) で休む間に反射が体を握った（体力 ${r1(Number(bot.health ?? 0))}）`);
-      const health = Number(bot.health ?? 0);
-      if (health >= resume) break;
-      if (lost - lostAtArrival >= 4) return fail('retreat', `体力 ${r1(hp0)}→${r1(health)} 隠れ場所 (${spot.x},${spot.y},${spot.z}) でも撃たれた。go で湧き場からさらに離れる`);
-      // A golden apple only when low; other food when the hunger is below the full (eating at the full is refused, and what is eaten under it fills the hidden value that mends the body fast).
-      const meal = health < 8 && findItem(bot, 'golden_apple') ? 'golden_apple'
-        : Number(bot.food ?? 20) < 20 ? ((bot.inventory?.items?.() ?? []) as Array<{ name: string }>).filter(item => itemFoodPoints(bot, item.name) > 0 && !NEVER_EAT.has(item.name) && item.name !== 'golden_apple')
-          .sort((a, b) => itemFoodPoints(bot, b.name) - itemFoodPoints(bot, a.name))[0]?.name ?? null : null;
-      if (meal && Date.now() - lastMealAt >= 2500 && ate < 6) {
-        lastMealAt = Date.now();
-        const result = await eat(ctx, { item: meal });
-        sample();
-        if (result.ok && result.code !== 'food_full') { meals++; ate++; }
-        continue;
-      }
-      await wait(ctx, 500);
-    }
     sample();
-    const health = Number(bot.health ?? 0), seconds = r1((Date.now() - began) / 1000);
-    const state = health >= resume ? '戻った' : `戻らず（${r1(resume)} まで）`;
-    return fail('retreat', `体力 ${r1(hp0)}→${r1(health)} 退いた先 (${spot.x},${spot.y},${spot.z}) は湧き場から見えない（${spot.steps}歩）。${seconds}秒休んで${state}・食べた ${ate}。野営マスへ戻る前に probe kind=around で blaze の数を見る`);
+    const health = Number(bot.health ?? 0), food = Number(bot.food ?? 20);
+    const foods = ((bot.inventory?.items?.() ?? []) as Array<{ name: string; count?: number }>).filter(item => itemFoodPoints(bot, item.name) > 0 && !NEVER_EAT.has(item.name))
+      .map(item => `${item.name} ${item.count ?? 1}`);
+    // The facts only: whether the health mends here is the hunger's (18 or more), which the planner reads to choose between eating, waiting and going back.
+    return fail('retreat', `体力 ${r1(hp0)}→${r1(health)}・満腹度 ${food}（${food >= 18 ? '体力が戻る' : '18 未満では体力が戻らない'}） 退いた先 (${spot.x},${spot.y},${spot.z}) は湧き場から見えない（${spot.steps}歩）に着いた・食べ物 ${foods.length ? foods.join('・') : 'なし'}。食べる・待つ・野営マスへ戻るは頭が選ぶ（戻る前に probe kind=around で blaze の数を見る）`);
   }
 
   /** Below retreatHp: gets out of reach; eats what helps, with a gap, and goes back in when the health is back; else leaves for good. Null: fight on. */
   async function retreat(): Promise<StepOutcome | null> {
     if (hovering) {
-      const rested = await restAtHideout();
-      if (rested) return rested;
+      const hidden = await toHideout();
+      if (hidden) return hidden;
     }
     for (let round = 0; round <= MAX_MEALS; round++) {
       sample();

@@ -329,7 +329,7 @@ describe('fight on a blaze: the shield and the choice of the blaze', () => {
 });
 
 // S2 (2026-11-02, S4's c1 trials: a fight at the spawner ran the health down to 2 in one act): below the planner's retreatHp, or the camp's own 12 when none was given, the body leaves the
-// blazes' sight for a footing none of the spawner's blazes can see (utils/huntCamp, the one `probe kind=camp` names), eats and rests there until the health is back, and the hand ends.
+// blazes' sight for a footing none of the spawner's blazes can see (utils/huntCamp, the one `probe kind=camp` names), and the hand ends there with the facts; eating and waiting are the head's (2026-11-05).
 describe('fight on a blaze: below the retreat health, to a hideout', () => {
   /** The spawner at (-3, 64, 2) with a wall of stone at x 3 from z -6 to 6, five high: what lies behind it is out of the sight of every blaze of the spawner. */
   const wall: Array<[number, number, number]> = [];
@@ -344,8 +344,9 @@ describe('fight on a blaze: below the retreat health, to a hideout', () => {
   const walkTo = () => vi.mocked(go).mockImplementationOnce((async (ctx: any, args: any) => { const at = args.goals[0]; ctx.bot.entity.position = new Vec3(at.x + 0.5, at.y, at.z + 0.5); return { ok: true, text: '着いた' }; }) as never);
   const healBy = (camp: Camp, points: number) => vi.mocked(eat).mockImplementation((async () => { camp.bot.health = Math.min(20, camp.bot.health + points); camp.bot.emit('health'); return { ok: true, text: '食べた' }; }) as never);
 
-  it('with no retreatHp given the camp\'s own 12 applies: it goes to a footing behind the wall, eats, rests until the health is back (18), and the hand ends with where it was and how it went', async () => {
+  it('with no retreatHp given the camp\'s own 12 applies: it goes to a footing behind the wall and the hand ends there with the facts (health, hunger, food), neither eating nor waiting', async () => {
     scanSpawner(); walkTo();
+    vi.mocked(eat).mockClear();
     const camp = setUp(7);
     healBy(camp, 6);
     const { json } = await act(camp, [{ do: 'fight', target: 'blaze', seconds: 20 }]);
@@ -354,12 +355,13 @@ describe('fight on a blaze: below the retreat health, to a hideout', () => {
     console.log('[blaze retreat]', line);
     expect(json.ok).toBe(false);
     expect(line).toContain('retreat');
-    expect(line).toMatch(/体力 7→19 退いた先 \(\d+,64,-?\d+\) は湧き場から見えない/u);
-    expect(line).toContain('戻った');
+    expect(line).toMatch(/体力 7→7・満腹度 14（18 未満では体力が戻らない） 退いた先 \(\d+,64,-?\d+\) は湧き場から見えない（\d+歩）に着いた・食べ物 cooked_beef 10/u);
+    expect(line).toContain('頭が選ぶ');
     const goal = vi.mocked(go).mock.calls.at(-1)![1].goals[0];
     expect(goal.x).toBeGreaterThanOrEqual(4);
-    expect(camp.bot.health).toBeGreaterThanOrEqual(18);
-    expect(vi.mocked(eat)).toHaveBeenCalledTimes(2);
+    // S2 (2026-11-05, the coordinator): eating and waiting at the hideout are the head's, not the hand's (raid3 sat at 6.1 with hunger 17 and went out again).
+    expect(vi.mocked(eat)).not.toHaveBeenCalled();
+    expect(camp.bot.health).toBe(7);
     expect(camp.mobs[0].health).toBe(20);
   }, 60_000);
 
@@ -369,14 +371,12 @@ describe('fight on a blaze: below the retreat health, to a hideout', () => {
     vi.mocked(go).mockImplementationOnce((async () => ({ ok: false, text: 'go 止まった unsafe: 行き先は火の隣' })) as never);
     walkTo();
     const camp = setUp(7);
-    healBy(camp, 6);
     const { json } = await act(camp, [{ do: 'fight', target: 'blaze', seconds: 20 }]);
     camp.stop();
     expect(vi.mocked(go)).toHaveBeenCalledTimes(2);
     const [first, second] = vi.mocked(go).mock.calls.map(call => call[1].goals[0]);
     expect(`${second.x},${second.y},${second.z}`).not.toBe(`${first.x},${first.y},${first.z}`);
     expect(lineOf(json)).toContain('退いた先');
-    expect(camp.bot.health).toBeGreaterThanOrEqual(18);
   }, 60_000);
 
   it('a retreatHp the planner gave is its own limit: 1 keeps the body in the fight at 7 hearts (the camp\'s default is overridden, not added)', async () => {
@@ -390,14 +390,16 @@ describe('fight on a blaze: below the retreat health, to a hideout', () => {
     expect(vi.mocked(go)).not.toHaveBeenCalled();
   }, 60_000);
 
-  it('shot at the hideout too (health lost there): it does not rest on, and says so', async () => {
+  it('at the full hunger the line says the health mends there (the head may wait without eating)', async () => {
     scanSpawner(); walkTo();
+    vi.mocked(eat).mockClear();
     const camp = setUp(9);
-    vi.mocked(eat).mockImplementation((async () => { camp.bot.health -= 5; camp.bot.emit('health'); return { ok: true, text: '食べた' }; }) as never);
+    camp.bot.food = 20;
     const { json } = await act(camp, [{ do: 'fight', target: 'blaze', seconds: 20 }]);
     camp.stop();
     expect(json.ok).toBe(false);
-    expect(lineOf(json)).toContain('でも撃たれた');
+    expect(lineOf(json)).toContain('満腹度 20（体力が戻る）');
+    expect(vi.mocked(eat)).not.toHaveBeenCalled();
   }, 60_000);
 
   it('with no hideout known (nothing loaded says a spawner) it is the old flight: go is not asked for', async () => {
