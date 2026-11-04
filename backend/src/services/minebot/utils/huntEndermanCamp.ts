@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import pathfinder from 'mineflayer-pathfinder';
-import { ENDERMAN_EYE, ENDERMAN_LEGS, ENDERMAN_STARE_MS, atRoofCentre, endermanStrikePoint, endermanView, planRoof, roofBlockFor, roofInterior, roofInteriorStep, roofSites, type EndermanLine, type EndermanView, type RoofPlan, type RoofWorld } from './huntEnderman.js';
+import { ENDERMAN_EYE, ENDERMAN_LEGS, ENDERMAN_STARE_MS, atRoofCentre, endermanAngry, endermanStrikePoint, endermanView, planRoof, roofBlockFor, roofExitCandidates, roofExitStep, roofInterior, roofInteriorStep, roofSites, type EndermanLine, type EndermanView, type RoofPlan, type RoofWorld } from './huntEnderman.js';
 import { bodyReader, feetCell, type Cell } from './localMap.js';
 import { nativeActionHost } from '../execution/ActionExecution.js';
 import { reflexHeld } from './floorReflexes.js';
@@ -32,6 +32,10 @@ const SIGHT_MS = 8_000;
 /** An enderman closer than this and angry is the fight's, not the building's (it reaches the body in a second). */
 const CONTACT = 4.2;
 const RECOVERY_LIMIT = 2, RECOVERY_MS = 3_000, RECOVERY_STEP_MS = 1_800;
+/** At most once per stare (including the existing one interrupted-stare retry), independently of interior recovery. */
+const ROOF_EXIT_LIMIT = 2;
+/** The exit crosses two cells in one segment, with the existing per-cell movement bound. This never renews SIGHT_MS. */
+const ROOF_EXIT_STEP_MS = 2 * RECOVERY_STEP_MS;
 
 export interface CampObservation extends EndermanView {
   at: number;
@@ -46,6 +50,8 @@ export interface CampObservationRecord {
   afterBuild: CampObservation | null;
   latest: CampObservation | null;
   recovery: Array<{ from: Cell; to: Cell; at: number; result: 'moving' | 'arrived' | 'stopped' }>;
+  exits: Array<{ from: Cell; to: Cell; at: number; result: 'moving' | 'staring' | 'returning' | 'returned' | 'stopped';
+    reason: 'angry' | 'stared' | 'not_visible' | null }>;
   stareAt: number | null;
   stareEndedAt: number | null;
   angryAt: number | null;
@@ -127,6 +133,8 @@ export class EndermanCamp {
   private readonly observation: CampObservationRecord;
   private temporary = new Map<string, { cell: Cell; name: string }>();
   private centringSince = 0;
+  private exit: { to: Cell; stage: 'out' | 'stare' | 'back'; at: number } | null = null;
+  private exitStare = -1;
 
   constructor(private readonly ctx: StepContext, private readonly target: any) {
     const bot = ctx.bot;
@@ -136,7 +144,7 @@ export class EndermanCamp {
     this.plan = this.planFrom(this.cell);
     this.block = roofBlockFor(bot, this.plan.placements.length, true);
     if (!this.plan.placements.length) this.phase = 'provoke';
-    this.observation = { targetId: this.targetId, roofCell: { ...this.cell }, afterBuild: null, latest: null, recovery: [],
+    this.observation = { targetId: this.targetId, roofCell: { ...this.cell }, afterBuild: null, latest: null, recovery: [], exits: [],
       stareAt: null, stareEndedAt: null, angryAt: null, legsAt: null, verifiedCaps: 0, capsPlaced: 0, supportsRemoved: 0 };
     observations.set(nativeActionHost(bot), this.observation);
   }
@@ -183,7 +191,7 @@ export class EndermanCamp {
     else if (this.guardWas !== null) { state.enabled = this.guardWas; this.guardWas = null; }
   }
   /** Put everything back (the hand's end). */
-  release(): void { this.stopShift(); this.guard(true); }
+  release(): void { this.stopShift(); this.stopExit(); this.guard(true); }
 
   /** Keep centring inside this single known cell. An angry target never authorizes movement out of the protected centre. */
   private async centre(now: number, angry: boolean): Promise<CampStep | null> {
@@ -232,7 +240,9 @@ export class EndermanCamp {
     const roof = this.plan.placements.length ? `屋根 ${this.laid}/${this.plan.placements.length}` : '屋根は既にある';
     const verified = this.observation.verifiedCaps === 9 ? `・天井9/9・仮柱撤去 ${this.observation.supportsRemoved}` : '';
     const shifts = this.observation.recovery;
-    return `${roof}・${this.angeredAt ? '怒らせた' : angry ? '怒っている' : '怒っていない'}${verified}${shifts.length ? `・屋根内の微動 ${shifts.length}/${RECOVERY_LIMIT}（${shifts[shifts.length - 1].result}）` : ''}`;
+    const exits = this.observation.exits;
+    const exitResult = { moving: '外へ移動中', staring: '注視中', returning: '中央へ戻り中', returned: '中央へ戻った', stopped: '中断' };
+    return `${roof}・${this.angeredAt ? '怒らせた' : angry ? '怒っている' : '怒っていない'}${verified}${shifts.length ? `・屋根内の微動 ${shifts.length}/${RECOVERY_LIMIT}（${shifts[shifts.length - 1].result}）` : ''}${exits.length ? `・屋根外の注視 ${exits.length}/${ROOF_EXIT_LIMIT}（${exitResult[exits[exits.length - 1].result]}）` : ''}`;
   }
 
   private observe(live: any, now: number): CampObservation {
@@ -261,6 +271,122 @@ export class EndermanCamp {
       && Math.abs(e.position.x - (to.x + 0.5)) < 0.3 + (e.width ?? 0.6) / 2
       && Math.abs(e.position.z - (to.z + 0.5)) < 0.3 + (e.width ?? 0.6) / 2
       && e.position.y < to.y + 1.8 && e.position.y + (e.height ?? 1.8) > to.y);
+  }
+
+  private stopExitMotion(): void {
+    for (const name of ['forward', 'sneak']) { try { this.ctx.bot.setControlState(name, false); } catch { /* lease ended */ } }
+  }
+
+  private stopExit(): void {
+    if (!this.exit) return;
+    this.stopExitMotion();
+    const last = this.observation.exits[this.observation.exits.length - 1];
+    if (last.result !== 'returned') last.result = 'stopped';
+    this.exit = null;
+  }
+
+  private exitOccupied(to: Cell, destination: Cell): boolean {
+    const p = this.ctx.bot.entity.position, alongX = to.x !== this.cell.x;
+    const start = Math.floor(alongX ? p.x : p.z), end = alongX ? destination.x : destination.z;
+    for (let i = 0; i <= 2; i++) {
+      const c = { x: this.cell.x + (to.x - this.cell.x) * i / 2, y: this.cell.y, z: this.cell.z + (to.z - this.cell.z) * i / 2 };
+      const along = alongX ? c.x : c.z;
+      if (along >= Math.min(start, end) && along <= Math.max(start, end) && this.shiftOccupied(c)) return true;
+    }
+    return false;
+  }
+
+  /** The only unprotected move: before any confirmed anger, from the original centre, for a roof cap hiding the eyes. */
+  private startExit(live: any, view: CampObservation, now: number): boolean {
+    if (this.angeredAt || this.observation.stareEndedAt !== null || this.exitStare === this.restares
+      || this.observation.exits.length >= ROOF_EXIT_LIMIT || !atRoofCentre(this.ctx.bot.entity.position, this.cell)) return false;
+    const cap = view.eyes.between.some(({ at }) => at.y === this.cell.y + 2
+      && Math.abs(at.x - this.cell.x) <= 1 && Math.abs(at.z - this.cell.z) <= 1);
+    if (!cap) return false;
+    const to = roofExitCandidates(bodyReader(this.ctx.bot), this.cell, live.position).find(c => !this.exitOccupied(c, c));
+    if (!to) return false;
+    this.exitStare = this.restares;
+    this.exit = { to, stage: 'out', at: now };
+    this.observation.exits.push({ from: { ...this.cell }, to, at: now, result: 'moving', reason: null });
+    return true;
+  }
+
+  private async returnFromExit(live: any, now: number, reason: 'angry' | 'stared' | 'not_visible'): Promise<void> {
+    if (!this.exit || this.exit.stage === 'back') return;
+    this.stopExitMotion();
+    this.exit.stage = 'back'; this.exit.at = now;
+    const last = this.observation.exits[this.observation.exits.length - 1];
+    last.result = 'returning'; last.reason = reason;
+    await this.legs(live, now);
+  }
+
+  /** Out, a short stationary stare, then the same straight corridor back. Combat is withheld until the original centre is verified. */
+  private async advanceExit(live: any, now: number): Promise<CampStep | null> {
+    try { return await this.stepExit(live, now); }
+    catch { return this.failure('roof_failed', 'moved', '屋根外の注視から中央へ戻る操作を続けられなかった', feetCell(this.ctx.bot) ?? this.cell); }
+  }
+
+  private async stepExit(live: any, now: number): Promise<CampStep | null> {
+    const exit = this.exit;
+    if (!exit) return null;
+    const bot = this.ctx.bot, p = bot.entity.position;
+    if (this.angeredAt) await this.returnFromExit(live, now, 'angry');
+    if (exit.stage === 'out' && (now - exit.at >= ROOF_EXIT_STEP_MS || now - this.blindSince > SIGHT_MS)) {
+      await this.returnFromExit(live, now, 'not_visible');
+    }
+    const alongX = exit.to.x !== this.cell.x;
+    const along = alongX ? p.x : p.z, across = alongX ? p.z : p.x;
+    const a = (alongX ? this.cell.x : this.cell.z) + 0.5, b = (alongX ? exit.to.x : exit.to.z) + 0.5;
+    let destination = exit.stage === 'back' ? this.cell : exit.to;
+    if (reflexHeld(bot) || bot.entity.onGround !== true || Math.abs(p.y - this.cell.y) > 0.1
+      || along < Math.min(a, b) - 0.15 || along > Math.max(a, b) + 0.15
+      || Math.abs(across - ((alongX ? this.cell.z : this.cell.x) + 0.5)) > 0.2
+      || !roofExitStep(bodyReader(bot), this.cell, exit.to) || this.exitOccupied(exit.to, destination)) {
+      return this.failure('roof_failed', 'moved', '屋根外の注視から中央へ戻る平らな道・立ち位置を確認できない', feetCell(bot) ?? this.cell);
+    }
+    if (exit.stage === 'back' && atRoofCentre(p, this.cell)) {
+      this.observation.exits[this.observation.exits.length - 1].result = 'returned';
+      this.stopExit(); this.standing = this.cell;
+      // Only an interrupted stare gets the already bounded retry. A completed stare is never repeated.
+      if (!this.angeredAt && this.staredSince && this.observation.stareEndedAt !== null
+        && this.observation.stareEndedAt - this.staredSince < ENDERMAN_STARE_MS && this.restares < 1) {
+        this.restares++; this.staredSince = 0; this.observation.stareEndedAt = null;
+      }
+      this.observe(live, now);
+      return null;
+    }
+    if (exit.stage === 'out' && atRoofCentre(p, exit.to)) {
+      this.stopExitMotion(); exit.stage = 'stare';
+      this.observation.exits[this.observation.exits.length - 1].result = 'staring';
+    }
+    if (exit.stage === 'stare') {
+      const view = this.observe(live, now);
+      if (!view.eyes.clear || now - this.blindSince > SIGHT_MS) await this.returnFromExit(live, now, 'not_visible');
+      else if (this.staredSince && now - this.staredSince >= ENDERMAN_STARE_MS) await this.returnFromExit(live, now, 'stared');
+      else {
+        this.staredSince ||= now; this.observation.stareAt ??= now; this.guard(false);
+        try {
+          const turned = await guard(this.ctx, Promise.resolve(bot.lookAt(live.position.offset(0, ENDERMAN_EYE, 0), true)), 300);
+          if (!turned) await this.returnFromExit(live, now, 'not_visible');
+        }
+        catch { await this.returnFromExit(live, now, 'not_visible'); }
+        return { kind: 'wait' };
+      }
+    }
+    destination = exit.stage === 'back' ? this.cell : exit.to;
+    if (now - exit.at >= ROOF_EXIT_STEP_MS) return this.failure('roof_failed', 'moved', '屋根外の注視の一歩を終えて中央へ戻れなかった', feetCell(bot) ?? this.cell);
+    this.guard(true);
+    this.stopExitMotion();
+    const turned = await guard(this.ctx, Promise.resolve(bot.lookAt(new Vec3(destination.x + 0.5, p.y + 1.62, destination.z + 0.5), true)), 300);
+    if (!turned || reflexHeld(bot) || this.ctx.stop.aborted || Date.now() >= this.ctx.deadline
+      || !roofExitStep(bodyReader(bot), this.cell, exit.to) || this.exitOccupied(exit.to, destination)) return this.failure('roof_failed', 'moved', '屋根外の注視から中央へ向き直れなかったか、戻る道が変わった', feetCell(bot) ?? this.cell);
+    if (exit.stage === 'out' && endermanAngry(bot.registry, live)) {
+      await this.returnFromExit(live, now, 'angry');
+      return { kind: 'wait' };
+    }
+    bot.setControlState('sprint', false); bot.setControlState('jump', false);
+    bot.setControlState('sneak', true); bot.setControlState('forward', true);
+    return { kind: 'wait' };
   }
 
   /** Starts only for a roof block on this target's eye ray and an already protected adjacent cell with a clear eye ray. */
@@ -317,21 +443,23 @@ export class EndermanCamp {
     this.guard(true); this.staredSince = 0; this.blindSince ||= now;
     const line = this.recoveryEnded && view.eyes.clear ? this.recoveryBlocker ?? view.eyes : view.eyes, first = line.between[0];
     if (now - this.blindSince > SIGHT_MS || this.recoveryEnded) {
-      return this.failure('enderman_not_visible', 'not_visible', `エンダーマンの目が見えない（${now - this.blindSince}ms/${SIGHT_MS}ms。間に ${first ? `${cellText(first.at)} ${first.name} ほか ${line.between.length - 1}` : 'なし'}。${box.toFixed(1)}m。対象 #${this.targetId}、微動 ${this.observation.recovery.length}/${RECOVERY_LIMIT}）。屋根内で線を戻せない`, feetCell(this.ctx.bot) ?? this.cell);
+      return this.failure('enderman_not_visible', 'not_visible', `エンダーマンの目が見えない（${now - this.blindSince}ms/${SIGHT_MS}ms。間に ${first ? `${cellText(first.at)} ${first.name} ほか ${line.between.length - 1}` : 'なし'}。${box.toFixed(1)}m。対象 #${this.targetId}、微動 ${this.observation.recovery.length}/${RECOVERY_LIMIT}、屋根外の注視 ${this.observation.exits.length}/${ROOF_EXIT_LIMIT}）。屋根内で線を戻せない`, feetCell(this.ctx.bot) ?? this.cell);
     }
     return { kind: 'wait' };
   }
 
   private failure(code: string, reason: string, text: string, at?: Cell): CampStep {
-    this.stopShift(); this.guard(true);
+    this.stopShift(); this.stopExit(); this.guard(true);
     return { kind: 'stop', outcome: { ...stopped(this.ctx.bot, reason, text, at), code } };
   }
 
   /** One step of the camp. `box` is the distance to the enderman's box, `angry` its `creepy` flag. */
   async advance(live: any, now: number, box: number, angry: boolean): Promise<CampStep> {
     const bot = this.ctx.bot;
+    angry ||= endermanAngry(bot.registry, live);
     if (live?.id !== this.targetId || live?.isValid === false || !live?.position) return this.failure('target_lost', 'lost', `対象 #${this.targetId} が見えない。同じ対象以外へ乗り換えない`);
     if (this.ctx.stop.aborted || now >= this.ctx.deadline) return this.failure('limit_time', 'limit_time', '狩りの停止・期限に達した');
+    if (angry && this.exit) this.stopExitMotion();
     if (angry && !this.angeredAt) { this.angeredAt = now; this.observation.angryAt = now; await this.legs(live, now); }
 
     if (this.phase === 'build') {
@@ -387,6 +515,10 @@ export class EndermanCamp {
     }
 
     if (this.phase === 'provoke' && angry) { this.phase = 'hold'; this.guard(true); this.blindSince = 0; }
+    if (this.exit) {
+      const step = await this.advanceExit(live, now);
+      if (step) return step;
+    }
     // A missing/reset flag after confirmed anger is not permission to stare at this same nearby target again.
     let view = this.observe(live, now);
     // Once angered, stop the recovery turn immediately and hold the verified swept space.
@@ -412,6 +544,12 @@ export class EndermanCamp {
     if (this.capsStanding() !== 9) return this.failure('roof_failed', 'roof_incomplete', '屋根9個の保護が失われた', this.cell);
 
     if (this.phase === 'provoke') {
+      // The roof can hide the eyes again after returning. A finished exterior stare still waits only for anger, looking at legs.
+      if (this.staredSince && this.observation.stareEndedAt !== null && this.observation.stareEndedAt - this.staredSince >= ENDERMAN_STARE_MS) {
+        await this.legs(live, now);
+        if (now - this.staredSince >= ENDERMAN_STARE_MS + ANGER_ACK_MS) return this.failure('enderman_not_angry', 'not_provoked', `約0.5秒目を見ても敵対を確認できない（${box.toFixed(1)}m）。同じ場所で目を見続けない`, this.cell);
+        return { kind: 'wait' };
+      }
       if (!view.eyes.clear) {
         // Losing sight ends the stare, but must not consume the branch for the bounded recovery (including its return step).
         if (this.staredSince) {
@@ -422,6 +560,7 @@ export class EndermanCamp {
           }
         }
         this.blindSince ||= now;
+        if (now - this.blindSince <= SIGHT_MS && this.startExit(live, view, now)) return (await this.advanceExit(live, now)) ?? { kind: 'wait' };
         if (now - this.blindSince <= SIGHT_MS && this.recover(live, view, now)) this.moveShift(now);
         return this.notVisible(view, now, box);
       }

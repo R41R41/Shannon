@@ -221,6 +221,27 @@ export function roofInteriorStep(read: BlockReader, anchor: Cell3, from: Cell3, 
     && roofInterior(read, anchor, from) && roofInterior(read, anchor, to);
 }
 
+/** One straight segment from the centre to the first cell outside the 3x3 roof. Check every swept column, in both directions. */
+export function roofExitStep(read: BlockReader, anchor: Cell3, to: Cell3): boolean {
+  const dx = to.x - anchor.x, dz = to.z - anchor.z;
+  if (to.y !== anchor.y || !((Math.abs(dx) === 2 && dz === 0) || (Math.abs(dz) === 2 && dx === 0))) return false;
+  const clear = (b: MapBlock | null) => freeCell(b) && b?.solid === false && !b.top && !b.plates;
+  for (let i = 0; i <= 2; i++) {
+    const x = anchor.x + dx * i / 2, z = anchor.z + dz * i / 2;
+    if (!fullFloor(read(x, anchor.y - 1, z)) || !clear(read(x, anchor.y, z)) || !clear(read(x, anchor.y + 1, z))) return false;
+  }
+  return clear(read(to.x, to.y + 2, to.z));
+}
+
+/** The target's nearer edge first. An unknown/unsafe corridor or a blocked eye ray is no candidate; never plan a detour. */
+export function roofExitCandidates(read: BlockReader, anchor: Cell3, target: Cell3): Cell3[] {
+  const dx = target.x - (anchor.x + 0.5), dz = target.z - (anchor.z + 0.5);
+  return [[2, 0], [-2, 0], [0, 2], [0, -2]]
+    .sort(([ax, az], [bx, bz]) => (bx - ax) * dx + (bz - az) * dz)
+    .map(([x, z]) => ({ x: anchor.x + x, y: anchor.y, z: anchor.z + z }))
+    .filter(to => roofExitStep(read, anchor, to) && endermanLine(read, { x: to.x + 0.5, y: to.y, z: to.z + 0.5 }, target, ENDERMAN_EYE).clear);
+}
+
 /**
  * Can this same enderman walk through known, dry three-high columns to a visible lower-body contact point?
  * A bounded local search observes the route only: the body never walks it. One-block steps need headroom over both columns.
