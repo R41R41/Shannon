@@ -150,6 +150,16 @@ describe('M1: a meal does not cut the API\'s own escape and shelter commands (de
     // cooked food only for a mending meal (raw meat and rotten flesh keep their own rules)
     expect(idle(15, 19, {}, [{ name: 'beef' }, { name: 'rotten_flesh' }])).toBeNull();
   });
+  it('unhurt, the body tops up once the bar is at 14 or less (the walk would otherwise sprint-lock at food 6), under the same safety checks, cooked food only', () => {
+    const idle = (health: number, food: number, entities: Record<string, unknown> = {}, items: Array<{ name: string }> = [bread]) =>
+      floorEatChoice({ ...fixture(flat()).bot, health, food, entities, inventory: { items: () => items, slots: [] } } as never)?.name ?? null;
+    expect(idle(20, 14)).toBe('bread');
+    expect(idle(20, 8)).toBe('bread');
+    expect(idle(20, 15)).toBeNull();
+    expect(idle(20, 14, { 2: { id: 2, name: 'zombie', position: new Vec3(7, 65, 0.5) } })).toBeNull();
+    expect(idle(20, 14, { 3: { id: 3, name: 'dragon_fireball', position: new Vec3(30, 70, 0.5) } })).toBeNull();
+    expect(idle(20, 14, {}, [{ name: 'beef' }])).toBeNull();
+  });
 });
 
 // ---- L1, L2, L6 ----------------------------------------------------------------------------------------------------------------------

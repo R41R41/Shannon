@@ -410,8 +410,10 @@ const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spi
  */
 const MEND_HOSTILE_NEAR = 8;
 const MEND_FIREBALL_NEAR = 40;
+const TOP_UP_FOOD = 14;
 function mendingMeal(bot: FloorBody, health: number, food: number): boolean {
-  if (!(health < 20 && food < 20)) return false;
+  // Unhurt too, once the bar is down to TOP_UP_FOOD: autoEat skips a walking body until food 6 (and sprint needs food above 6), so the walk would spend the run hungry.
+  if (!((health < 20 && food < 20) || food <= TOP_UP_FOOD)) return false;
   try {
     if (dragonHazards(bot).length) return false;
     const at = bot.entity?.position;
