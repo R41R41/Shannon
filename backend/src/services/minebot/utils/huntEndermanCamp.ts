@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import pathfinder from 'mineflayer-pathfinder';
-import { ENDERMAN_EYE, ENDERMAN_LEGS, ENDERMAN_STARE_MS, atRoofCentre, endermanAngry, endermanStrikePoint, endermanView,
+import { ENDERMAN_EYE, ENDERMAN_LEGS, endermanLine, ENDERMAN_STARE_MS, atRoofCentre, endermanAngry, endermanStrikePoint, endermanView,
   planRoof, roofBlockFor, roofCellOccupied, roofExitForSight, roofExitStep, roofInterior, roofInteriorStep, roofSites,
   type EndermanLine, type EndermanView, type RoofPlan, type RoofWorld } from './huntEnderman.js';
 import { bodyReader, feetCell, type Cell } from './localMap.js';
@@ -621,4 +621,33 @@ export class EndermanCamp {
     await this.legs(live, now);
     return { kind: 'fight' };
   }
+}
+
+/** A roof site and how many endermen's eyes are seen from it. */
+export interface EndermanRoofSite { cell: Cell; blocks: number; distance: number; seen: number; seenIds: number[] }
+/**
+ * probe kind=roofsite (S6, 11/5): where a roof would see the most endermen. The cells within `radius` where the roof's plan stands (roofSites: uneven ground too,
+ * the blocks it takes), each with the endermen whose EYES are in sight from it at 8-48 m (the band the roof hunts were won in), most first, then fewest blocks,
+ * then nearest. Read only; the planner chooses one and walks there before `fight target=enderman`. Why: in c1's warped forest the body built where it stood
+ * and 1,029 of 1,037 calls found no eyes in sight (the lab, 25 minutes, six kills).
+ */
+export function endermanRoofSites(bot: any, radius = 16, limit = 5): { sites: EndermanRoofSite[]; endermen: number } {
+  const here = feetCell(bot);
+  if (!here) return { sites: [], endermen: 0 };
+  const read = bodyReader(bot), world = roofWorldOf(bot);
+  const at = bot.entity.position;
+  const endermen = (Object.values(bot.entities ?? {}) as any[]).filter(e => e?.name === 'enderman' && e.position && e.isValid !== false && e.position.distanceTo(at) <= 64);
+  const all = roofSites(world, here, Math.max(4, Math.min(24, Math.round(radius))), undefined, 2000);
+  // The nearest first when there are very many (each site reads a line to every enderman).
+  const sites = all.sort((a, b) => a.distance - b.distance).slice(0, 300).map(site => {
+    const from = { x: site.cell.x + 0.5, y: site.cell.y, z: site.cell.z + 0.5 };
+    const seenIds = endermen.filter(e => {
+      const d = Math.hypot(e.position.x - from.x, e.position.y - from.y, e.position.z - from.z);
+      if (d < 8 || d > 48) return false;
+      try { return endermanLine(read, from, e.position, ENDERMAN_EYE).clear; } catch { return false; }
+    }).map(e => Number(e.id));
+    return { cell: site.cell, blocks: site.blocks, distance: site.distance, seen: seenIds.length, seenIds };
+  });
+  sites.sort((a, b) => b.seen - a.seen || a.blocks - b.blocks || a.distance - b.distance);
+  return { sites: sites.slice(0, limit), endermen: endermen.length };
 }

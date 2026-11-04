@@ -64,6 +64,18 @@ scene('s6_pearls_kind', '自然湧き: fight target=enderman（体が選ぶ）�
         if (emptyInRow < 2 && /enderman_not_visible|enderman_not_angry/u.test(String(code))) continue;   // another one may be in sight now
         emptyInRow = 0;
         const e0 = Date.now(); explore++;
+        // The body's reading first (probe kind=roofsite): the roof site within 16 m that sees the most eyes; walked to when it sees any (a head would read it the same way).
+        if (process.env.MINECRAFT_HUNT_ROOFSITE !== 'off') {
+          const found = await runSkill('probe', { kind: 'roofsite', radius: 16 }, 20);
+          let best: any = null;
+          try { best = JSON.parse(String(found.receipt?.result ?? ''))?.sites?.[0] ?? null; } catch { best = null; }
+          row.roofsite = best;
+          if (best && best.seen > 0 && best.distance > 0.5) {
+            const walk = await act(`s6-site#${explore}`, [{ ...walkTo(best.cell), maxPlace: 0, seconds: 15 }], 16, { accept: ['enderman'] }, { deadlineAt: endAt });
+            row.site = (walk.lines[0] ?? '').slice(0, 200); clock.exploreMs += Date.now() - e0;
+            if (walk.ok) continue;
+          } else if (best && best.seen > 0 && explore % 3 !== 0) { await sleep(1000); clock.exploreMs += Date.now() - e0; continue; }
+        }
         const p0 = actor.entity.position, read = bodyReader(actor);
         // Toward the nearest enderman seen more than 20 m off (what the fight's line names: a head would go there), else the next compass direction.
         const seenFar = (Object.values(actor.entities ?? {}) as any[]).filter(e => e?.name === 'enderman' && e.position && e.position.distanceTo(p0) > 20)

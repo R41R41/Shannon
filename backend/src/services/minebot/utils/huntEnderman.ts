@@ -324,10 +324,6 @@ export function roofSites(world: RoofWorld, around: Cell3, radius = 7, toward?: 
 }
 
 /**
- * The block to build with: the first kind in the order the body spends them that it carries enough of, else the kind it carries most of (told short).
- * Gravity blocks and the like are not in the list. The live roof camp requests cobblestone only; other callers retain their material order.
- */
-/**
  * The roof's blocks: any building block but obsidian (kept for the gate and the dragon), the first kind with enough, else the kind there is most of. The head says
  * "丸石・土・ネザーラック等 11 個"; the site walk (moveToRoofSite) and the camp ask this one rule (Codex's pre-deploy review 6, 11/5: the camp took cobblestone only).
  */

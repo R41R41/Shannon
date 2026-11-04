@@ -1,5 +1,6 @@
 import { probeWorksite } from '../utils/probeWorksite.js';
 import { endermanDenCandidates } from '../utils/huntEndermanDen.js';
+import { endermanRoofSites } from '../utils/huntEndermanCamp.js';
 import { z } from 'zod';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
@@ -28,7 +29,7 @@ import { laneProbeFields } from '../utils/huntLane.js';
  *   lane    four read-only lane plans: cells, counts, support order, occupants, reach, safe footings and groups of up to six.
  * The answer is JSON: { v: 1, kind, text, ... } with the sentence first, the dangerous facts said as they are.
  */
-export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite', 'frames', 'camp', 'lane', 'den'] as const;
+export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite', 'frames', 'camp', 'lane', 'den', 'roofsite'] as const;
 const Pos = z.object({ x: z.number(), y: z.number(), z: z.number() }).strict();
 
 const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ '
@@ -38,6 +39,7 @@ const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: pa
   + 'frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ '
   + 'camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。'
   + 'lane（spawner の四方向のレーン計画。省略時は近い湧き場。丸石・建築順・支え・生き物・待ち場からの距離と危険。build の standAtCell は cells の足マス参照、group は同じ立ち位置で最大6マス、末尾の walk は from（既定は足）からの歩数、立ち位置なしは全て null。facts 末尾の standFact は standFacts の参照で noStand・blockedByCreature・fireNear。目から4.3以内で視線が通り、火・液体・マグマ・縁を避ける。計画のマスを避け、掘らず置かず四方向・上下1段までを2000マス探索し、歩数・従来順位の順に立ち位置を選ぶ。着けない場合は noStand: unreachable。go で立ち位置へ→同じ group の place、占有マスは組の末尾で再確認。fireNear は立ち位置なしなら null、安全なら false。読むだけ）。'
+  + 'roofsite（エンダーマンの屋根を作れる所を radius（既定16）内で、そこから目の見えるエンダーマン（8〜48m）の数が多い順に5件。屋根に要るブロック数・距離つき。選んで go してから fight target=enderman）。'
   + '結果は JSON（text が先頭。危ない事実をそのまま書く）。';
 
 const cellOf = (value: { x: number; y: number; z: number }): Cell => ({ x: Math.floor(value.x), y: Math.floor(value.y), z: Math.floor(value.z) });
@@ -50,7 +52,7 @@ class Probe extends InstantSkill {
     this.description = DESCRIPTION;
     this.maxDurationMs = 30_000;
     this.params = [
-      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan・worksite・frames・camp・lane・den', required: true },
+      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan・worksite・frames・camp・lane・den・roofsite', required: true },
       { name: 'to', type: 'json', schema: Pos, description: 'path: 行きたいマス' },
       { name: 'from', type: 'json', schema: Pos, description: 'path・sight・lane: 出発・目の位置の足のマス（既定は足）' },
       { name: 'target', type: 'json', schema: z.union([Pos, z.string().max(64), z.number()]), description: 'sight: ブロック {x,y,z} か生き物 "#id"' },
@@ -129,6 +131,14 @@ export async function runProbe(bot: any, input: ProbeInput): Promise<{ success: 
       const found = endermanDenCandidates(bot as any, { limit: 8 });
       const lines = found.map(c => `入口 (${c.entrance.x},${c.entrance.y},${c.entrance.z}) 向き ${c.direction}・見通し ${c.sightDistance}m・未掘削 ${c.remaining}/4${c.penalties.length ? '（' + c.penalties.join('、') + '）' : ''}`);
       return answer({ v: 1, kind: 'den', text: found.length ? `横穴の候補 ${found.length} 件: ${lines.join(' / ')}` : '横穴を掘れる壁の候補は見つからない（半径内に、4 マスを掘れて溶岩・空洞に開かず入口から外が見える壁が無い）', candidates: found.map(c => ({ entrance: c.entrance, direction: c.direction, dig: c.dig, wait: c.wait, outside: c.outside, sightDistance: c.sightDistance, distance: c.distance, remaining: c.remaining, score: c.score, penalties: c.penalties })) } as any);
+    }
+    case 'roofsite': {
+      const report = endermanRoofSites(bot, clampRadius(input.radius, 4, 24, 16));
+      const lines = report.sites.map(s => `(${s.cell.x},${s.cell.y},${s.cell.z}) 目の見えるエンダーマン ${s.seen} 体・ブロック ${s.blocks}・${s.distance}m`);
+      const text = !report.sites.length ? `半径内に屋根を作れる所が無い（エンダーマン ${report.endermen} 体が 64m 内に見えている）`
+        : report.sites[0].seen === 0 ? `屋根を作れる所はあるが、どこからも 8〜48m に目の見えるエンダーマンがいない（64m 内に ${report.endermen} 体）。開けた所・高い所へ動くか、時間をおく: ${lines.slice(0, 3).join(' / ')}`
+          : `屋根の場所の候補（目の見える数の多い順）: ${lines.join(' / ')}`;
+      return answer({ v: 1, kind: 'roofsite', text, endermen: report.endermen, sites: report.sites } as any);
     }
     case 'worksite': {
       if (!input.target || typeof input.target !== 'object') return bad('worksite には target のブロック座標が要る');
