@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { actionLeaseStatus, actionSignal, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, reservationOf, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
+import { actionLeaseStatus, actionSignal, activeActionCapabilities, cancelCapability, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, reservationOf, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
 import { isHeadCombatActive, isHeadCombatRunning } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
@@ -179,6 +179,10 @@ export interface FloorState {
   retreat: RetreatState; busy: 'eat' | 'armor' | 'flee' | null; retryAt: number; engagements: { eat: number; armor: number; flee?: number; fleeRefused?: number };
   /** When each flee episode of the last 20 s began (the flee's own allowance). */
   fleeStarts?: number[];
+  /** The meal being eaten: whether it is a mending one (its danger rule, `mealDanger`) and whether the dragon's danger has cut it. */
+  meal?: { mend: boolean; cut?: string };
+  /** When the dragon's danger last cut a meal (one cut in MEAL_CUT_GAP_MS). */
+  mealCutAt?: number;
   fleeEpisode?: FleeEpisode;
   /** No new episode before this (the rest after one) and no ground reading before this (the cache after a refusal). */
   fleeRestUntil?: number;
@@ -415,17 +419,33 @@ const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spi
 const MEND_HOSTILE_NEAR = 8;
 const MEND_FIREBALL_NEAR = 40;
 const TOP_UP_FOOD = 14;
+/** The shortest time between two meals the dragon's danger cuts (`installFloorReflexes`). */
+const MEAL_CUT_GAP_MS = 5000;
 function mendingMeal(bot: FloorBody, health: number, food: number): boolean {
   // Unhurt too, once the bar is down to TOP_UP_FOOD: autoEat skips a walking body until food 6 (and sprint needs food above 6), so the walk would spend the run hungry.
   if (!((health < 20 && food < 20) || food <= TOP_UP_FOOD)) return false;
+  return mealDanger(bot, true) === null;
+}
+/**
+ * What of the dragon would strike a meal now, or null: its breath, a fireball's line or its boxes reaching the body (`dragonHazards`), and for a
+ * mending meal also a dragon fireball flying within MEND_FIREBALL_NEAR. Read when a meal is chosen and again on every tick while it is eaten
+ * (`installFloorReflexes`: the meal is cut and the dragon's retreat comes next).
+ */
+export function mealDanger(bot: FloorBody, mend: boolean): string | null {
   try {
-    if (dragonHazards(bot).length) return false;
+    const hazards = dragonHazards(bot);
+    if (hazards.length) return hazards.map(hazard => hazard.why).join('・');
+    if (!mend) return null;
     const at = bot.entity?.position;
     for (const entity of Object.values((bot as unknown as { entities?: Record<string, any> }).entities ?? {})) {
-      if (entity?.name === 'dragon_fireball' && at && entity.position?.distanceTo?.(at) <= MEND_FIREBALL_NEAR) return false;
+      if (entity?.name === 'dragon_fireball' && at && entity.position?.distanceTo?.(at) <= MEND_FIREBALL_NEAR) return `竜の火の玉が${MEND_FIREBALL_NEAR}m内`;
     }
-  } catch { return false; }
-  return true;
+  } catch { return mend ? '竜の危険が読めない' : null; }
+  return null;
+}
+/** A meal that cannot wait (starving, or nearly dead with hunger to fill), by the mode's own test; every other meal of the body is a mending one. */
+function criticalMeal(health: number, food: number, wide: boolean): boolean {
+  return (food <= SELF_EAT_FOOD || health <= SELF_EAT_HEALTH) && (wide ? eatIsCritical(health, food) : (food <= 6 || (health <= 12 && food < 18)));
 }
 /**
  * Food to eat now, or null; never with an enemy at arm's length (standing to eat there killed the body, L18).
@@ -437,12 +457,11 @@ function mendingMeal(bot: FloorBody, health: number, food: number): boolean {
  */
 export function floorEatChoice(bot: FloorBody, wide = true): Item | null {
   const health = bot.health ?? 20, food = bot.food ?? 20;
-  const mend = wide && mendingMeal(bot, health, food);
-  if (!(food <= SELF_EAT_FOOD || health <= SELF_EAT_HEALTH || mend)) return null;
-  if (wide && !mend) {
-    // Nearly dead with food 18 or more: a meal gains next to nothing.
-    if (!eatIsCritical(health, food)) return null;
-  } else if (!wide && !(food <= 6 || (health <= 12 && food < 18))) return null;
+  // The critical meal first (nearly dead with food 18 or more gains next to nothing): it keeps its raw meat and rotten flesh, its 5 m and its
+  // danger rule; only a meal that is not critical is a mending one, cooked food only (the top-up at food 14 had taken the starving body's last raw meal away).
+  const critical = criticalMeal(health, food, wide);
+  const mend = wide && !critical && mendingMeal(bot, health, food);
+  if (!critical && !mend) return null;
   if (bot.entity?.isInLava || hostileWithin(bot, mend ? MEND_HOSTILE_NEAR : HOSTILE_NEAR, wide, wide)) return null;
   let items = (bot.inventory?.items() ?? []).filter(item => (FALLBACK_FOOD_POINTS[item.name] ?? 0) > 0 && !NEVER_EAT.has(item.name)
     && (item.name !== 'rotten_flesh' || food <= 6) && !(mend && (RAW_FOOD.has(item.name) || item.name === 'rotten_flesh')));
@@ -2440,6 +2459,18 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       return;
     }
     if (outcome === 'released') { state.retreat.done = true; state.retreat.release?.(); return; }
+    // A meal under way gives way to the dragon: its breath, a fireball's line or its boxes come (or, for a mending meal, a fireball flies near)
+    // after the meal was chosen, and the meal is cut, so the dragon's retreat runs at the next tick (Codex review of the 4th release, 4).
+    // At most one cut in MEAL_CUT_GAP_MS: a starving body with no way out of the danger eats its next meal to the end (as before) instead of
+    // being cut on every tick.
+    if (state.busy === 'eat' && state.meal && !state.meal.cut && config.retreat && isEnd(bot) && now() - (state.mealCutAt ?? -Infinity) >= MEAL_CUT_GAP_MS) {
+      const danger = mealDanger(bot, state.meal.mend);
+      if (danger) {
+        state.meal.cut = danger; state.mealCutAt = now();
+        log.warn(`🐉 食事を止める: ${danger}`);
+        cancelCapability(bot, 'floor-eat', 'floor-dragon');
+      }
+    }
     if (state.retreat.engaged || state.busy) return;
     // The End: out of the dragon's breath, fireball line and perch boxes, whatever the planner is doing (a fight with the dragon included).
     if (dragonTick()) return;
@@ -2510,10 +2541,21 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       // Starving or at 6 health or less the meal is not metered (floorBudget.ts): only a short backoff after one that failed.
       if (budget && !budget.allow('eat', bot.health ?? 20, bot.food ?? 20)) return;
       state.busy = 'eat'; state.engagements.eat++;
+      const meal = state.meal = { mend: !criticalMeal(bot.health ?? 20, bot.food ?? 20, config.wideThreats) } as NonNullable<FloorState['meal']>;
       log.info(`🍖 食べる: ${food.name}（体力 ${bot.health} / 満腹度 ${bot.food}）`);
       const held = bot.heldItem;
       void takeNoted('eat', `食事（${food.name}）`, 'floor-eat', FLOOR_EAT_PRIORITY, 6000, async () => {
-        try { await bot.equip!(food!, 'hand'); await bot.consume!(); }
+        try {
+          await bot.equip!(food!, 'hand');
+          // A cut meal lets go of the body at once (the abort lowers the food: deactivateItem), not when mineflayer's consume times out 2.5 s later.
+          const signal = actionSignal(bot);
+          const eating = bot.consume!();
+          eating.catch(() => undefined);
+          await (signal ? Promise.race([eating, new Promise<never>((_, reject) => {
+            if (signal.aborted) reject(new Error('meal cut'));
+            else signal.addEventListener('abort', () => reject(new Error('meal cut')), { once: true });
+          })]) : eating);
+        }
         finally {
           // What was in hand before the meal goes back, also when the meal was cut off: a fight went on with mutton in hand (run 16).
           // Found again by name: the stack the body held may have moved slots while the food was in hand.
@@ -2524,7 +2566,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         }
         return { success: true, result: `${food!.name}を食べた` };
       }, 'eat').then(result => { if (!result?.success) failed(); })
-        .catch(() => failed()).finally(() => { state.busy = null; });
+        .catch(() => failed()).finally(() => { state.busy = null; if (state.meal === meal) state.meal = undefined; });
     }
   });
 }
