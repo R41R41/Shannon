@@ -126,6 +126,8 @@ interface DigTally { dug: number; open: number; /** The cell being dug now (clea
 /** A body that has gone this far (m) beyond DIG_REACH of the block it is digging is clearly not digging it any more (the server breaks a block only within ~5.5 m of its face; the run saw 7.8 m): checked this often. */
 export const DIG_DRIFT_MARGIN = 1;
 export const DIG_DRIFT_CHECK_MS = 200;
+/** The dig must be this long past the time the block takes before a body out of reach ends it (a dig that finishes in its time is let finish: the simulated server does not look at the reach). */
+export const DIG_DRIFT_OVERDUE_MS = 3000;
 
 async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promise<StepOutcome> {
   const bot = ctx.bot;
@@ -213,8 +215,8 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
         try { current = assessBreathingDig(bot, block, cell, digStarted); readFailures = 0; } catch { readFailures++; }
         if (readFailures >= 3) current = { allowed: false, airSeconds: null, returnSeconds: null, workSeconds: null, neededSeconds: null, reason: 'air_unknown', escapeWork: false };
         if (current && !current.allowed) { breathStopped = current; clearInterval(timer); resolve('breathing_work'); return; }
-        // Reach is a precondition, even before the dig timer expires. A body washed down a shaft must not wait out a long underwater dig.
-        if (eyeDistance(bot, cell) > DIG_REACH + DIG_DRIFT_MARGIN) { drifted = true; clearInterval(timer); resolve('drifted'); }
+        // only a dig that is overdue (water over the block slows it fivefold; a body washed away never finishes it) and whose body is out of reach
+        if (Date.now() - digStarted > expected + DIG_DRIFT_OVERDUE_MS && eyeDistance(bot, cell) > DIG_REACH + DIG_DRIFT_MARGIN) { drifted = true; clearInterval(timer); resolve('drifted'); }
       }, DIG_DRIFT_CHECK_MS);
       stopWatching = () => clearInterval(timer);
     });
