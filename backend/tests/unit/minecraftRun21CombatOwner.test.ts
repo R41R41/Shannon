@@ -176,8 +176,8 @@ describe('combat owner: the floor leaves the planner\'s fight alone', () => {
     expect(bot.floorReflexes.busy).toBeNull();
   });
 
-  it('eating at health 6 or less still happens while the planner fights', async () => {
-    const eat = fixture({ health: 6, food: 10, zombieAt: 9, items: [{ name: 'bread', count: 3 }] });
+  it('eating at health 5 or less still happens while the planner fights', async () => {
+    const eat = fixture({ health: 5, food: 10, zombieAt: 9, items: [{ name: 'bread', count: 3 }] });
     installFloorReflexes(eat.bot, floorConfig({}));
     markHeadCombat(eat.bot, 'attack-nearest', ['*']);
     tick(eat.bot); await settle(10);

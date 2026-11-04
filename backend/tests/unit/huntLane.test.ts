@@ -31,6 +31,13 @@ const flat = (changes: Record<string, string | null> = {}): CampReader => (x, y,
   const k = `${x},${y},${z}`, name = k in changes ? changes[k] : k === key(SPAWNER) ? 'spawner' : y < 20 ? 'stone' : 'air';
   return name === null ? null : { name, solid: !['air', 'water', 'lava', 'fire', 'soul_fire'].includes(name) };
 };
+/** A corridor with a step down into a gap at lid height. Its lower floor is two below the roof walk. */
+const lidBridge: CampReader = (x, y, z) => {
+  const name = key({ x, y, z }) === key(SPAWNER) ? 'spawner'
+    : x >= -5 && x <= 6 && z >= 1 && z <= 3 && y >= (x <= 4 ? 21 : 22) && y <= 24 ? 'air' : 'stone';
+  return { name, solid: name !== 'air' };
+};
+const BRIDGE_FROM = { x: 5, y: 22, z: 2 };
 
 describe('laneReport: read-only lane geometry and counts', () => {
   it('counts two open cells per feet layer, without requiring a floor, and counts columns only once', () => {
@@ -263,6 +270,53 @@ describe('laneReport: read-only lane geometry and counts', () => {
     expect(east(read).build.some(p => p.standAt)).toBe(true);
   });
 
+  it('reaches later footings across a floor gap by walking on preceding projected lids', () => {
+    const c = east(lidBridge, BRIDGE_FROM), far = at(c, { x: -4, y: 21, z: 2 });
+    expect(far.standAt).not.toBeNull(); expect(far.walk).toBeGreaterThan(0);
+    expect(standableAt(lidBridge, far.standAt!).why).toBe('no_floor');
+    const floor = { ...far.standAt!, y: far.standAt!.y - 1 };
+    const earlier = c.build.slice(0, c.build.indexOf(far));
+    expect(earlier.some(p => key(p.at) === key(floor) && p.standAt !== null)).toBe(true);
+    expect(lidBridge(floor.x, floor.y, floor.z)?.name).toBe('air');
+    const prior = new Set(earlier.filter(p => p.standAt && !p.blockedByCreature && p.at.state === 'air').map(p => key(p.at)));
+    const projected: CampReader = (x, y, z) => prior.has(key({ x, y, z })) ? { name: 'cobblestone', solid: true } : lidBridge(x, y, z);
+    expect(standableAt(projected, far.standAt!).ok).toBe(true);
+    // An uninterrupted chain of earlier lids connects the raised origin to that footing.
+    for (let x = far.standAt!.x; x <= 4; x++) expect(prior.has(key({ x, y: 21, z: far.standAt!.z }))).toBe(true);
+  });
+
+  it('never stands on or routes over a future lid, or one whose earlier placement is creature-blocked', () => {
+    const report = laneReport(lidBridge, SPAWNER, BRIDGE_FROM, { entities: [
+      { id: 90, name: 'blaze', position: { x: 4.5, y: 21, z: 2.5 }, width: 0.6, height: 0.8 },
+    ] });
+    const c = report.candidates.find(c => c.direction === 'east')!, projected = new Set<string>();
+    const planned = new Set(c.build.map(p => key(p.at)));
+    let newFloors = 0;
+    for (const p of c.build) {
+      if (p.standAt) {
+        const floor = { ...p.standAt, y: p.standAt.y - 1 };
+        if (planned.has(key(floor))) { expect(projected.has(key(floor))).toBe(true); newFloors++; }
+        const current: CampReader = (x, y, z) => projected.has(key({ x, y, z })) ? { name: 'cobblestone', solid: true } : lidBridge(x, y, z);
+        expect(standableAt(current, p.standAt).ok).toBe(true);
+        // Replay reachability using only this prefix: no future block is a floor or a body passage.
+        const future = new Set([...planned].filter(k => !projected.has(k)));
+        const seen = new Set([key(BRIDGE_FROM)]), queue = [BRIDGE_FROM];
+        for (let i = 0; i < queue.length; i++) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1, -1]) {
+          const q = { x: queue[i].x + dx, y: queue[i].y + dy, z: queue[i].z + dz };
+          if (seen.has(key(q)) || !standableAt(current, q, { ignore: future }).ok) continue;
+          const above = dy === 1 ? { ...queue[i], y: queue[i].y + 2 } : { ...q, y: q.y + 2 };
+          if (dy !== 0 && (planned.has(key(above)) || current(above.x, above.y, above.z)?.solid)) continue;
+          seen.add(key(q)); queue.push(q);
+        }
+        expect(seen.has(key(p.standAt))).toBe(true);
+      }
+      if (p.standAt && !p.blockedByCreature && p.at.state === 'air'
+        && (p.supportNow === true || (p.supportAfter && projected.has(key(p.supportAfter))))) projected.add(key(p.at));
+    }
+    expect(newFloors).toBeGreaterThan(0);
+    expect(projected.has('4,21,2')).toBe(false);
+  });
+
   it('does not cross a fire barrier to reach an otherwise safe placement footing', () => {
     const base = flat(), from = { x: 12, y: 20, z: 0 };
     const read: CampReader = (x, y, z) => x === 10 && y === 20 ? { name: 'fire', solid: false } : base(x, y, z);
@@ -301,11 +355,19 @@ describe('laneReport: read-only lane geometry and counts', () => {
       return { name, solid: !['air', 'water', 'lava', 'fire', 'soul_fire'].includes(name) };
     };
     const report = laneReport(bridge, { x: 0, y: 21, z: 0 }, { x: -2, y: 20, z: 2 });
-    const stands = report.candidates.flatMap(c => c.build).filter(p => p.standAt);
-    expect(stands.length).toBeGreaterThan(0);
-    for (const p of stands) expect(p.standAt!.x <= 0 || p.standAt!.z !== 2).toBe(true);
-    const target = report.candidates.flatMap(c => c.build).filter(p => key(p.at) === key({ x: 2, y: 22, z: -1 }));
-    for (const p of target) expect(p.standAt === null ? p.noStand === 'hazard' || p.noStand === 'out_of_reach' : p.standAt.x <= 0).toBe(true);
+    expect(report.candidates.some(c => c.build.some(p => p.standAt))).toBe(true);
+    for (const c of report.candidates) {
+      const prior = new Set<string>();
+      for (const p of c.build) {
+        if (p.standAt && p.standAt.x > 0) {
+          // A later, wider projected lid can be safe above the bridge; the original one-wide floor remains refused.
+          expect(p.standAt.y).toBeGreaterThan(20);
+          expect(prior.has(key({ ...p.standAt, y: p.standAt.y - 1 }))).toBe(true);
+        }
+        if (p.standAt && !p.blockedByCreature && p.at.state === 'air'
+          && (p.supportNow === true || (p.supportAfter && prior.has(key(p.supportAfter))))) prior.add(key(p.at));
+      }
+    }
   });
 
   it('keeps a wide room within the 16,000 characters the receipt keeps: the build rows of the plans after the first are left out', () => {

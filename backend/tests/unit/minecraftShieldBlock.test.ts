@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
+import minecraftData from 'minecraft-data';
 import { describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { flyOn, impact, installShieldBlock, shooterAt } from '../../src/services/minebot/utils/shieldBlock.js';
@@ -24,6 +26,86 @@ function shoot(bot: any, id: number, from: Vec3, velocity: Vec3, name = 'arrow')
   bot.entities[id] = { id, name, type: 'projectile', position: from.clone(), velocity: new Vec3(0, 0, 0) };
   bot._client.emit('spawn_entity', { entityId: id, velocity: { x: velocity.x, y: velocity.y, z: velocity.z } });
 }
+
+/** 1.21.11の実際のsound/inventory pluginで、パケットから通知・Itemまでを通す。接続はしない。 */
+function serverBody() {
+  const bot = body();
+  const registry = minecraftData('1.21.11');
+  Object.assign(bot, { registry, version: '1.21.11', supportFeature: registry.supportFeature, QUICK_BAR_START: 36 });
+  const require = createRequire(import.meta.url);
+  require('mineflayer/lib/plugins/inventory.js')(bot, { hideErrors: true });
+  require('mineflayer/lib/plugins/sound.js')(bot);
+  bot.quickBarSlot = 0;
+  installShieldBlock(bot);
+  const slot = (used: number | null, index = 45) => bot._client.emit('set_slot', { windowId: 0, stateId: 1, slot: index,
+    item: used === null ? { itemCount: 0 } : { itemId: registry.itemsByName.shield.id, itemCount: 1, components: [{ type: 'damage', data: used }], removeComponents: [] } });
+  // wire: node-minecraft-protocolが実際に返す形（holderの n-1。1.21.11のminecraft-dataのidより1小さい）。
+  const sound = (at = bot.entity.position, named = false, name = 'item.shield.block', wire = false) => bot._client.emit('sound_effect', {
+    sound: named ? { data: { soundName: `minecraft:${name}` } } : { soundId: registry.soundsArray.find(s => s.name === name)!.id - (wire ? 1 : 0) },
+    soundCategory: 'player', x: Math.trunc(at.x * 8), y: Math.trunc(at.y * 8), z: Math.trunc(at.z * 8), volume: 1, pitch: 1,
+  });
+  return { bot, slot, sound };
+}
+
+describe('1.21.11のサーバーが確かめた盾の受けと摩耗', () => {
+  it('火の玉を受けた成功音を数え、耐久や構えから受けた数を推測しない', () => {
+    const { bot, slot, sound } = serverBody();
+    slot(0);
+    bot.entities[7] = { id: 7, name: 'small_fireball', type: 'projectile', position: new Vec3(0.5, 65, 0.5) };
+    slot(6); // 摩耗だけでは回数や相手は分からない
+    expect(bot.shieldBlock.shieldCaught).toBe(0);
+    sound(); sound(bot.entity.position, true);
+    bot._client.emit('entity_status', { entityId: 1, entityStatus: 29 });
+    expect(bot.shieldBlock.shieldCaught).toBe(2);
+    expect(bot.shieldBlock.shieldWear).toBe(6);
+    bot._client.emit('damage_event', { entityId: 1, sourceDirectId: 8, sourceCauseId: 10 });
+    bot.health = 15; bot.emit('health');
+    expect(bot.shieldBlock.shieldMissed).toBe(1);
+    expect(bot.shieldBlock.shieldCaught).toBe(2);
+  });
+
+  it('別の位置・同じ位置の別人・盾の無効化音は自分の受けにしない', () => {
+    const { bot, sound } = serverBody();
+    sound(new Vec3(1.5, 64, 0.5));
+    sound(bot.entity.position, false, 'item.shield.break');
+    bot.entities[2] = { id: 2, type: 'player', position: bot.entity.position.clone() };
+    sound();
+    expect(bot.shieldBlock.shieldCaught).toBe(0);
+    delete bot.entities[2];
+    bot.entity.position = new Vec3(-0.54, 64, -0.54);
+    sound(); // 負座標でもパケットの1/8マス丸めを許す
+    expect(bot.shieldBlock.shieldCaught).toBe(1);
+  });
+
+  it('ライブラリが1つ手前の音に読むidでも数え、走って1〜2tickずれた位置も自分の受けにする', () => {
+    const { bot, sound } = serverBody();
+    const heard: string[] = [];
+    bot.on('soundEffectHeard', (name: string) => heard.push(name));
+    sound(bot.entity.position, false, 'item.shield.block', true);
+    expect(heard).toEqual(['block.shelf.take_item']); // mineflayerの名前は手前の音になる
+    expect(bot.shieldBlock.shieldCaught).toBe(1);
+    sound(bot.entity.position.offset(0.45, 0, -0.3), false, 'item.shield.block', true);
+    expect(bot.shieldBlock.shieldCaught).toBe(2);
+    sound(bot.entity.position.offset(0.9, 0, 0), false, 'item.shield.block', true);
+    expect(bot.shieldBlock.shieldCaught).toBe(2);
+  });
+
+  it('破損の最後の摩耗と予備の摩耗を足し、装備・空slot・死亡・再送で消さない', () => {
+    const { bot, slot } = serverBody();
+    slot(320); // 場面以前の摩耗を足さない
+    const before = bot.shieldBlock.shieldWear;
+    slot(326); slot(326);
+    bot._client.emit('entity_status', { entityId: 1, entityStatus: 48 });
+    slot(null); slot(0); slot(6); slot(18);
+    expect(bot.shieldBlock.shieldWear - before).toBe(16 + 18);
+    // ローカルな持ち替えはserverのset_slotではない。
+    const spare = { name: 'shield', durabilityUsed: 90, slot: 45 };
+    bot.inventory.updateSlot(45, spare); slot(90); slot(96);
+    expect(bot.shieldBlock.shieldWear - before).toBe(16 + 18 + 6);
+    slot(null); bot.emit('respawn'); slot(0);
+    expect(bot.shieldBlock.shieldWear - before).toBe(40);
+  });
+});
 
 describe('what the server said of a speed is kept as it said it (the library holds an arrow leaving a bow at 1.6 as 0.0002)', () => {
   it('keeps the speed of the packet, in blocks a tick, for either form of the packet, and forgets an entity that is gone', () => {

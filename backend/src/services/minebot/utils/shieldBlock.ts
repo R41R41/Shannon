@@ -100,10 +100,12 @@ function hostileInReach(bot: ShieldBot): boolean {
 }
 
 interface ShieldBot {
+  _client?: { on(event: string, listener: (...args: any[]) => void): unknown };
   entity?: { id?: number; position: Vec3 };
   entities?: Record<string, any>;
   health?: number;
-  inventory?: { slots: Array<{ name: string } | null | undefined> };
+  inventory?: { slots: Array<{ name: string; durabilityUsed?: number; maxDurability?: number; slot?: number } | null | undefined> };
+  registry?: { version?: { '>='(version: string): boolean }; itemsByName?: { shield?: { maxDurability?: number } } };
   getEquipmentDestSlot?(destination: string): number;
   look?(yaw: number, pitch: number, force?: boolean): unknown;
   attack?(...args: unknown[]): unknown;
@@ -118,6 +120,10 @@ interface ShieldBot {
 }
 /** `raised` counts the times the shield went up; `upTicks` the ticks it was held. */
 export interface ShieldBlockState { enabled: boolean; guard: boolean; raised: number; guards: number; upTicks: number; up: boolean; last?: string;
+  /** Server-confirmed blocks (source unspecified), and small_fireball damage confirmed by a health fall; never raise/trajectory guesses. */
+  shieldCaught?: number; shieldMissed?: number;
+  /** サーバーのslot更新と左手の破損通知で確かめた摩耗の累計。持ち替え・死亡でも戻さない。 */
+  shieldWear?: number;
   /** A-6 (2, 9): the times the shield was lowered, and the times `deactivateItem` was called on the body; the handover's "kept" is read from these. */
   lowered?: number; deactivateCalls?: number }
 
@@ -135,7 +141,71 @@ function bridgeHoldsShield(bot: ShieldBot): boolean {
 
 export function installShieldBlock(bot: ShieldBot): void {
   if (bot.shieldBlock || typeof bot.on !== 'function') return;
-  const state: ShieldBlockState = bot.shieldBlock = { enabled: true, guard: true, raised: 0, guards: 0, upTicks: 0, up: false };
+  const state: ShieldBlockState = bot.shieldBlock = { enabled: true, guard: true, raised: 0, guards: 0, upTicks: 0, up: false, shieldCaught: 0, shieldMissed: 0, shieldWear: 0 };
+  // 1.21.5以降は blocks_attacks.block_sound（公式1.21.5更新履歴）。1.21.11のEntityEventには盾の29/30が無く、
+  // 受けた本人にも sound_effect が届く（位置は1/8マス単位）。mineflayerのsoundEffectHeardは使わない：
+  // node-minecraft-protocolは音のholder idを n-1 で返すが、minecraft-data 1.21.11のsoundsは1始まりで、
+  // registry.sounds[soundId] は1つ手前の音（item.shield.block の手前は block.shelf.take_item）を指しうる。
+  // 生のpacketで soundId と soundId+1 のどちらかが item.shield.block なら数え、どちらで合ったかを1度だけ記録する
+  // （ネザーで足元に棚の音は鳴らない。ずれが無い版では +1 側に盾の割れる音 item.shield.break が入りうる）。
+  // 体は走りながら受けるのでサーバーの位置と1〜2tickずれる。足元0.6マス内の成功音だけを数える。
+  // 音に攻撃元は無いので種別不明のまま。軌道・構え・摩耗を受けた回数にはしない。
+  const blockSound = bot.registry?.version?.['>=']('1.21.5') === true;
+  let soundOffsetTold = false;
+  bot._client?.on('sound_effect', packet => {
+    if (!blockSound || !bot.entity?.position) return;
+    const sounds = (bot.registry as { sounds?: Record<number, { name?: string } | undefined> } | undefined)?.sounds;
+    const inline = packet.sound?.data?.soundName as string | undefined;
+    const soundId = packet.sound ? packet.sound.soundId : packet.soundId;
+    const isBlock = (name: unknown) => String(name ?? '').replace(/^minecraft:/u, '') === 'item.shield.block';
+    const offset = inline !== undefined ? (isBlock(inline) ? 'inline' : null)
+      : typeof soundId !== 'number' ? null
+        : isBlock(sounds?.[soundId]?.name) ? '+0' : isBlock(sounds?.[soundId + 1]?.name) ? '+1' : null;
+    if (!offset) return;
+    const at = new Vec3(packet.x / 8, packet.y / 8, packet.z / 8);
+    const near = (p: Vec3) => Math.abs(p.x - at.x) <= 0.6 && Math.abs(p.y - at.y) <= 0.6 && Math.abs(p.z - at.z) <= 0.6;
+    if (!near(bot.entity.position)) return;
+    // 同じ位置の別の生き物の盾かもしれない音は帰属させない。
+    if (Object.values(bot.entities ?? {}).some(entity => entity?.position && entity.id !== bot.entity?.id
+      && !['projectile', 'object', 'orb', 'other'].includes(String(entity.type)) && near(entity.position))) return;
+    if (!soundOffsetTold) { soundOffsetTold = true; log.info(`🛡 盾で受けた音（音id ${soundId ?? '名前'}、registryの${offset}で item.shield.block）`); }
+    state.shieldCaught!++;
+  });
+  // 古い版の29は受けたentityの通知。新しい版では音だけを使い、同じ受けを二重に数えない。
+  bot._client?.on('entity_status', packet => {
+    if (packet.entityId !== bot.entity?.id) return;
+    if (!blockSound && packet.entityStatus === 29) state.shieldCaught!++;
+    // OFFHAND_BREAK=48。最後の打撃はslotのdamage更新を挟まず盾を消すので、残っていた耐久もここで足す。
+    // 単なる空slot（持ち替え・死亡・装備の初期化）は破損と推測しない。
+    const shield = bot.inventory?.slots?.[45];
+    if (packet.entityStatus === 48 && shield?.name === 'shield') {
+      const max = shield.maxDurability ?? bot.registry?.itemsByName?.shield?.maxDurability ?? 336;
+      state.shieldWear! += Math.max(0, max - Number(shield.durabilityUsed ?? 0));
+    }
+  });
+  // mineflayer inventoryのsetSlot:0はサーバーのset_slotを適用した後（old/newともPrismarine Item）。
+  // ローカルなequipのupdateSlotでは数えない。新品への持ち替えでdamageが減っても累計を減らさない。
+  bot.on('setSlot:0', (oldItem, newItem) => {
+    if ((newItem?.slot ?? oldItem?.slot) !== 45 || oldItem?.name !== 'shield' || newItem?.name !== 'shield') return;
+    state.shieldWear! += Math.max(0, Number(newItem.durabilityUsed ?? 0) - Number(oldItem.durabilityUsed ?? 0));
+  });
+  // damage_event's sourceDirectId is the damaging entity's id + 1 (sourceCauseId is the shooter, not its ball).
+  // Only a known small_fireball followed by a health fall counts. Mixed/absorption-only/late or unknown-source notices
+  // are left uncounted: neither entityHurt nor a shield being up proves a fireball cost health. Clear at each tick
+  // so a notice with no health update cannot be paired with a later burn. This deliberately undercounts ambiguous batches.
+  let health = Number(bot.health ?? 20);
+  const hurts: boolean[] = [];
+  bot._client?.on('damage_event', packet => {
+    if (packet.entityId !== bot.entity?.id) return;
+    hurts.push(bot.entities?.[packet.sourceDirectId - 1]?.name === 'small_fireball');
+  });
+  bot.on('health', () => {
+    const now = Number(bot.health ?? health);
+    if (now < health && hurts.length === 1 && hurts[0]) state.shieldMissed!++;
+    health = now; hurts.length = 0;
+  });
+  bot.on('physicsTick', () => { hurts.length = 0; });
+  bot.on('respawn', () => { health = Number(bot.health ?? 20); hurts.length = 0; });
   // The body's own blow goes out from behind the raised shield (S2, 2026-11-03, lab: a still golem struck eight times with the shield up, down and up again lost 40 of 100 each way; the old
   // note that the server refuses such a blow was wrong). Lowering it for the blow left a five-tick gap at each blow.
   installToldVelocity(bot as any);

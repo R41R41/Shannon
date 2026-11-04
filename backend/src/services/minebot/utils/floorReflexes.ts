@@ -457,6 +457,8 @@ function criticalMeal(health: number, food: number, wide: boolean): boolean {
  */
 export function floorEatChoice(bot: FloorBody, wide = true): Item | null {
   const health = bot.health ?? 20, food = bot.food ?? 20;
+  // 戦う印がある間は cover/flee と同じく体力5より上で待つ。射線の中の食事で退きを切らず、隠れた先の食事は頭が選ぶ。
+  if (isHeadCombatActive(bot)) return null;
   // The critical meal first (nearly dead with food 18 or more gains next to nothing): it keeps its raw meat and rotten flesh, its 5 m and its
   // danger rule; only a meal that is not critical is a mending one, cooked food only (the top-up at food 14 had taken the starving body's last raw meal away).
   const critical = criticalMeal(health, food, wide);
