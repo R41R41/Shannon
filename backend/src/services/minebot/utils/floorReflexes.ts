@@ -1599,6 +1599,11 @@ function lineChoice(bot: FloorBody, read: ReturnType<typeof bodyReader>, closed:
   const at = centreOf(feet);
   const origins = [at.offset(0, 1.62, 0), at.offset(0, 0.9, 0)];
   const cells = new Map<string, { cell: { x: number; y: number; z: number }; near: number }>();
+  // The body's own cells, its box sampled as the place hand does (utils/primitives/place bodyCells): standing across two cells, the other one is its own too
+  // (S2 lab raid2: the line tried the feet's neighbour four times, the place hand refused it each time, and the body burned).
+  const pos = bot.entity?.position ?? at;
+  const own = new Set<string>();
+  for (const dx of [-0.3, 0.3]) for (const dz of [-0.3, 0.3]) for (const dy of [0, 0.9, 1.79]) own.add(`${Math.floor(pos.x + dx)},${Math.floor(pos.y + dy)},${Math.floor(pos.z + dz)}`);
   for (const { entity } of watching) {
     const eyes = entity.position.offset(0, (entity.height ?? 1.8) * 0.85, 0);
     for (const from of origins) {
@@ -1608,8 +1613,8 @@ function lineChoice(bot: FloorBody, read: ReturnType<typeof bodyReader>, closed:
       for (let s = 0.25; s <= LINE_REACH && s < span; s += 0.25) {
         const p = from.plus(step.scaled(s));
         const cell = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
-        if (cell.x === feet.x && cell.z === feet.z && (cell.y === feet.y || cell.y === feet.y + 1)) continue;
         const key = `${cell.x},${cell.y},${cell.z}`, old = cells.get(key);
+        if (own.has(key) || (cell.x === feet.x && cell.z === feet.z && (cell.y === feet.y || cell.y === feet.y + 1))) continue;
         if (!old || s < old.near) cells.set(key, { cell, near: s });
       }
     }
