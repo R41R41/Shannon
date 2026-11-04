@@ -336,4 +336,124 @@ const m6 = (crystals: boolean) => async () => {
 };
 scenes.m6_landing_c10 = m6(true);
 scenes.m6_landing_c0 = m6(false);
+
+// ----- M6w: where to wait (crystals kept) -----
+// The M6 reset loop with the waiting place as the variable, no resistance (iron armour, natural regeneration on): the damage taken while waiting, and the
+// times of phase 2, 3 and the perch for the walk to the bed stand. DragonHoldingPatternPhase.findNewTarget: at each path end 1/(crystals+3) lands; otherwise
+// a player near the podium is strafed with 1/((dist^2 / 512) + 2) or 1/(crystals + 2): the farther the wait, the fewer strafes (M6: each strafe ~25 s).
+/** The top of the ground at a column (feet height: solid below, two air above), searched from g+16 down to g-24; null when the client has nothing there. */
+function m456Ground(x: number, z: number): number | null {
+  for (let y = g + 16; y >= g - 24; y--) {
+    const below = actor.blockAt(new Vec3(x, y - 1, z)), at = actor.blockAt(new Vec3(x, y, z)), above = actor.blockAt(new Vec3(x, y + 1, z));
+    if (below && below.boundingBox === 'block' && at && at.boundingBox === 'empty' && above && above.boundingBox === 'empty') return y;
+  }
+  return null;
+}
+type M6wPlace = { note: string; place: () => Promise<P3 | null> };
+const M6W_BED_STAND = { x: 0.5, z: 10.7 }; // the M4 stand: 1.2 m behind a 3-high obsidian column at (0, ., 9); the head comes down about 6.5 m out
+const m6wPlaces: Record<string, M6wPlace> = {
+  fountain: { note: 'in the exit portal basin behind the bedrock pillar (speedrun guide: stand in the centre of the exit portal)', place: async () => ({ x: 0.5, y: g, z: 2.5 }) },
+  shadow: { note: 'the M4 stand: behind a 3-high obsidian column 9 m out, where the beds go (wait by the bed table, behind a pillar)', place: async () => {
+    const y = m456Ground(0, 9); if (y === null) return null;
+    await ask(`${END} fill 0 ${y} 9 0 ${y + 2} 9 obsidian`);
+    const sy = m456Ground(0, 10); return sy === null ? null : { x: M6W_BED_STAND.x, y: sy, z: M6W_BED_STAND.z };
+  } },
+  mid25: { note: '25 m out on the island, between the podium and the spike ring', place: async () => { const y = m456Ground(0, 25); return y === null ? null : { x: 0.5, y, z: 25.5 }; } },
+  far60: { note: '60 m out, past the spike ring (speedrun forum: go back as far as you can while you still see the dragon)', place: async () => {
+    for (const z of [60, 55, 50, 65]) { const y = m456Ground(0, z); if (y !== null) return { x: 0.5, y, z: z + 0.5 }; }
+    return null;
+  } },
+};
+const m6w = (key: string) => async () => {
+  const where = m6wPlaces[key];
+  // The body keeps its own reflexes (it steps out of a breath cloud, as it would in a run): s7w1 (11/5) held the dragon reflex off and put the body back within
+  // 1.5 m every time, and it died 99 times in the clouds of the strafe fireballs ("killed by Ender Dragon using magic") until the client timed out.
+  // s7w3: with the reflexes on it still died 24 times in one fountain wait, and the respawn churn broke the client. So Resistance IV (80 % off
+  // everything, armour first): the health lost is counted x5 as the unprotected loss, and the body lives to give the next samples.
+  const RESIST = `effect give ${ACTOR} minecraft:resistance 99999 3 true`, RESIST_FACTOR = 5;
+  await protect(false); releaseReflex(); await park(false);
+  await ask(RESIST);
+  await wearIron();
+  await m456Regen(true);
+  const RATE = 60, WALL_MS = 900_000, CAP_TICKS = 20 * 600;
+  await ask(`${END} tp ${ACTOR} 0.5 ${g + 2} 10.5`); await sleep(1500); // near the middle first, so the columns looked at are loaded
+  const STAND = await where.place();
+  if (!STAND) return { place: key, error: 'no ground found for the waiting place' };
+  const bedStandGround = m456Ground(0, 10);
+  const bedStand = bedStandGround === null ? null : { x: M6W_BED_STAND.x, y: bedStandGround, z: M6W_BED_STAND.z };
+  const walk = bedStand ? Math.hypot(STAND.x - bedStand.x, STAND.z - bedStand.z) : null;
+  const rateAnswer = (await ask(`tick rate ${RATE}`)).replace(/\s+/gu, ' ').slice(0, 120);
+  let age = Number((actor as any).time?.age ?? 0);
+  const onTime = () => { age = Number((actor as any).time?.age ?? age); };
+  actor.on('time', onTime);
+  let damage = 0, lastHealth = Number(actor.health), heals = 0;
+  const onHealth = () => { const h = Number(actor.health); if (h < lastHealth) damage += lastHealth - h; lastHealth = h; };
+  actor.on('health', onHealth);
+  const deaths0 = actorDeaths;
+  const samples: Array<Record<string, any>> = [];
+  const started = Date.now();
+  let displaced = 0, fell = 0;
+  try {
+    while (Date.now() - started < WALL_MS) {
+      await ask(`${END} tp ${ACTOR} ${STAND.x} ${STAND.y} ${STAND.z}`);
+      await ask(`effect give ${ACTOR} minecraft:saturation 1 4 true`);
+      await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 0`);
+      await ask(`${END} tp ${DRAGON} 0 128 0`); await still();
+      await ask(`${END} data modify entity ${DRAGON} Health set value 200.0f`);
+      const t0 = age, damage0 = damage, heals0 = heals, disp0 = displaced, deathsAt = actorDeaths;
+      const firstAt: Record<number, number> = {};
+      const seen: number[] = [];
+      let last: number | null = null, damageAtLanding: number | null = null, approachYaw: number | null = null, perchYaw: number | null = null;
+      let wallCut = false, diedHandled = false;
+      while (true) {
+        await sleep(100);
+        const d = dragonEntity(), p = phaseNow();
+        if (p !== null && p !== last) {
+          seen.push(p); last = p;
+          if (firstAt[p] === undefined) {
+            firstAt[p] = age - t0;
+            if (p === 3) { damageAtLanding = damage - damage0; approachYaw = d ? d.yaw : null; }
+            if ([5, 6, 7].includes(p)) perchYaw = d ? d.yaw : null;
+          }
+        }
+        if (actorDeaths > deathsAt && !diedHandled) { diedHandled = true; await sleep(2500); await ask(RESIST); void ask(`${END} tp ${ACTOR} ${STAND.x} ${STAND.y} ${STAND.z}`); await sleep(500); lastHealth = Number(actor.health); }
+        if (Number(actor.health) > 0 && Number(actor.health) < 8) { heals++; void ask(`effect give ${ACTOR} minecraft:instant_health 1 1 true`); await sleep(300); }
+        const at = actor.entity.position;
+        if (at.y < STAND.y - 4) fell++;
+        if (Math.hypot(at.x - STAND.x, at.z - STAND.z) > 8 || at.y < STAND.y - 6 || at.y > STAND.y + 12) { displaced++; void ask(`${END} tp ${ACTOR} ${STAND.x} ${STAND.y} ${STAND.z}`); await sleep(300); }
+        if ([5, 6, 7].some(x => firstAt[x] !== undefined) || age - t0 > CAP_TICKS) break;
+        if (firstAt[3] !== undefined && age - t0 - firstAt[3] > 20 * 40) break;
+        if (Date.now() - started > WALL_MS) { wallCut = true; break; }
+      }
+      if (wallCut && firstAt[3] === undefined) break; // a sample cut by the wall clock is not a sample
+      const perch = [5, 6, 7].map(x => firstAt[x]).filter((x): x is number => x !== undefined);
+      // the head's bearing at the perch against the bearing to the waiting place (mineflayer yaw 0 = +z, head at (sin yaw, cos yaw))
+      const bearing = Math.atan2(STAND.x - 0.5, STAND.z - 0.5);
+      const headOff = (yaw: number | null) => yaw === null ? null : round(Math.abs(((yaw - bearing) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI) * 180 / Math.PI, 0);
+      const row = { i: samples.length, toApproach: firstAt[2] !== undefined ? firstAt[2] / 20 : null, toLanding: firstAt[3] !== undefined ? firstAt[3] / 20 : null,
+        toPerch: perch.length ? Math.min(...perch) / 20 : null, strafes: seen.filter(p => p === 1).length, charges: seen.filter(p => p === 8).length,
+        damageWaiting: round((damageAtLanding ?? (damage - damage0)) * RESIST_FACTOR, 1), damageToPerch: round((damage - damage0) * RESIST_FACTOR, 1), heals: heals - heals0, deaths: actorDeaths - deathsAt, displaced: displaced - disp0,
+        headFromPlaceDeg: headOff(perchYaw ?? approachYaw), gameSeconds: (age - t0) / 20, censored: firstAt[3] === undefined, phases: seen.join(',') };
+      samples.push(row);
+      log(`M6W ${key} #${row.i}: ${JSON.stringify(row)}`);
+    }
+  } finally {
+    actor.removeListener('time', onTime); actor.removeListener('health', onHealth);
+    await ask('tick rate 20');
+  }
+  const landed = samples.filter(s => !s.censored);
+  const over4 = samples.filter(s => s.censored ? s.gameSeconds > 240 : s.toLanding > 240).length;
+  // the walk to the bed stand: sprint 5.612 m/s (no pearls); in time when it ends no later than 2 s into phase 3 (the first bursts want the head still coming down)
+  const need = walk === null ? null : walk / 5.612;
+  const withApproach = landed.filter(s => s.toApproach !== null);
+  const inTime = need === null ? 0 : withApproach.filter(s => s.toApproach + need <= s.toLanding + 2).length;
+  const sum = (k: string) => samples.reduce((a, s) => a + Number(s[k] ?? 0), 0);
+  return { place: key, note: where.note, damageNote: `health lost under Resistance IV x${RESIST_FACTOR} (iron armour on)`, stand: STAND, bedStand, walkMetres: walk === null ? null : round(walk, 1), sprintSeconds: need === null ? null : round(need, 1), rate: RATE, rateAnswer,
+    samples, toLanding: waitSummary(landed.map(s => Number(s.toLanding)), samples.length - landed.length), over4min: `${over4}/${samples.length}`,
+    approachToLanding: waitSummary(withApproach.map(s => Number(s.toLanding) - Number(s.toApproach))), walkInTime: need === null ? null : `${inTime}/${withApproach.length}`,
+    damagePerMinuteWaiting: round(sum('damageWaiting') / Math.max(1, samples.reduce((a, s) => a + Number(s.toLanding ?? s.gameSeconds), 0) / 60), 2),
+    damageWaiting: waitSummary(samples.map(s => Number(s.damageWaiting))), heals: sum('heals'), deaths: actorDeaths - deaths0, displaced: sum('displaced'), fell,
+    strafesMean: round(sum('strafes') / Math.max(1, samples.length), 2), headFromPlaceDeg: waitSummary(landed.map(s => Number(s.headFromPlaceDeg)).filter(Number.isFinite)) };
+};
+for (const key of Object.keys(m6wPlaces)) scenes[`m6w_${key}`] = m6w(key);
 // ===== end S7 M4-M6 =====
