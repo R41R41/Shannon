@@ -581,6 +581,15 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
         if (!laid.confirmed) scaffoldUnconfirmed = true;   // the world did not show it in a block update: walked on, not counted
       }
     }
+    // Run 62 (1,846 and 1,856 s, two stairs down at y 5 stopped no_floor): the next foothold opened onto a cave deeper than a harmless fall. A player lays
+    // that step from the blocks carried and goes on down; a step that cannot be laid (no canPlace block, no face, out of reach) stays the stop below.
+    if (down && placeOrder.length) {
+      const under = blockAt(bot, plan.floor);
+      if (under && !solid(under) && !liquidKind(under) && floorDrop(bot as never, plan.floor, down) === null) {
+        const laid = await layCell(plan.floor);
+        if (laid.ok && !laid.confirmed) scaffoldUnconfirmed = true;
+      }
+    }
     // Run 47: a stair down into a cave (the next foothold is air with rock one or two cells under it) is taken as a fall of at most three, which does no harm; up, and onto liquid, magma or a drop
     // beyond that, it stays a stop.
     const extra = floorDrop(bot as never, plan.floor, down);

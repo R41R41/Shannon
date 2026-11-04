@@ -18,7 +18,7 @@ import { assessBreathingWork } from '../breathingWork.js';
 
 /**
  * dig: the cells in order (design mb-llm-centric 2.3). The tool is the one asked for, else the quickest carried that makes the block
- * drop; none is made, none is placed, no way round is dug. It stops, saying exactly why, at a cell it cannot reach, one nothing can
+ * drop; none is made, none is placed, no way round is dug (only, with `openSight`, the one or two blocks hiding a cell). It stops, saying exactly why, at a cell it cannot reach, one nothing can
  * break, one that needs a tool not carried, a chest or bed or furnace (it may be a village's: `take` digs it), one that would let a
  * shut-out hostile at the body (`exposeOk` digs it), and (the safety rules that stay) one that would let lava onto the body or drop the
  * body a dangerous height. A cell already empty is said and passed.
@@ -30,6 +30,27 @@ export interface DigArgs {
    * collision box to the feet). Without it such a cell is "already open" and nothing is dug. Not a hand's field: go's climb sets it for its floor.
    */
   thin?: boolean;
+  /**
+   * Run 62 (282–667 s, the village's beds: not_visible six times, each a bed or planks behind one cobblestone, glass pane or stair of the
+   * house wall): a cell asked for but hidden by one or two ordinary blocks within reach has those dug first, as a player breaks the wall in
+   * front of it. Each passes the same checks as a cell asked for; a chest, bed or furnace in the way still stops. Set by the planner's hand
+   * only (act): mine, go and the reflexes that dig keep their own ways round.
+   */
+  openSight?: boolean;
+}
+
+/** At most this many blocks opened in one hand to see the cells asked. */
+const MAX_OPENED = 3;
+/** The blocks between the eye and a cell asked that may be dug to see it (null: none to dig, or one that may not be dug). */
+function sightOpening(bot: any, between: Array<{ at: Cell; name: string }>, used: number): Cell[] | null {
+  if (!between.length || between.length > 2 || used + between.length > MAX_OPENED) return null;
+  for (const { at } of between) {
+    const block = blockAt(bot, at);
+    if (!block || isAirLike(block) || block.name === 'water' || block.name === 'lava' || PROTECTED_UTILITY_BLOCKS.has(block.name)) return null;
+    if (UNBREAKABLE.has(block.name) || block.diggable === false || block.hardness === null || block.hardness < 0) return null;
+    if (eyeDistance(bot, at) > DIG_REACH) return null;
+  }
+  return between.map(entry => entry.at);
 }
 
 /** Whether the planner has let this kind in: every kind (true), or the kinds it named. */
@@ -138,9 +159,15 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
   const before = new Set(Object.keys(bot.entities ?? {}).map(Number));
   const dugCells: Cell[] = [];
   const result = (outcome: StepOutcome) => ({ ...outcome, text: `${done.length ? `${done.join('、')}。` : ''}${outcome.text}` });
-  for (const cell of cells) {
+  // The cells asked, with any block dug to see one of them put just before it (openSight); those are not counted as cells of the hand.
+  const queue = [...cells];
+  const opening = new Map<string, string>();
+  for (let index = 0; index < queue.length; index++) {
+    const cell = queue[index];
+    const seeing = opening.get(cellKey(cell));
     const block = blockAt(bot, cell);
     if (!block) return result(stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell));
+    if (seeing && (isAirLike(block) || block.name === 'water' || block.name === 'lava')) continue;
     if ((isAirLike(block) && !(args.thin && block.boundingBox === 'block')) || block.name === 'water' || block.name === 'lava') { done.push(`${cellText(cell)} は既に ${cellNow(bot, cell)}（掘らずに次へ）`); tally.open++; continue; }
     if (UNBREAKABLE.has(block.name) || block.diggable === false || block.hardness === null || block.hardness < 0) {
       return result(stopped(bot, 'unbreakable', `${placeText(bot, cell)} の ${block.name} は壊せない`, cell));
@@ -175,6 +202,13 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     const position = bot.entity?.position;
     const sight = position ? blockInSight(bodyReader(bot), eyeOf(position), cell) : { visible: true, between: [] };
     if (!sight.visible) {
+      const way = args.openSight && !seeing ? sightOpening(bot, sight.between, opening.size) : null;
+      if (way) {
+        for (const at of way) opening.set(cellKey(at), `${cellText(cell)} の ${block.name} を見るため`);
+        queue.splice(index, 0, ...way);
+        index--;
+        continue;
+      }
       return result(stopped(bot, 'not_visible', `${placeText(bot, cell)} の ${block.name} が見えない：間に ${sight.between.map(b => `${cellText(b.at)} ${b.name}`).join('、') || '固いブロック'}（目から${distance.toFixed(1)}m）`, cell));
     }
     const lava = lavaReleasedBy(bot, vecOf(cell));
@@ -245,13 +279,13 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       return result(stopped(bot, 'dig_failed', `${placeText(bot, cell)} の ${block.name} を掘れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}（今 ${cellNow(bot, cell)}）`, cell));
     } finally { stopWatching(); if (guardState && guardState.allowAt === cellKey(cell)) guardState.allowAt = undefined; }
     dugCells.push(cell);
-    tally.dug++;
+    if (!seeing) tally.dug++;
     tally.current = null;
     await wait(ctx, 150);
     const now = blockAt(bot, cell);
     const refilled = now && !isAirLike(now) && now.name !== 'water' && now.name !== 'lava' ? `（掘った後、今は ${now.name}: 上から落ちてきた）` : now && (now.name === 'water' || now.name === 'lava') ? `（掘った後、${now.name} が流れ込んだ）` : '';
     const left = usesLeft(bot.heldItem);
-    done.push(`${cellText(cell)} ${block.name} を掘った（${tool.held}、${((Date.now() - started) / 1000).toFixed(1)}秒${left !== null && left <= 10 ? `、${bot.heldItem?.name} 残り${left}回` : ''}${own ? `。${ownerWords(own)}` : ''}）${refilled}`);
+    done.push(`${cellText(cell)} ${block.name} を掘った（${seeing ? `${seeing}、` : ''}${tool.held}、${((Date.now() - started) / 1000).toFixed(1)}秒${left !== null && left <= 10 ? `、${bot.heldItem?.name} 残り${left}回` : ''}${own ? `。${ownerWords(own)}` : ''}）${refilled}`);
     ctx.progress?.(`${done.length}/${cells.length}`);
   }
   if (args.collect !== false && dugCells.length) {

@@ -98,7 +98,7 @@ const CLOSED: Record<string, string> = {
   unbreakable: '掘れない', no_harvest_tool: '掘れない', dig_unconfirmed: '掘れない', dig_failed: '掘れない', not_visible: '掘れない',
   occupied: '置けない', body_in_cell: '置けない', creature_in_cell: '置けない', nothing_to_set_against: '置けない', not_placed: '置けない',
   not_set: '置けない', already_filled: '置けない', not_poured: '置けない', not_lit: '置けない', not_filled: '置けない', no_floor: '足場が無い',
-  inventory_full: '満杯', threat_exposed: '見られる', protected: '守られた物', lava_behind: '溶岩が流れ込む', footing: '足場が無い',
+  inventory_full: '満杯', threat_exposed: '見られる', protected: '守られた物', last_pickaxe_kept: '守られた物', lava_behind: '溶岩が流れ込む', footing: '足場が無い',
   timeout: '時間切れ', time_up: '時間切れ', reflex: '反射', interrupted_by_reflex: '反射', stop_if: 'stopIf',
   no_progress: '進まない', damage_taken: '被弾', fell: '落下',
   // go (2026-10-26): its stops carry the contract's own code in the line; these words only count where it stopped.

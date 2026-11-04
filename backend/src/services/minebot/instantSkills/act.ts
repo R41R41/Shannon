@@ -246,7 +246,7 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       return vertical(ctx, { dir: hand.dir!, shape: hand.shape!, toward: hand.toward, toY: hand.toY!, canDig: hand.canDig ?? [], maxDig: hand.maxDig, canPlace: hand.canPlace,
         maxPlace: hand.maxPlace, liquid: hand.liquid!, range: hand.range, seconds: hand.seconds });
     }
-    case 'dig': return dig(ctx, { at: cells, tool: hand.tool, collect: hand.collect, take: hand.takeOk, exposeOk: hand.exposeOk });
+    case 'dig': return dig(ctx, { at: cells, tool: hand.tool, collect: hand.collect, take: hand.takeOk, exposeOk: hand.exposeOk, openSight: true });
     case 'obsidian': {
       // The lava sources are the planner's, as cells; where to stand, where to pour, the wait, the dig and the water back are the body's (utils/primitives/obsidian).
       const problem = obsidianProblem(hand as Record<string, unknown>, spec => cellOf(ctx, hand, spec) !== null);

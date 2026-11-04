@@ -135,6 +135,23 @@ function tossWay(bot: any, feet: Cell): { name: string; dx: number; dz: number; 
 }
 
 /**
+ * The last pickaxe of each kind is never thrown (run 62, 1,756 s: the two spare stone pickaxes were thrown for room, the iron one broke at
+ * 2,403 s, and she climbed from y 39 to 67 bare-handed). Asked for all of a kind, the drop throws all but one and says why.
+ */
+const KEEP_LAST = /_pickaxe$/u;
+
+/** Throws `count` of the kind; tools (one to a slot) go the most worn first, so the one kept is the best (bot.toss takes slot order). */
+async function tossWorstFirst(bot: any, name: string, count: number): Promise<void> {
+  const entries = (bot.inventory?.items?.() ?? []).filter((item: any) => item.name === name);
+  if (typeof bot.tossStack === 'function' && entries.length > count && entries.every((item: any) => item.count === 1)) {
+    const left = (item: any) => item.maxDurability > 0 ? item.maxDurability - (item.durabilityUsed ?? 0) : Infinity;
+    for (const item of [...entries].sort((a, b) => left(a) - left(b)).slice(0, count)) await bot.tossStack(item);
+    return;
+  }
+  await bot.toss(entries[0].type, null, count);
+}
+
+/**
  * drop: throw these from the pack the way the body faces, or toward a creature (a piglin, to trade gold) or a cell first. Only
  * thrown: what lands where is the game's; a trade's goods are taken up with pickup. With no way asked, the throw is level toward the freest
  * of the four ways (`tossWay`), and the line says where the items lay (read from the item entities) and whether they are far enough not to be
@@ -164,18 +181,23 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
     }
   }
   const done: string[] = [];
+  const kept: string[] = [];
   let thrown = 0, asked = 0;
   for (const want of args.items) {
     const have = inventoryCount(bot, want.item);
     if (!have) { done.push(`${want.item} を持っていない`); continue; }
-    const count = Math.min(have, Math.max(1, Math.round(want.count ?? have)));
-    asked += Math.max(1, Math.round(want.count ?? have));
-    const item = findItem(bot, want.item);
-    try { await guard(ctx, Promise.resolve(bot.toss(item.type, null, count)), 3000); }
+    const wanted = Math.max(1, Math.round(want.count ?? have));
+    const keepOne = KEEP_LAST.test(want.item);
+    const count = Math.min(have - (keepOne ? 1 : 0), wanted);
+    if (keepOne && count < wanted) kept.push(`${want.item} の最後の 1 本は投げない（ツルハシは種類ごとに 1 本残す。今の 1 本が壊れた時の予備で、無いと素手で掘ることになる。空きが要るなら丸石・土・砂利など別の物を投げる）`);
+    if (count <= 0) continue;
+    asked += keepOne ? count : wanted;
+    try { await guard(ctx, Promise.resolve(tossWorstFirst(bot, want.item, count)), 3000); }
     catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
     thrown += Math.max(0, have - inventoryCount(bot, want.item));
     done.push(`${want.item}×${have - inventoryCount(bot, want.item)} を投げた（残り${inventoryCount(bot, want.item)}）`);
   }
+  if (kept.length && !done.length) return stopped(bot, 'last_pickaxe_kept', kept.join('。'));
   // Where the items lay: the item entities that were not there before, read after a moment (the server spawns them a tick on).
   let where = '';
   if (bot.entity?.position) {
@@ -193,6 +215,6 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
       } else if (aim) where = `。${aim.replace(/。$/u, '')}（落ちた先は読めなかった）`;
     } catch (error) { if (error instanceof StepStopped) throw error; }
   }
-  // Continue contracts (1): the items thrown (counted from the pack), of the items asked.
-  return { ok: true, text: `${done.join('、')}${where}`, progress: { unit: 'item', done: thrown, left: Math.max(0, asked - thrown) } };
+  // Continue contracts (1): the items thrown (counted from the pack), of the items asked (a kept last pickaxe is not asked).
+  return { ok: true, text: `${done.join('、')}${where}${kept.length ? `。${kept.join('。')}` : ''}`, progress: { unit: 'item', done: thrown, left: Math.max(0, asked - thrown) } };
 }
