@@ -62,16 +62,47 @@ export function chooseTool<T extends ToolLike>(block: BlockLike, items: T[], opt
   // A tool one or two uses from breaking is the last choice: the cheapest, it was picked again and again while an iron pickaxe
   // lay beside it, and a stair stopped on it five times as "durability 1" (run 17). It is still used when nothing else does the job.
   const sound = items.filter(item => !nearlyBroken(item));
-  if (sound.length < items.length) {
-    const first = pick(sound);
-    if (first.best) return first.best;
-    // The hand is the best of the sound choices: the worn tool only when it is far quicker (stone by hand is 7.5 s a block).
-    if (Number.isFinite(first.bestCost)) {
-      const any = pick(items);
-      return any.best && any.bestCost < first.bestCost / 3 ? any.best : null;
+  const byCost = (): T | null => {
+    if (sound.length < items.length) {
+      const first = pick(sound);
+      if (first.best) return first.best;
+      // The hand is the best of the sound choices: the worn tool only when it is far quicker (stone by hand is 7.5 s a block).
+      if (Number.isFinite(first.bestCost)) {
+        const any = pick(items);
+        return any.best && any.bestCost < first.bestCost / 3 ? any.best : null;
+      }
     }
+    return pick(items).best;
+  };
+  const chosen = byCost();
+  if (chosen || options.requireHarvest) return chosen;
+  return farQuickerThanHand(block, sound, options.effects);
+}
+
+/** The hand is this many times slower than a tool: the tool is used, whatever its wear is priced at. */
+export const HAND_FAR_SLOWER = 4;
+/** Under this many uses left, the tool is kept for what only it can break (obsidian), and the hand clears the way as before. */
+export const HAND_FAR_SLOWER_RESERVE = 64;
+/**
+ * end1109f22/f24 (Haiku, random worlds): with only the diamond pickaxe left, one use priced at 6 s made the bare hand (2 s) the
+ * cheaper way through netherrack (0.1 s with the pickaxe, which then had some 1,500 uses left). Every Nether go dug by hand,
+ * "掘 34" in 80 s with the pickaxe's uses unchanged, and the road search priced rock at seven times a step and ran out of time
+ * (search_timeout) looking for open ground: the walk to the fortress took 1,174 and 2,330 s. Wear is weighed between tools;
+ * a hand four times slower than a sound tool is not a saving.
+ */
+function farQuickerThanHand<T extends ToolLike>(block: BlockLike, tools: T[], effects: unknown): T | null {
+  const hand = toolCost(block, null, effects);
+  let best: T | null = null;
+  let bestCost = Infinity;
+  for (const tool of tools) {
+    const left = usesLeft(tool);
+    if (left !== null && left < HAND_FAR_SLOWER_RESERVE) continue;
+    const time = toolCost(block, tool, effects) - wearCostSeconds(tool);
+    if (!Number.isFinite(time) || !(time * HAND_FAR_SLOWER <= hand)) continue;
+    const cost = time + wearCostSeconds(tool);
+    if (cost < bestCost) { bestCost = cost; best = tool; }
   }
-  return pick(items).best;
+  return best;
 }
 
 /** Uses left before a tool breaks, or null when it does not wear (or nothing is known of it). */

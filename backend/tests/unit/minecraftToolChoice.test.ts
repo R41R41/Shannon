@@ -30,6 +30,15 @@ describe('tool choice by time and wear', () => {
     expect(pick('oak_planks', [item('iron_pickaxe'), item('stone_axe')], false)).toBe('stone_axe');
   });
 
+  it('digs netherrack with the diamond pickaxe, not the hand four times slower (end1109f22/f24)', () => {
+    expect(pick('netherrack', [item('diamond_pickaxe', 75)], false)).toBe('diamond_pickaxe');
+    expect(pick('netherrack', [item('iron_pickaxe'), item('diamond_pickaxe')], false)).toBe('iron_pickaxe');
+    // Nearly worn out: kept for what only it breaks, the hand clears the way.
+    expect(pick('netherrack', [item('diamond_pickaxe', 1561 - 40)], false)).toBe('hand');
+    expect(pick('dirt', [item('diamond_pickaxe')], false)).toBe('hand');
+    expect(pick('obsidian', [item('diamond_pickaxe', 1561 - 40)])).toBe('diamond_pickaxe');
+  });
+
   it('prices wear by material and only for things that wear', () => {
     expect(wearCostSeconds(item('iron_pickaxe'))).toBeGreaterThan(wearCostSeconds(item('stone_pickaxe')));
     expect(wearCostSeconds({ name: 'cobblestone' })).toBe(0);
