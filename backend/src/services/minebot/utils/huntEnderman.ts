@@ -341,7 +341,10 @@ export function roofSites(world: RoofWorld, around: Cell3, radius = 7, toward?: 
  */
 // end1109p09 (11/9, warped forest): the head dug warped_wart_block for the roof and held 2 of them beside netherrack×1, yet the camp counted only
 // netherrack and said missing_item about 20 times (same place, same reason). Wart blocks are whole blocks an enderman does not carry off.
-const ROOF_BLOCKS = [...BUILDING_BLOCKS.filter(name => name !== 'obsidian'), 'warped_wart_block', 'nether_wart_block'];
+// end1109p11 (11/9, warped forest): 128 shortage stops, 69 of them while the bag held enough warped_stem / warped_planks / warped_nylium /
+// shroomlight (dug, the nylium came back as nylium) that were not counted. Whole blocks all; the nylium last, an enderman can lift it.
+const ROOF_BLOCKS = [...BUILDING_BLOCKS.filter(name => name !== 'obsidian'), 'warped_wart_block', 'nether_wart_block',
+  'warped_planks', 'crimson_planks', 'warped_stem', 'crimson_stem', 'warped_hyphae', 'crimson_hyphae', 'shroomlight', 'warped_nylium', 'crimson_nylium'];
 /**
  * Every roof block carried, kinds mixed: the roof is laid one cell at a time and each cell takes whatever kind is in hand (roofBlockFor(bot, 1)),
  * so the need is met by the total. Why: end1109p09 netherrack×1 + wart blocks were told "1 種類で" and the head looped digging.
@@ -351,6 +354,22 @@ export function roofBlocksHeld(bot: { inventory?: { items?: () => Array<{ name: 
   for (const item of bot.inventory?.items?.() ?? []) if (ROOF_BLOCKS.includes(item.name)) have.set(item.name, (have.get(item.name) ?? 0) + item.count);
   const kinds = [...have].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
   return { total: kinds.reduce((sum, kind) => sum + kind.count, 0), kinds };
+}
+/**
+ * end1109p11: the roof material went on go's climbs as well (go place=cobblestone 236 times, place=cobblestone,dirt 183 times in the head's hands)
+ * and the camps after stopped missing_item. How many go laid is not in the records, so the rule is small: within ROOF_HUNT_RECENT_MS of a roof
+ * camp, and with ROOF_KEEP or fewer roof blocks held, go does not lay roof blocks (it lays the others named, or says it kept them).
+ */
+const ROOF_HUNT_RECENT_MS = 10 * 60_000;
+export const ROOF_KEEP = 10;
+const roofHuntAt = new WeakMap<object, number>();
+export function noteRoofHunt(host: object, now = Date.now()): void { roofHuntAt.set(host, now); }
+/** The names of `names` that go keeps for the roof now (above), or none. */
+export function roofBlocksKeptFromGo(host: object, bot: Parameters<typeof roofBlocksHeld>[0], names: readonly string[], now = Date.now()): string[] {
+  const at = roofHuntAt.get(host);
+  if (at === undefined || now - at > ROOF_HUNT_RECENT_MS) return [];
+  if (roofBlocksHeld(bot).total > ROOF_KEEP) return [];
+  return names.filter(name => ROOF_BLOCKS.includes(name));
 }
 export function roofBlockFor(bot: { inventory?: { items?: () => Array<{ name: string; count: number }> } }, need: number): { name: string; count: number } | null {
   const have = new Map<string, number>();

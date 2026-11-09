@@ -12,6 +12,19 @@ const FIREBALL_REACH = 8;
 
 type Hazard = { kind: 'fireball' | 'breath'; from: { position: Vec3 }; distance: number };
 
+const solid = (block: any): boolean => block?.boundingBox === 'block';
+
+/**
+ * Standing on a 1×1 column: a solid block under the feet with open air at all four sides of it and of the one below. The flee walks with
+ * the default `canPlace`, so on a column it bridged out with end stone under her feet (e04c-e04e, 11/9: all three deaths were on or on the
+ * way down a pillar). There is no walking away from a column; the act on it (climb, strike, vertical down) goes on instead.
+ */
+export function onColumn(bot: any): boolean {
+  const feet = bot?.entity?.position?.floored?.();
+  if (!feet || typeof bot.blockAt !== 'function' || !solid(bot.blockAt(feet.offset(0, -1, 0)))) return false;
+  return [-1, -2].every(dy => [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([dx, dz]) => !solid(bot.blockAt(feet.offset(dx!, dy, dz!)))));
+}
+
 class AutoAvoidDragonBreath extends ConstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
@@ -38,7 +51,7 @@ class AutoAvoidDragonBreath extends ConstantSkill {
   /** The danger this second, or null: only in the End, where the dragon's fireballs and breath are. */
   private hazard(): Hazard | null {
     const bot = this.bot as any;
-    if (!String(bot.game?.dimension ?? '').includes('the_end') || !bot.entity?.position) return null;
+    if (!String(bot.game?.dimension ?? '').includes('the_end') || !bot.entity?.position || onColumn(bot)) return null;
     const botPos: Vec3 = bot.entity.position;
     // 1. ドラゴンの火の玉（dragon_fireball）: where it will land
     for (const fireball of Object.values(bot.entities ?? {}) as any[]) {

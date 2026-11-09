@@ -37,7 +37,7 @@ export function createCommonFcaBody(bot: any, settings: { url: string; serverId:
   // Idle work (the idle pickup) asks this before it starts: a body with a command, an owner or a hold is not idle.
   bot.fcaLeaseHeld = () => loop.leaseHeld;
   const end = () => {
-    void loop.stop();
+    void loop.stop('bot_end');
     forgetLoop(settings.serverId, loop);
   };
   bot.once('end', end);
@@ -57,7 +57,7 @@ export function retirePrevious(serverId: string, loop: Pick<CommonFcaControlLoop
   liveLoops.set(serverId, loop);
   if (!previous || previous === loop || previous.stopped) return;
   logger.warn(`common FCA: the control loop of an earlier connection to ${serverId} was still open; stopping it`);
-  void previous.stop().catch(() => false);
+  void previous.stop('replaced_by_new_loop').catch(() => false);
 }
 /** A loop that stopped with its bot is no longer the server's (nor kept with its bot in memory). */
 function forgetLoop(serverId: string, loop: Pick<CommonFcaControlLoop, 'stopped' | 'stop'>): void {

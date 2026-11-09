@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { z } from 'zod';
 import { endermanRoofSites, netherrackNear, noteRoofLaid } from '../../src/services/minebot/utils/huntEndermanCamp.js';
+import { noteRoofHunt, roofBlockFor, roofBlocksHeld, roofBlocksKeptFromGo } from '../../src/services/minebot/utils/huntEnderman.js';
 import Probe, { runProbe } from '../../src/services/minebot/instantSkills/probe.js';
 
 // probe kind=roofsite (S6, 11/5): the roof sites ranked by the endermen whose eyes are seen from them. A wall to the east hides the one there from the body's own
@@ -120,8 +121,8 @@ describe('netherrackNear (h28: the kit cobblestone ran out and the shortage line
     expect(words).toContain('落ちた分は dig が拾う');
   });
   // end1109p09 (warped forest): the floor was nylium and the trees wart blocks; only netherrack was looked for.
-  it('counts nylium (dug, it drops netherrack) and wart blocks as roof sources', () => {
-    expect(netherrackNear(body({ '3,64,0': 'warped_nylium', '5,64,0': 'netherrack' }, []), 6)).toBe('。近くの warped_nylium（掘ると netherrack） (3,64,0)（3.2m）などを dig で 6 個以上掘ってから（ツルハシですぐ掘れる）');
+  it('counts nylium and wart blocks as roof sources', () => {
+    expect(netherrackNear(body({ '3,64,0': 'warped_nylium', '5,64,0': 'netherrack' }, []), 6)).toBe('。近くの warped_nylium (3,64,0)（3.2m）などを dig で 6 個以上掘ってから（ツルハシですぐ掘れる）');
     const canopy: Record<string, string> = {};
     for (let x = 2; x <= 3; x++) for (let y = 64; y <= 65; y++) for (let z = -1; z <= 1; z++) canopy[`${x},${y},${z}`] = 'warped_wart_block';
     expect(netherrackNear(body(canopy, []), 6)).toMatch(/^。ここから手の届く warped_wart_block 8 マスを 1 手で/u);
@@ -145,6 +146,23 @@ describe('netherrackNear (h28: the kit cobblestone ran out and the shortage line
     const bare = body({ '20,64,0': 'cobblestone' }, []);
     noteRoofLaid(bare, { x: 20, y: 64, z: 0 }, 'cobblestone');
     expect(netherrackNear(bare, 4)).toBe('。前に自分で張った屋根の 1 個が (20,64,0)（20m）に残る（寄れば dig 1 手で回収）');
+  });
+  // end1109p11: half the shortage stops came while the bag held stems, planks, nylium and shroomlight that were not counted.
+  it('counts stems, planks, nylium and shroomlight as roof blocks, the nylium last', () => {
+    const bag = { inventory: { items: () => [{ name: 'warped_nylium', count: 3 }, { name: 'warped_stem', count: 4 }, { name: 'warped_planks', count: 2 }, { name: 'shroomlight', count: 1 }, { name: 'torch', count: 8 }] } };
+    expect(roofBlocksHeld(bag).total).toBe(10);
+    expect(roofBlockFor(bag, 1)?.name).toBe('warped_planks');
+  });
+  // end1109p11: go's climbs spent the roof material in a hunt; with 10 or fewer roof blocks go keeps them, only within 10 minutes of a roof camp.
+  it('keeps roof blocks out of go in a hunt when 10 or fewer are held', () => {
+    const host = {};
+    const few = { inventory: { items: () => [{ name: 'cobblestone', count: 6 }, { name: 'dirt', count: 2 }] } };
+    const many = { inventory: { items: () => [{ name: 'cobblestone', count: 30 }] } };
+    expect(roofBlocksKeptFromGo(host, few, ['cobblestone', 'glass'])).toEqual([]);   // no hunt yet
+    noteRoofHunt(host, 1_000);
+    expect(roofBlocksKeptFromGo(host, few, ['cobblestone', 'glass'], 2_000)).toEqual(['cobblestone']);
+    expect(roofBlocksKeptFromGo(host, many, ['cobblestone'], 2_000)).toEqual([]);
+    expect(roofBlocksKeptFromGo(host, few, ['cobblestone'], 1_000 + 11 * 60_000)).toEqual([]);
   });
   it('says none when only buried netherrack or none is near, and nothing when nothing is short', () => {
     expect(netherrackNear(body({}, []), 4)).toBe('。6m 内に掘れる netherrack は見えない');

@@ -93,6 +93,43 @@ function gapDrop(movements: any, node: any, dx: number, dz: number, bound: numbe
   return Infinity;
 }
 
+/** What a step swum with no air above the head costs the planner, on top of the water's own cost. */
+const CEILING_SWIM_COST = 6;
+const WATER_LIKE = new Set(['water', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass', 'bubble_column']);
+
+/**
+ * A step whose head cell is water with ice or rock over it before any air: the body swims there with its
+ * breath running out, and the planner priced it like any other water. By a cold stony shore the route went
+ * under the ice sheet; the breathing reflex brought the body up at 4/20 of air, the move went on, and it
+ * dived under again (end1109s14 S9: down to 2/20 of air, the last 80 s spent there). Such a step is not
+ * closed (an underwater way may be the only one); it costs enough that open water or the ice top is taken.
+ * The planner also asks this of the cell above the feet: there the ice itself is overhead, not water, so 0.
+ */
+export function ceilingSwimStepCost(bot: { registry?: any; world?: any }): (block: { position?: { x: number; y: number; z: number } }) => number {
+  const read = bot.world?.getBlockStateId;
+  const byState = bot.registry?.blocksByStateId;
+  if (typeof read !== 'function' || !byState) return () => 0;
+  const at = new Vec3(0, 0, 0);
+  const kind = (x: number, y: number, z: number): 'water' | 'solid' | 'open' => {
+    at.x = x; at.y = y; at.z = z;
+    let block: { name?: string; boundingBox?: string } | undefined;
+    try { block = byState[read.call(bot.world, at)]; } catch { return 'open'; }
+    if (!block) return 'open';
+    if (WATER_LIKE.has(String(block.name))) return 'water';
+    return block.boundingBox === 'block' ? 'solid' : 'open';
+  };
+  return block => {
+    const p = block?.position;
+    if (!p || kind(p.x, p.y + 1, p.z) !== 'water') return 0;
+    for (let rise = 2; rise <= 6; rise++) {
+      const k = kind(p.x, p.y + rise, p.z);
+      if (k === 'open') return 0;
+      if (k === 'solid') return CEILING_SWIM_COST;
+    }
+    return 0;
+  };
+}
+
 export function setMovements(bot: CustomBot, ...profile: MovementProfile): void {
   bot.pathfinder.setMovements(buildMovements(bot, ...profile));
 }
@@ -201,6 +238,8 @@ export function buildMovements(
   (defaultMove as any).exclusionAreasStep.push(lavaBesideStepCost(bot as any));
   // Soul sand slows the body to 40%: a step onto it costs what the time costs, so a way round is taken when it is not much longer (utils/huntNetherWalk).
   (defaultMove as any).exclusionAreasStep.push(soulSandStepCost(bot as any));
+  // Water under ice or rock costs breath the planner does not count (see ceilingSwimStepCost).
+  (defaultMove as any).exclusionAreasStep.push(ceilingSwimStepCost(bot as any));
   // Things the body must not stand in, beyond what the pathfinder knows of (fire, cobweb, lava). Soul fire was
   // not among them: it was a cell to walk through, and the reflex that takes the body out of fire walked it
   // back out, so the two held it in a one-block pocket for nine minutes with every move timing out (lab

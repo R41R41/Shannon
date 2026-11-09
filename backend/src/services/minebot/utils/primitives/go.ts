@@ -27,6 +27,7 @@ import { isPerched } from '../dragonParts.js';
 import { holeUnderCentreWords, magmaAtFootprint } from '../magmaFootprint.js';
 import { airPerchHint } from '../shaftDown.js';
 import { framesAround, FRAME_SEARCH_MAX } from '../huntFrameSearch.js';
+import { ROOF_KEEP, roofBlocksKeptFromGo } from '../huntEnderman.js';
 
 const waterExitText = (bot: any, feet: Cell) => { const exit = waterExitWords(bot, feet); return exit ? `。${exit}` : ''; };
 
@@ -1100,6 +1101,12 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   /** What one search of the road is given (the stop says this long). */
   const searchSlice = args.searchMs === undefined ? Math.min(searchCap, SEARCH_SLICE_MS) : searchCap;
   const place = placeNamesOf(bot, args.canPlace);
+  // end1109p11: in a roof hunt with ROOF_KEEP or fewer roof blocks, they are kept for the roof (huntEnderman's roofBlocksKeptFromGo); the stops name them.
+  const keptForRoof = roofBlocksKeptFromGo(nativeActionHost(bot), bot, place.held);
+  if (keptForRoof.length) {
+    place.held = place.held.filter(name => !keptForRoof.includes(name));
+    place.refused.push(...keptForRoof.map(name => `${name}（屋根用に ${ROOF_KEEP} 個以下なので取っておく）`));
+  }
   // Run 62 (#21): no pickaxe and no block to climb with: no fall the body cannot climb back (a jump), the way it came first; the drop as asked is only for the stop's reason.
   const requestedDrop = limits.maxDrop;
   const stranded = strandedPack(bot, place.held);

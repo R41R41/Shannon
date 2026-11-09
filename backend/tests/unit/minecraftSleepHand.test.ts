@@ -68,12 +68,13 @@ describe('sleep: the facts before it lies down', () => {
     expect(day).toMatchObject({ ok: false, reason: 'not_night' });
     expect(day.text).toContain('夜まであと約 327 秒');
     expect(closedWord(day.reason)).toBe('夜ではない');
-    // end1109o09: far from the night the line says the day is the plan's; within a minute of it, only the seconds.
-    expect(day.text).toContain('それまでは計画の手を進める');
+    // end1109o09 / s12・s14: the day is the plan's at any distance from the night; far from it the line also says the cost of waiting.
+    expect(day.text).toContain('wait で夜を待たず、計画の手・今の道を進め');
     expect(day.text).toContain('30 分の目標の約 18%');
     const near = await sleep(ctxOf(body({ time: { timeOfDay: 12_000 } })), {});
     expect(near.text).toContain('夜まであと約 27 秒');
-    expect(near.text).not.toContain('計画の手を進める');
+    expect(near.text).toContain('wait で夜を待たず');
+    expect(near.text).not.toContain('30 分の目標');
     const storm = body({ time: { timeOfDay: 6000 }, isRaining: true, thunderState: 1 });
     skilled(storm, async () => ({ success: true, nightPassed: true, bedLeft: false }));
     expect((await sleep(ctxOf(storm), {})).ok).toBe(true);

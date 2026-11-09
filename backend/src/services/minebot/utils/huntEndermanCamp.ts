@@ -1,7 +1,7 @@
 import { Vec3 } from 'vec3';
 import pathfinder from 'mineflayer-pathfinder';
 import { ENDERMAN_ANGRY_STRIKE_HEIGHTS, ENDERMAN_EYE, ENDERMAN_LEGS, endermanLine, ENDERMAN_STARE_MS, atRoofCentre, endermanAngry, endermanStrikePoint, endermanView,
-  planRoof, roofBlockFor, roofBlocksHeld, roofCellOccupied, roofExitForSight, roofExitStep, roofInterior, roofInteriorStep, roofSites,
+  planRoof, noteRoofHunt, roofBlockFor, roofBlocksHeld, roofCellOccupied, roofExitForSight, roofExitStep, roofInterior, roofInteriorStep, roofSites,
   type EndermanLine, type EndermanView, type RoofPlan, type RoofWorld } from './huntEnderman.js';
 import { bodyReader, feetCell, type BlockReader, type Cell } from './localMap.js';
 import { huntCandidates } from './huntEndermanProbe.js';
@@ -229,6 +229,7 @@ export class EndermanCamp {
   /** What stops the hunt before anything is done: no site, or not enough to build with. Null when it can begin. */
   check(): { code: string; text: string; cause?: string } | null {
     const bot = this.ctx.bot;
+    noteRoofHunt(nativeActionHost(bot));
     if (this.plan.problems.length) {
       return { code: 'no_site', text: `ここには屋根の穴を作れない: ${this.plan.problems.join('。')}（${cellText(this.cell)}。平らな床の上か、2 マスの高さの所へ動いてから）` };
     }
@@ -242,7 +243,7 @@ export class EndermanCamp {
       return {
         code: 'missing_item',
         cause: `屋根に建築用ブロックが ${need} 個要る。あと ${need - held.total} 個（持っているのは${kinds ? ` ${kinds}` : ' なし'}）`,
-        text: `${way ? `${way}。` : ''}種類は混ぜてよい（丸石・土・ネザーラック・wart ブロックなど。黒曜石は使わない）`,
+        text: `${way ? `${way}。` : ''}種類は混ぜてよい（丸石・ネザーラック・ナイリウム・wart ブロック・幹・板など。黒曜石は使わない）`,
       };
     }
     if (String(bot.inventory?.slots?.[5]?.name ?? '') === 'carved_pumpkin') {
@@ -809,7 +810,8 @@ export class EndermanCamp {
 // end1109p09 (11/9, warped forest): the floor was warped_nylium and the trees wart blocks; only netherrack was looked for, so the line named one cell
 // 7 m off again and again. Nylium dug without silk touch drops netherrack; a wart block drops itself and the roof takes it.
 const ROOF_SOURCES = new Set(['netherrack', 'warped_nylium', 'crimson_nylium', 'warped_wart_block', 'nether_wart_block']);
-const sourceWord = (name: string) => /nylium$/u.test(name) ? `${name}（掘ると netherrack）` : name;
+// end1109p11: the nylium dug came back as nylium, not netherrack; either is a roof block, so the line names the block only.
+const sourceWord = (name: string) => name;
 export function netherrackNear(bot: any, short: number): string {
   const here = feetCell(bot);
   if (!here || short <= 0) return '';
@@ -921,7 +923,28 @@ export function roofSiteOpenness(read: BlockReader, cell: Cell): number {
  * then nearest. Read only; the planner chooses one and walks there before `fight target=enderman`. Why: in c1's warped forest the body built where it stood
  * and 1,029 of 1,037 calls found no eyes in sight (the lab, 25 minutes, six kills).
  */
+/**
+ * end1109p10: endermanRoofSites held the event loop 1.4-2.6 s, 24 times (the fight's stop line reads it up to three times; each of 300 sites
+ * completes a roof and reads a line to every enderman), and the reflexes waited behind it. The same read within ROOF_SITES_CACHE_MS from the same
+ * feet cell is given again, and the sites are read nearest first only until ROOF_SITES_BUDGET_MS (the probe's own read: ROOF_SITES_PROBE_BUDGET_MS).
+ */
+const ROOF_SITES_CACHE_MS = 2_000, ROOF_SITES_BUDGET_MS = 300, ROOF_SITES_PROBE_BUDGET_MS = 800;
+const roofSitesCache = new WeakMap<object, Map<string, { at: number; value: { sites: EndermanRoofSite[]; endermen: number } }>>();
 export function endermanRoofSites(bot: any, radius = 16, limit = 5, seenCap = Infinity, around?: Cell): { sites: EndermanRoofSite[]; endermen: number } {
+  const feetNow = feetCell(bot);
+  if (!feetNow) return { sites: [], endermen: 0 };
+  const key = [radius, limit, seenCap, around ? `${around.x},${around.y},${around.z}` : '', feetNow.x, feetNow.y, feetNow.z].join('|');
+  const now = Date.now();
+  let cache = roofSitesCache.get(bot);
+  if (!cache) { cache = new Map(); roofSitesCache.set(bot, cache); }
+  const hit = cache.get(key);
+  if (hit && now - hit.at < ROOF_SITES_CACHE_MS) return hit.value;
+  const value = readRoofSites(bot, radius, limit, seenCap, around, now + (seenCap === Infinity ? ROOF_SITES_PROBE_BUDGET_MS : ROOF_SITES_BUDGET_MS));
+  for (const [k, v] of cache) if (now - v.at >= ROOF_SITES_CACHE_MS) cache.delete(k);
+  cache.set(key, { at: now, value });
+  return value;
+}
+function readRoofSites(bot: any, radius: number, limit: number, seenCap: number, around: Cell | undefined, deadline: number): { sites: EndermanRoofSite[]; endermen: number } {
   // around: read the sites round another cell (an enderman's feet) instead of the body's; distance is then from that cell.
   const bodyFeet = feetCell(bot);
   if (!bodyFeet) return { sites: [], endermen: 0 };
@@ -946,7 +969,10 @@ export function endermanRoofSites(bot: any, radius = 16, limit = 5, seenCap = In
   // The nearest first when there are very many (each site reads a line to every enderman).
   const entities = Object.values(bot.entities ?? {});
   const occupied = (cell: Cell) => roofCellOccupied(entities, bot.entity.id, cell);
-  const sites = all.sort((a, b) => a.distance - b.distance).slice(0, 300).flatMap(site => {
+  let late = false;
+  const sites = all.sort((a, b) => a.distance - b.distance).slice(0, 300).flatMap((site, index) => {
+    // The nearest are read first; past the budget the rest are left (at least 20 are read, so a slow world still has a site to name).
+    if (late || (index >= 20 && index % 10 === 0 && Date.now() > deadline)) { late = true; return []; }
     const done = completedRoof(world, read, site.cell);
     if (!done) return [];
     const { plan, future } = done;

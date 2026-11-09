@@ -92,11 +92,17 @@ const FLEE_MAX_IN_WINDOW = 2;
 /** Kinds that hurt from afar: the flee starts earlier for them (what the legacy 16 m watch was for). */
 const SHOOTERS = new Set(['skeleton', 'stray', 'bogged', 'pillager', 'blaze', 'ghast', 'witch', 'evoker', 'breeze']);
 /**
+ * end1110r1 (11/10, 1,013 s): a witch 0.6 to 2.8 m off, health 7.3; the cover had no cell, the low-health flee ran twice, and her potions
+ * (harm, poison) reach about 10 m and hit a back that runs: 7.3 to 0.3 in six seconds of running. A witch this near is struck (26 health, a
+ * stone axe in three or four blows), not run from, whatever the shield and the health, while a blade is carried.
+ */
+const WITCH_CONTACT_M = 4;
+/**
  * end1108h21 (11/8): a blaze 0.8 m off struck her five times in 5 s on a bridge (13.5 → 0) while the head was deciding; a shooter was never a
  * melee enemy, so no blow came back and only the cover's seals (no cell to seal) ran. A blaze inside its own melee distance (vanilla: under
  * 2 m it closes and strikes instead of firing) is a melee enemy for the floor's melee hand, up to this distance.
  */
-export const CONTACT_SHOOTERS: Readonly<Record<string, number>> = { blaze: 2.5 };
+export const CONTACT_SHOOTERS: Readonly<Record<string, number>> = { blaze: 2.5, witch: WITCH_CONTACT_M };
 /** The kinds whose shots are arrows: a fight with one of them is not cut by an arrow's step aside (a blaze fight still is). */
 const ARCHERS = ['skeleton', 'stray', 'bogged', 'pillager', 'piglin'];
 /**
@@ -969,12 +975,18 @@ export function fleeThreat(bot: FloorBody, keeping = false): FleeThreat | null {
   const health = bot.health ?? 20, at = bot.entity?.position;
   if (!at || !(health > 0 && health <= FLEE_HEALTH) || bot.entity?.isInLava) return null;
   const found: Array<{ distance: number; position: Vec3 }> = [];
+  let blade: boolean | undefined;
   for (const entity of others(bot)) {
     if (!isThreat(bot, entity)) continue;
     const name = String(entity.name).toLowerCase(), shooter = SHOOTERS.has(name) || bot.shootsAtBody?.(name) === true;
     const range = shooter ? (keeping ? FLEE_KEEP_RANGE_SHOOTER : FLEE_RANGE_SHOOTER) : (keeping ? FLEE_KEEP_RANGE : FLEE_RANGE);
     const distance = entity.position.distanceTo(at);
     if (distance > range) continue;
+    // end1110r1: a witch within WITCH_CONTACT_M is the melee hand's (a blow back), not a reason to run, while a blade is carried.
+    if (name === 'witch' && distance <= WITCH_CONTACT_M) {
+      try { blade ??= !!bestBlade(bot.inventory?.items() ?? []); } catch { blade = false; }
+      if (blade) continue;
+    }
     let sealed = false;
     try {
       const exposure = threatExposure(bot as any, entity as any);
@@ -1392,6 +1404,10 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
     let zones: ReadonlyArray<{ centre: { x: number; y: number; z: number }; radius: number }> = [];
     try { zones = lyingCloudZones(bot); } catch { zones = []; }
     if (zones.length && cloudZoneAtCell(zones, feet.x, feet.y - 1, feet.z)) return null;
+    // thru 11/10: the cover's rule too: no dig that lets lava run in beside the body.
+    let lava: Vec3 | null = null;
+    try { lava = lavaReleasedBy(bot as never, new Vec3(feet.x, feet.y - 1, feet.z)); } catch { lava = null; }
+    if (lava) return null;
     // S2 (2026-11-02, S4's c1 trial: the fortress's nether bricks and no pickaxe carried): the dig hand refuses a block that nothing carried can harvest at once, and the one stand in 1.5 s was spent on it.
     if (!creeper && (under as { harvestTools?: unknown }).harvestTools && !items.some(item => canHarvest(under as never, item as never))) return null;
     if (creeper) {
@@ -1522,8 +1538,23 @@ export async function runLastStand(bot: FloorBody, port: FloorBody, stand: LastS
   const base = { x: Math.floor(position.x), y: Math.floor(position.y + 1e-3), z: Math.floor(position.z) };
   const ctx = { bot: port, stop: new AbortController().signal, deadline: Date.now() + LAST_STAND_TIMEOUT_MS[stand.kind], facing: 'north' as const, base };
   if (stand.kind === 'dig') {
+    // thru 11/10 (the status page's hole (a), "the reflex digs the floor it stands on"): the cover's dig checks its column, centres the body,
+    // refuses a dig while a neighbour cell still holds it up, and proves the drop (run 52, S2 c1); the last stand dug with none of that. A body
+    // thrown off the cell, or standing across two, dug a hole beside itself and stood on in the line; the next stand 1.5 s later dug again.
+    const feet = feetCell(bot as never) ?? base, cell = stand.cell;
+    if (cell.x !== feet.x || cell.z !== feet.z || cell.y !== feet.y - 1) return { success: false, result: '足元を掘る前に体が別のマスへ移った（掘らない）' };
+    const { centreInColumn } = await import('./tunnelWalk.js');
+    const column = new Vec3(feet.x, feet.y, feet.z);
+    const centred = await centreInColumn(port as never, column);
+    if (centred) return { success: false, result: `足元の真ん中に立てない（${centred}。掘らない）` };
+    const rim = supportCells(bot, feet.y).filter(held => held.x !== cell.x || held.z !== cell.z);
+    if (rim.length) return { success: false, result: `足元の隣 ${rim.map(held => `(${held.x},${held.y},${held.z})`).join('・')} にも乗っている（掘らない）` };
     const { dig } = await import('./primitives/dig.js');
-    const outcome = await dig(ctx as never, { at: [stand.cell], collect: false, exposeOk: true });
+    const outcome = await dig({ ...ctx, base: feet } as never, { at: [cell], collect: false, exposeOk: true });
+    if (outcome.ok) {
+      const dropped = await dropIntoHole(bot, port, column);
+      if (dropped) return { success: false, result: `足元を掘ったが一段下がっていない（${dropped}）` };
+    }
     return { success: outcome.ok, result: outcome.text };
   }
   const { pillarUp } = await import('./primitives/pillarUp.js');
@@ -2263,7 +2294,8 @@ export function meleeChoice(bot: FloorBody, threats: MeleeThreat[], options: { h
   const contactShooter = threats.find(({ entity }) => CONTACT_SHOOTERS[String(entity.name ?? '').toLowerCase()] !== undefined);
   if (contactShooter) {
     const blade = bestBlade(items);
-    if (blade && hasMeleeShield(bot) && (bot.health ?? 20) > MELEE_HIT_HEALTH) {
+    const witch = String(contactShooter.entity.name ?? '').toLowerCase() === 'witch';
+    if (blade && (witch || (hasMeleeShield(bot) && (bot.health ?? 20) > MELEE_HIT_HEALTH))) {
       let reached = false;
       try { reached = inReachOfBlow(bot, contactShooter.entity); } catch { reached = false; }
       if (reached) return { hand: { kind: 'hit', target: contactShooter.entity, weapon: blade, detail: `${blade.name} で接近した ${contactShooter.entity.name} を打ち返す` }, why: '', footing: here, quiet: false };

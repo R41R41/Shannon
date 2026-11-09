@@ -119,6 +119,14 @@ describe('an angry enderman that did not come is left out of the pick for a whil
     expect(endermanStuckAway(bot, bot.entities[4])).toBe(false);
   });
 
+  it('end1109p10: one stuck angry 3+ below the feet is still passed over by the pick, but stays a danger to the next item (it strikes whoever goes down)', () => {
+    const bot = body({}, [enderman(4, 20.5, 5.5), enderman(5, 6.5, 0.5, true)]);
+    bot.entities[5].position = new Vec3(6.5, 59, 0.5);   // 5 below
+    noteStuckAngry(bot, 5, { x: 6, y: 59, z: 0 });
+    expect(pickEnderman(bot)?.id).toBe(4);
+    expect(endermanStuckAway(bot, bot.entities[5])).toBe(false);
+  });
+
   it('says so when it is the only one about, instead of nothing', () => {
     const bot = body({}, [enderman(5, 45.5, -9.5, true)]);
     noteStuckAngry(bot, 5, { x: 45, y: 64, z: -10 });

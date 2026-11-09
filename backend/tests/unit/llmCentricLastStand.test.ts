@@ -10,6 +10,9 @@ vi.mock('../../src/services/minebot/utils/digBlockVerified.js', async importOrig
   return { ...actual, digBlockVerified: vi.fn(async (bot: any, block: any) => {
     bot.__dug.push(`${block.position.x},${block.position.y},${block.position.z}`);
     bot.__blocks.set(`${block.position.x},${block.position.y},${block.position.z}`, { name: 'air', boundingBox: 'empty' });
+    // thru 11/10: the body falls into the cell dug under it (the last stand now proves the drop, as the cover does).
+    const at = bot.entity?.position;
+    if (at && Math.floor(at.x) === block.position.x && Math.floor(at.z) === block.position.z && Math.floor(at.y) === block.position.y + 1) bot.entity.position = new Vec3(at.x, block.position.y, at.z);
     return { stateId: 0, blockName: 'air' };
   }) };
 });

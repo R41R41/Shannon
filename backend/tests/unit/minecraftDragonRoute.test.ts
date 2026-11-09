@@ -208,6 +208,18 @@ describe('the dragon breath reflex', () => {
     expect(runFromEntities).not.toHaveBeenCalled();
   });
 
+  it('does not flee on a 1×1 column (the flee bridged out with end stone under her feet), and does on the ground', async () => {
+    const { bot, runFromEntities } = endBot();
+    const metadata: unknown[] = []; metadata[8] = 3; metadata[10] = { type: 'dragon_breath' };
+    bot.entities = { 5: { id: 5, name: 'area_effect_cloud', position: new Vec3(2, 64, 0), metadata } };
+    bot.blockAt = (at: Vec3) => ({ boundingBox: at.x === 0 && at.z === 0 && at.y < 64 ? 'block' : 'empty' });
+    await new AutoAvoidDragonBreath(bot).runImpl();
+    expect(runFromEntities).not.toHaveBeenCalled();
+    bot.blockAt = (at: Vec3) => ({ boundingBox: at.y < 64 ? 'block' : 'empty' });
+    await new AutoAvoidDragonBreath(bot).runImpl();
+    expect(runFromEntities).toHaveBeenCalledOnce();
+  });
+
   it('takes the body from a task only while a danger is near, and takes no action at all when none is', async () => {
     const { bot } = endBot();
     const reflex: any = new AutoAvoidDragonBreath(bot);

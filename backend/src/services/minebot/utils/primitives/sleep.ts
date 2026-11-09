@@ -84,10 +84,10 @@ export async function sleep(ctx: StepContext, args: SleepArgs): Promise<StepOutc
   if (!isNight(timeOfDay) && !storm) {
     const seconds = Math.round(ticksToNight(timeOfDay) / 20);
     // end1109o09: told the seconds alone, she waited them out twice (about 4 minutes each) with the plan's work in front of her.
-    const day = seconds > DAY_WAIT_SECONDS
-      ? `。それまでは計画の手を進める（夜まで wait すると 30 分の目標の約 ${Math.round(seconds / 18)}% が消える）。寝るのは夜になってから、待つのは残り ${DAY_WAIT_SECONDS} 秒を切ってから`
-      : '';
-    return none('not_night', `夜ではない（今 ${timeOfDay}、寝られるのは ${NIGHT_FROM}〜${NIGHT_TO}。夜まであと約 ${seconds} 秒）${day}`);
+    // end1109s12/s14 S9: even under a minute she waited for the dark (wait 30, 20, 15 s and sleep again, ~130 s; s14 a wait of 25 s twice).
+    const cost = seconds > DAY_WAIT_SECONDS ? `（夜まで wait すると 30 分の目標の約 ${Math.round(seconds / 18)}% が消える）` : '';
+    return none('not_night', `夜ではない（今 ${timeOfDay}、寝られるのは ${NIGHT_FROM}〜${NIGHT_TO}。夜まであと約 ${seconds} 秒）。`
+      + `wait で夜を待たず、計画の手・今の道を進め${cost}、暗くなった所で sleep をもう一度`);
   }
   const beds = ((bot.inventory?.items?.() ?? []) as Array<{ name: string; count: number }>).filter(item => isBedName(item.name));
   let standing: { position: Cell } | null = null;

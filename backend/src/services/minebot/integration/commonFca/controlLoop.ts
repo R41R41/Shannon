@@ -94,6 +94,8 @@ const OBSERVATION_REUSE_MS = 100;
 const POLL_TIMEOUT_MS = 5000;
 /** How long the API may stay silent before running commands are stopped (an API restart takes about this long). */
 const CONTACT_LOSS_MS = 15_000;
+/** The command ids kept against a repeat (the newest ones). */
+const SEEN_MAX = 10_000;
 /** After an API answered a poll that carried events without taking them (an older API), they are offered again this much later. */
 const EVENTS_RETRY_MS = 60_000;
 const identity = (c: Command) => JSON.stringify([c.lease.id, c.lease.generation, c.lease.holder, c.context.scopeKey, c.context.taskId]);
@@ -102,6 +104,8 @@ export class CommonFcaControlLoop {
   readonly connectionId: string;
   private readonly baseUrl: string;
   private readonly seen = new Set<string>();
+  /** The seen ids reached SEEN_MAX once (said in the log the first time). */
+  private seenWrapped = false;
   private readonly receipts = new Map<string, Receipt>();
   private readonly active = new Map<string, { controller: AbortController; running: Promise<void>; headBoot?: string }>();
   /** Continue contracts: when each command was accepted, the head's start-up id (the last reply's), and the failure a kept item went on despite. */
@@ -247,7 +251,14 @@ export class CommonFcaControlLoop {
   }
   private accept(command: Command): void {
     if (!command || !ID.test(command.id) || this.seen.has(command.id)) return;
-    if (this.seen.size >= 10_000) { void this.stop(); return; }
+    // External review M5 (11/10): at 10,000 ids the loop stopped and the body stayed logged in with no control. A thru reads and acts about
+    // 500 commands an hour (end1109 rig records, probes included), so a long filming day is within reach. Only the newest SEEN_MAX ids are
+    // kept against a repeat (the Set keeps insertion order: the oldest goes first); a command that old is long past its deadline anyway.
+    if (this.seen.size >= SEEN_MAX) {
+      const oldest = this.seen.values().next().value as string | undefined;
+      if (oldest !== undefined) this.seen.delete(oldest);
+      if (!this.seenWrapped) { this.seenWrapped = true; log.info(`命令 ID が ${SEEN_MAX} 件に達した: 古い ID から忘れて続ける（重複は直近 ${SEEN_MAX} 件で防ぐ）`); }
+    }
     this.seen.add(command.id);
     const now = (this.options.now ?? Date.now)();
     this.acceptedAt.set(command.id, now);
@@ -573,8 +584,9 @@ export class CommonFcaControlLoop {
     try { return { op, id, ...(await run.call(this.options.actuator, id)) }; }
     catch (error) { return { op, id, done: false, hold: null, unfreeze: `failed:${String((error as Error)?.message ?? error).slice(0, 60)}` }; }
   }
-  async stop(): Promise<boolean> {
+  async stop(reason = 'body_disconnected'): Promise<boolean> {
     if (this.closed) return !this.held;
+    log.warn(`制御のループを止める: ${reason}（実行中 ${this.active.size}件、待ち ${this.queue.waiting.length}件）`);
     this.closed = true; this.lifetime.abort('body_disconnected');
     clearTimeout(this.timer); clearInterval(this.observationTimer);
     this.unbindDeath?.();

@@ -18,7 +18,9 @@ import { deathLedgerOf } from '../deathLedger.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { eat } from './body.js';
 import { findEntity, isDying } from './use.js';
-import { findItem, guard, letGo, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
+import { blockAt, findItem, guard, letGo, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
+import { holdsWater } from '../waterBlocks.js';
+import { deepWaterWords } from './waterExit.js';
 import { swimControls, swimPulse } from './swim.js';
 import { HOVERING_SHOOTERS, SHOT_HOLD_TICKS, ShooterWatch, StrikeGate, hoversAboveReach, nextShotTicks, strikeHold } from '../huntBlaze.js';
 import { itemIds, itemsSince } from '../huntBarter.js';
@@ -124,6 +126,22 @@ const SORTIE_M = 8, SORTIE_MS = 8_000, SORTIE_CHARGE_MS = 1_000, HOME_MS = 8_000
 const HOME_M = 1.6, SORTIE_GAP_MS = 1_500, SORTIE_REST_MS = 5_000;
 const r1 = (value: number) => Math.round(value * 10) / 10;
 
+/**
+ * end1109s07 S9: a drowned deep in the sea threw its trident from out of reach; the head asked fight three times, the body could not swim to it
+ * (unreachable, no swing each time) and stood in the same water taking about nine hits in 40 s until it died. A drowned in deep water (its feet
+ * and the cell below in water) out of the blade's reach is said at once, with the way out: leave the water, break the line. Facts and the way
+ * out only; the head chooses the move.
+ */
+const WATER_SHOOTERS: ReadonlySet<string> = new Set(['drowned']);
+const LEAVE_WATER = '水の中の drowned には泳いで近づけず、三叉槍を投げ続けてくる。fight を打ち切って水から離れる: go waterOk で今の行き先へ泳ぎ続けて 10m より離れるか、近い陸へ上がり、固いブロックの陰で射線を切る（水の中で wait・fight しない）';
+/** The deep-water cell of a drowned (feet and the cell below hold water), or null for any other creature or a drowned on land or in the shallows. */
+function waterShooterCell(bot: any, entity: any): Cell | null {
+  const p = entity?.position;
+  if (!p || !WATER_SHOOTERS.has(String(entity?.name ?? '').toLowerCase())) return null;
+  const at = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
+  try { return holdsWater(blockAt(bot, at)) && holdsWater(blockAt(bot, { ...at, y: at.y - 1 })) ? at : null; } catch { return null; }
+}
+
 /** Thrown when something above the hand ended it (a reflex's lease, the act's stop): the act reports a stop in the hand, and this tells the counts. */
 export class HandCut extends StepStopped {
   constructor(why: string, readonly summary: string) { super(why); }
@@ -162,9 +180,17 @@ function stuckWhere(bot: any, entity: any, now = Date.now()): Cell | null {
   const me = bot.entity?.position;
   return me && p.distanceTo?.(me) > STUCK_FAR_M ? cellOfEntity(entity) : null;
 }
-/** Whether an enderman is one that stuck angry and has not come since (above): it cannot reach the body, so it is no danger to the body's next item. */
+/**
+ * Whether an enderman is one that stuck angry and has not come since (above): it cannot reach the body, so it is no danger to the body's next item.
+ * end1109p10: not one still STUCK_BELOW or more below the feet. It cannot come up, but the next item may go down to it (#2077, angry 5 below: the
+ * head dug netherrack and walked down to the drops, it struck and she died in 3 s); it stays a danger, and the items behind the fight wait for the head.
+ */
 export function endermanStuckAway(bot: any, entity: any, now = Date.now()): boolean {
-  try { return String(entity?.name ?? '').toLowerCase() === 'enderman' && stuckWhere(bot, entity, now) !== null; } catch { return false; }
+  try {
+    if (String(entity?.name ?? '').toLowerCase() !== 'enderman' || stuckWhere(bot, entity, now) === null) return false;
+    const feet = Number(bot.entity?.position?.y);
+    return !(Number.isFinite(feet) && feet - Number(entity.position?.y) >= STUCK_BELOW);
+  } catch { return false; }
 }
 const STUCK_BELOW = 3;
 // end1109p10: after such a stop (#2077 angry 5 below) the head dug netherrack and walked down to the drops; it struck and she died in 3 s.
@@ -630,6 +656,12 @@ async function fightOnce(ctx: StepContext, args: FightArgs): Promise<StepOutcome
         + '下りて戦うと地上で囲まれる。上で待つ（wait）か、上がって来た敵だけ attack hold で打つ。矢（skeleton）だけは届く'), code: 'stay_on_pillar' };
     }
   }
+  const waterAt = stance === 'fight' ? waterShooterCell(bot, target) : null;
+  const waterGap = waterAt && bot.entity?.position ? bot.entity.position.distanceTo(target.position) : 0;
+  if (waterAt && waterGap > REACH + 0.5) {
+    const mine = deepWaterWords(bot);
+    return none('unreachable', `${label} は深い水の中 (${waterAt.x},${waterAt.y},${waterAt.z})（足の下も水）で、剣が届かない（${r1(waterGap)}m）。${LEAVE_WATER}${mine ? `。今の体: ${mine}` : ''}`);
+  }
 
   // What it fights with: the item named, else the best sword or axe carried. A flight needs none.
   let weaponName: string | null = null;
@@ -834,6 +866,9 @@ async function fightOnce(ctx: StepContext, args: FightArgs): Promise<StepOutcome
   };
   /** `at`: the creature's cell, only where the place is what the line is about (it cannot be reached). */
   const fail = (code: string, text: string, at?: Cell, cause?: string): StepOutcome => {
+    // A drowned that went (or stayed) deep in the water while it was fought: the same way out as at the start (end1109s07).
+    const inWater = code === 'unreachable' ? waterShooterCell(bot, target) : null;
+    if (inWater) text = `${text}。相手は深い水の中 (${inWater.x},${inWater.y},${inWater.z})。${LEAVE_WATER}`;
     const out = { ...stopped(bot, code, `fight 止まった ${code}: ${label} ${text}。${counts()}・${holder(code === 'reflex' ? reflexHeld(bot) : null)}`, at, undefined, cause), progress: struck() };
     // The creature went out of the body's sight with no death seen: the aim's outcome is not seen (goal unknown, code target_lost), not a failure and not a success.
     return code === 'lost' ? { ...out, goal: 'unknown' as const, code: 'target_lost' } : out;
