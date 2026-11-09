@@ -31,6 +31,30 @@ export const UNDERGROUND_REACH_M = 2;
 const MIN_LEG_M = 24;
 /** The leg's point is looked for in steps of this many metres back from the full leg. */
 const LEG_STEP_M = 8;
+/**
+ * end1108c S9 (11/8, 20:03 to 20:18): the head walked 100 to 150 m waypoints at the height it stood at (y 69) over hills; the first 20 m
+ * of each line ran into a hill, so the legs went through rock at y 69 and each go dug 105 to 192 cells (about 25 m a minute, the pack full
+ * of cobblestone). A body under the open sky walking to a place not well below it walks over the ground: the rock legs are for a body
+ * already under the ground, or a place well below it. The sky is read this many cells up from the head; leaves do not count.
+ */
+const SKY_SCAN = 24;
+/** A place more than this far below a body on the surface is under the ground (a stronghold, a cave): the rock legs still go to it. */
+const SURFACE_DROP = 8;
+/**
+ * end1108f S9 (11/8, 22:09 to 22:33): on a 1,300 m walk to the portal crossing an open-ground leg (a goal about x and z only) let the path
+ * search end in a ravine 60 m down; under the ground the rock legs then kept the line's height (the crossing about 90 m up and 600 m off:
+ * 3 m a leg), so she went on at y -25 to -51 for 600 m, dug hundreds of blocks into the pack, met the cave's mobs and died. In the
+ * overworld a body under the ground walking far to a place not well below it climbs back up first: each leg goes CLIMB_LEG_M on and up
+ * to CLIMB_M towards the surface over the leg's point. Open-ground legs name the surface's height at their point, so a leg is not reached
+ * at the bottom of a ravine.
+ */
+const CLIMB_LEG_M = 16;
+const CLIMB_M = 8;
+/** The surface is looked for from this height down (the overworld's top) to the world's bottom. */
+const SURFACE_TOP = 319;
+const WORLD_BOTTOM = -64;
+/** Solid blocks a body does not stand on top of as the ground (a tree; leaves are passed by name). */
+const NOT_GROUND = /(_log|_wood|_stem|_hyphae|leaves|bamboo|cactus)$/;
 /** Turns (radians) tried, in order, when the straight line's point is no good (water, a wall, nothing loaded). */
 const TURNS = [0, 0.6, -0.6, 1.2, -1.2];
 
@@ -48,6 +72,29 @@ export function goalTarget(goal: Goal): GoalTarget | null {
 export interface LegBot {
   entity: { position: { x: number; y: number; z: number } };
   blockAt(position: Vec3, extraInfos?: boolean): { name?: string; boundingBox?: string } | null;
+  game?: { dimension?: string };
+}
+
+/** Whether the body is in the overworld (the surface and the climbing legs are only about it; the Nether has a roof). */
+function inOverworld(bot: LegBot): boolean {
+  return !/nether|the_end/.test(String(bot.game?.dimension ?? ''));
+}
+
+/**
+ * The height a body stands at on the top of the column (x, z): one over its highest solid block, or over water or lava; trees are passed.
+ * Null when the column is not loaded or nothing in it is ground.
+ */
+export function surfaceY(bot: LegBot, x: number, z: number): number | null {
+  const fx = Math.floor(x), fz = Math.floor(z);
+  for (let y = SURFACE_TOP; y >= WORLD_BOTTOM; y--) {
+    let block: { name?: string; boundingBox?: string } | null = null;
+    try { block = bot.blockAt(new Vec3(fx, y, fz), false); } catch { return null; }
+    if (!block) return null;
+    const name = String(block.name ?? '');
+    if (name === 'water' || name === 'lava') return y + 1;
+    if (block.boundingBox === 'block' && !NOT_GROUND.test(name)) return y + 1;
+  }
+  return null;
 }
 
 export interface Leg {
@@ -68,6 +115,19 @@ function loaded(bot: LegBot, x: number, z: number): boolean {
     try { if (bot.blockAt(new Vec3(Math.floor(x), y + dy, Math.floor(z)), false)) return true; } catch { /* unloaded */ }
   }
   return false;
+}
+
+/** Whether nothing solid but leaves is over the body's head for SKY_SCAN cells (cells not loaded, or past the world's top, are open). */
+export function underSky(bot: LegBot): boolean {
+  const p = bot.entity.position;
+  const x = Math.floor(p.x), z = Math.floor(p.z), head = Math.floor(p.y) + 1;
+  for (let y = head + 1; y <= head + SKY_SCAN; y++) {
+    let block: { name?: string; boundingBox?: string } | null = null;
+    try { block = bot.blockAt(new Vec3(x, y, z), false); } catch { block = null; }
+    if (!block) return true;
+    if (block.boundingBox === 'block' && !String(block.name ?? '').endsWith('leaves')) return false;
+  }
+  return true;
 }
 
 /**
@@ -109,7 +169,18 @@ export function nextLeg(bot: LegBot, goal: Goal, attempt = 0, legM = FAR_LEG_M):
   // Through rock: the first stretch of the line is mostly to be dug.
   const probeLength = Math.min(UNDERGROUND_LEG_M, space);
   const probe = { x: here.x + dx * (probeLength / space), y: here.y + dy * (probeLength / space), z: here.z + dz * (probeLength / space) };
-  const rock = space > UNDERGROUND_LEG_M * 1.5 && rockShare(bot, here, probe) >= ROCK_SHARE;
+  const sky = underSky(bot);
+  const overworld = inOverworld(bot);
+  // Under the ground, far from a place not well below: up towards the surface first (end1108f S9).
+  if (overworld && !sky && flat > legM * 1.5 && dy >= -SURFACE_DROP) {
+    const point = { x: here.x + Math.cos(heading) * CLIMB_LEG_M, z: here.z + Math.sin(heading) * CLIMB_LEG_M };
+    const top = surfaceY(bot, point.x, point.z) ?? (target.y ?? here.y + CLIMB_M);
+    const y = here.y + Math.max(-2, Math.min(CLIMB_M, top - here.y));
+    const via = { x: Math.round(point.x), y: Math.round(y), z: Math.round(point.z) };
+    return { goal: new goals.GoalNear(via.x, via.y, via.z, UNDERGROUND_REACH_M) as unknown as Goal, final: false, via, rock: true };
+  }
+  const overGround = dy >= -SURFACE_DROP && sky;
+  const rock = space > UNDERGROUND_LEG_M * 1.5 && !overGround && rockShare(bot, here, probe) >= ROCK_SHARE;
   if (rock) {
     // The point is on the line itself, turned by the attempt (in the level, as the height is the line's).
     const fraction = UNDERGROUND_LEG_M / space;
@@ -126,8 +197,13 @@ export function nextLeg(bot: LegBot, goal: Goal, attempt = 0, legM = FAR_LEG_M):
     const point = pointAt(length);
     if (loaded(bot, point.x, point.z)) { via = point; break; }
   }
-  return { goal: new goals.GoalNearXZ(Math.round(via.x), Math.round(via.z), LEG_REACH_M) as unknown as Goal, final: false,
-    via: { x: Math.round(via.x), z: Math.round(via.z) }, rock: false };
+  const vx = Math.round(via.x), vz = Math.round(via.z);
+  // In the overworld the leg is the ground at its point, not anywhere under it (a ravine's bottom is not on the way: end1108f S9).
+  const ground = overworld ? surfaceY(bot, vx, vz) : null;
+  if (ground !== null) {
+    return { goal: new goals.GoalNear(vx, ground, vz, LEG_REACH_M) as unknown as Goal, final: false, via: { x: vx, y: ground, z: vz }, rock: false };
+  }
+  return { goal: new goals.GoalNearXZ(vx, vz, LEG_REACH_M) as unknown as Goal, final: false, via: { x: vx, z: vz }, rock: false };
 }
 
 /** MINEBOT_FAR_LEG_M: the leg length (m); 0 plans every walk as one goal (the way before run 20, for a comparison or a rollback). */
@@ -139,3 +215,50 @@ export function configuredLegM(env: NodeJS.ProcessEnv = process.env): number {
 
 /** How many different legs are tried at one place before the walk gives up with the path search's own answer. */
 export const LEG_ATTEMPTS = TURNS.length;
+
+/** How far off (flat) a buried place must be before a long walk takes the ground over it instead, and how deep it may lie. */
+export const BURIED_FAR_M = 24;
+// end1109s02 S9: legs at y=70 lay under a mountain whose ground was y=123 (53 down). With 48 they stayed in the rock and the walk tunnelled
+// for 6 minutes (limit_dig 13, a night slept in the stone). The walk to a far place goes over the ground however high it is.
+const BURIED_DEPTH_MAX = 160;
+/**
+ * end1108g S9 (11/8): the head gave every leg of a 1.3 km walk at y=62, and in the hills the place was inside the rock: the walk tunnelled
+ * to it (one go: 171 dug for 161 steps, 0.35 m/s). In the overworld a place more than BURIED_FAR_M off whose feet or head cell is solid is
+ * walked to on the ground over it: the height of that ground, or null (near, not loaded, open, or deeper than BURIED_DEPTH_MAX).
+ */
+export function buriedSurface(bot: LegBot, cell: { x: number; y: number; z: number }, nearM = BURIED_FAR_M, depthMax = BURIED_DEPTH_MAX): number | null {
+  if (!inOverworld(bot)) return null;
+  const here = bot.entity.position;
+  if (Math.hypot(cell.x + 0.5 - here.x, cell.z + 0.5 - here.z) <= nearM) return null;
+  let solid = false;
+  for (const dy of [0, 1]) {
+    let block: { boundingBox?: string } | null = null;
+    try { block = bot.blockAt(new Vec3(cell.x, cell.y + dy, cell.z), false); } catch { return null; }
+    if (!block) return null;
+    if (block.boundingBox === 'block') solid = true;
+  }
+  if (!solid) return null;
+  const ground = surfaceY(bot, cell.x, cell.z);
+  return ground !== null && ground > cell.y && ground - cell.y <= depthMax ? ground : null;
+}
+
+/** A far place this many cells or more over the ground under it is in the air (a step or two down is a ledge the walk takes as it is). */
+const AIR_DROP_MIN = 4;
+/**
+ * end1109s02 S9: the body climbed out of a mountain to its top (y 120) and the head gave the next place 196 m off at that height, where the
+ * ground was y 89. The walk kept the height and laid a bridge one block wide 30 over the valley (29 placed, a zombie beside it). In the
+ * overworld a place more than BURIED_FAR_M off whose feet, head and floor cells are all open, with the ground AIR_DROP_MIN or more below,
+ * is walked to on that ground: its height, or null (near, not loaded, not in the air, or no ground in the column).
+ */
+export function airborneGround(bot: LegBot, cell: { x: number; y: number; z: number }, nearM = BURIED_FAR_M): number | null {
+  if (!inOverworld(bot)) return null;
+  const here = bot.entity.position;
+  if (Math.hypot(cell.x + 0.5 - here.x, cell.z + 0.5 - here.z) <= nearM) return null;
+  for (const dy of [-1, 0, 1]) {
+    let block: { boundingBox?: string } | null = null;
+    try { block = bot.blockAt(new Vec3(cell.x, cell.y + dy, cell.z), false); } catch { return null; }
+    if (!block || block.boundingBox === 'block') return null;
+  }
+  const ground = surfaceY(bot, cell.x, cell.z);
+  return ground !== null && cell.y - ground >= AIR_DROP_MIN ? ground : null;
+}

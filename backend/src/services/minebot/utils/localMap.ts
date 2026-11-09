@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { nativeActionHost } from '../execution/ActionExecution.js';
-import { isLikelyHostileMobName } from './hostileMobHints.js';
+import { isThreatEntity, NEUTRAL_UNTIL_STRUCK } from './hostileMobHints.js';
 
 /**
  * The map the planner reads every decision (design mb-llm-centric 2.2; the format and the symbols are the head's contract,
@@ -142,7 +142,7 @@ export function isOpenBlock(block: MapBlock | null): boolean { return !!block &&
 /** The legend, word for word the head's (minecraftActContract.ts MAP_LEGEND): the head puts it in the fixed instructions; the map does not. */
 export const MAP_LEGEND = [
   '地図の記号（1字。地図は上が北・左が西。行の頭は z、列の見出しは x の下 1 桁）:',
-  '@ 自分の足 / ! 敵の足 / m 動物の足 / * 60秒以内に歩いた空気 / . 空気 / , 通れる草花・雪 / ? 未ロード / X 掘れない（岩盤・バリア）',
+  '@ 自分の足 / ! 敵の足 / & 中立の足 / m 動物の足 / * 60秒以内に歩いた空気 / . 空気 / , 通れる草花・雪 / ? 未ロード / X 掘れない（岩盤・バリア）',
   '# 石の類（石・深層岩・安山岩・閃緑岩・花崗岩・凝灰岩・丸石・石レンガ）/ : 土・草・雪・粘土 / s 砂・砂利 / I 氷',
   'w 水源 / - 流れる水 / L 溶岩源 / l 流れる溶岩 / f 火 / x クモの巣',
   'i 鉄 / c 石炭 / d ダイヤ / g 金 / r レッドストーン / o ほかの鉱石（銅・ラピス・エメラルド・石英・古代の残骸）',
@@ -651,7 +651,9 @@ export function creatureCells(bot: MapBody, range = 12): Map<string, string> {
     if (Math.abs(entity.position.x - at.x) > range || Math.abs(entity.position.z - at.z) > range || Math.abs(entity.position.y - at.y) > range) continue;
     const name = String(entity.name ?? '');
     const type = String(bot.registry?.entitiesByName?.[name]?.type ?? entity.type ?? '');
-    const mark = type === 'hostile' || isLikelyHostileMobName(name) ? '!' : ANIMAL_TYPES.has(type) ? 'm' : null;
+    // Rig end1109f02: an unprovoked enderman or zombified piglin was drawn `!` by the game's category; the body's one rule (isThreatEntity) is used, and such a one is `&`.
+    const threat = isThreatEntity(entity, type, Date.now(), bot as never);
+    const mark = threat ? '!' : NEUTRAL_UNTIL_STRUCK.includes(name.toLowerCase()) ? '&' : ANIMAL_TYPES.has(type) ? 'm' : null;
     if (!mark) continue;
     const key = `${Math.floor(entity.position.x)},${Math.floor(entity.position.y + 1e-3)},${Math.floor(entity.position.z)}`;
     if (cells.get(key) !== '!') cells.set(key, mark);

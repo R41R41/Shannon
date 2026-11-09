@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import { makeSim, type Ground, type Sim } from '../helpers/physicsBody.js';
-import { floorlessAt, go } from '../../src/services/minebot/utils/primitives/go.js';
+import { floorlessAt, go, waterFaceBelow } from '../../src/services/minebot/utils/primitives/go.js';
 
 // Run52 hold4: the dry feet/head cells were stone, but the cell under the requested feet was water.
 // waterOk permits swimming in water; it cannot give the pathfinder a standing node above the water.
@@ -57,5 +57,33 @@ describe('run52 hold4: a dry exact goal above water is not a swimming destinatio
       {goals:[fixture.target],waterOk:true,canDig:['stone','dirt'],maxDig:40,seconds:60}));
     expect(out.reason).toBe('no_floor');expect(out.text).toContain('水面の上');
     expect(search).not.toHaveBeenCalled();expect(sim.bot.dugBlocks).toEqual([]);
+  });
+});
+
+// end1109s02 S9 (the sea, 127-142 s): a place on the sea's face with waterOk was refused three times; it is the water cell under it now.
+const sea: Ground = (x,y,z) => {
+  if (Math.abs(x)>8 || Math.abs(z)>8) return null;
+  if (x>=2 && y>=58 && y<=62) return x===4 && z===0 ? (y===62 ? 'kelp' : 'kelp_plant') : 'water';
+  return y<64 && x<2 ? 'stone' : y<58 ? 'stone' : 'air';
+};
+describe('end1109s02: a place on the water face is the water under it',()=>{
+  it('names the water or kelp cell under open air, and nothing for a dry or rock-filled place',()=>{
+    const sim=makeSim(sea);
+    expect(waterFaceBelow(sim.bot,{x:3,y:63,z:0})).toBe(62);
+    expect(waterFaceBelow(sim.bot,{x:4,y:63,z:0})).toBe(62);
+    expect(waterFaceBelow(sim.bot,{x:0,y:64,z:0})).toBeNull();
+    expect(waterFaceBelow(sim.bot,{x:3,y:62,z:0})).toBeNull();
+    const rock=makeSim(shore);
+    expect(waterFaceBelow(rock.bot,place)).toBeNull();
+    expect(floorlessAt(sim.bot,{x:4,y:62,z:0},rule,false)).toBeNull();
+  });
+  it('searches toward the sunk place instead of refusing it as no_floor',async()=>{
+    const sim=makeSim(sea,{start:[0.5,64,0.5],items:[]});
+    const search=vi.spyOn(sim.bot.pathfinder,'getPathFromTo');
+    const out=await drive(sim,go({bot:sim.bot,stop:new AbortController().signal,deadline:Date.now()+10_000,facing:'east',base:{x:0,y:64,z:0}} as never,
+      {goals:[{x:4,y:63,z:0}],waterOk:true,maxDig:0,maxPlace:0,searchMs:50,seconds:2}));
+    expect(out.reason).not.toBe('no_floor');
+    expect(search).toHaveBeenCalled();
+    if(out.text)expect(out.text).not.toContain('水面の上には立てない');
   });
 });

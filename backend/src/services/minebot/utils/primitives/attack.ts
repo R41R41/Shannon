@@ -1,24 +1,24 @@
 import pathfinder from 'mineflayer-pathfinder';
+import { Vec3 } from 'vec3';
 import { buildMovements } from '../setMovements.js';
 import { entityHealth } from '../mapMarks.js';
 import { findItem, guard, letGo, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
 import { findEntity } from './use.js';
 import { beginEngagement } from '../engagement.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
-import { isLikelyHostileMobName } from '../hostileMobHints.js';
+import { isThreatEntity } from '../hostileMobHints.js';
 import { bodyReader, feetCell, relativeWords } from '../localMap.js';
 import { eyeOf, probeSight } from '../probeTools.js';
 import { deathLedgerOf } from '../deathLedger.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { swimControls, swimPulse } from './swim.js';
 import { markHeadCombat } from '../combatOwner.js';
-import { bestMeleeWeapon } from '../floorReflexes.js';
-import { equipToHandVerified } from '../equipVerified.js';
 import { scanLoadedBlocks } from '../loadedBlockScan.js';
 import { HOVERING_SHOOTERS, ShooterWatch, StrikeGate, chargeHold, strikeHold } from '../huntBlaze.js';
 import { isDragonTarget, strikeDragon } from './dragonStrike.js';
 import { endDragonOf } from '../dragonState.js';
 import { isCrystalTarget, strikeCrystal } from './crystalStrike.js';
+import { takeUpMeleeWeapon } from './meleeWeapon.js';
 
 const { goals } = pathfinder;
 
@@ -33,6 +33,22 @@ export interface AttackArgs { target?: string | number; until?: 'dead' | number;
 const REACH = 3.0;
 const MAX_SECONDS = 30;
 const NO_GAIN_MS = 5000;
+/**
+ * A blaze is chased only near its camp. end1108h16 S7 (11/8): two chases killed in 0.7 and 2.7 s with no health lost, and the chase and the
+ * shots after one blaze took her 15 to 36 m east of the spawner, where nothing spawns (a spawner spawns while a player is within 16 m).
+ * With a spawner within 16 m the chase stops once the body is farther than LEASH_SPAWNER_M from it; with none, farther than LEASH_START_M
+ * from where the chase began.
+ */
+export const LEASH_SPAWNER_M = 12;
+export const LEASH_START_M = 10;
+/** A target this much past the reach is a step or two away: struck even past the radius. */
+export const LEASH_NEAR_M = 2;
+export function leashOf(bot: any): { at: any; radius: number; spawner: boolean } {
+  let hit: { position: any } | undefined;
+  try { hit = scanLoadedBlocks(bot, ['spawner'], { maxHits: 1, maxDistance: 16 }).hits[0]; } catch { hit = undefined; }
+  return hit ? { at: hit.position.offset(0.5, 0.5, 0.5), radius: LEASH_SPAWNER_M, spawner: true }
+    : { at: bot.entity.position.clone(), radius: LEASH_START_M, spawner: false };
+}
 
 /** The time a swing needs to be at full strength, by what is held (the game's attack speed). */
 export function cooldownMs(held: string | undefined): number {
@@ -42,6 +58,47 @@ export function cooldownMs(held: string | undefined): number {
   if (held === 'trident') return 910;
   if (held.endsWith('_shovel') || held.endsWith('_pickaxe')) return held.endsWith('_pickaxe') ? 830 : 1000;
   return 250;
+}
+
+const ROD_WATCH_MS = 1000;
+const ROD_NEAR_M = 3;
+/**
+ * end1108h21 (11/8): 13 blazes fell to the sword and 3 rods came in, 2 of them picked up by a hand; the head was never told whether a kill
+ * dropped a rod or where it lay (a blaze drops one half the time; one killed over the bridge's void drops it into the void or the lava).
+ * Watched for ROD_WATCH_MS after the death: the rod's cell and the fall under it, or that none dropped.
+ * end1108h29 (11/8): three endermen fell to attack and the head heard only 倒した, never whether a pearl dropped or where (a pearl, like a rod,
+ * comes half the time; the camp's fight already said 落とし物 ender_pearl×1). The same watch now runs for an enderman's pearl.
+ */
+const KEY_DROPS: Record<string, { item: string; word: string; owner: string }> = {
+  blaze: { item: 'blaze_rod', word: 'ロッド', owner: 'ブレイズ' },
+  enderman: { item: 'ender_pearl', word: 'パール', owner: 'エンダーマン' },
+};
+async function rodDropWords(ctx: StepContext, at: any, before: Set<unknown>, kind = 'blaze'): Promise<string> {
+  const drop = KEY_DROPS[kind] ?? KEY_DROPS.blaze;
+  const bot = ctx.bot;
+  if (!at) return '';
+  const until = Date.now() + ROD_WATCH_MS;
+  const rods = () => (Object.values(bot.entities ?? {}) as any[]).filter(e => e?.name === 'item' && !before.has(e.id) && e.position && e.position.distanceTo(at) <= ROD_NEAR_M + 2
+    && (() => { try { return e.getDroppedItem?.()?.name === drop.item; } catch { return false; } })());
+  try { while (Date.now() < until && !rods().length) await wait(ctx, 100); } catch { /* the hand was stopped: say what was seen */ }
+  const rod = rods()[0];
+  if (!rod) return `。${drop.word}は落ちなかった（${drop.owner}が落とすのは半分）`;
+  // The drop falls: read the column under it until a solid block (or 48 cells of air: the void).
+  const x = Math.floor(rod.position.x), z = Math.floor(rod.position.z);
+  const y = Math.floor(rod.position.y);
+  let fall = 0, under = '';
+  for (; fall < 48; fall++) {
+    const block = bot.blockAt?.(new Vec3(x, y - 1 - fall, z));
+    if (!block) { under = '未ロード'; break; }
+    if (block.boundingBox === 'block' || block.name === 'lava') { under = block.name; break; }
+  }
+  const self = bot.entity?.position;
+  const off = self ? `・${rod.position.distanceTo(self).toFixed(1)}m` : '';
+  const land = under === 'lava' ? `。下 ${fall} 段で溶岩に落ちて燃える（拾えない）`
+    : !under ? `。下は 48 段以上空所で、拾えない（橋や足場の外で倒すと落とす。床の上で斬る）`
+    : fall >= 3 ? `。${fall} 段下の ${under} の上に落ちる（拾うには下りる）`
+    : `。歩いて重なれば拾える（pickup target=${drop.item}）`;
+  return `。${drop.word}が落ちた (${x},${Math.floor(rod.position.y) - fall},${z})${off}${land}`;
 }
 
 /** The id a hand names a creature by ("#41" or 41), or null when it names a kind (a kind does not name one creature, so a death seen is not its answer). */
@@ -107,11 +164,16 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
   const untilDead = args.until === undefined || args.until === 'dead';
   const chase = args.chase !== false;
   const started = Date.now();
+  const leash = chase && HOVERING_SHOOTERS.has(String(target.name)) ? leashOf(bot) : null;
+  const { takenUp } = await takeUpMeleeWeapon(ctx);
+  const tookUp = takenUp ? `（${takenUp} を手に持った）` : '';
   let blows = 0, hurt = 0, dead = false;
   /** Continue contracts (1): the blows that landed (the target was hurt), of the blows swung. */
   const landed = (): Progress => ({ unit: 'blow', done: hurt, left: null });
   const onHurt = (entity: any) => { if (entity?.id === target.id) hurt++; };
-  const onDead = (entity: any) => { if (entity?.id === target.id) dead = true; };
+  let deathAt: any = null;
+  const onDead = (entity: any) => { if (entity?.id === target.id) { dead = true; deathAt = entity.position?.clone?.() ?? target.position?.clone?.() ?? null; } };
+  const itemsBefore = KEY_DROPS[String(target.name)] ? new Set(Object.values(bot.entities ?? {}).filter((e: any) => e?.name === 'item').map((e: any) => e.id)) : null;
   bot.on('entityHurt', onHurt); bot.on('entityDead', onDead);
   // A fight the planner chose: the dig guard does not count this kind as one shut out, and an archer's arrows are not stepped away from.
   // The low-health flight still runs (the contract's 1.4: the planner raises stopIf.hpBelow to pull out sooner).
@@ -123,7 +185,8 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
     navigator.setMovements(buildMovements(bot, false, true, true, true, false, true, 1, false, true, 3, 10, false));
     navigator.setGoal(new goals.GoalFollow(target, 2), true);
   }
-  let lastSwing = 0, best = Infinity, bestAt = Date.now();
+  // A blow that lands is progress too: a target knocked back past the reach by each hit (a wither skeleton, 3.1m) is still being fought, not out of reach.
+  let lastSwing = 0, best = Infinity, bestAt = Date.now(), hurtSeen = 0;
   let swimming = false;
   try {
     for (;;) {
@@ -132,10 +195,25 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
       if (Date.now() - started >= limitMs) break;
       const distance = live.position.distanceTo(bot.entity.position.offset(0, 1.6, 0)) - (live.height ?? 1.8) / 2;
       if (distance < best - 0.3) { best = distance; bestAt = Date.now(); }
+      if (hurt > hurtSeen) { hurtSeen = hurt; bestAt = Date.now(); }
+      // end1108h17: the cover reflex had already stepped her past the radius, and the first chase let go of a blaze 3.1m away. A blaze a
+      // step or two off is struck, and one inside the radius is chased (that leads back in): the leash holds only against a far one outside it.
+      if (leash && distance > REACH + LEASH_NEAR_M && bot.entity.position.distanceTo(leash.at) > leash.radius && live.position.distanceTo(leash.at) > leash.radius) {
+        letGo(bot);
+        const from = leash.at, here = bot.entity.position;
+        const where = leash.spawner ? `スポナー (${Math.floor(from.x)},${Math.floor(from.y)},${Math.floor(from.z)}) から ${here.distanceTo(from).toFixed(0)}m` : `追い始めた所から ${here.distanceTo(from).toFixed(0)}m`;
+        return { ...stopped(bot, 'leash', `${label} を追うのをやめた: ${where}（${leash.radius}m を超えた。${leash.spawner ? '16m より遠いと新しく湧かない。' : ''}近くに来たブレイズを斬る）。${blows}回振って ${hurt}回当たった`,
+          { x: Math.floor(from.x), y: Math.floor(from.y), z: Math.floor(from.z) }), progress: landed() };
+      }
       if (distance > REACH && (!chase || Date.now() - bestAt > NO_GAIN_MS)) {
         letGo(bot);
-        return { ...stopped(bot, chase ? 'cannot_reach' : 'out_of_reach', `${label} に届かない（${distance.toFixed(1)}m${chase ? `、${NO_GAIN_MS / 1000}秒近づけない` : ''}）。${blows}回振って ${hurt}回当たった`,
-          { x: Math.floor(live.position.x), y: Math.floor(live.position.y), z: Math.floor(live.position.z) }), progress: landed() };
+        // S1 lab 11/8: the cover reflex had walled a wither skeleton off (cobblestone, 2 high) and attack said 届かない six times naming the
+        // creature's own cell (air): the head was not told that a wall stood between. The first solid cell on the line is named (and is the cell).
+        const wall = creatureSight(bot, live).between[0];
+        const between = wall ? `。間に ${wall.name} (${wall.at.x},${wall.at.y},${wall.at.z})：掘るか回り込めば近づける` : '';
+        const cell = wall ? wall.at : { x: Math.floor(live.position.x), y: Math.floor(live.position.y), z: Math.floor(live.position.z) };
+        return { ...stopped(bot, chase ? 'cannot_reach' : 'out_of_reach', `${label} に届かない（${distance.toFixed(1)}m${chase ? `、${NO_GAIN_MS / 1000}秒近づけない` : ''}）。${blows}回振って ${hurt}回当たった${between}`,
+          cell), progress: landed() };
       }
       if (distance <= REACH && Date.now() - lastSwing >= cooldownMs(bot.heldItem?.name)) {
         try { await bot.lookAt(live.position.offset(0, (live.height ?? 1.8) * 0.6, 0), true); } catch { /* looked */ }
@@ -169,13 +247,16 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
   // The death is the one the body saw (`entityDead` of this creature while the hand ran): done. A creature that is no longer listed with no death seen (it went out of sight, out of range, into
   // another dimension) is not known dead and not known alive: the aim's outcome is not seen (goal unknown, code target_lost), never a success.
-  if (dead) return { ok: true, text: `${label} を倒した（${blows}回振って ${hurt}回当たった、${seconds}秒）`, progress: landed() };
+  if (dead) {
+    const rod = itemsBefore ? await rodDropWords(ctx, deathAt ?? target.position, itemsBefore, String(target.name)) : '';
+    return { ok: true, text: `${label} を倒した（${blows}回振って ${hurt}回当たった、${seconds}秒）${tookUp}${rod}`, progress: landed() };
+  }
   if (!live) {
     return { ok: false, goal: 'unknown', reason: 'target_lost', code: 'target_lost', progress: landed(),
       text: `${label} が見えなくなった（死ぬのは見ていない。倒れたか、離れて消えたかは分からない。${blows}回振って ${hurt}回当たった、${seconds}秒）` };
   }
   if (untilDead) return { ...stopped(bot, 'time_up', `${label} は${Math.round(limitMs / 1000)}秒で倒れなかった（${blows}回振って ${hurt}回当たった${health !== null ? `、残り体力 ${health}` : ''}）`), progress: landed() };
-  return { ok: true, text: `${label} を ${seconds}秒攻撃した（${blows}回振って ${hurt}回当たった${health !== null ? `、残り体力 ${health}` : ''}）`, progress: landed() };
+  return { ok: true, text: `${label} を ${seconds}秒攻撃した（${blows}回振って ${hurt}回当たった${health !== null ? `、残り体力 ${health}` : ''}）${tookUp}`, progress: landed() };
 }
 
 /**
@@ -216,7 +297,8 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
   const wantedId = typeof wanted === 'number' ? wanted : null;
   const wantedName = typeof wanted === 'string' ? wanted.replace(/^minecraft:/u, '').toLowerCase() : null;
   const label = wantedId !== null ? `#${wantedId}` : wantedName ?? '敵';
-  const isHostile = (entity: any) => String(bot.registry?.entitiesByName?.[entity.name]?.type ?? entity.type) === 'hostile' || isLikelyHostileMobName(String(entity.name ?? ''));
+  // An attack with no target (`*`) goes for a threat by the body's one rule: an unprovoked zombified piglin, piglin with gold worn or enderman is left alone (rig end1109f01).
+  const isHostile = (entity: any) => isThreatEntity(entity, bot.registry?.entitiesByName?.[entity.name]?.type, Date.now(), bot as never);
   const fits = (entity: any) => entity && entity !== bot.entity && entity.position && entity.type !== 'player' && entity.name !== 'item'
     && (wantedId !== null ? entity.id === wantedId : wantedName ? String(entity.name).toLowerCase() === wantedName : isHostile(entity));
   // The shield goes to the off hand when one is carried (the hold raises it from there, and the body's reflex raises it against what flies).
@@ -227,15 +309,7 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
       catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
     }
   }
-  // A blow struck with an empty hand is one point of a blaze's twenty: when the hand holds no sword or axe, the best one carried goes into it first (one already held stays).
-  let weapon = String(bot.heldItem?.name ?? ''), takenUp = '';
-  if (!/_(sword|axe)$/u.test(weapon)) {
-    const best = bestMeleeWeapon(bot.inventory?.items?.() ?? []);
-    if (best && /_(sword|axe)$/u.test(String(best.name))) {
-      try { const held = await guard(ctx, equipToHandVerified(bot, best as { name: string; type: number; slot?: number }), 5000); if (held?.value.held) { weapon = String(best.name); takenUp = weapon; } }
-      catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
-    }
-  }
+  const { takenUp } = await takeUpMeleeWeapon(ctx);
   const shield = bot.inventory?.slots?.[45]?.name === 'shield';
   // The shield's wear is told across swaps: what each shield that broke had left when it was put on is counted as worn, and the one on the arm by its own mark.
   let shieldUsed0 = Number(bot.inventory?.slots?.[45]?.durabilityUsed ?? 0), retiredWear = 0, spares = 0, spareTriedAt = 0;
@@ -338,12 +412,14 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
   const counts = `${blows}回打った・${landed}回当たった・倒した ${killed.length}${killed.length ? `（${killed.join('・')}）` : ''}・受けた傷 ${lost}${wear}${gate.count + chargeGate.count ? `・見送り ${gate.count + chargeGate.count}` : ''}`;
   const drops = (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity?.name === 'item' && !before.has(entity.id)
     && entity.position.distanceTo(bot.entity.position) <= 8);
-  const dropNames = drops.map(entity => { try { const item = entity.getDroppedItem?.(); return item ? `${item.name}×${item.count}` : `#${entity.id}`; } catch { return `#${entity.id}`; } });
+  const dropNames = drops.map(entity => { try { const item = entity.getDroppedItem?.(); return item ? `${item.name}×${item.count}（id ${entity.id}）` : `#${entity.id}`; } catch { return `#${entity.id}`; } });
+  // end1108h7b: a rod asked for by radius lost to the nearest brick; the id lets the hand walk to the rod itself.
+  const pickWords = drops.length ? `pickup target=#${drops[0].id} で拾う${drops.length > 1 ? `。ほかは target=#${drops.slice(1).map(entity => entity.id).join('・#')}` : ''}` : '';
   if (unreached) {
     // The act's line is 160 characters with the closed word and what the cell holds: the counts first (and what the kills dropped, a rod to pick up), then the nearest one.
     const held = ((Date.now() - started) / 1000).toFixed(0);
     const nearest = nearestFact(bot, fits, label);
-    return { ...stopped(bot, 'out_of_reach', `${held}秒、打てる所（目から${REACH}m・見える）に${label}がいない。${counts}${dropNames.length ? `。落とし物 ${dropNames.join(' ')}（pickup で拾う）` : ''}。${nearest.text}`, nearest.at), progress: struckProgress() };
+    return { ...stopped(bot, 'out_of_reach', `${held}秒、打てる所（目から${REACH}m・見える）に${label}がいない。${counts}${dropNames.length ? `。落とし物 ${dropNames.join(' ')}（${pickWords}）` : ''}。${nearest.text}`, nearest.at), progress: struckProgress() };
   }
   // A hold that struck nothing says where the nearest one was, as the stop does.
   const none = blows === 0 ? `。${nearestFact(bot, fits, label).text}` : '';
@@ -356,7 +432,7 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
     } catch { /* unread */ }
   }
   return { ok: true, progress: struckProgress(), text: `${seconds}秒その場で構えた${shield ? '（盾）' : ''}: ${counts}（被弾 ${hurtTaken}回）${takenUp ? `、${takenUp} を手に持った` : ''}`
-    + `、落とし物 ${dropNames.length ? `${dropNames.join(' ')}（pickup で拾う）` : 'なし'}${spawnerNote}${none}` };
+    + `、落とし物 ${dropNames.length ? `${dropNames.join(' ')}（${pickWords}）` : 'なし'}${spawnerNote}${none}` };
 }
 
 /** The nearest creature the hold waits for: its id and place, where from the feet (up/down), the distance from the eye, seen or the blocks between. */

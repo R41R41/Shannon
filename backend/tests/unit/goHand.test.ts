@@ -171,6 +171,14 @@ describe('go: across a gap (canPlace)', () => {
     expect(counts(outcome)!.placed).toBeGreaterThanOrEqual(1);
     expect(outcome.text).toContain('使い切った');
     expect(outcome.text.length).toBeLessThanOrEqual(160);
+    // end1108a S8b: the same in the Nether names the netherrack all around (the head dug its own bridge back for six stones).
+    const nether = makeSim(void_, { items: stacks(COBBLE(6)) });
+    nether.bot.game.dimension = 'the_nether';
+    const there = await drive(nether, run(nether, { canPlace: ['cobblestone'], maxPlace: 100 }, goal(120, FLOOR, 0)));
+    expect(there.ok).toBe(false);
+    expect(there.text).toContain('使い切った');
+    expect(there.text).toContain('netherrack を 30 個ほど掘り canPlace に足す');
+    expect(there.text.length).toBeLessThanOrEqual(160);
   });
 
   it('stops at its limit of blocks before it lays one (limit_place)', async () => {
@@ -178,6 +186,9 @@ describe('go: across a gap (canPlace)', () => {
     const outcome = await drive(sim, run(sim, { canPlace: ['cobblestone'], maxPlace: 2 }));
     expect(outcome.reason).toBe('limit_place');
     expect(outcome.text).toContain('go 止まった limit_place:');
+    // end1108h32 S9: without waterOk the stop names the swim first (39 were laid over a lake and the stop said only to raise maxPlace).
+    expect(outcome.text).toContain('waterOk で下りて泳ぐ');
+    expect(outcome.text).toContain('maxPlace を増やす');
     expect(counts(outcome)!.placed).toBeLessThanOrEqual(2);
     expect(sim.bot.placedBlocks.length).toBeLessThanOrEqual(2);
   });
@@ -236,13 +247,23 @@ describe('go: through a wall (canDig)', () => {
   });
 
   it('says no_tool when the kind may be dug and the tool that breaks it is not held', async () => {
-    const sim = makeSim(wall);
+    // Cobblestone: too hard for the stranded body's bare hands (run 62 #19 lets it dig only the soft ones, stone and below).
+    const hardWall = over(flat, box('cobblestone', 3, 5, FLOOR, FLOOR + 6, -R - 1, R + 1));
+    const sim = makeSim(hardWall);
     // The explanation draws the way again with each rule lifted; its search is given no time limit of its own (the faked clock runs on while it searches, so a slow
     // machine would run a 2.5 s search out and the line would say dead_end).
-    const outcome = await drive(sim, run(sim, { canDig: ['stone'], seconds: 120, searchMs: 600_000 }));
+    const outcome = await drive(sim, run(sim, { canDig: ['cobblestone'], seconds: 120, searchMs: 600_000 }));
     expect(outcome.reason).toBe('no_tool');
     expect(outcome.text).toContain('go 止まった no_tool:');
     expect(sim.bot.dugBlocks).toEqual([]);
+  });
+
+  it('run 62 (#19): a body with no pickaxe and no block digs its way through a soft wall by hand', async () => {
+    const sim = makeSim(wall);
+    const outcome = await drive(sim, run(sim, { canDig: ['stone'], seconds: 180, searchMs: 600_000 }));
+    expect(outcome.ok).toBe(true);
+    expect(sim.bot.dugBlocks.length).toBeGreaterThanOrEqual(5);
+    expect(sim.bot.dugBlocks.every((line: string) => line.startsWith('stone@'))).toBe(true);
   });
 
   it('stops at its limit of digs before it digs (limit_dig)', async () => {
@@ -255,6 +276,25 @@ describe('go: through a wall (canDig)', () => {
 });
 
 describe('go: up and down', () => {
+  it.each(['roof', 'blocker'] as const)('reports an exhausted climbing dig budget for an allowed %s without digging', async kind => {
+    const cliff = over(flat, box('stone', 3, R, FLOOR, FLOOR + 4, -R - 1, R + 1));
+    const ground = over(cliff, kind === 'roof'
+      ? box('stone', 0, 0, FLOOR + 2, FLOOR + 2, 0, 0)
+      : box('rail', 0, 0, FLOOR, FLOOR, 0, 0));
+    const sim = makeSim(ground, { items: stacks(PICK, COBBLE(12)) });
+    // No horizontal route was found: exercise go's existing climb at the current feet, not a route around the roof/rail.
+    sim.bot.pathfinder.getPathFromTo = function* () { yield { result: { status: 'noPath', path: [] } }; } as never;
+    const outcome = await drive(sim, run(sim, { canDig: [kind === 'roof' ? 'stone' : 'rail'], canPlace: ['cobblestone'], maxDig: 0 }, goal(6, FLOOR + 5, 0)));
+    expect(outcome.reason).toBe('limit_dig');
+    expect(sim.bot.dugBlocks).toEqual([]);
+    expect(sim.bot.placedBlocks).toEqual([]);
+    expect(outcome.text).toContain('上限 0');
+    expect(outcome.text).toContain('残り 0');
+    expect(outcome.text).not.toContain('canDig');
+    expect(outcome.text).not.toContain('掘ってよい物に無い');
+    expect(outcome.text.length).toBeLessThanOrEqual(160);
+  });
+
   it('climbs a cliff with a pillar, a block laid at the top of each jump', async () => {
     // Stone up to y=68 for x>=3, across the whole ground: the top is at y=69 (5 higher than the start).
     const cliff = over(flat, box('stone', 3, R, FLOOR, FLOOR + 4, -R - 1, R + 1));
@@ -300,10 +340,16 @@ describe('go: up and down', () => {
     const careful = makeSim(platform, { start });
     const refused = await drive(careful, run(careful, { maxDrop: 3 }, goal(6, FLOOR, 0)));
     expect(refused.reason).toBe('dead_end');
-    const bold = makeSim(platform, { start });
+    const bold = makeSim(platform, { start, items: stacks(PICK) });
     const taken = await drive(bold, run(bold, { maxDrop: 7 }, goal(6, FLOOR, 0)));
     expect(taken.ok).toBe(true);
     expect(Math.floor(bold.bot.entity.position.y)).toBe(FLOOR);
+    // Run 62 (#21): with no pickaxe and no block to climb back with, a fall of two or more is not taken, whatever maxDrop says.
+    const empty = makeSim(platform, { start });
+    const stranded = await drive(empty, run(empty, { maxDrop: 7 }, goal(6, FLOOR, 0)));
+    expect(stranded.reason).toBe('no_return');
+    expect(stranded.text).toMatch(/ツルハシもブロックも無い/u);
+    expect(Math.floor(empty.bot.entity.position.y)).toBe(FLOOR + 6);
   });
 });
 

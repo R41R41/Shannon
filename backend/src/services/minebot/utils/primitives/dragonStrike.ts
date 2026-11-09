@@ -3,6 +3,7 @@ import { entityHealth } from '../mapMarks.js';
 import { beginEngagement } from '../engagement.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { letGo, StepStopped, stopped, wait, type StepContext, type StepOutcome } from './common.js';
+import { takeUpMeleeWeapon } from './meleeWeapon.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { boxCentre, boxDistance, isDying, isPerched, partBox, partTarget, phaseName, STRIKE_ORDER, type DragonPart } from '../dragonParts.js';
 import { dragonPhaseOf, STRIKE_REACH } from '../dragonState.js';
@@ -75,6 +76,8 @@ export async function strikeDragon(ctx: StepContext, dragon: any, limitMs: numbe
   const bot = ctx.bot;
   const id: number = dragon.id;
   const started = Date.now();
+  // The bow is the dragon's while she flies; a blow with it in hand is one point (end1108h12: the chasing attack had the same gap).
+  const { takenUp } = await takeUpMeleeWeapon(ctx);
   const healthBefore = entityHealth(bot, dragon);
   const parts: Record<string, number> = {};
   const swungAt: number[] = [];
@@ -151,7 +154,7 @@ export async function strikeDragon(ctx: StepContext, dragon: any, limitMs: numbe
   const healthAfter = live ? entityHealth(bot, live) : null;
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
   const where = Object.entries(parts).map(([part, n]) => `${part} ${n}`).join('・');
-  const counts = `${blows}回振って ${landed}回当たった${where ? `（${where}）` : ''}、体力 ${healthBefore ?? '?'}→${healthAfter ?? '?'}、${seconds}秒`;
+  const counts = `${blows}回振って ${landed}回当たった${where ? `（${where}）` : ''}、体力 ${healthBefore ?? '?'}→${healthAfter ?? '?'}、${seconds}秒${takenUp ? `、${takenUp} を手に持った` : ''}`;
   const label = `ender_dragon（id ${id}）`;
   if (dead) return { ok: true, text: `${label} を倒した（${counts}）`, progress: struck(), data: { dragon: { blows, landed, parts, dead: true } } };
   if (!live) {

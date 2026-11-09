@@ -39,13 +39,13 @@ describe('run 43: the furnace says what its fuel smelts', () => {
     expect(outcome.text).toContain('作業台なしで板は残り 0（作業台は板 4。燃料は石炭・木炭を先に）');
   }, 30_000);
 
-  it('a batch out of fuel is said as stopped with how many smelted, at its time and after a wait', () => {
+  it('a fueled batch estimate is said at its time and after a wait, with output left to take', () => {
     const batch = { pos: { x: 10, y: 64, z: 8 }, item: 'raw_iron', count: 1, unfueledCount: 14, readyAt: 1_010, startedAt: 1_000 };
-    expect(furnaceDoneWords(batch)).toBe('かまど (10,64,8) は燃料切れで止まった（焼けたのは約 1 個。raw_iron 14 個は燃料が要る）');
-    expect(furnaceDoneWords({ ...batch, unfueledCount: undefined, count: 8 })).toBe('かまど (10,64,8) の焼きが終わった');
+    expect(furnaceDoneWords(batch)).toBe('かまど (10,64,8) の燃料分の焼き見込み時間に達した（約 1 個。raw_iron 14 個は燃料が要る。furnace op=takeで現物確認）');
+    expect(furnaceDoneWords({ ...batch, unfueledCount: undefined, count: 8 })).toBe('かまど (10,64,8) の焼き見込み時間に達した（furnace op=takeで現物確認）');
     const body = { activeFurnaces: [{ ...batch }], game: { dimension: 'overworld' } };
     expect(furnacesDueByNow(body, 1_005)).toEqual([]);
-    expect(furnacesDueByNow(body, 60_000)).toEqual(['かまど (10,64,8) は燃料切れで止まった（焼けたのは約 1 個。raw_iron 14 個は燃料が要る）']);
+    expect(furnacesDueByNow(body, 60_000)).toEqual(['かまど (10,64,8) の燃料分の焼き見込み時間に達した（約 1 個。raw_iron 14 個は燃料が要る。furnace op=takeで現物確認）']);
     expect(furnacesDueByNow(body, 90_000)).toEqual([]);
   });
 });
@@ -93,9 +93,10 @@ describe('run 43, 18:36:46 to 18:36:51: a drowned hits her after her fight hand 
       entity: { id: 1, name: 'player', position: new Vec3(193.5, 63, 204.5), yaw: 0, pitch: 0, onGround: true, metadata: [0] },
       health, food: 16, game: { dimension: 'overworld' }, entities: mobs,
       registry: { blocksByName: { cobblestone: { id: 1 } }, entitiesByName: { drowned: { type: 'hostile' } }, itemsByName: {}, items: {} },
-      heldItem: null, inventory: { items: () => [IRON_SWORD], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,
+      heldItem: null, inventory: { items: () => [IRON_SWORD], slots: Object.assign(new Array(46).fill(null), { 45: { name: 'shield' } }) }, controlState: {} as Record<string, boolean>,
       executingSkill: false, interruptExecution: false, clearControlStates: vi.fn(), look: vi.fn(async () => undefined), lookAt: vi.fn(async () => undefined),
       equip: vi.fn(async (item: any) => { bot.heldItem = item; }), consume: vi.fn(async () => undefined), stopDigging: () => undefined,
+      activateItem: vi.fn(() => { bot.usingHeldItem = true; }), deactivateItem: vi.fn(() => { bot.usingHeldItem = false; }),
       attack: vi.fn((entity: any) => { bot.__swings.push(entity.id); setTimeout(() => { entity.health -= 6; bot.emit('entityHurt', entity); }, 20); }),
       setControlState: vi.fn(), placeBlock: vi.fn(async () => undefined),
       blockAt: (position: Vec3) => { const x = Math.floor(position.x), y = Math.floor(position.y), z = Math.floor(position.z); return { diggable: true, hardness: 1.5, ...field(x, y, z), position: new Vec3(x, y, z) }; },

@@ -1,4 +1,5 @@
 import { Vec3 } from 'vec3';
+import { magmaAcrossStep } from './magmaFootprint.js';
 import { symbolFor, isOpenSymbol, platesOfShapes, type BlockReader, type Cell, type MapBlock } from './localMap.js';
 
 /**
@@ -232,7 +233,7 @@ export function installWalkRules(movements: any): void {
 }
 
 /**
- * Only the door rules of the above (go uses these and digs by its own rules): a door, gate or trapdoor is open ground to the search, a
+ * The shared door and magma-footprint rules (go uses these and digs by its own rules): a door, gate or trapdoor is open ground to the search, a
  * shut iron one is neither ground nor floor, and a jump over a gap never passes a shut door.
  */
 export function installDoorRules(movements: any): void {
@@ -252,6 +253,9 @@ export function installDoorRules(movements: any): void {
   };
   const getNeighbors = movements.getNeighbors.bind(movements);
   movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => {
+    // Cell nodes are centred at +0.5: only a diagonal sweeps the two neighbouring corner floors.
+    if (!movements.__allowMagma && !move.parkour && magmaAcrossStep(
+      (x, y, z) => movements.getBlock(node, x - node.x, y - node.y, z - node.z)?.name, node, move)) return false;
     // Run 47 (hold 1): an open trapdoor at the head of the next cell stands as a wall on one edge of its cell; the search took it as open ground and the body stood 3 s against it.
     // Run 47 (holds 7-9, after the diagonals): a step upstream in flowing water under a ceiling (the water fills the column up to the roof) is not a way: the body floats up into the roof and the
     // current holds it (4 s without a step, over and over). The step is not taken unless the walk is told to try it (`movements.__upstream`, the go's last look for the reason).

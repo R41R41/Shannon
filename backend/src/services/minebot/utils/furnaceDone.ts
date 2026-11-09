@@ -1,6 +1,6 @@
 /**
  * The batches in the furnaces that have come due (smelt, furnace, start-smelting all write `bot.activeFurnaces`): each is told once, as
- * the working event `furnace.done` ("かまど (x,y,z) の焼きが終わった"). The time is the body's estimate from the furnace's own progress
+ * the working event `furnace.done` ("かまど (x,y,z) の焼き見込み時間に達した（furnace op=takeで現物確認）"). The time is the body's estimate from the furnace's own progress
  * when the batch was put in; whether it is truly done is seen on taking it out (`completionVerified` stays false in the jobs).
  * - Told once per batch: the key is the furnace's cell, its dimension and the time the batch began, so a batch put in again is a new one,
  *   and a batch taken out before it was due (the entry is dropped) is never told.
@@ -16,14 +16,14 @@ export interface FurnaceDone {
 }
 
 /**
- * A batch come due, as said: done, or (run 43: five waits before a furnace out of fuel, about 420 s) stopped for want of fuel with how many smelted
- * and how many still need fuel.
+ * A batch come due, as estimated: the fueled batch time is reached, with any input still needing fuel.
+ * Actual output is confirmed only by taking it out.
  */
 export function furnaceDoneWords(batch: FurnaceBatch): string {
   const { x, y, z } = batch.pos;
   return batch.unfueledCount
-    ? `かまど (${x},${y},${z}) は燃料切れで止まった（焼けたのは約 ${batch.count ?? 0} 個。${batch.item ?? '材料'} ${batch.unfueledCount} 個は燃料が要る）`
-    : `かまど (${x},${y},${z}) の焼きが終わった`;
+    ? `かまど (${x},${y},${z}) の燃料分の焼き見込み時間に達した（約 ${batch.count ?? 0} 個。${batch.item ?? '材料'} ${batch.unfueledCount} 個は燃料が要る。furnace op=takeで現物確認）`
+    : `かまど (${x},${y},${z}) の焼き見込み時間に達した（furnace op=takeで現物確認）`;
 }
 /**
  * The batches due by `now` that no wait has said yet, as said (`furnaceDoneWords`), in this dimension; each is said by one wait only (run 43: the

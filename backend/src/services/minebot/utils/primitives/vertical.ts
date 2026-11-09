@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3';
 import { feetCell, type Cell } from '../localMap.js';
 import { bodyOverlap } from '../placeFacts.js';
 import { centreInColumn, digCell, floorDrop, moveOneCell, relativeTo, waitDropOne } from '../tunnelWalk.js';
-import { explainShaftRefusal, shaftStepRefusal } from '../shaftDown.js';
+import { airPerchHint, explainShaftRefusal, shaftStepRefusal } from '../shaftDown.js';
 import { trailOf } from '../stairLine.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
@@ -560,6 +560,8 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       }
     }
   };
+  // end1109 S9: on a perch in the air the stop names the way down (the shaft here or beside, or back the way laid).
+  const perchHint = (feet: Cell): string | null => airPerchHint(bot as never, new Vec3(feet.x, feet.y, feet.z));
   const stairsLevel = async (plan: Plan) => {
     precheckStandingRoof(plan);
     precheckDig(plan.clear);
@@ -581,12 +583,21 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
         if (!laid.confirmed) scaffoldUnconfirmed = true;   // the world did not show it in a block update: walked on, not counted
       }
     }
+    // Run 62 (1,846 and 1,856 s, two stairs down at y 5 stopped no_floor): the next foothold opened onto a cave deeper than a harmless fall. A player lays
+    // that step from the blocks carried and goes on down; a step that cannot be laid (no canPlace block, no face, out of reach) stays the stop below.
+    if (down && placeOrder.length) {
+      const under = blockAt(bot, plan.floor);
+      if (under && !solid(under) && !liquidKind(under) && floorDrop(bot as never, plan.floor, down) === null) {
+        const laid = await layCell(plan.floor);
+        if (laid.ok && !laid.confirmed) scaffoldUnconfirmed = true;
+      }
+    }
     // Run 47: a stair down into a cave (the next foothold is air with rock one or two cells under it) is taken as a fall of at most three, which does no harm; up, and onto liquid, magma or a drop
     // beyond that, it stays a stop.
     const extra = floorDrop(bot as never, plan.floor, down);
     if (extra === null || (!down && extra !== 0)) {
       const under = nameOf(blockAt(bot, plan.floor));
-      throw new VStop('no_floor', `次の足場 ${cellText(plan.floor)} が ${under} で立てない（落ちる段が ${down ? 3 : 1} を超える・立てない床）`, plan.floor, '別の形か、足場を置いて');
+      throw new VStop('no_floor', `次の足場 ${cellText(plan.floor)} が ${under} で立てない（落ちる段が ${down ? 3 : 1} を超える・立てない床）`, plan.floor, (down && perchHint(plan.from)) || '別の形か、足場を置いて');
     }
     const landing = shift(plan.to, 0, -extra);
     if (extra > 0) {
@@ -625,7 +636,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
         const side = NEIGHBOURS.slice(0, 2).concat(NEIGHBOURS.slice(4)).map(([ox, oy, oz]) => shift(plan.to, ox, oy, oz)).find(cell => isLiquidName(nameOf(blockAt(bot, cell))));
         throw new VStop(side && liquidKind(blockAt(bot, side)) === 'lava' ? 'lava' : 'water', text, side ?? plan.to);
       }
-      throw new VStop('no_floor', text, shift(plan.to, 0, -1), '別の形か、下を確かめてから');
+      throw new VStop('no_floor', text, shift(plan.to, 0, -1), perchHint(plan.from) ?? '別の形か、下を確かめてから');
     }
     const centred = await centreInColumn(bot as never, new Vec3(plan.from.x, plan.from.y, plan.from.z));
     if (centred) throw new VStop('displaced', `縦穴の真ん中に立てない（${centred}）`, feetCell(bot) ?? plan.from);

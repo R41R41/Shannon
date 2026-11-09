@@ -1,8 +1,9 @@
 import { Vec3 } from 'vec3';
 import { feetCell, relativeWords, type Cell } from '../localMap.js';
 import { cellText, freeSlots, guard, inventoryCount, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
-import { nearestTable, tableInReach } from './craft.js';
+import { nearestTable, ROUND_SETTLE_MS, tableInReach } from './craft.js';
 import { placeNearby } from './placeSpot.js';
+import { go } from './go.js';
 import { withProgress } from './progressUnits.js';
 import { craftEvents } from './craftEvents.js';
 import { withWoodForms } from './woodRecipes.js';
@@ -21,6 +22,8 @@ interface State { stock: Map<string, number>; steps: Step[]; short: Map<string, 
 
 const MAX_NODES = 40_000;
 const MAX_CANDIDATES = 16;
+/** A table this near (metres) is walked to when none is within reach (end1109o05). */
+const TABLE_WALK_M = 16;
 const nameOf = (bot: any, id: number): string => String(bot.registry?.items?.[id]?.name ?? id);
 
 /** What a recipe takes: its ingredients by item name and count (the negative entries of the recipe's delta). */
@@ -142,6 +145,17 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
       } else {
         const near = nearestTable(bot);
         const feet = feetCell(bot);
+        // end1109o05: a table 6.8 m off, out of the 4.5 m reach: four makes and walks stopped over 10 minutes. A table within TABLE_WALK_M
+        // is walked to (the way only, nothing dug or placed) and then used.
+        if (near && feet && Math.hypot(near.x - feet.x, near.y - feet.y, near.z - feet.z) <= TABLE_WALK_M) {
+          const beside = [[1, 0], [-1, 0], [0, 1], [0, -1]].flatMap(([dx, dz]) => [0, -1, 1].map(dy => ({ x: near.x + dx, y: near.y + dy, z: near.z + dz })));
+          await go(ctx, { goals: beside, range: 1, maxDrop: 3, seconds: 20 });
+          table = tableInReach(bot);
+        }
+      }
+      if (!table) {
+        const near = nearestTable(bot);
+        const feet = feetCell(bot);
         return fail(bot, 'no_table', `${name} の途中に作業台（3x3）が要る。手の届く所に作業台が無く、持ってもいない${near && feet ? `（いちばん近い作業台 ${cellText(near)} 自分から${relativeWords(feet, near)}）` : near ? `（いちばん近い作業台 ${cellText(near)}）` : ''}`);
       }
     }
@@ -173,8 +187,21 @@ async function craftStep(ctx: StepContext, step: Step, table: any, target: strin
   const record = craftEvents(ctx, step.recipe, step.item, intermediate, madeNames);
   try {
     try {
-      const crafted = await guard(ctx, Promise.resolve(bot.craft(step.recipe, step.times, step.recipe.requiresTable === true ? table : undefined)), 4000 + step.times * 400);
-      if (!crafted) return { n: 0, fail: fail(bot, 'craft_failed', `${step.item} を作る途中で時間切れ（今 ${inventoryCount(bot, step.item)} 個）`) };
+      if (step.recipe.requiresTable === true || step.times === 1) {
+        const crafted = await guard(ctx, Promise.resolve(bot.craft(step.recipe, step.times, step.recipe.requiresTable === true ? table : undefined)), 4000 + step.times * 400);
+        if (!crafted) return { n: 0, fail: fail(bot, 'craft_failed', `${step.item} を作る途中で時間切れ（今 ${inventoryCount(bot, step.item)} 個）`) };
+      } else {
+        // In the hand, a round at a time, as the craft hand does (utils/primitives/craft): mineflayer's own loop starts the next round before the last one's result has
+        // settled. S5's rig (c1, 2026-11-05): make ender_eye 12 made the twelve powder and then failed the eyes with "missing ingredient", and the head went to hunt
+        // endermen for pearls it held.
+        for (let round = 0; round < step.times; round++) {
+          const roundStart = inventoryCount(bot, step.item);
+          const crafted = await guard(ctx, Promise.resolve(bot.craft(step.recipe, 1, undefined)), 4000);
+          if (!crafted) return { n: Math.max(0, inventoryCount(bot, step.item) - before), fail: fail(bot, 'craft_failed', `${step.item} を作る途中で時間切れ（${round}/${step.times} 回目まで。今 ${inventoryCount(bot, step.item)} 個）`) };
+          if (round + 1 < step.times) await wait(ctx, ROUND_SETTLE_MS);
+          if (inventoryCount(bot, step.item) <= roundStart && round + 1 < step.times) await wait(ctx, ROUND_SETTLE_MS);
+        }
+      }
     } catch (error) {
       if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
       return { n: 0, fail: fail(bot, freeSlots(bot) === 0 ? 'full' : 'craft_failed', `${step.item} を作れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}`) };

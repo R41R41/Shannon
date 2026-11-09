@@ -133,6 +133,42 @@ describe('the cover: burning in a shooter\'s line, the body cuts the line by its
     expect(lines[0]).toMatch(/^燃えて射手から見えている: 頭の上 \(0,63,0\) を cobblestone で塞いだ。射線が切れた/u);
   });
 
+  it('end1108h26: a wither skeleton in the cell over the pit: no seal (it failed about 20 times in a row while the body died in the pit)', async () => {
+    const clock = { at: 9_160_000 };
+    const pit = (x: number, y: number, z: number): Cell => (x === 0 && z === 0 && y >= 61 && y <= 63 ? AIR : field(x, y, z));
+    const wither = { id: 7, name: 'wither_skeleton', type: 'hostile', height: 2.4, width: 0.7, position: new Vec3(0.5, 63, 0.5) };
+    const { bot, ledger } = burning(pit, { mobs: { 9: blaze(9, 1.5, 72, 0.5), 7: wither }, items: [COBBLE], now: () => clock.at });
+    bot.entity.position = new Vec3(0.5, 61, 0.5);
+    bot.heldItem = COBBLE;
+    await ticksUntilQuiet(bot, clock, 4);
+    expect(bot.__placed).not.toContain('0,63,0');
+    const lines = covers(ledger).map(entry => entry.detail).join(' | ');
+    expect(lines).toContain('頭の上 (0,63,0) に wither_skeleton がいる');
+    expect(lines).not.toContain('で塞いだ');
+  });
+
+  it('end1108h26: a seal that failed is not tried again in the episode', async () => {
+    const clock = { at: 9_170_000 };
+    const pit = (x: number, y: number, z: number): Cell => (x === 0 && z === 0 && y >= 61 && y <= 63 ? AIR : field(x, y, z));
+    const { bot, ledger } = burning(pit, { mobs: { 9: blaze(9, 1.5, 72, 0.5) }, items: [COBBLE], now: () => clock.at });
+    bot.entity.position = new Vec3(0.5, 61, 0.5);
+    bot.heldItem = COBBLE;
+    bot.placeBlock = vi.fn(async () => { throw new Error('blocked'); });
+    await ticksUntilQuiet(bot, clock, 6);
+    const lines = covers(ledger).map(entry => entry.detail);
+    expect(lines.filter(line => line.includes('で塞いだ'))).toHaveLength(1);
+    expect(lines.join(' | ')).toContain('もう塞がない');
+  });
+
+  it('end1108h26: a melee enemy within reach: no dig down (in the pit the wither skeleton struck down at the body)', async () => {
+    const clock = { at: 9_180_000 };
+    const wither = { id: 7, name: 'wither_skeleton', type: 'hostile', height: 2.4, width: 0.7, position: new Vec3(2.5, 64, 0.5) };
+    const { bot, ledger } = burning(field, { mobs: { 9: blaze(9, 20.5, 64, 0.5), 7: wither }, now: () => clock.at });
+    await ticksUntilQuiet(bot, clock, 3);
+    expect(bot.__dug).toEqual([]);
+    expect(covers(ledger).map(entry => entry.detail).join(' | ')).toContain('近接の wither_skeleton #7 が 2.0m（穴は罠になるので掘らない）');
+  });
+
   it('lava beside the cell under the feet: no dig; the facts of why no hand is made are told once', async () => {
     const clock = { at: 9_200_000 };
     const lavaBeside = (x: number, y: number, z: number): Cell => (x === 1 && y === 63 && z === 0 ? { name: 'lava', boundingBox: 'empty' } : field(x, y, z));
@@ -163,6 +199,42 @@ describe('the cover: burning in a shooter\'s line, the body cuts the line by its
     expect(covers(ledger)[0]).toMatchObject({ kind: 'cover', outcome: 'done' });
     expect(covers(ledger)[0].detail).toContain('燃えて射手が 3.2m にいるので走って離れた');
     expect(bot.entity.position.x).toBeLessThan(-5);
+  });
+
+  it('end1108h24: on a bridge one wide over a drop of 34, burning with a blaze 3 m off, no run (it sprinted off the bridge and fell to death at 5 s)', async () => {
+    const clock = { at: 9_255_000 };
+    // A bridge along x at z 0 (floor y 63), air on both sides down to y 29 and below that.
+    const bridge = (_x: number, y: number, z: number): Cell => (y === 63 && z === 0 ? STONE : y < 29 ? STONE : AIR);
+    const { bot, ledger } = burning(bridge, { mobs: { 9: blaze(9, 3.5, 65, 0.5) }, now: () => clock.at });
+    let yaw = 0;
+    bot.look = vi.fn(async (to: number) => { yaw = to; });
+    bot.setControlState = vi.fn((key: string, on: boolean) => { if (key === 'forward' && on) bot.entity.position = bot.entity.position.offset(-Math.sin(yaw) * 0.3, 0, -Math.cos(yaw) * 0.3); });
+    await ticksUntilQuiet(bot, clock, 3);
+    const lines = covers(ledger).map(entry => entry.detail).join('\n');
+    expect(lines).not.toContain('走って離れた');
+    expect(lines).toContain('縁では走らない');
+    expect(Math.floor(bot.entity.position.z)).toBe(0);
+  });
+
+  it('end1108h24: a run on an open floor ends where the floor narrows to a bridge over a drop', async () => {
+    const clock = { at: 9_257_000 };
+    // A walled lane (z -1..1) from x -3 east, and from x -4 west a bridge one wide at z 0 over air down to y 29.
+    const ledge = (x: number, y: number, z: number): Cell => {
+      if (y < 29) return STONE;
+      if (Math.abs(z) >= 2) return x >= -3 || y >= 64 ? STONE : AIR;
+      if (y >= 64) return AIR;
+      return y === 63 && (x >= -3 || z === 0) ? STONE : x >= -3 ? STONE : AIR;
+    };
+    const { bot, ledger } = burning(ledge, { mobs: { 9: blaze(9, 3.5, 65, 0.5) }, now: () => clock.at });
+    let yaw = 0;
+    bot.look = vi.fn(async (to: number) => { yaw = to; });
+    bot.setControlState = vi.fn((key: string, on: boolean) => { if (key === 'forward' && on) bot.entity.position = bot.entity.position.offset(-Math.sin(yaw) * 0.3, 0, -Math.cos(yaw) * 0.3); });
+    tick(bot);
+    await vi.waitFor(() => expect(covers(ledger)).toHaveLength(1), { timeout: 4000, interval: 5 });
+    expect(covers(ledger)[0].detail).toContain('走って離れた');
+    // Stopped in the last cell of the lane (its diagonals over the bridge's sides are voids), not out on the bridge.
+    expect(bot.entity.position.x).toBeGreaterThanOrEqual(-3.5);
+    expect(bot.entity.position.x).toBeLessThan(-2);
   });
 
   it('S2 (lab c1): a dig that did not lower the body (knocked off the hole) is not made again in the episode', async () => {

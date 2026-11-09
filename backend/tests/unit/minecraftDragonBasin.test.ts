@@ -122,6 +122,36 @@ describe('observed basin footing and go entry', () => {
     expect(hints(s)?.basin).toBeUndefined();
   });
 
+  it.each([0, 1, 2, 8, 10])('offers where to wait for the next sit while she flies (phase %s), near by a checked walk and far on the ring toward the body', phase => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const s = fixture(); s.d.metadata[16] = phase; s.d.position = new Vec3(40, 90, -30);
+    const near = dragonApproach(s.bot, s.d, phase)!;
+    expect(near.strike).toEqual([]); expect(near.basin).toBeUndefined(); expect(near.bed).toBeUndefined();
+    expect(near.wait!.length).toBeGreaterThan(0);
+    for (const p of near.wait!) { const r = Math.hypot(p.x - 0.5, p.z - 0.5); expect(r).toBeGreaterThanOrEqual(10); expect(r).toBeLessThanOrEqual(14); expect(p.straight).toBeUndefined(); }
+    s.bot.entity.position = new Vec3(70.5, 65, 0.5);
+    const far = dragonApproach(s.bot, s.d, phase)!.wait!;
+    expect(far.length).toBeGreaterThan(0);
+    for (const p of far) {
+      expect(p.straight).toBe(true); expect(p.y).toBe(65);
+      expect(Math.hypot(p.x - 0.5, p.z - 0.5)).toBeGreaterThan(10); expect(Math.hypot(p.x - 0.5, p.z - 0.5)).toBeLessThan(14);
+      expect(p.x).toBeGreaterThan(0.5); // the body's side of the perch
+      expect(p.walkSeconds).toBeCloseTo(p.walkMeters / 4.317);
+    }
+    expect(far[0].walkMeters).toBeCloseTo(Math.hypot(far[0].x - 70.5, far[0].z - 0.5));
+    // a lying breath cloud on the near ring cell is not offered
+    cloud(s, far[0].x, far[0].z);
+    expect(dragonApproach(s.bot, s.d, phase)!.wait!.some(p => Math.hypot(p.x - far[0].x, p.z - far[0].z) < 3)).toBe(false);
+  });
+
+  it('offers nothing while she dies or without a loaded fountain', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const s = fixture();
+    expect(dragonApproach(s.bot, s.d, 9)).toBeUndefined();
+    s.world.set(0, 67, 0, 'air');
+    expect(dragonApproach(s.bot, s.d, 0)).toBeUndefined();
+  });
+
   it('bounds both scans and validation by the shared observation budget', () => {
     const s = fixture(); let time = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => time += 2);

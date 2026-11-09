@@ -177,15 +177,15 @@ export function makeHandsSim(ground: Ground, options: { start?: [number, number,
         scheduleSettle();
       }
     },
-    /** A right click on a block's face (flint and steel lights the cell beside it). */
+    /** A right click on a block's face (flint and steel lights the cell beside it; a fire charge too, and is used up). */
     activateBlock: async (block: any, direction?: Vec3) => {
       const held = bot.heldItem;
-      if (held?.name !== 'flint_and_steel' || !direction) return;
+      if ((held?.name !== 'flint_and_steel' && held?.name !== 'fire_charge') || !direction) return;
       const cell = block.position.plus(direction);
       const there = world.nameAt(cell.x, cell.y, cell.z);
       if (!there || !AIR.has(there)) return;
       world.set(cell.x, cell.y, cell.z, 'fire');
-      held.durabilityUsed++;
+      if (held.name === 'fire_charge') held.count--; else held.durabilityUsed++;
       bot.lit.push(`${cell.x},${cell.y},${cell.z}`);
       makePortal(cell);
       bot.emit('blockUpdate', null, null);

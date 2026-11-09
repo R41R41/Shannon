@@ -166,6 +166,8 @@ describe('mine on the practice ground', () => {
     expect(shut.ok).toBe(false);
     expect(shut.reason).toBe('unreachable');
     expect(g.dugLog).toHaveLength(0);
+    // end1109o04: the stop without a dig list says the same hand with the rock to dig.
+    expect(shut.text).toContain('同じ mine に dig=stone,dirt');
     g = build();
     const road = await mine(stepContext(g.bot, undefined, 100), { block: 'iron_ore', at: [cell(15, 64, 8)], count: 1, canDig: ['stone'], maxDig: 12, seconds: 90 });
     expect(road.ok).toBe(true);
@@ -193,6 +195,23 @@ describe('mine on the practice ground', () => {
     expect(outcome.ok).toBe(false);
     expect(outcome.reason).toBe('unreachable');
     expect(g.dugLog).toHaveLength(0);
+  }, 90_000);
+
+  it('5b. end1109o05: tool=iron_pickaxe named for stone digs it with the stone pickaxe and says so once; for an ore only iron makes drop, iron is used', async () => {
+    let g = open();
+    g.set(11, 64, 8, 'stone');
+    g.give('stone_pickaxe', 1); g.give('iron_pickaxe', 1);
+    const rock = await mine(stepContext(g.bot), { block: 'stone', at: [cell(11, 64, 8)], count: 1, tool: 'iron_pickaxe' });
+    expect(rock.ok).toBe(true);
+    expect(g.dugLog.map(dug => dug.tool)).toEqual(['stone_pickaxe']);
+    expect(rock.text).toContain('stone は stone_pickaxe で足りるので iron_pickaxe は取っておいた');
+    g = open();
+    g.set(11, 64, 8, 'diamond_ore');
+    g.give('stone_pickaxe', 1); g.give('iron_pickaxe', 1);
+    const ore = await mine(stepContext(g.bot), { block: 'diamond_ore', at: [cell(11, 64, 8)], count: 1, tool: 'iron_pickaxe' });
+    expect(ore.ok).toBe(true);
+    expect(g.dugLog.map(dug => dug.tool)).toEqual(['iron_pickaxe']);
+    expect(ore.text).not.toContain('取っておいた');
   }, 90_000);
 
   it('6. the act\'s own stop cuts the hand between two cells: the cells after it are not dug', async () => {
@@ -340,6 +359,11 @@ describe('make on the practice ground', () => {
     g.set(1, 64, 1, 'crafting_table');
     g.bot.entity.position = new Vec3(14.5, 64, 14.5);
     expect((await make(stepContext(g.bot), { item: 'wooden_pickaxe' })).reason).toBe('no_table');
+    // end1109o05: a table within 16 m (here about 9 m) is walked to and used.
+    g.set(8, 64, 8, 'crafting_table');
+    const walked = await make(stepContext(g.bot, undefined, 40), { item: 'wooden_pickaxe' });
+    expect(walked.ok).toBe(true);
+    expect(g.countOf('wooden_pickaxe')).toBe(1);
     expect((await make(stepContext(g.bot), { item: 'cobblestone' })).reason).toBe('no_recipe');
     expect((await make(stepContext(g.bot), { item: 'wooden_pikaxe' })).reason).toBe('no_recipe');
   }, 20_000);
@@ -513,7 +537,7 @@ describe('the furnace.done event', () => {
     const told = events();
     expect(told).toHaveLength(1);
     expect(told[0].subject).toBe('furnace:10,64,10');
-    expect(told[0].data).toMatchObject({ x: 10, y: 64, z: 10, text: 'かまど (10,64,10) の焼きが終わった', input: 'iron_ore', count: 8, dimension: 'overworld', estimated: true });
+    expect(told[0].data).toMatchObject({ x: 10, y: 64, z: 10, text: 'かまど (10,64,10) の焼き見込み時間に達した（furnace op=takeで現物確認）', input: 'iron_ore', count: 8, dimension: 'overworld', estimated: true });
     expect(Number(told[0].data.lateSec)).toBeGreaterThanOrEqual(5);
     // Once only, also after the events are taken and the clock moves on; a batch put in again later is a new one.
     watcher.acknowledge(told[0].seq);

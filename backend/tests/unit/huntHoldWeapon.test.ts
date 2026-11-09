@@ -74,6 +74,42 @@ describe('attack hold: what is in the hand when the blows are struck', () => {
   });
 });
 
+describe('attack (the chasing one): what is in the hand when the blows are struck', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  // end1108h12 S7 (11/8): after the bow, the chasing attack hit blaze 531 with the bow in hand (23 swings every quarter second, 12 landed,
+  // 5.6 s for 7 points) while an iron sword was in the pack. The chasing attack takes the sword up first, as the hold does.
+  it('a bow in the hand and a sword in the pack: the sword is taken up before the first blow, the blows are a sword\'s apart, and the line says so', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const bot = flat({ name: 'bow', type: 2 }, [{ name: 'bow', type: 2, count: 1 }, { name: 'iron_sword', type: 5, count: 1 }, { name: 'arrow', type: 8, count: 10 }]);
+    bot.entities = { 5: { ...blaze(5, 2.5, 64, 0.5), metadata: [] } };
+    const swungWith: string[] = [];
+    const swungAt: number[] = [];
+    bot.attack = () => { swungWith.push(String(bot.heldItem?.name ?? 'hand')); swungAt.push(Date.now()); if (swungWith.length === 4) { delete bot.entities[5]; bot.emit('entityDead', { id: 5 }); } };
+    const running = attack(ctx(bot), { target: 5, chase: false, maxSeconds: 10 });
+    await vi.advanceTimersByTimeAsync(6_000);
+    const out = await running;
+    expect(bot.equips).toEqual(['iron_sword']);
+    expect(new Set(swungWith)).toEqual(new Set(['iron_sword']));
+    expect(swungAt.slice(1).every((at, index) => at - swungAt[index] >= 625)).toBe(true);
+    expect(out.ok).toBe(true);
+    expect(out.text).toContain('を倒した');
+    expect(out.text).toContain('iron_sword を手に持った');
+  });
+
+  it('a sword already in the hand stays, and the line does not say anything was taken up', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const bot = flat({ name: 'iron_sword', type: 5 }, [{ name: 'iron_sword', type: 5, count: 1 }]);
+    bot.entities = { 5: { ...blaze(5, 2.5, 64, 0.5), metadata: [] } };
+    bot.attack = () => { delete bot.entities[5]; bot.emit('entityDead', { id: 5 }); };
+    const running = attack(ctx(bot), { target: 5, chase: false, maxSeconds: 5 });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const out = await running;
+    expect(bot.equips).toEqual([]);
+    expect(out.text).not.toContain('手に持った');
+  });
+});
+
 describe('attack hold: a shield that breaks is replaced from the pack', () => {
   afterEach(() => { vi.useRealTimers(); });
 

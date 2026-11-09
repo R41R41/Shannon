@@ -148,7 +148,8 @@ export async function digBlockVerified(
   }
   const position = block.position;
   const observedStateIds: number[] = [];
-  let confirmation: ServerConfirmedDig | null = null;
+  // Packet callbacks own this mutable state; it can change while the dig promise is pending.
+  const server: { confirmation: ServerConfirmedDig | null } = { confirmation: null };
   let notify: (() => void) | undefined;
   const observe = (stateId: number | null) => {
     if (stateId === null || !Number.isInteger(stateId)) return;
@@ -158,10 +159,10 @@ export async function digBlockVerified(
     // that acknowledgement, nor a state-only update of the same block type.
     if (!replacement) return;
     if (replacement.id === block.type) {
-      confirmation = null; // a later correction supersedes an earlier change
+      server.confirmation = null; // a later correction supersedes an earlier change
       return;
     }
-    confirmation = { stateId, blockName: replacement.name };
+    server.confirmation = { stateId, blockName: replacement.name };
     notify?.();
   };
   const onBlockChange = (packet: any) => {
@@ -174,7 +175,7 @@ export async function digBlockVerified(
   listenFirst(client, 'block_change', onBlockChange);
   listenFirst(client, 'multi_block_change', onMultiBlockChange);
   // The library's own guess of air is undone as it is made: only the server's packet turns this block to air.
-  const release = holdBlockUntilConfirmed(bot as any, block, () => confirmation !== null);
+  const release = holdBlockUntilConfirmed(bot as any, block, () => server.confirmation !== null);
   try {
     // Mineflayer fixes the whole dig duration when digging starts (x5 in
     // water, x5 while airborne). Draining flow from a scooped source or a
@@ -184,7 +185,7 @@ export async function digBlockVerified(
     while (Date.now() < settleDeadline && slowDigStateIsPassing(bot)
       && !actionSignal(bot)?.aborted) await new Promise(resolve => setTimeout(resolve, 100));
     await digBounded(bot, block);
-    if (!confirmation) {
+    if (!server.confirmation) {
       await new Promise<void>((resolve, reject) => {
         const signal = actionSignal(bot);
         let timer: ReturnType<typeof setTimeout>;
@@ -200,14 +201,15 @@ export async function digBlockVerified(
         if (signal?.aborted) onAbort();
       });
     }
-    if (!confirmation) throw new ServerDigUnconfirmedError(position, observedStateIds);
+    const confirmed = server.confirmation;
+    if (!confirmed) throw new ServerDigUnconfirmedError(position, observedStateIds);
     // A server packet can arrive before Mineflayer's local dig timer, which
     // then overwrites it with predicted air. Keep the local map synchronized
     // with the last authoritative state before downstream path/placement work.
-    restoreAuthoritativeState(bot, position, confirmation.stateId);
-    return confirmation;
+    restoreAuthoritativeState(bot, position, confirmed.stateId);
+    return confirmed;
   } catch (error) {
-    if (!confirmation) restoreAuthoritativeState(bot, position, block.stateId);
+    if (!server.confirmation) restoreAuthoritativeState(bot, position, block.stateId);
     throw error;
   } finally {
     release();

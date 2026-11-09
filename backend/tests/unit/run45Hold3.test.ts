@@ -38,7 +38,7 @@ describe('run 45, hold 3: the way does not undo its own work', () => {
     const ground: Ground = (x, y, z) => {
       if (Math.abs(x) > R || Math.abs(z) > R) return null;
       if (y >= FLOOR) return 'air';
-      if (y >= FLOOR - 6 && (x === 1 || x === 2) && z !== 4) return 'air';
+      if (y >= FLOOR - 3 && (x === 1 || x === 2) && z !== 4) return 'air'; // 3 deep: a floor laid here is not over open air (go's AIR_LAY_DROP)
       return 'stone';
     };
     const sim = makeSim(ground, { start: [0.5, FLOOR, 0.5], items: [{ name: 'cobblestone', count: 8 }] });

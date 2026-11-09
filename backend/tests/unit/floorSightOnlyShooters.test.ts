@@ -26,8 +26,8 @@ describe('a blaze or a ghast that cannot see the body is no threat the floor run
     expect(fleeThreat(body({ 4: mob(4, 'blaze', new Vec3(4.5, 66, 0.5)) }))).toBeNull();
   });
 
-  it('a ghast likewise; a skeleton or a zombie that can reach the body is a threat whether it sees it or not (they walk after it)', () => {
-    exposures[5] = 'reachable'; exposures[6] = 'reachable'; exposures[7] = 'reachable';
+  it('a ghast likewise; a skeleton that sees the body, or a zombie that can reach it, is a threat (run62 #17: a bow that cannot see is not)', () => {
+    exposures[5] = 'reachable'; exposures[6] = 'seen'; exposures[7] = 'reachable';
     expect(fleeThreat(body({ 5: mob(5, 'ghast', new Vec3(15.5, 70, 0.5)) }))).toBeNull();
     expect(fleeThreat(body({ 6: mob(6, 'skeleton', new Vec3(12.5, 64, 0.5)) }))?.nearest).toBeGreaterThan(11);
     expect(fleeThreat(body({ 7: mob(7, 'zombie', new Vec3(8.5, 64, 0.5)) }))?.nearest).toBeGreaterThan(7);

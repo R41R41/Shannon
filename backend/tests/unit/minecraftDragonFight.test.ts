@@ -569,12 +569,15 @@ describe('the floor reflex out of the dragon\'s reach', () => {
   });
 });
 
-import { shoot, arrowBlockedAt } from '../../src/services/minebot/utils/primitives/shoot.js';
+import { shoot, arrowBlockedAt, aimPitch } from '../../src/services/minebot/utils/primitives/shoot.js';
 
 describe('shoot at a crystal', () => {
   /** The bot at (0.5, 64, 0.5) with a bow and arrows in hand, a crystal at the given place in the air. */
   function bowFixture(crystalAt: Vec3) {
-    const f = fixture({ at: new Vec3(0.5, 64, 0.5), phase: DRAGON_PHASE.holdingPattern });
+    const world = endWorld();
+    // This shooter stands on the floor, outside the shared fountain pillar used by other fixtures.
+    for (let y = 64; y <= 67; y++) world.delete(key(0, y, 0));
+    const f = fixture({ at: new Vec3(0.5, 64, 0.5), phase: DRAGON_PHASE.holdingPattern, world });
     const bow = { name: 'bow', type: 800, count: 1 };
     Object.assign(f.bot, {
       heldItem: bow, quickBarSlot: 0, setQuickBarSlot: vi.fn(), look: vi.fn(async () => undefined),
@@ -603,6 +606,24 @@ describe('shoot at a crystal', () => {
     expect(f.bot.activateItem).toHaveBeenCalled();
     expect(open.text).toMatch(/射った/u);
   }, 15_000);
+  it('refuses a creature behind a wall before the draw, naming the cell, and shoots once it is in the open (a blaze in its room, 2026-11-03)', async () => {
+    const f = bowFixture(new Vec3(30.5, 66, 0.5));
+    f.bot.entities[301] = { id: 301, name: 'blaze', position: new Vec3(8.5, 66, 0.5), metadata: [], height: 1.8 };
+    for (let y = 64; y <= 69; y++) f.world.set(key(4, y, 0), 'cobblestone');
+    const blocked = await shoot(ctx(f.bot) as never, { target: 301 });
+    expect(blocked).toMatchObject({ ok: false, reason: 'line_blocked' });
+    expect(blocked.text).toMatch(/cobblestone/u);
+    expect(f.bot.activateItem).not.toHaveBeenCalled();
+    for (let y = 64; y <= 69; y++) f.world.delete(key(4, y, 0));
+    const open = await shoot(ctx(f.bot) as never, { target: 301 });
+    expect(f.bot.activateItem).toHaveBeenCalled();
+    expect(open.text).toMatch(/射った/u);
+  }, 15_000);
+  it('aims at a creature that hovers almost over the body (a steep pitch, past the old 70 degrees)', () => {
+    const near = aimPitch(3, 0.3, 6);
+    expect(near).not.toBeNull();
+    expect(near!.pitch * 180 / Math.PI).toBeGreaterThan(70);
+  });
   it('does not let go of a draw when the body was brought within the blast\'s reach meanwhile', async () => {
     const f = bowFixture(new Vec3(30.5, 66, 0.5));
     f.bot.activateItem = vi.fn(() => { setTimeout(() => { f.self.position = new Vec3(22.5, 64, 0.5); }, 400); });
@@ -653,7 +674,14 @@ describe('the water-bucket clutch of a fall in the End', () => {
       else if (item.name === 'bucket') { hotbar[selected] = { name: 'water_bucket', slot: 36 + selected }; world.delete(key(0, 64, 0)); }
       bot.heldItem = hotbar[selected];
     });
-    const timer = setInterval(() => { if (self.position.y > 64) self.position.y = Math.max(64, self.position.y - 0.5); else { self.onGround = true; self.velocity = new Vec3(0, 0, 0); } }, 15);
+    const timer = setInterval(() => {
+      if (self.position.y > 64) self.position.y = Math.max(64, self.position.y - 0.5);
+      else { self.onGround = true; self.velocity = new Vec3(0, 0, 0); }
+      // Recovery fixture only: preserve its small position steps, but emit the native packet/event order.
+      bot.emit('physicsTick');
+      bot._client.write('position', { x: self.position.x, y: self.position.y, z: self.position.z });
+      bot.emit('move', self.position.clone());
+    }, 15);
     return { seen, hotbar, stop: () => clearInterval(timer) };
   }
   it('starts for a long fall over a floor with a bucket of water, and says how far and how much', () => {
@@ -772,18 +800,29 @@ describe('the water-bucket clutch of a fall in the End', () => {
       const kit = withBucket(f);
       f.bot.setControlState = vi.fn(); f.bot.consume = vi.fn(async () => undefined);
       // a stronger reflex takes the body in the very moment after the pour, before the water is taken up (not on a clock: a loaded machine would let the clutch finish first)
+      let requestWall!: () => void, releaseWall!: () => void, wallStarted = false;
+      const requested = new Promise<void>(resolve => { requestWall = resolve; });
+      const released = new Promise<void>(resolve => { releaseWall = resolve; });
+      // Register outside the clutch's ALS context: the stronger reflex is a real successor owner.
+      const wall = requested.then(() => executeAction(f.bot, 'wall-escape', 4000, (async () => {
+        wallStarted = true; await released; return { success: true, result: 'wall cleared' };
+      }) as never, { priority: 500, safetyLease: true, waitForQuiescence: false }));
       const use = f.bot.activateItem;
-      f.bot.activateItem = vi.fn((...args: unknown[]) => { const done = use(...args); if (kit.seen.uses === 1) queueMicrotask(() => preemptLowerPriorityActions(f.bot, 500, 'wall-escape')); return done; });
+      f.bot.activateItem = vi.fn((...args: unknown[]) => { const done = use(...args); if (kit.seen.uses === 1) queueMicrotask(() => {
+        preemptLowerPriorityActions(f.bot, 500, 'wall-escape'); requestWall();
+      }); return done; });
       installFloorReflexes(f.bot, floorConfig({ MINEBOT_FCA_REFLEXES: 'default' }), { fleeTickMs: 1 });
       try {
         f.bot.emit('physicsTick'); // the clutch begins, pours, and is taken from
         await until(() => kit.seen.uses === 1, 4000);
-        await until(() => f.self.onGround === true && !hasActiveSafetyLease(f.bot), 4000);
+        await until(() => f.self.onGround === true && wallStarted, 4000);
+        expect(hasActiveSafetyLease(f.bot)).toBe(true);
         const memory: FallMemory = f.bot.floorReflexes.fall;
         expect(memory.scoop).toMatchObject({ x: 0, y: 64, z: 0, tries: 0, hand: 0, handName: 'diamond_sword' }); // the note says the hand the bucket was taken from, and the item that was in it
         expect(kit.seen.uses).toBe(1);
         expect(kit.hotbar[1].name).toBe('bucket'); // the only bucket of water is empty: left so, the next fall has no clutch
         expect(f.bot.heldItem.name).toBe('bucket'); // and the clutch that was cut off left it in the hand
+        releaseWall(); await wall; // only a quiet body may take up the pending source
         await until(() => { f.bot.emit('physicsTick'); return kit.seen.uses === 2; }, 4000);
         expect(kit.hotbar[1].name).toBe('water_bucket');
         expect(memory.scoop).toBeUndefined();
@@ -794,7 +833,7 @@ describe('the water-bucket clutch of a fall in the End', () => {
         // the next fall
         f.self.onGround = false; f.self.position = new Vec3(0.5, 100, 0.5); f.self.velocity = new Vec3(0, -1.6, 0);
         expect(clutchWanted(f.bot, {}, Date.now() + 10_000)).not.toBeNull();
-      } finally { kit.stop(); }
+      } finally { releaseWall(); kit.stop(); }
     });
     it('takes the water up in a quiet moment with a hold that has no safety lease, the empty bucket in the hand', async () => {
       const s = afterCutOff();

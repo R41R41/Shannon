@@ -6,19 +6,28 @@ export type CandidateVia = 'centre' | 'exit';
 const distance = (a: Cell3, b: Cell3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const inRange = (a: Cell3, b: Cell3) => distance(a, b) >= 8 && distance(a, b) <= 48;
 
-/** Probe head only. An exit is offered only with an existing roof or the caller's explicit future roof. */
+/** The candidates' order: those within 30 m first, then the nearest. */
+const bandOrder = (from: Cell3) => (a: Creature, b: Creature) => Number(distance(from, a.position) > 30) - Number(distance(from, b.position) > 30)
+  || distance(from, a.position) - distance(from, b.position);
+
+/**
+ * Probe head only. An exit is offered only with an existing roof or the caller's explicit future roof.
+ * `limit`: stop once that many are found. The creatures are walked in the band's order, so the first `limit` are the same as the whole list's first
+ * `limit`. In a warped forest with 30-42 endermen round, every one cost an eye line and up to four exit lines, and the body's loop stopped 1.3-2.1 s
+ * (end1108c S8a); the pick needs only the first.
+ */
 export function huntCandidates<T extends Creature>(read: BlockReader, from: Cell3, entities: T[], roof: Cell3 | null,
-  occupied: (cell: Cell3) => boolean = () => false) {
+  occupied: (cell: Cell3) => boolean = () => false, limit = Infinity) {
   const candidates: Array<T & { via: CandidateVia }> = [];
-  for (const entity of entities) {
+  for (const entity of [...entities].sort(bandOrder(from))) {
+    if (candidates.length >= limit) break;
     if (!inRange(from, entity.position)) continue;
     const eyes = endermanLine(read, from, entity.position, ENDERMAN_EYE);
     const via = eyes.clear ? 'centre' : roof && roofExitForSight(read, roof, entity.position, eyes, occupied).length ? 'exit' : null;
     if (via) candidates.push({ ...entity, via });
   }
   // Keep the explicit near band before distant fallbacks; the head's find() scans in this order.
-  return candidates.sort((a, b) => Number(distance(from, a.position) > 30) - Number(distance(from, b.position) > 30)
-    || distance(from, a.position) - distance(from, b.position));
+  return candidates;
 }
 
 /** The eight 12m eye directions measure persistent openness; visible counts the individuals present now. */

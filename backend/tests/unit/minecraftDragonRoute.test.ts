@@ -4,7 +4,7 @@ import minecraftData from 'minecraft-data';
 import { describe, expect, it, vi } from 'vitest';
 import UseItem from '../../src/services/minebot/instantSkills/useItem.js';
 import ActivateBlock from '../../src/services/minebot/instantSkills/activateBlock.js';
-import SleepInBed from '../../src/services/minebot/instantSkills/sleepInBed.js';
+import SleepInBed, { obstructedAdvice } from '../../src/services/minebot/instantSkills/sleepInBed.js';
 import AutoAvoidDragonBreath from '../../src/services/minebot/constantSkills/autoAvoidDragonBreath.js';
 import { DRAGON_GOALS, bodySkillCatalog, isDragonGoal, offeredSchema } from '../../src/services/minebot/integration/commonFca/skillCatalog.js';
 import { captureWorldObservation } from '../../src/services/minebot/cognition/worldFrame.js';
@@ -124,6 +124,37 @@ describe('beds: the respawn point by a right-click, never a bed where it explode
     expect(await new ActivateBlock(bot).runImpl('crafting_table')).toMatchObject({ success: true });
   });
 
+  it('end1109o03: a bed a villager sleeps in is passed over; with only taken beds and none carried, the stop says to dig one with takeOk', async () => {
+    const { bot, bed } = bedBot();
+    bot.time.timeOfDay = 13000;
+    bot.findBlocks = vi.fn(() => [bed.position]);
+    bot.entities = { 7: { name: 'villager', position: new Vec3(5.5, 64.2, 5.5), metadata: { 6: 2 } } };
+    const result = await new SleepInBed(bot).runImpl(false, false, { noDig: true });
+    expect(result).toMatchObject({ success: false, failureType: 'bed_taken' });
+    expect(result.result).toContain('dig takeOk');
+    expect(result.result).toContain('(5,64,5)');
+  });
+  it('end1109o03: an obstructed bed names the solid cells over its halves, and the bed spot search wants the space over both open', async () => {
+    const at = (x: number, y: number, z: number) => `${x},${y},${z}`;
+    const world = new Map<string, { name: string; boundingBox: string }>([
+      [at(205, 68, 57), { name: 'yellow_bed', boundingBox: 'block' }], [at(205, 68, 56), { name: 'yellow_bed', boundingBox: 'block' }],
+      [at(205, 69, 57), { name: 'air', boundingBox: 'empty' }], [at(205, 69, 56), { name: 'stone', boundingBox: 'block' }],
+    ]);
+    const fake = { blockAt: (p: Vec3) => world.get(at(p.x, p.y, p.z)) ?? { name: 'stone', boundingBox: 'block' } };
+    const advice = obstructedAdvice(fake, { x: 205, y: 68, z: 57 });
+    expect(advice).toContain('(205,69,56) stone');
+    expect(advice).not.toContain('(205,69,57)');
+    expect(advice).toContain('dig takeOk collect=true');
+    world.set(at(205, 69, 56), { name: 'air', boundingBox: 'empty' });
+    expect(obstructedAdvice(fake, { x: 205, y: 68, z: 57 })).toBeNull();
+    // A floor of two free cells under a ceiling one block high is not a spot; the same floor with air over it is.
+    const ground = (ceiling: boolean) => ({ entity: { position: new Vec3(0.5, 64, 0.5) }, blockAt: (p: Vec3) => p.y === 63 ? { name: 'stone', boundingBox: 'block' }
+      : p.y === 64 ? { name: 'air', boundingBox: 'empty' } : p.y === 65 && ceiling && p.x >= 2 ? { name: 'stone', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' } });
+    const spot = (ceiling: boolean) => SleepInBed.prototype.findPlaceForBed.call({ bot: ground(ceiling) }, 3, 4) as Vec3 | null;
+    const open = spot(false), shut = spot(true);
+    expect(open).not.toBeNull();
+    expect(shut === null || shut.x < 1).toBe(true);
+  });
   it('by day sleep-in-bed points to activate-block for the respawn point alone', async () => {
     const { bot } = bedBot();
     const result = await new SleepInBed(bot).runImpl(false, false);

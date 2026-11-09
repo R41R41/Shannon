@@ -53,7 +53,9 @@ describe('damage with no attacker is described by what the body can tell is hurt
     expect(message).not.toContain('チャット');
     const unknown = CombatEventHandler.buildEmergencyMessage({ eventType: 'damage', timestamp: 0, damage: 4, damagePercent: 20, currentHealth: 9,
       consecutiveCount: 1 } as any)!;
-    expect(unknown).toContain('身体からは分かりません');
+    // run62 #12: never "unknown": a closed cause is always named (environment when the state shows nothing).
+    expect(unknown).toContain('原因: environment');
+    expect(unknown).toContain('一度きりのこともある');
   });
 });
 
@@ -157,3 +159,25 @@ describe('magma under the feet is named as what hurts (paid run L94)', () => {
   });
 });
 
+
+import { captureWorldObservation } from '../../src/services/minebot/cognition/worldFrame.js';
+
+describe('the frame keeps an unprovoked neutral one out of the threats (rig end1109f01: an urgent cut and a blow at a zombified piglin, and its group killed her)', () => {
+  const frameWith = (names: string[], armour: string | null = null) => {
+    const bot: any = { entity: { position: new Vec3(0.5, 64, 0.5), height: 1.8 }, blockAt: () => ({ boundingBox: 'empty' }),
+      registry: { entitiesByName: { zombified_piglin: { type: 'hostile' }, piglin: { type: 'hostile' }, wither_skeleton: { type: 'hostile' } } },
+      inventory: { items: () => [], slots: Object.assign(new Array(46).fill(null), armour ? { 6: { name: armour } } : {}) },
+      entities: Object.fromEntries(names.map((name, i) => [i + 2, { id: i + 2, name, position: new Vec3(4.5 + i, 64, 0.5), height: 1.95 }])) };
+    return captureWorldObservation(bot);
+  };
+  it('says it among the creatures as neutral, and among the threats only once its kind has struck', () => {
+    const calm = frameWith(['zombified_piglin', 'wither_skeleton']);
+    expect((calm.nearbyThreats ?? []).map(item => item.name)).toEqual(['wither_skeleton']);
+    expect(calm.nearbyEntities.find(item => item.name === 'zombified_piglin')).toMatchObject({ kind: 'neutral' });
+    // A piglin goes for a body without gold, and leaves one in a golden chestplate alone.
+    expect((frameWith(['piglin']).nearbyThreats ?? []).map(item => item.name)).toEqual(['piglin']);
+    expect(frameWith(['piglin'], 'golden_chestplate').nearbyThreats ?? []).toEqual([]);
+    noteAttackedBy('zombified_piglin');
+    expect((frameWith(['zombified_piglin']).nearbyThreats ?? []).map(item => item.name)).toEqual(['zombified_piglin']);
+  });
+});

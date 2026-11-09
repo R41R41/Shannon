@@ -18,9 +18,9 @@ const log = createLogger('Minebot:ReflexLedger');
 /**
  * melee (r8): a hand toward a melee enemy near (a step off a drop's rim, a block between, a step away: floorReflexes `meleeChoice`);
  * melee_none: such an enemy near with no hand to make, or the episode's hands used up (a fact only: it does not stop an act).
- * r9: on a floor the same kind also says a blow back ("打ち返した 2 回（iron_sword）・当たった 2・相手の残り体力 4") and two blocks up ("2段積んで上がった").
+ * r9: on a floor the same kind also says a blow back ("打ち返した 2 回（iron_sword）・当たった 2・相手の残り体力 4"). run62 #5 adds the guarded step and two-high barrier; its pillar says "3段積んで上がった".
  */
-export type ReflexKind = 'retreat' | 'eat' | 'armor' | 'flee' | 'pickup' | 'budget' | 'shield' | 'fireball' | 'knock' | 'lava' | 'breath' | 'cover' | 'cover_none' | 'melee' | 'melee_none' | 'wall';
+export type ReflexKind = 'retreat' | 'eat' | 'armor' | 'flee' | 'pickup' | 'budget' | 'shield' | 'fireball' | 'knock' | 'lava' | 'magma' | 'breath' | 'cover' | 'cover_none' | 'melee' | 'melee_none' | 'wall';
 export type ReflexOutcome = 'done' | 'cut' | 'failed';
 export interface ReflexEntry {
   seq: number; at: number; kind: ReflexKind; detail: string; outcome: ReflexOutcome;
@@ -45,7 +45,7 @@ interface LedgerBot {
   shieldBlock?: { raised?: number };
   fireballDeflect?: { strikes?: number };
   knockBrace?: { braced?: number };
-  lavaReflex?: { engagements?: number };
+  lavaReflex?: { engagements?: number; magma?: { engagements?: number } };
   breathingReflex?: { engagements?: number };
   reflexLedger?: ReflexLedger;
 }
@@ -56,6 +56,7 @@ const COUNTERS: Array<{ kind: ReflexKind; detail: string; read: (bot: LedgerBot)
   { kind: 'fireball', detail: '火の玉を打ち返した', read: bot => bot.fireballDeflect?.strikes },
   { kind: 'knock', detail: '押された先で踏ん張った', read: bot => bot.knockBrace?.braced },
   { kind: 'lava', detail: '溶岩回避の反射が始まった（脱出は未確認）', read: bot => bot.lavaReflex?.engagements },
+  { kind: 'magma', detail: 'マグマの上でしゃがんだ（止まっていれば降りる・覆う。手は止めない）', read: bot => bot.lavaReflex?.magma?.engagements },
   { kind: 'breath', detail: '浮上反射が始まった（呼吸回復は未確認）', read: bot => bot.breathingReflex?.engagements },
 ];
 

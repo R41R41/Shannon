@@ -44,7 +44,8 @@ import type { ReflexDecision, ReflexPolicy } from '../cognition/types.js';
 import { executeDirectReflex, reflexFactsDigest } from '../cognition/DirectReflexExecutor.js';
 import { cancelNonSurvivalActions, preemptLowerPriorityActions, waitForActionQuiescence, withActionSignal, executeAction, actionSignal, currentAction } from '../execution/ActionExecution.js';
 import { actionDelay } from '../execution/observedWait.js';
-import { describeHarm } from '../utils/harm.js';
+import { describeHarm, harmCause } from '../utils/harm.js';
+import { reflexHeld } from '../utils/floorReflexes.js';
 import { MAX_HOSTILE_CLEAR_RADIUS } from '../cognition/GoalVerifier.js';
 import { engagedWith, beginEngagement } from '../utils/engagement.js';
 import { answeredByReflex } from '../utils/reflexAnswers.js';
@@ -513,6 +514,10 @@ export class EventReactionSystem {
             ...data,
             ...(possibleSource ? { possibleSource } : {}),
             ...(() => { try { const harm = describeHarm(this.bot as any); return harm ? { harm } : {}; } catch { return {}; } })(),
+            // run62: the head was told the source was unknown nine times while the body stood on magma. Name the cause from the
+            // body's state (hot_floor@x,y,z, on_fire, wither …) and the reflex holding the body, every time.
+            ...(possibleSource ? {} : (() => { try { return { cause: harmCause(this.bot as any) }; } catch { return { cause: 'environment' }; } })()),
+            ...(() => { try { const reflex = reflexHeld(this.bot); return reflex ? { reflex } : {}; } catch { return {}; } })(),
         };
         await this.handleEvent(eventData);
     }

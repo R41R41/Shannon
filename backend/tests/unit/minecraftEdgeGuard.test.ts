@@ -303,3 +303,17 @@ describe('a step of its own into lava at the level of the feet is taken back (pa
     expect(judgeAppliedTick(wading, { position: new Vec3(0.5, 65, -1.5), onGround: true, inLava: true }, null)).toBeNull();
   });
 });
+
+describe('a body afloat in a pool at a ravine rim is kept in the water (end1109s12 S9: it swam out over a 33-block drop on a fight\'s chase)', () => {
+  // A pool two deep on the plateau (z >= 0, floor y69, water up to y71); the ravine floor at y39 beyond the rim.
+  const pool = columnWorld((_x, z) => (z >= 0 ? 69 : 39), (_x, z) => (z >= 0 ? { name: 'water', top: 71 } : null));
+  it('the scenario is lethal without the guard', () => {
+    expect(run(pool, new Vec3(0.5, 71.2, 2.5), { guard: false, sprint: false, jump: true, ticks: 120 }).lowest).toBeLessThan(45);
+  });
+  it('holds the swimming body at the water\'s edge, still afloat', () => {
+    const { lowest, position, stops } = run(pool, new Vec3(0.5, 71.2, 2.5), { sprint: false, jump: true, ticks: 120 });
+    expect(stops).toBeGreaterThan(0);
+    expect(lowest).toBeGreaterThan(68);
+    expect(position.z).toBeGreaterThan(-0.3);
+  });
+});

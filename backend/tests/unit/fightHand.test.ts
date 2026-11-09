@@ -456,7 +456,8 @@ describe('fight: the critical hit timing (a long fight with a creature that does
 });
 
 describe('fight against the old attack hand, on the same zombie', () => {
-  it('attack (no accept) is stopped by the act\'s hurt rule after a 4-health loss; fight, which the act counts as accepting its target, is not', async () => {
+  // h19 (11/8): a targeted attack now accepts its target's kind too (it was cut in 0.4 s by a wither skeleton's blow and the body died idle).
+  it('neither attack nor fight is stopped by the act\'s hurt rule for blows from its own target', async () => {
     const same = () => makeField({ held: 'iron_sword', mobs: [{ at: new Vec3(3.5, 64, 0.5), damage: 6, hitGapMs: 700, health: 20 }] });
     const old = same();
     const attackResult = await act(old, [{ do: 'attack', target: '#100', untilDead: true, seconds: 30 }]);
@@ -465,7 +466,7 @@ describe('fight against the old attack hand, on the same zombie', () => {
     const fightResult = await act(fresh, [{ do: 'fight', target: '#100', seconds: 30 }]);
     fresh.stop();
     console.log('[attack vs fight]', attackResult.json.stoppedBy, lineOf(attackResult.json), '|', fightResult.json.stoppedBy, lineOf(fightResult.json));
-    expect(attackResult.json.stoppedBy).toBe('damage');
+    expect(attackResult.json.stoppedBy).not.toBe('damage');
     expect(fightResult.json.ok).toBe(true);
   }, 60_000);
 });

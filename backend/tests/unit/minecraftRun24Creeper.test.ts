@@ -68,6 +68,22 @@ describe('the dig guard and a creeper in view (run 24: 76 m of tunnel refused wa
   });
 });
 
+describe('the dig guard and a magma cube in armour (end1109f06: seven walls refused under a blaze spawner)', () => {
+  const stone = { name: 'basalt', boundingBox: 'block' }, air = { name: 'air', boundingBox: 'empty' };
+  function body(mob: any, extra: Record<string, unknown> = {}) {
+    const open = new Set(['0,62,0', '0,63,0']);
+    return { entity: { position: new Vec3(0.5, 62, 0.5), id: 1 }, entities: { 2: mob }, oxygenLevel: 20,
+      blockAt: (pos: Vec3) => (pos.y > 64 || open.has(`${pos.x},${pos.y},${pos.z}`) ? air : stone), ...extra } as any;
+  }
+  const cube = (x: number) => ({ id: 2, name: 'magma_cube', position: new Vec3(x, 65, 0.5), height: 2 });
+  it('lets the roof go with a magma cube 5 m or more away for a body in armour, not when near or bare', () => {
+    const armoured = { inventory: { slots: wear(...IRON) }, health: 20 };
+    expect(threatExposedBy(body(cube(8.5)), new Vec3(0, 64, 0))).toMatchObject({ name: 'magma_cube' });
+    expect(threatExposedBy(body(cube(8.5), armoured), new Vec3(0, 64, 0))).toBeNull();
+    expect(threatExposedBy(body(cube(3.5), armoured), new Vec3(0, 64, 0))).toMatchObject({ name: 'magma_cube' });
+  });
+});
+
 describe('flee-from and a creeper that is not near (run 24: three cuts, 13-15 m away)', () => {
   beforeEach(() => { gotoSafeMock.mockReset(); });
   function fixture(extra: Record<string, unknown>, creeperAt = 13, metadata: unknown[] = []) {

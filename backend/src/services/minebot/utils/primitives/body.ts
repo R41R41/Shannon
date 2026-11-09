@@ -1,9 +1,10 @@
 import { Vec3 } from 'vec3';
 import { equipToHandVerified } from '../equipVerified.js';
 import { itemFoodPoints } from '../foodPoints.js';
-import { facingOfYaw, feetCell, type Cell } from '../localMap.js';
-import { cellText, DIRECTIONS, DIRECTION_JA, findItem, guard, inventoryCount, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { feetCell, type Cell } from '../localMap.js';
+import { cellText, findItem, guard, inventoryCount, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { findEntity } from './use.js';
+import { holdShieldForDraw } from '../shieldBlock.js';
 
 /** The small parts of act (design mb-llm-centric 2.3): look, jump, sneak, equip, eat, drop. Each does what it says and reads back what came of it. */
 
@@ -105,9 +106,16 @@ export async function eat(ctx: StepContext, args: { item: string }): Promise<Ste
   const before = { count: inventoryCount(bot, args.item), food: bot.food as number, saturation: Number(bot.foodSaturation ?? 0) };
   const held = await guard(ctx, equipToHandVerified(bot, item), 5000);
   if (!held?.value.held) return stopped(bot, 'equip_failed', `${args.item} を手に持てなかった`);
-  try { await guard(ctx, Promise.resolve(bot.consume()), 4000); }
-  catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
-  const shown = await waitUntil(ctx, () => inventoryCount(bot, args.item) < before.count || bot.food > before.food, 2500, 100);
+  // A raised shield keeps the server from starting the meal at all (S1 lab 11/8: two meals at 17/20 among blazes and wither skeletons ate nothing,
+  // as the bow's draw did, 5d516dc9): it comes down first, and the reflex keeps off the hands until the meal is down.
+  const shield = holdShieldForDraw(bot, 4000);
+  let shown = false;
+  try {
+    if (shield.lowered) await wait(ctx, 100);
+    try { await guard(ctx, Promise.resolve(bot.consume()), 4000); }
+    catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
+    shown = await waitUntil(ctx, () => inventoryCount(bot, args.item) < before.count || bot.food > before.food, 2500, 100);
+  } finally { shield.release(); }
   if (!shown) return stopped(bot, 'not_eaten', `${args.item} を食べられなかった（満腹度 ${bot.food}/20、残り ${inventoryCount(bot, args.item)}）`);
   return { ok: true, text: `${args.item} を食べた（満腹度 ${before.food}→${bot.food}、隠し値 ${before.saturation.toFixed(1)}→${Number(bot.foodSaturation ?? 0).toFixed(1)}、1個 ${itemFoodPoints(bot, args.item)}点、残り ${inventoryCount(bot, args.item)}）` };
 }
@@ -122,23 +130,63 @@ const solidAt = (bot: any, x: number, y: number, z: number): boolean => {
   try { return bot.blockAt?.(new Vec3(x, y, z), false)?.boundingBox === 'block'; } catch { return false; }
 };
 
+/** The eight ways a throw may go: the four compass ways and the four between them. */
+const TOSS_WAYS: Array<{ name: string; ja: string; dx: number; dz: number }> = [
+  { name: 'north', ja: '北', dx: 0, dz: -1 }, { name: 'northeast', ja: '北東', dx: 1, dz: -1 }, { name: 'east', ja: '東', dx: 1, dz: 0 },
+  { name: 'southeast', ja: '南東', dx: 1, dz: 1 }, { name: 'south', ja: '南', dx: 0, dz: 1 }, { name: 'southwest', ja: '南西', dx: -1, dz: 1 },
+  { name: 'west', ja: '西', dx: -1, dz: 0 }, { name: 'northwest', ja: '北西', dx: -1, dz: -1 },
+];
+
 /**
  * The way to throw when none was asked (mb-llmc-cand 3, run 37: eight stops on a full pack, about 150 s: the stones thrown at the feet while she
- * looked down a stair were picked up again by standing there): the one of the four compass ways with the most free cells at the head's height
- * (up to TOSS_LOOKS), the way she faces first among equals. The throw is level, so the items fly several blocks and do not fall at the feet.
+ * looked down a stair were picked up again by standing there): the one of the eight ways with the most free room at the head's height
+ * (up to TOSS_LOOKS cells), the way behind her first among equals. The throw is level, so the items fly several blocks and do not fall at the feet.
+ * end1109s02 S9 (11/9): in a tunnel dug on the slant through a mountain each compass way was free for one cell, the stones fell 1 m off, and the
+ * next go walked over them: four throws of 89, 136, 200 and 251 each left 128-139, the rest picked up again. A slanted tunnel is open along its
+ * slant, so the ways between are looked at too; and the way behind (where she came from) is preferred to the way she faces (where she goes next).
  */
-function tossWay(bot: any, feet: Cell): { name: string; dx: number; dz: number; free: number } {
-  type Way = { name: string; dx: number; dz: number; free: number };
-  const facing = facingOfYaw(Number(bot.entity?.yaw ?? 0));
-  let best: Way = { name: facing, dx: 0, dz: 0, free: -1 };
-  for (const name of ['north', 'east', 'south', 'west']) {
-    const [dx, , dz] = DIRECTIONS[name];
+function tossWay(bot: any, feet: Cell): { name: string; ja: string; dx: number; dz: number; free: number } {
+  type Way = { name: string; ja: string; dx: number; dz: number; free: number; score: number };
+  const yaw = Number(bot.entity?.yaw ?? 0);
+  // Facing is (-sin yaw, -cos yaw); behind is the other way.
+  const behindX = Math.sin(yaw), behindZ = Math.cos(yaw);
+  let best: Way | null = null;
+  for (const way of TOSS_WAYS) {
+    const slant = way.dx !== 0 && way.dz !== 0;
     let free = 0;
-    for (let i = 1; i <= TOSS_LOOKS; i++) { if (solidAt(bot, feet.x + dx * i, feet.y + 1, feet.z + dz * i)) break; free = i; }
-    const score = free + (name === facing ? 0.5 : 0);
-    if (best.free < 0 || score > best.free + (best.name === facing ? 0.5 : 0)) best = { name, dx, dz, free };
+    for (let i = 1; i <= TOSS_LOOKS; i++) {
+      const x = feet.x + way.dx * i, y = feet.y + 1, z = feet.z + way.dz * i;
+      if (solidAt(bot, x, y, z)) break;
+      // On the slant an item passes a corner only where one of the two cells beside the corner is open.
+      if (slant && solidAt(bot, x - way.dx, y, z) && solidAt(bot, x, y, z - way.dz)) break;
+      free = i;
+    }
+    const length = slant ? Math.SQRT2 : 1;
+    const toward = (way.dx * behindX + way.dz * behindZ) / length;
+    const score = Math.min(free * length, TOSS_LOOKS) + 0.5 * toward;
+    if (!best || score > best.score) best = { ...way, free, score };
   }
-  return best;
+  return best!;
+}
+
+/** How long a drop waits for the thrown items to be seen where they lay (the server tells an item's moves about once a second). */
+const TOSS_SETTLE_MS = 1500;
+
+/**
+ * The last pickaxe of each kind is never thrown (run 62, 1,756 s: the two spare stone pickaxes were thrown for room, the iron one broke at
+ * 2,403 s, and she climbed from y 39 to 67 bare-handed). Asked for all of a kind, the drop throws all but one and says why.
+ */
+const KEEP_LAST = /_pickaxe$/u;
+
+/** Throws `count` of the kind; tools (one to a slot) go the most worn first, so the one kept is the best (bot.toss takes slot order). */
+async function tossWorstFirst(bot: any, name: string, count: number): Promise<void> {
+  const entries = (bot.inventory?.items?.() ?? []).filter((item: any) => item.name === name);
+  if (typeof bot.tossStack === 'function' && entries.length > count && entries.every((item: any) => item.count === 1)) {
+    const left = (item: any) => item.maxDurability > 0 ? item.maxDurability - (item.durabilityUsed ?? 0) : Infinity;
+    for (const item of [...entries].sort((a, b) => left(a) - left(b)).slice(0, count)) await bot.tossStack(item);
+    return;
+  }
+  await bot.toss(entries[0].type, null, count);
 }
 
 /**
@@ -171,28 +219,48 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
     }
   }
   const done: string[] = [];
+  const kept: string[] = [];
   let thrown = 0, asked = 0;
   for (const want of args.items) {
     const have = inventoryCount(bot, want.item);
     if (!have) { done.push(`${want.item} を持っていない`); continue; }
-    const count = Math.min(have, Math.max(1, Math.round(want.count ?? have)));
-    asked += Math.max(1, Math.round(want.count ?? have));
-    const item = findItem(bot, want.item);
-    try { await guard(ctx, Promise.resolve(bot.toss(item.type, null, count)), 3000); }
+    const wanted = Math.max(1, Math.round(want.count ?? have));
+    const keepOne = KEEP_LAST.test(want.item);
+    const count = Math.min(have - (keepOne ? 1 : 0), wanted);
+    if (keepOne && count < wanted) kept.push(`${want.item} の最後の 1 本は投げない（ツルハシは種類ごとに 1 本残す。今の 1 本が壊れた時の予備で、無いと素手で掘ることになる。空きが要るなら丸石・土・砂利など別の物を投げる）`);
+    if (count <= 0) continue;
+    asked += keepOne ? count : wanted;
+    try { await guard(ctx, Promise.resolve(tossWorstFirst(bot, want.item, count)), 3000); }
     catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
     thrown += Math.max(0, have - inventoryCount(bot, want.item));
     done.push(`${want.item}×${have - inventoryCount(bot, want.item)} を投げた（残り${inventoryCount(bot, want.item)}）`);
   }
-  // Where the items lay: the item entities that were not there before, read after a moment (the server spawns them a tick on).
+  if (kept.length && !done.length) return stopped(bot, 'last_pickaxe_kept', kept.join('。'));
+  // Where the items lay: the item entities that were not there before. mineflayer keeps a thrown item where it was spawned (at the hand) until
+  // the server tells its moves, about once a second (end1109s02: read at 0.35 s, a throw with six free cells was said to lie "0.0m" off): the
+  // line waits until each new item has been seen to move, or TOSS_SETTLE_MS.
   let where = '';
   if (bot.entity?.position) {
     try {
-      await wait(ctx, 350);
+      const firstSeen = new Map<number, { x: number; y: number; z: number }>();
+      const settled = () => {
+        let fresh = 0, moved = 0;
+        for (const e of Object.values(bot.entities ?? {}) as any[]) {
+          if (e?.name !== 'item' || !e.position || before.has(e.id)) continue;
+          fresh++;
+          const seen = firstSeen.get(e.id);
+          if (!seen) firstSeen.set(e.id, { x: e.position.x, y: e.position.y, z: e.position.z });
+          else if (Math.hypot(e.position.x - seen.x, e.position.y - seen.y, e.position.z - seen.z) > 0.2) moved++;
+        }
+        return fresh > 0 && moved === fresh;
+      };
+      await wait(ctx, 150);
+      await waitUntil(ctx, settled, TOSS_SETTLE_MS, 100);
       const origin = bot.entity.position;
       const landed = Object.values(bot.entities ?? {}).filter((e: any) => e?.name === 'item' && e.position && !before.has(e.id) && origin.distanceTo(e.position) <= 16)
         .map((e: any) => ({ at: { x: Math.floor(e.position.x), y: Math.floor(e.position.y), z: Math.floor(e.position.z) }, d: Math.hypot(e.position.x - origin.x, e.position.z - origin.z) }))
         .sort((a, b) => a.d - b.d);
-      const aim = way ? `${DIRECTION_JA[way.name]}へ水平に投げた（その向きの空きは頭の高さで ${way.free >= TOSS_LOOKS ? `${TOSS_LOOKS} マス以上` : `${way.free} マス`}）。` : '';
+      const aim = way ? `${way.ja}へ水平に投げた（その向きの空きは頭の高さで ${way.free >= TOSS_LOOKS ? `${TOSS_LOOKS} マス以上` : `${way.free} マス`}）。` : '';
       if (landed.length) {
         const near = landed[0];
         where = `。${aim}落ちた先 ${cellText(near.at)}（足から横 ${near.d.toFixed(1)}m）`
@@ -200,6 +268,6 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
       } else if (aim) where = `。${aim.replace(/。$/u, '')}（落ちた先は読めなかった）`;
     } catch (error) { if (error instanceof StepStopped) throw error; }
   }
-  // Continue contracts (1): the items thrown (counted from the pack), of the items asked.
-  return { ok: true, text: `${done.join('、')}${where}`, progress: { unit: 'item', done: thrown, left: Math.max(0, asked - thrown) } };
+  // Continue contracts (1): the items thrown (counted from the pack), of the items asked (a kept last pickaxe is not asked).
+  return { ok: true, text: `${done.join('、')}${where}${kept.length ? `。${kept.join('。')}` : ''}`, progress: { unit: 'item', done: thrown, left: Math.max(0, asked - thrown) } };
 }

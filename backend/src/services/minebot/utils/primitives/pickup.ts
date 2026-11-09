@@ -5,6 +5,7 @@ import { isSelfDropped } from '../selfDropped.js';
 import { solidBetween } from '../probeTools.js';
 import { cellText, freeSlots, letGo, packLine, stopped, wait, type StepContext, type StepOutcome } from './common.js';
 import { goWith, walkMovements, wayWords, whyBlocked, type WayNotes } from './walk.js';
+import { magmaAtFootprint } from '../magmaFootprint.js';
 
 const { goals } = pathfinder;
 
@@ -13,10 +14,15 @@ const { goals } = pathfinder;
  * the walk's (no dig, no block laid; doors opened, leaves broken). What is gained is counted from the pack, not assumed. An item not taken
  * is said with where it lies, where it is from the body, how far, and what stands between (r5: run 28's 19 "拾えなかった" said none of it).
  */
-export interface PickupArgs { radius?: number; ids?: number[] }
+/**
+ * `item`: only drops of that name (end1108h7b S7: 「pickup target=blaze_rod」 from 10 m off took the nearest brick, failed on it and never went
+ * for the rod; the name was dropped on the way to the body). A named kind is looked for out to NAMED_RADIUS unless a radius is given.
+ */
+export interface PickupArgs { radius?: number; ids?: number[]; item?: string }
 
 const DEFAULT_RADIUS = 6;
 const MAX_RADIUS = 16;
+const NAMED_RADIUS = 24;
 const ITEM_WAIT_MS = 2500;
 /** The longest a drop still in the air is waited for to come to rest before the hand walks to it or waits for it. */
 const SETTLE_MS = 1500;
@@ -70,12 +76,22 @@ export function itemFacts(bot: any, position: { x: number; y: number; z: number 
 
 export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
-  const radius = Math.min(MAX_RADIUS, Math.max(1, args.radius ?? DEFAULT_RADIUS));
+  const readFloor = (x: number, y: number, z: number): string | null => {
+    try { return bot.blockAt?.(new Vec3(x, y, z), false)?.name ?? null; } catch { return null; }
+  };
+  const unsafe = magmaAtFootprint(readFloor, bot.entity?.position);
+  if (unsafe) return stopped(bot, 'unsafe', `足幅が ${cellText(unsafe)} の magma_block に掛かるため拾いを止めた。安全な床へ離れてから`, unsafe);
+  const named = args.item && !args.ids?.length ? args.item : undefined;
+  const radius = named ? Math.min(NAMED_RADIUS, Math.max(1, args.radius ?? NAMED_RADIUS)) : Math.min(MAX_RADIUS, Math.max(1, args.radius ?? DEFAULT_RADIUS));
   const wanted = args.ids?.length ? new Set(args.ids) : null;
   // What the body threw away itself is not picked up again by a radius (by id it is: the planner asked for that one).
   const targets = (wanted ? Object.values(bot.entities ?? {}).filter((entity: any) => entity && wanted.has(entity.id))
-    : itemEntitiesNear(bot, radius).filter(entity => !isSelfDropped(bot, entity))) as any[];
-  if (!targets.length) return { ok: true, text: `半径${radius}m に落とし物は無い` };
+    : itemEntitiesNear(bot, radius).filter(entity => !isSelfDropped(bot, entity) && (!named || droppedName(bot, entity) === named))) as any[];
+  if (!targets.length) {
+    // An arrow shot is not a drop: one that met a creature is gone, one stuck in a block is not taken by this hand (end1108h7b: four hands asked for arrows).
+    if (named) return { ok: true, text: `拾う対象がない: ${radius}m 内に落ちている ${named} は無い（地面の落とし物のみ対象。射った矢は落とし物ではない）` };
+    return { ok: true, text: '拾う対象がない（地面の落とし物のみ対象。射った矢は落とし物ではない）' };
+  }
   const before = new Map<string, number>();
   for (const item of bot.inventory?.items?.() ?? []) before.set(item.name, (before.get(item.name) ?? 0) + item.count);
   const navigator = bot.pathfinder;
@@ -106,8 +122,11 @@ export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOu
           const itemCell = { x: Math.floor(entity.position.x), y: Math.floor(entity.position.y + 1e-3), z: Math.floor(entity.position.z) };
           let inBlock = false;
           try { inBlock = bot.blockAt?.(new Vec3(itemCell.x, itemCell.y, itemCell.z), false)?.boundingBox === 'block'; } catch { inBlock = false; }
-          const goal = new goals.GoalNear(entity.position.x, entity.position.y, entity.position.z, inBlock ? Math.max(0.5, TAKE_ACROSS - 0.15) : 0.5);
+          const onMagma = magmaAtFootprint(readFloor, { ...where(), y: itemCell.y });
+          const goal = new goals.GoalNear(entity.position.x, entity.position.y, entity.position.z,
+            inBlock || onMagma ? Math.max(0.5, TAKE_ACROSS - 0.15) : 0.5);
           const gone = await goWith(ctx, goal, Math.min(10_000, Math.max(500, ctx.deadline - Date.now())), notes);
+          if (gone.magma) { missed.push(`${name}（足幅が ${cellText(gone.magma)} の magma_block に掛かるため移動を止めた）`); unreachable = true; break; }
           if (!bot.entities?.[entity.id]) break; // taken on the way
           if (gone.timedOut || gone.stuck || gone.error || !gone.reached) {
             letGo(bot);

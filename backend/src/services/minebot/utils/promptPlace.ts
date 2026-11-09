@@ -1,4 +1,5 @@
 import { actionSignal } from '../execution/ActionExecution.js';
+import type { Vec3 } from 'vec3';
 
 /**
  * A placement the server refuses is not answered: nothing says "no". The library waits five seconds for the
@@ -16,7 +17,8 @@ export const PLACE_ANSWER_MS = 1500;
 
 interface PlacingBot {
   _placeBlockWithOptions?: (reference: unknown, face: unknown, options?: unknown) => Promise<void>;
-  placeBlock?: (reference: unknown, face: unknown) => Promise<void>;
+  placeBlock?: (reference: { position: Vec3 }, face: Vec3, beforeSend?: () => void) => Promise<void>;
+  lookAt?: (point: Vec3) => Promise<void>;
   promptPlace?: { unanswered: number; interrupted: number };
 }
 
@@ -48,7 +50,18 @@ export function installPromptPlace(target: unknown, answerMs = PLACE_ANSWER_MS):
     });
   };
   bot._placeBlockWithOptions = place;
-  bot.placeBlock = (reference, face) => place(reference, face, { swingArm: 'right' });
+  bot.placeBlock = async (reference, face, beforeSend) => {
+    if (beforeSend && bot.lookAt) {
+      // Native placement normally awaits this look before sending. Recheck the changing world AFTER it,
+      // then skip the native look so a creature cannot enter during a second look wait.
+      await bot.lookAt(reference.position.offset(.5 + face.x * .5, .5 + face.y * .5, .5 + face.z * .5));
+      if (actionSignal(bot as object)?.aborted) throw new Error('Action interrupted');
+      beforeSend();
+      return place(reference, face, { swingArm: 'right', forceLook: 'ignore' });
+    }
+    beforeSend?.();
+    return place(reference, face, { swingArm: 'right' });
+  };
 }
 
 export function promptPlacePlugin(bot: unknown): void { installPromptPlace(bot); }

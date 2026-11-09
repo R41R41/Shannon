@@ -154,30 +154,63 @@ describe('portal: what it refuses', () => {
     const short = await drive(mixed, run(mixed, {}));
     expect(short.reason).toBe('no_obsidian');
     expect(short.text).toContain('obsidian を 9 個しか持っていない');
+    // S8: a crying obsidian standing in a frame cell (a ruined portal's) is dug out and the obsidian laid there: it is no frame and is in the way.
     const standing: Layer = (x, y, z) => (z === 10 && y === 64 && x === 10 ? 'crying_obsidian' : undefined);
-    const inFrame = makeHandsSim(over(flat, standing), { items: stacks(OBSIDIAN(), FLINT, COBBLE()) });
-    const blocked = await drive(inFrame, run(inFrame, {}));
+    const inFrame = makeHandsSim(over(flat, standing), { items: stacks(OBSIDIAN(), FLINT, COBBLE(), { name: 'diamond_pickaxe', count: 1 }) });
+    const replaced = await drive(inFrame, run(inFrame, {}));
+    expect(replaced.text).toMatch(/^portal 済/u);
+    expect(inFrame.bot.dugBlocks).toContain('crying_obsidian@10,64,10');
+    expect(frameNames(inFrame).every(name => name === 'obsidian')).toBe(true);
+    const noPick = makeHandsSim(over(flat, standing), { items: stacks(OBSIDIAN(), FLINT, COBBLE()) });
+    const blocked = await drive(noPick, run(noPick, {}));
     expect(blocked.reason).toBe('blocked');
-    expect(blocked.text).toContain('crying_obsidian');
+    expect(blocked.text).toContain('crying_obsidian（掘るにはダイヤのツルハシが要る');
   });
-  it('says no_flint before it lays a block', async () => {
+  it('says no_flint before it lays a block when it is to go in with nothing to light the frame', async () => {
     const sim = makeHandsSim(flat, { items: stacks(OBSIDIAN(), COBBLE()) });
     const outcome = await drive(sim, run(sim, {}));
     expect(outcome.reason).toBe('no_flint');
-    expect(outcome.text).toMatch(/^portal 止まった no_flint: /u);
+    expect(outcome.text).toMatch(/^portal 止まった no_flint: .*fire_charge/u);
     expect(sim.bot.placedBlocks).toEqual([]);
   });
-  it('says blocked with the cell when the frame or the inside is rock or water or lava, and does not break it', async () => {
-    const rock = makeHandsSim(over(flat, box('stone', 11, 11, 66, 66, 10, 10)), { items: stacks(OBSIDIAN(), FLINT, COBBLE()) });
+  it('builds the frame and leaves it unlit when it is not to go in and has nothing to light it (S8)', async () => {
+    const sim = makeHandsSim(flat, { items: stacks(OBSIDIAN(), COBBLE()) });
+    const outcome = await drive(sim, run(sim, { enter: false }));
+    expect(outcome.ok).toBe(true);
+    expect(outcome.text).toMatch(/^portal 済 枠 10 個（置いた 10）.*点火は未/u);
+    expect(frameNames(sim).every(name => name === 'obsidian')).toBe(true);
+    expect(interiorNames(sim).every(name => name === 'air')).toBe(true);
+  });
+  it('lights the frame with a fire charge when there is no flint and steel (S8)', async () => {
+    const sim = makeHandsSim(flat, { items: stacks(OBSIDIAN(), { name: 'fire_charge', count: 2 }, COBBLE()) });
+    const outcome = await drive(sim, run(sim, {}));
+    expect(outcome.ok).toBe(true);
+    expect(sim.bot.lit).toHaveLength(1);
+    expect(sim.count('fire_charge')).toBe(1);
+    expect(sim.bot.game.dimension).toBe('the_nether');
+  });
+  it('digs the ground out of the frame\'s bottom row when the at stands on the ground (S8: run 59 leg 2, "枠の (171,74,26) が grass_block")', async () => {
+    const grass: Layer = (x, y, z) => (y === 63 ? 'grass_block' : y === 62 ? 'dirt' : undefined);
+    const sim = makeHandsSim(over(flat, grass), { items: stacks(OBSIDIAN(), FLINT, COBBLE(), { name: 'iron_pickaxe', count: 1 }) });
+    const origin = at(10, 64, 10);
+    const outcome = await drive(sim, run(sim, { at: origin }));
+    expect(outcome.ok).toBe(true);
+    expect(outcome.text).toMatch(/地面を 2 個掘った/u);
+    expect(sim.bot.dugBlocks).toEqual(expect.arrayContaining(['grass_block@10,63,10', 'grass_block@11,63,10']));
+    expect(frameNames(sim, origin).every(name => name === 'obsidian')).toBe(true);
+    expect(sim.bot.game.dimension).toBe('the_nether');
+  });
+  it('digs rock out of the inside, and says blocked with the cell when the frame is water or lava, and does not take it', async () => {
+    const rock = makeHandsSim(over(flat, box('stone', 11, 11, 66, 66, 10, 10)), { items: stacks(OBSIDIAN(), FLINT, COBBLE(), { name: 'iron_pickaxe', count: 1 }) });
     const inFrame = await drive(rock, run(rock, {}));
-    expect(inFrame.reason).toBe('blocked');
-    expect(inFrame.text).toMatch(/^portal 止まった blocked: 内側の \(11,66,10\) が stone/u);
+    expect(inFrame.ok).toBe(true);
+    expect(rock.bot.dugBlocks).toContain('stone@11,66,10');
     const water = makeHandsSim(over(flat, box('water', 9, 9, 66, 66, 10, 10)), { items: stacks(OBSIDIAN(), FLINT, COBBLE()) });
     const wet = await drive(water, run(water, {}));
     expect(wet.reason).toBe('blocked');
     expect(wet.text).toContain('枠の (9,66,10) が water');
     expect(water.bot.placedBlocks).toEqual([]);
-    expect(rock.bot.dugBlocks).toEqual([]);
+    expect(water.bot.dugBlocks).toEqual([]);
   });
   it('says blocked, not a guess, when the first block of a column has nothing to be set against and no scaffold may be laid', async () => {
     const sim = makeHandsSim(flat, { items: stacks(OBSIDIAN(), FLINT, COBBLE()) });

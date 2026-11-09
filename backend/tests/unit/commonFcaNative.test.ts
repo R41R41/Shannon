@@ -158,6 +158,27 @@ describe('common FCA native body', () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(300);
     await safety; await body.dispose();
   });
+  it('waits for a second safety reflex that begins while the plugin cleanup awaits (end1108h17: two cover steps 48 ms apart paused the task)', async () => {
+    const { bot, body } = fixture();
+    const step = (ms: number) => executeAction(bot, 'floor-cover', 0, async () => { await new Promise(resolve => setTimeout(resolve, ms));
+      return { success: true, result: 'stepped' }; }, { waitForQuiescence: false, safetyLease: true, priority: 200 });
+    const first = step(100);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    let second: Promise<unknown> | null = null;
+    bot.collectBlock = { cancelTask: () => { second ??= step(200); return new Promise(resolve => setTimeout(resolve, 20)); } };
+    expect(await body.release(AbortSignal.timeout(50))).toBe(true);
+    expect(second).not.toBeNull();
+    expect(physicalActionBusy(bot)).toBe(false);
+    await first; await second; await body.dispose();
+  });
+  it('still answers held when a non-safety action begins during the cleanup', async () => {
+    const { bot, body } = fixture();
+    let finish!: () => void; let work: Promise<unknown> | null = null;
+    bot.collectBlock = { cancelTask: () => { work = executeAction(bot, 'go', 0, async () => { await new Promise<void>(resolve => { finish = resolve; });
+      return { success: true, result: 'went' }; }, { waitForQuiescence: false, priority: 0 }); return Promise.resolve(); } };
+    expect(await body.release(AbortSignal.timeout(300))).toBe(false);
+    finish(); await work; await body.dispose();
+  });
   it.each([false, true])('reports unavailable capture without physical uncertainty (already cancelled: %s)', async cancelled => {
     const original = fixture(); await original.body.dispose(); const { bot } = original;
     const capture = vi.fn(async () => { throw Error('BODY_CAPTURE_EXACT_VERSION_ASSETS_REQUIRED'); });

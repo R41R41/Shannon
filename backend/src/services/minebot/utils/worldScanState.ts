@@ -25,6 +25,12 @@ export interface WorldScanState {
   reach: number;
   ms: number;
   partial?: boolean;
+  /** A first actual, bounded view before the spawn's normal loading wait; unread range remains. */
+  preliminary?: boolean;
+  /** S8's loaded share; a preliminary scan instead reports its actual read share (unknown when the view distance is unknown). */
+  coverage?: number;
+  /** Start of this scan; `at` is its completion/publication time. */
+  startedAt?: string;
   /** r5: the furthest ring of loaded chunks from the body's own (chunks, square), the view distance the server sends (when known), and how long the scan waited after the spawn. */
   radiusChunks?: number;
   viewDistance?: number;

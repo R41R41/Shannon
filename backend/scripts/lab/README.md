@@ -201,7 +201,7 @@ bash backend/scripts/lab/lab-slot.sh --wait 1800 --label hands-live -- bash run-
 
 ### エンド：ラボで the_end へ tp すると竜戦は始まるか（`run-end-check.sh`、`end-check.mjs`）— **始まる**
 `bash lab-slot.sh -- bash run-end-check.sh <label> [<シード>] [--survival]`。新しい自然ワールド（難易度 normal・視野 10 チャンク＝本番）に、素のクライアント（`ShannonProbe`、op）が入り、`/execute in minecraft:the_end run tp @s 100 49 0` する。
-実測（WSL、シード 2336550045790902932、4 回）：到着の 1.5 秒後に the_end、**竜が存在するまで 4.7〜7.3 秒**（`execute if entity @e[type=minecraft:ender_dragon]`）、体力 200.0、竜 1・クリスタル 10、ボスバー「Ender Dragon」、
+実測（WSL、あるシード、4 回）：到着の 1.5 秒後に the_end、**竜が存在するまで 4.7〜7.3 秒**（`execute if entity @e[type=minecraft:ender_dragon]`）、体力 200.0、竜 1・クリスタル 10、ボスバー「Ender Dragon」、
 tick は 8〜20ms（目標 50ms）で、End の島を作る間に一度だけ「Can't keep up」（約 2.7 秒遅れ）。
 - **到着の黒曜石の足場（(100,48,0) を中心に 5×5）は、世界生成で既にある**（`execute if block 100 48 0 minecraft:obsidian` が、何も作る前に通る）。`fill` で作り直しても「何も埋めなかった」と返るだけ。tp だけでよい。
 - 視野：ラボの既定（5 チャンク＝80 ブロック）だと、100 ブロックほど外を回る竜はクライアントに届かない。`MINECRAFT_LAB_VIEW_DISTANCE=10`（`run-end-check.sh` と `lab-world.sh` は 10）で、**竜（id 237、`type: mob`、高さ 8・幅 16、メタデータ 17 枠）とクリスタル 10 個が最初から見える**。

@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { describe, expect, it } from 'vitest';
-import { ENDERMAN_EYE, ENDERMAN_FEET, atRoofCentre, endermanLine, endermanStrikePoint, endermanView, looksAtEyes, planRoof, roofBlockFor, roofExitCandidates, roofExitStep, roofSites, type Cell3, type RoofPlan, type RoofWorld } from '../../src/services/minebot/utils/huntEnderman.js';
+import { ENDERMAN_ANGRY_STRIKE_HEIGHTS, ENDERMAN_EYE, ENDERMAN_FEET, atRoofCentre, endermanLine, endermanStrikePoint, endermanView, looksAtEyes, planRoof, roofBlockFor, roofBlocksHeld, roofExitCandidates, roofExitStep, roofSites, type Cell3, type RoofPlan, type RoofWorld } from '../../src/services/minebot/utils/huntEnderman.js';
 import type { BlockReader } from '../../src/services/minebot/utils/localMap.js';
 
 // The roof over an enderman hunt (S2, 2026-11-02): a plan that leaves no cell round the body where an enderman (2.9 tall, 0.6 wide) can stand lower than the roof
@@ -53,6 +53,15 @@ describe('planRoof: the 3x3 over the body', () => {
     expect(flat.supports.every(c => c.y >= 0 && c.y < 2)).toBe(true);
     expect(atRoofCentre({ x: 0.7, y: 0, z: 0.3 }, flat.cell)).toBe(true);
     expect(atRoofCentre({ x: 0.701, y: 0, z: 0.5 }, flat.cell)).toBe(false);
+  });
+  // end1109p01 (11/9): a support hung from a block overhead at feet+3, over the centre cap: hidden from under the roof, it could not be dug, and three fights stopped on it.
+  it('a support above the caps (hung from a block overhead) is laid but not one to remove', () => {
+    const w = world({ solids: [[0, 4, 0]] });
+    const plan = planRoof(w, { x: 0, y: 0, z: 0 }, undefined, undefined, true);
+    expect(plan.problems).toEqual([]);
+    expect(plan.placements).toContainEqual({ x: 0, y: 3, z: 0 });
+    expect(plan.supports.every(c => c.y <= 2)).toBe(true);
+    check(w, plan);
   });
   it('on flat ground: the support column, then the nine caps (11 blocks), each laid against one standing', () => {
     const w = world();
@@ -148,6 +157,12 @@ describe('the block for the roof, and the look', () => {
     // Codex's pre-deploy review 6 (11/5): netherrack is a roof as the head says; obsidian is never spent on one.
     expect(roofBlockFor(pack(['netherrack', 40]), 11)).toEqual({ name: 'netherrack', count: 40 });
     expect(roofBlockFor(pack(['obsidian', 20]), 11)).toBeNull();
+  });
+  // end1109p09: netherrack×1 and wart blocks were told "1 種類で" and the head dug in a loop; kinds are mixed now, obsidian still never.
+  it('the roof is met by every roof kind carried, wart blocks too, never obsidian', () => {
+    expect(roofBlocksHeld(pack(['netherrack', 1], ['warped_wart_block', 9], ['obsidian', 20], ['sand', 5]))).toEqual({ total: 10, kinds: [{ name: 'warped_wart_block', count: 9 }, { name: 'netherrack', count: 1 }] });
+    expect(roofBlocksHeld(pack(['obsidian', 20])).total).toBe(0);
+    expect(roofBlockFor(pack(['nether_wart_block', 3]), 1)).toEqual({ name: 'nether_wart_block', count: 3 });
   });
 
   it('the look is on the eyes by the server\'s own measure: within 1 - 0.025 / distance', () => {
@@ -252,6 +267,16 @@ describe('the working lines after the roof is placed', () => {
     expect(endermanStrikePoint(roofRead(), from, target)).not.toBeNull();
     expect(endermanStrikePoint(roofRead({ '1,1,0': 'stone' }), from, target)).toBeNull();
     expect(endermanStrikePoint(roofRead(), from, { x: 8.5, y: 0, z: 0.5 })).toBeNull();
+  });
+
+  // end1108h29: #985 a step below the roof's floor, 1.3m off; the legs line ran through the floor's rim, five times "behind a wall".
+  it("an angry enderman a step below: its legs are behind the floor's rim, its body higher up is struck instead", () => {
+    const read = roofRead({ '2,-1,0': 'air' }), target = { x: 2.5, y: -1, z: 0.5 };
+    expect(endermanStrikePoint(read, from, target)).toBeNull();
+    const point = endermanStrikePoint(read, from, target, ENDERMAN_ANGRY_STRIKE_HEIGHTS);
+    expect(point).not.toBeNull();
+    expect(point!.y).toBeCloseTo(0);
+    expect(endermanStrikePoint(read, from, { x: 6.5, y: -1, z: 0.5 }, ENDERMAN_ANGRY_STRIKE_HEIGHTS)).toBeNull();
   });
 
   it('a clear eye ray does not prove an approach: a two-high passage has no route for a three-high enderman', () => {

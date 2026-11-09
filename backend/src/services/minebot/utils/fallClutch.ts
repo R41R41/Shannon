@@ -2,19 +2,21 @@ import { Vec3 } from 'vec3';
 import { bodyReader, type BlockReader } from './localMap.js';
 import { dropUnder } from './voidFooting.js';
 import { isEnd } from './dragonState.js';
-import { actionSignal } from '../execution/ActionExecution.js';
+import { actionSignal, assertActionActive, bindActionCallback, nativeActionHost } from '../execution/ActionExecution.js';
+import { lifeOf } from './life.js';
 
 /**
  * A fall that would cripple or kill, stopped with a bucket of water (the clutch every player knows). In the End a body that climbed a pillar for a caged crystal is up to 40 blocks over the ground, and
  * the dragon's wings push what is near: a fall of 30 blocks is 27 points of damage, and armour does not take any of it. Water laid on the ground under the body as it comes down takes the fall.
  *
- * The bucket reaches 4.5 blocks from the eye (4.2 is used). Up to a fall of about 80 blocks the body is slower than the 2.58 blocks that lie between the reach and the ground, so there is always a physics tick with the ground inside
- * the reach and the body not yet on it (checked tick by tick for falls of 10 to 120 blocks: no miss up to 80), and the pour is made in that tick (the use packet follows the position packet of the same tick). Only in the End, only with a bucket of water
- * in the hand or in the hotbar, only where the ground under the body is a solid floor (not water, lava, the void or what is not loaded) and the fall would cost at least CLUTCH_MIN_DAMAGE.
+ * The bucket reaches 4.5 blocks from the eye (4.4 including the horizontal aim is used). Pour synchronously on move, after Mineflayer writes position/position_look, using the CURRENT eye.
+ * physicsTick precedes that write: a use there is processed from the previous sent position, not a future one (r224/r225). Forecasts choose the landing support only, never the eye used for reach/aim.
+ * There is no guaranteed airborne in-reach sample at high speed. Observe the target cell's actual blockUpdate for two ticks after sending; a use packet alone does not prove water was placed.
+ * Only in the End, only with a bucket of water
+ * in the hand/hotbar, only where a short forecast sees a solid floor (not water, lava, the void or what is not loaded) and the fall would cost at least CLUTCH_MIN_DAMAGE.
  *
- * The bucket is taken into the hand by selecting its hotbar slot: one packet, nothing to wait for (the game's own `equip` does just that for an item in the hotbar). For an item in the pack `equip` moves the
- * stack with clicks of the window over several ticks that a stronger reflex taking the body cannot stop (independent review 2026-11-02, round 6: two window clicks after the interruption, the wall escape
- * late by half a second). So a bucket in the pack, not in the hotbar, does not start the clutch.
+ * A hand/hotbar bucket is selected in one packet. Pack equip stays refused in this integration: native inventory accepts a local window click before writing its packet, so a write-only expiry fence cannot prevent stale slot/cursor mutation.
+ * No native equip/window click is started during this fall; hand/hotbar selection is the existing synchronous motor operation.
  * The water poured is taken up again afterwards. A clutch cut off between the pour and the taking-up leaves a note in the floor's memory (`FallMemory.scoop`: the cell of the water), and the floor takes the
  * water up later, in a quiet moment, with a new hold on the body (`scoopWanted`, `scoopBack`): a water source and an empty bucket left behind would end the clutch for the next fall.
  *
@@ -30,13 +32,13 @@ import { actionSignal } from '../execution/ActionExecution.js';
  */
 export const CLUTCH_FALLING_VY = -0.75;
 export const CLUTCH_MIN_DAMAGE = 5;
-/** Blocks from the eye to the ground at which the pour is made: the bucket reaches 4.5. */
-export const CLUTCH_REACH = 4.2;
+/** Current Euclidean eye-to-face distance: 0.1m short of the bucket's 4.5m ray, allowing rounding and an off-centre aim. */
+export const CLUTCH_REACH = 4.4;
 const EYE_HEIGHT = 1.62;
 const LOOK_DOWN = 70;
 const GAP_MS = 6000;
-const POLLS = 400;
-const POLL_MS = 10;
+const CLUTCH_TICKS = 160;
+const CLUTCH_WAIT_MS = 8000;
 const SCOOP_TRIES = 3;
 /** A note of water left behind is kept this long, tried this many times (one try per SCOOP_GAP_MS at the most), and only while the body is within SCOOP_NEAR blocks of the water. */
 export const SCOOP_PENDING_MS = 90_000;
@@ -49,7 +51,7 @@ export const SCOOP_SAFE_DROP = 1;
 /** The slots of the hotbar in the player's window. */
 const HOTBAR_FIRST = 36, HOTBAR_LAST = 44;
 
-interface BodyEntity { position: Vec3; velocity?: Vec3; yaw?: number; pitch?: number; onGround?: boolean; isInWater?: boolean }
+interface BodyEntity { position: Vec3; velocity?: Vec3; yaw?: number; pitch?: number; onGround?: boolean; isInWater?: boolean; eyeHeight?: number; width?: number }
 type Item = { name: string; type?: number; slot?: number };
 export interface FallBody {
   entity?: BodyEntity;
@@ -62,9 +64,12 @@ export interface FallBody {
   look?(yaw: number, pitch: number, force?: boolean): unknown;
   lookAt?(target: Vec3, force?: boolean): unknown;
   setQuickBarSlot?(slot: number): void;
+  equip?(item: Item, destination: 'hand'): Promise<void>;
   activateItem?(offHand?: boolean): void;
   deactivateItem?(): void;
   blockAt?(position: Vec3): { name?: string; metadata?: number; shapes?: unknown } | null;
+  on?(event: string, listener: (...args: any[]) => void): unknown;
+  removeListener?(event: string, listener: (...args: any[]) => void): unknown;
   _client?: { write: (...args: any[]) => unknown };
 }
 /**
@@ -72,8 +77,111 @@ export interface FallBody {
  * before the clutch took the bucket (to be given back; absent when the bucket was in the hand already).
  */
 export interface PendingScoop { x: number; y: number; z: number; at: number; tries: number; lastAt?: number; hand?: number; handName?: string }
-/** What the floor remembers of a fall: the highest y since the body last stood, when the clutch last began, and the water poured and not yet taken up. */
-export interface FallMemory { from?: number; clutchAt?: number; scoop?: PendingScoop }
+/** The last pour's target, send time, elapsed physics ticks (up to two), and actual target-cell confirmation. */
+export interface PourObservation { x: number; y: number; z: number; at: number; ticks: number; status: 'sent_unconfirmed' | 'water_observed' }
+/** The floor's fall history, recovery note, and bounded evidence of the last pour. */
+export interface FallMemory {
+  from?: number; clutchAt?: number; scoop?: PendingScoop;
+  /** Last use and its actual target-cell update, retained even when scoop-back deletes its own note. At most one observation per pour. */
+  pour?: PourObservation;
+  waterObserved?: PourObservation[];
+}
+interface FallStamp {
+  entity: FallBody['entity']; client: FallBody['_client']; dimension: string | undefined;
+  life: number | undefined; epoch: string | undefined; dimSince: string | undefined; valid: boolean;
+}
+interface FallScope { signal: AbortSignal; check(): void; current(): boolean; close(): void }
+const memoryLives = new WeakMap<FallMemory, FallStamp>();
+const fallScopes = new WeakMap<object, FallScope>();
+const noteLives = new WeakMap<FallMemory, { note: PendingScoop; close(): void }>();
+const LIFE_EVENTS = ['death', 'respawn', 'spawn', 'game', 'end'];
+
+function closeNoteLife(memory: FallMemory): void { noteLives.get(memory)?.close(); }
+/** A probe/legacy body without a keeper still watches the bounded note between two owners. It issues no motor operations. */
+function retainNoteLife(bot: FallBody, memory: FallMemory): void {
+  const old = noteLives.get(memory), stamp = memoryLives.get(memory), note = memory.scoop;
+  if (old?.note === note && stamp?.valid) return;
+  old?.close();
+  if (!note || !stamp || lifeOf(nativeActionHost(bot))) return;
+  if (!sameLife(bot, stamp)) { if (memory.scoop === note) delete memory.scoop; return; }
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true; clearTimeout(timer);
+    for (const event of LIFE_EVENTS) bot.removeListener?.(event, lapsedNote);
+    if (noteLives.get(memory)?.note === note) noteLives.delete(memory);
+  };
+  const lapsedNote = () => {
+    stamp.valid = false;
+    if (memory.scoop === note) delete memory.scoop;
+    close();
+  };
+  const timer = setTimeout(() => { if (memory.scoop === note) delete memory.scoop; close(); },
+    Math.max(0, SCOOP_PENDING_MS - Math.max(0, Date.now() - note.at)));
+  timer.unref?.();
+  noteLives.set(memory, { note, close });
+  for (const event of LIFE_EVENTS) bot.on?.(event, lapsedNote);
+}
+
+function lifeStamp(bot: FallBody): FallStamp {
+  const life = lifeOf(nativeActionHost(bot))?.view(); // Reuse the installed keeper; never install or own its store here.
+  return { entity: bot.entity, client: bot._client, dimension: bot.game?.dimension,
+    life: life?.life, epoch: life?.deathEpoch, dimSince: life?.dimensionSince,
+    valid: !!bot.entity && (bot.health ?? 20) > 0 };
+}
+function sameLife(bot: FallBody, stamp: FallStamp): boolean {
+  const now = lifeStamp(bot);
+  if (!stamp.valid || !now.valid || now.entity !== stamp.entity || now.client !== stamp.client || now.dimension !== stamp.dimension
+    || now.life !== stamp.life || now.epoch !== stamp.epoch || now.dimSince !== stamp.dimSince) stamp.valid = false;
+  return stamp.valid;
+}
+function memoryInLife(bot: FallBody, memory: FallMemory): FallStamp {
+  const old = memoryLives.get(memory);
+  if (old && sameLife(bot, old)) return old;
+  if (old) {
+    closeNoteLife(memory);
+    delete memory.from; delete memory.clutchAt; delete memory.scoop; delete memory.pour; delete memory.waterObserved;
+  }
+  const stamp = lifeStamp(bot);
+  memoryLives.set(memory, stamp);
+  return stamp;
+}
+/** A life lapse permanently closes this work and its note; owner preemption alone keeps a same-life scoop note. */
+async function inFallScope<T>(bot: FallBody, port: FallBody, memory: FallMemory, work: () => Promise<T>, onLifeEnd: () => T): Promise<T> {
+  if (fallScopes.has(port)) return work();
+  const stamp = memoryInLife(bot, memory), controller = new AbortController(), owner = actionSignal(port);
+  let closed = false;
+  const abort = () => controller.abort();
+  const lapsed = () => { stamp.valid = false; abort(); };
+  const current = () => {
+    if (!sameLife(bot, stamp)) abort();
+    return !closed && !controller.signal.aborted && !owner?.aborted;
+  };
+  const scope: FallScope = { signal: controller.signal, current,
+    check() { if (!current()) throw new Error('Motor owner expired: fall life or world changed'); assertActionActive(port); },
+    close() {
+      if (closed) return;
+      closed = true; abort(); owner?.removeEventListener('abort', ownerEnded);
+      retainNoteLife(bot, memory); // Hand the note's life fence over before removing the running scope's listeners.
+      for (const event of LIFE_EVENTS) bot.removeListener?.(event, lapsed);
+    } };
+  const ownerEnded = () => scope.close();
+  fallScopes.set(port, scope);
+  for (const event of LIFE_EVENTS) bot.on?.(event, lapsed);
+  closeNoteLife(memory); // The running scope now owns the same fence.
+  owner?.addEventListener('abort', ownerEnded, { once: true });
+  if (owner?.aborted) ownerEnded();
+  try { return await work(); }
+  catch (error) { if (!stamp.valid) return onLifeEnd(); throw error; }
+  finally { scope.close(); if (fallScopes.get(port) === scope) fallScopes.delete(port); }
+}
+function assertFallActive(port: FallBody): void { fallScopes.get(port)?.check(); assertActionActive(port); }
+function fallSignal(port: FallBody): AbortSignal | undefined {
+  const scope = fallScopes.get(port);
+  scope?.current();
+  return scope?.signal ?? actionSignal(port);
+}
+
 type Outcome = { success: boolean; result: string };
 
 /** The ground under (x, y, z) as the top of its first solid block, how far under the feet that is, and what the fall would end in. */
@@ -93,10 +201,15 @@ function inHand(bot: FallBody, name: string): { held: boolean; slot: number } | 
   return item ? { held: false, slot: (item.slot as number) - HOTBAR_FIRST } : null;
 }
 
+type WaterBucket = { held: boolean; slot: number };
+/** Pack equip stays refused: native inventory mutates local slots/cursor before its final packet write. */
+function waterBucket(bot: FallBody): WaterBucket | null { return inHand(bot, 'water_bucket'); }
+
 /**
  * Whether the clutch starts at this physics tick, and why. Keeps `memory.from` (the highest y since the body last stood) to know how far the body has already fallen: the damage is the whole fall less three.
  */
 export function clutchWanted(bot: FallBody, memory: FallMemory, now: number): string | null {
+  memoryInLife(bot, memory);
   const body = bot.entity;
   if (!body || !isEnd(bot)) return null;
   const y = body.position.y;
@@ -104,42 +217,51 @@ export function clutchWanted(bot: FallBody, memory: FallMemory, now: number): st
   memory.from = Math.max(memory.from ?? y, y);
   if ((body.velocity?.y ?? 0) > CLUTCH_FALLING_VY) return null;
   if (memory.clutchAt !== undefined && now - memory.clutchAt < GAP_MS) return null;
-  if ((bot.health ?? 20) <= 0 || !inHand(bot, 'water_bucket')) return null;
-  const ground = groundUnder(bodyReader(bot as never), body.position);
-  if (ground.kind !== 'floor') return null;
-  const total = (memory.from - y) + ground.drop;
+  const have = waterBucket(bot);
+  if ((bot.health ?? 20) <= 0 || !have) return null;
+  const read = bodyReader(bot as never), support = forecastSupports(bot, read, body).pop();
+  if (!support) return null;
+  const drop = Math.max(0, y - support.source.y);
+  const total = memory.from - support.source.y;
   const damage = total - 3;
-  return damage >= CLUTCH_MIN_DAMAGE ? `落ちて${total.toFixed(0)}ブロック（地面まであと${ground.drop}、受ける被害およそ${damage.toFixed(0)}）` : null;
+  return damage >= CLUTCH_MIN_DAMAGE ? `落ちて${total.toFixed(0)}ブロック（地面まであと${drop.toFixed(0)}、受ける被害およそ${damage.toFixed(0)}）` : null;
 }
 
 /**
  * The bucket used along the look, now: the packet carries the body's rotation (activateItemFacing says why), and nothing waits for a look to settle. Through the motor `port`: a body whose owner has
  * been taken (a stronger reflex holds it) sends nothing, the port throws there (independent review 2026-11-02, round 5: after the interruption the pour still went out through the bare bot).
  */
-function pourNow(port: FallBody): void {
+function pourNow(port: FallBody, facing?: { yaw: number; pitch: number }): void {
+  assertFallActive(port);
   const client = port._client, entity = port.entity;
   if (!client || !entity || !port.activateItem) return;
   const original = client.write;
-  client.write = function (this: unknown, name: string, data: any, ...rest: any[]) {
-    if (name === 'use_item' && data?.rotation) {
-      data = { ...data, rotation: { x: (180 / Math.PI) * (Math.PI - (entity.yaw ?? 0)), y: (180 / Math.PI) * -(entity.pitch ?? 0) } };
+  let active = true;
+  const write = function (this: unknown, name: string, data: any, ...rest: any[]) {
+    if (active && name === 'use_item' && data?.rotation) {
+      assertFallActive(port);
+      data = { ...data, rotation: { x: (180 / Math.PI) * (Math.PI - (facing?.yaw ?? entity.yaw ?? 0)), y: (180 / Math.PI) * -(facing?.pitch ?? entity.pitch ?? 0) } };
     }
     return (original as any).call(this, name, data, ...rest);
   } as typeof client.write;
-  try { port.activateItem(false); } finally { client.write = original; }
+  client.write = write;
+  try { port.activateItem(false); } finally {
+    active = false; // A successor may retain this writer in its chain: the old owner no longer transforms or guards packets.
+    if (client.write === write) client.write = original;
+  }
 }
 
 /** A pause that ends at once when the action that holds the body is taken from it (the wall escape, the lava escape ...): the clutch lets go of the body in that tick, not a poll later. */
-function abortableDelay(port: object, ms: number): Promise<void> {
+function abortableDelay(port: FallBody, ms: number): Promise<void> {
   return new Promise(resolve => {
-    const signal = actionSignal(port);
+    const signal = fallSignal(port);
     if (signal?.aborted) { resolve(); return; }
     const timer = setTimeout(done, ms);
     function done() { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); }
     signal?.addEventListener('abort', done, { once: true });
   });
 }
-const interrupted = (port: object) => actionSignal(port)?.aborted === true;
+const interrupted = (port: FallBody) => fallSignal(port)?.aborted === true;
 const lostOwnership = (error: unknown) => /Action interrupted|Motor owner expired/u.test(String((error as Error)?.message ?? error));
 const TAKEN: Outcome = { success: false, result: '強い反射に操作を取られて中断した' };
 const CUT_AFTER_POUR: Outcome = { success: false, result: '強い反射に操作を取られて中断した（水はあけた：あとで汲み直す）' };
@@ -219,7 +341,7 @@ function giveBackHand(bot: FallBody, port: FallBody, hand: HandBack | undefined)
     }
   }
   if (bot.quickBarSlot === slot) return;
-  try { port.setQuickBarSlot?.(slot); } catch { /* the body is no longer ours */ }
+  try { assertFallActive(port); port.setQuickBarSlot?.(slot); } catch { /* the body is no longer ours */ }
 }
 
 /** The cell of the water that was poured, when it is a source now: the one the note names and no other (a source nearby that is not that one is no substitute). */
@@ -241,16 +363,16 @@ async function takeUp(bot: FallBody, port: FallBody, memory: FallMemory, pending
       if (bot.heldItem?.name !== 'bucket') {
         const empty = inHand(bot, 'bucket');
         if (!empty) { delete memory.scoop; return { success: false, result: '空のバケツが手にも hotbar にも無く、水は残した', scooped: false }; }
-        port.setQuickBarSlot?.(empty.slot);
+        assertFallActive(port); port.setQuickBarSlot?.(empty.slot);
       }
-      await port.lookAt?.(source.offset(0.5, 0.4, 0.5), true);
+      assertFallActive(port); await port.lookAt?.(source.offset(0.5, 0.4, 0.5), true);
       if (interrupted(port)) return { ...TAKEN, scooped: false };
       // Asked again just before the use: the body and the water are not where they were a look ago.
       if (!standsDry(bot) || !isSource(bot, source)) return { success: false, result: '汲む直前に足場か水が変わったので汲み直さない', scooped: false };
       // The first source along the look is the one used: another one in the body's own cell would be taken instead of the note's. Not used then, and the note is dropped (once).
       if (!firstSourceIsOurs(bot, source)) { delete memory.scoop; return { success: false, result: '照準の先で最初の水の源が記録の水ではないので汲まない（メモは捨てた）', scooped: false }; }
       pourNow(port);
-      port.deactivateItem?.();
+      assertFallActive(port); port.deactivateItem?.();
       for (let waited = 0; waited < 600 && bot.heldItem?.name !== 'water_bucket' && !interrupted(port); waited += 50) await abortableDelay(port, 50);
     } catch (error) { if (lostOwnership(error)) throw error; }
     if (bot.heldItem?.name === 'water_bucket') {
@@ -273,6 +395,9 @@ async function takeUp(bot: FallBody, port: FallBody, memory: FallMemory, pending
  * bucket from (`pending.hand`).
  */
 export async function scoopBack(bot: FallBody, port: FallBody, memory: FallMemory): Promise<Outcome & { scooped: boolean }> {
+  return inFallScope(bot, port, memory, () => scoopInLife(bot, port, memory), () => ({ ...TAKEN, scooped: false }));
+}
+async function scoopInLife(bot: FallBody, port: FallBody, memory: FallMemory): Promise<Outcome & { scooped: boolean }> {
   const pending = memory.scoop;
   if (!pending) return { success: true, result: '汲み直す水は無い', scooped: false };
   const found: HandBack | undefined = typeof bot.quickBarSlot === 'number' ? { slot: bot.quickBarSlot, ...(bot.heldItem?.name ? { name: bot.heldItem.name } : {}) } : undefined;
@@ -287,12 +412,13 @@ export async function scoopBack(bot: FallBody, port: FallBody, memory: FallMemor
  * within SCOOP_GAP_MS, and an empty bucket is in the hand or the hotbar. A note that is too old, tried too often, or whose empty bucket is no longer to be had is dropped here.
  */
 export function scoopWanted(bot: FallBody, memory: FallMemory, now: number): boolean {
+  memoryInLife(bot, memory);
   const pending = memory.scoop, body = bot.entity;
-  if (!pending || !body) return false;
-  if (now - pending.at > SCOOP_PENDING_MS || pending.tries >= SCOOP_PENDING_TRIES) { delete memory.scoop; return false; }
+  if (!pending || !body) { if (!pending) closeNoteLife(memory); return false; }
+  if (now - pending.at > SCOOP_PENDING_MS || pending.tries >= SCOOP_PENDING_TRIES) { delete memory.scoop; closeNoteLife(memory); return false; }
   if (!inHand(bot, 'bucket')) {
     // The server's word that the bucket is empty is on its way for a moment after the pour: the note is not dropped for want of the empty bucket before then.
-    if (now - pending.at > SCOOP_BUCKET_WAIT_MS) delete memory.scoop;
+    if (now - pending.at > SCOOP_BUCKET_WAIT_MS) { delete memory.scoop; closeNoteLife(memory); }
     return false;
   }
   if ((bot.health ?? 20) <= 0 || !(body.onGround || body.isInWater) || !standsDry(bot)) return false;
@@ -300,32 +426,158 @@ export function scoopWanted(bot: FallBody, memory: FallMemory, now: number): boo
   return Math.hypot(body.position.x - (pending.x + 0.5), body.position.y - pending.y, body.position.z - (pending.z + 0.5)) <= SCOOP_NEAR;
 }
 
+type PourTarget = { source: Vec3; yaw: number; pitch: number };
+
+type ForecastSupport = { source: Vec3; feet: Vec3 };
+/** Shared by start and pour: next 1..8 footprints, stopping at the first collision. Still a bounded 70-cell column read, not proof of a bottomless world. */
+function forecastSupports(bot: FallBody, read: BlockReader, body: BodyEntity): ForecastSupport[] {
+  const v = body.velocity;
+  if (!v || ![v.x, v.y, v.z].every(Number.isFinite) || v.y > CLUTCH_FALLING_VY) return [];
+  const half = (body.width ?? 0.6) / 2 - 1e-6, supports: ForecastSupport[] = [];
+  const columns = new Map<string, Vec3 | null>();
+  let predicted = body.position.clone(), vy = v.y;
+  for (let tick = 0; tick < 8; tick++) {
+    vy = (vy - 0.08) * 0.98;
+    predicted = predicted.offset(v.x, vy, v.z);
+    let support: Vec3 | null = null, nearest = Infinity;
+    for (let x = Math.floor(predicted.x - half); x <= Math.floor(predicted.x + half); x++) {
+      for (let z = Math.floor(predicted.z - half); z <= Math.floor(predicted.z + half); z++) {
+        const key = `${x},${z}`;
+        if (!columns.has(key)) {
+          const ground = groundUnder(read, { x: x + 0.5, y: body.position.y, z: z + 0.5 });
+          columns.set(key, ground.kind === 'floor' && fullCube(bot, new Vec3(x, ground.top - 1, z)) ? new Vec3(x, ground.top, z) : null);
+        }
+        const candidate = columns.get(key);
+        if (!candidate) continue;
+        const distance = Math.hypot(x + 0.5 - predicted.x, z + 0.5 - predicted.z);
+        if (!support || candidate.y > support.y || (candidate.y === support.y && distance < nearest)) {
+          support = candidate; nearest = distance;
+        }
+      }
+    }
+    if (support) {
+      supports.push({ source: support, feet: predicted });
+      if (predicted.y <= support.y) break;
+    }
+  }
+  return supports;
+}
+
+/**
+ * A short ballistic forecast, with the observed horizontal velocity held constant (no steering).
+ * The first full-cube support across the landing footprint wins, including a higher adjacent cell.
+ * groundUnder deliberately remains a centre-column reader: its top is blockY + 1, not blockY.
+ * Water is aimed at the support's top-face centre, rather than the cell the body is leaving.
+ */
+function targetForPour(bot: FallBody, read: BlockReader, body: BodyEntity): PourTarget | null {
+  const v = body.velocity;
+  if (!v || ![v.x, v.y, v.z].every(Number.isFinite) || v.y > CLUTCH_FALLING_VY) return null;
+  const eyeHeight = body.eyeHeight ?? EYE_HEIGHT;
+  const useEye = body.position.offset(0, eyeHeight, 0);
+  // At the pour window even a slow eligible fall lands within eight ticks. No distant trajectory is trusted.
+  for (const { source: support, feet } of forecastSupports(bot, read, body)) {
+    if (feet.y > support.y) continue;
+    // The source must have room, and the eye must still be above the face at use time.
+    if (!AIR_NAMES.has(read(support.x, support.y, support.z)?.name ?? '') || useEye.y <= support.y) return null;
+    const aim = support.offset(0.5, 0, 0.5).minus(useEye);
+    if (aim.norm() > CLUTCH_REACH) return null;
+    // Reject a top face hidden by a nearer solid/unknown cell. Do not pour on a lower floor beside a raised rim.
+    const length = aim.norm(), direction = aim.scaled(1 / length);
+    for (let d = 0; d < length - 0.01; d += 0.1) {
+      const at = useEye.plus(direction.scaled(d));
+      const block = read(Math.floor(at.x), Math.floor(at.y), Math.floor(at.z));
+      if (!block || !AIR_NAMES.has(block.name)) return null;
+    }
+    return { source: support, yaw: Math.atan2(-aim.x, -aim.z), pitch: Math.atan2(aim.y, Math.hypot(aim.x, aim.z)) };
+  }
+  return null;
+}
+
+/** The use runs inside move, after the position write, without yielding. physicsTick only counts waits; blockUpdate confirms the target, never a slot update. */
+function pourOnMove(bot: FallBody, port: FallBody, memory: FallMemory, clock: () => number, before: HandBack | undefined): Promise<Outcome | null> {
+  if (!bot.on || !bot.removeListener) return Promise.resolve({ success: false, result: '移動packet後を監視できないため水をあけない' });
+  const read = bodyReader(bot as never), signal = fallSignal(port);
+  return new Promise((resolve, reject) => {
+    let ticks = 0, done = false;
+    let sent: PourObservation | undefined;
+    const finish = (result: Outcome | null, error?: unknown) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      bot.removeListener?.('physicsTick', onTick);
+      bot.removeListener?.('move', onMove);
+      bot.removeListener?.('blockUpdate', onBlock);
+      bot.removeListener?.('end', ended);
+      signal?.removeEventListener('abort', aborted);
+      if (error !== undefined) reject(error); else resolve(result);
+    };
+    const ended = () => finish({ success: false, result: sent ? '水の使用送信後に接続が切れた' : '水をあける前に落下が終わった' });
+    const aborted = () => finish(sent ? CUT_AFTER_POUR : TAKEN);
+    const onTick = bindActionCallback(port, () => {
+      if (interrupted(port)) { aborted(); return; }
+      if (sent) {
+        // Keep the whole second tick, including network updates after its move. Close at the next physics event.
+        if (sent.ticks >= 2) finish(null); else sent.ticks++;
+      } else if (++ticks > CLUTCH_TICKS) ended();
+    });
+    const onBlock = (_old: unknown, block: { name?: string; position?: Vec3 } | null) => {
+      if (interrupted(port)) { aborted(); return; }
+      if (!sent || done || block?.name !== 'water') return;
+      const p = block.position;
+      if (!p || p.x !== sent.x || p.y !== sent.y || p.z !== sent.z) return;
+      sent.status = 'water_observed';
+      memory.waterObserved = [{ ...sent, at: clock() }];
+      finish(null);
+    };
+    const onMove = bindActionCallback(port, () => {
+      try {
+        if (done) return;
+        if (sent) return;
+        if (signal?.aborted) { aborted(); return; }
+        const body = bot.entity;
+        if (!body || (bot.health ?? 20) <= 0 || body.onGround) { finish({ success: false, result: '水をあける前に着地した' }); return; }
+        if (body.isInWater || groundUnder(read, body.position).kind === 'water') { finish({ success: true, result: '落ちる先が水だった' }); return; }
+        const target = targetForPour(bot, read, body);
+        if (target) {
+          if (bot.heldItem?.name !== 'water_bucket') { finish({ success: false, result: '水をあける前に手のバケツが変わった' }); return; }
+          memory.scoop = { x: target.source.x, y: target.source.y, z: target.source.z, at: clock(), tries: 0, ...(before !== undefined ? { hand: before.slot, ...(before.name !== undefined ? { handName: before.name } : {}) } : {}) };
+          sent = memory.pour = { x: target.source.x, y: target.source.y, z: target.source.z, at: clock(), ticks: 0, status: 'sent_unconfirmed' };
+          memory.waterObserved = [];
+          // Bound observation even when physics stalls; the timer never triggers a use or invents a water update.
+          clearTimeout(timer);
+          timer = setTimeout(() => finish(null), 150);
+          // No awaited look: in particular vy <= -2 can cross the entire window next tick.
+          // The packet carries its own aim even if look has not updated entity.pitch/yaw yet.
+          try { pourNow(port, target); } catch (error) { delete memory.scoop; delete memory.pour; delete memory.waterObserved; throw error; }
+          return;
+        }
+      } catch (error) { finish(null, error); }
+    });
+    // The timer only releases a stalled/disconnected body; it never decides to pour.
+    let timer = setTimeout(ended, CLUTCH_WAIT_MS);
+    bot.on?.('physicsTick', onTick);
+    bot.on?.('move', onMove);
+    bot.on?.('blockUpdate', onBlock);
+    bot.on?.('end', ended);
+    signal?.addEventListener('abort', aborted, { once: true });
+    if (signal?.aborted) aborted();
+  });
+}
+
 /** The clutch itself (`runFallClutch` gives the hand back after it). */
-async function clutch(bot: FallBody, port: FallBody, memory: FallMemory, clock: () => number, have: { held: boolean; slot: number }, before: HandBack | undefined): Promise<Outcome> {
+async function clutch(bot: FallBody, port: FallBody, memory: FallMemory, clock: () => number, have: WaterBucket, before: HandBack | undefined): Promise<Outcome> {
   try {
-    if (!have.held) port.setQuickBarSlot?.(have.slot);
+    if (interrupted(port)) return TAKEN;
+    if (!have.held) { assertFallActive(port); port.setQuickBarSlot?.(have.slot); }
     if (bot.heldItem?.name !== 'water_bucket') return { success: false, result: 'バケツを手に持てなかった' };
-    port.look?.(bot.entity?.yaw ?? 0, -Math.PI / 2, true);
+    // A visual preparation only: the eventual use has its own rotation and waits for no look promise.
+    assertFallActive(port); void Promise.resolve(port.look?.(bot.entity?.yaw ?? 0, -Math.PI / 2, true)).catch(() => undefined);
   } catch (error) {
     if (lostOwnership(error)) throw error;
     return { success: false, result: `バケツを手に持てなかった（${String((error as Error)?.message ?? error).slice(0, 40)}）` };
   }
-  const read = bodyReader(bot as never);
-  let poured = false;
-  for (let poll = 0; poll < POLLS && !poured; poll++) {
-    if (interrupted(port)) return TAKEN;
-    const body = bot.entity;
-    if (!body || body.onGround || body.isInWater) break;
-    const ground = groundUnder(read, body.position);
-    if (ground.kind === 'floor' && body.position.y + EYE_HEIGHT - ground.top <= CLUTCH_REACH) {
-      memory.scoop = { x: Math.floor(body.position.x), y: ground.top, z: Math.floor(body.position.z), at: clock(), tries: 0, ...(before !== undefined ? { hand: before.slot, ...(before.name !== undefined ? { handName: before.name } : {}) } : {}) };
-      try { pourNow(port); } catch (error) { delete memory.scoop; throw error; }
-      poured = true; break;
-    }
-    if (ground.kind === 'water') return { success: true, result: '落ちる先が水だった' };
-    await abortableDelay(port, POLL_MS);
-  }
-  if (!poured) return interrupted(port) ? TAKEN : { success: false, result: bot.entity?.onGround ? '水をあける前に着地した' : '地面が届く所へ来る前に落下が終わった' };
+  const notPoured = await pourOnMove(bot, port, memory, clock, before);
+  if (notPoured) return notPoured;
   for (let waited = 0; waited < 1500 && bot.entity && !bot.entity.onGround && !bot.entity.isInWater && !interrupted(port); waited += 25) await abortableDelay(port, 25);
   if (!interrupted(port)) await abortableDelay(port, 150);
   // The server's word that the bucket is empty (the slot update) comes some ticks after the pour.
@@ -339,22 +591,29 @@ async function clutch(bot: FallBody, port: FallBody, memory: FallMemory, clock: 
   else {
     const back = await scoopBack(bot, port, memory);
     if (interrupted(port)) return CUT_AFTER_POUR;
-    tail = back.scooped ? '（水は汲み直した）' : memory.scoop ? '（水は残した：あとで汲み直す）' : '（水は残した）';
+    tail = back.scooped ? '（水は汲み直した）' : memory.pour?.status !== 'water_observed' ? '（記録の水セルは未確認）' : memory.scoop ? '（水は残した：あとで汲み直す）' : '（水は残した）';
   }
-  return { success: wet, result: wet ? `水を地面にあけて落下を止めた${tail}` : `水をあけたが、水の中に着地できなかった${tail}` };
+  return { success: wet, result: wet ? `水を地面にあけて落下を止めた${tail}` : memory.pour?.status === 'water_observed' ? `水をあけたが、水の中に着地できなかった${tail}` : `水の使用を送ったが、水の設置と着水を確認できなかった${tail}` };
 }
 
 /**
- * The clutch: the bucket in the hand, the look straight down, the pour in the tick the ground comes within reach, and the water taken up again once the body stands (a water source left on the island is
+ * The clutch: the bucket in the hand, a downward look prepared without waiting, the pour on the first post-position move whose current-eye ray reaches the landing face while airborne, and water taken up again once the body stands (a water source left on the island is
  * harmless, but the bucket is wanted for the next fall). Returns what happened, in words the ledger can carry. Everything that acts on the body goes through `port`, and every wait ends when the action is taken.
  * The pour is noted in `memory.scoop` before it goes out and the note is dropped only when the water is taken up (or is not there to take): whatever cuts the clutch off after the pour leaves it for the floor.
  * The hand the bucket was taken from is given back when the clutch ends with the body still its own, and is in the note for a taking-up that comes later (`PendingScoop.hand`).
  */
 export async function runFallClutch(bot: FallBody, port: FallBody, memory: FallMemory = {}, clock: () => number = Date.now): Promise<Outcome> {
-  const have = inHand(bot, 'water_bucket');
-  if (!have || !bot.entity) return { success: false, result: '水の入ったバケツを手にも hotbar にも持っていない' };
+  return inFallScope(bot, port, memory, () => clutchInLife(bot, port, memory, clock), () => TAKEN);
+}
+async function clutchInLife(bot: FallBody, port: FallBody, memory: FallMemory, clock: () => number): Promise<Outcome> {
+  const have = waterBucket(bot);
+  if (!have || !bot.entity) return { success: false, result: '水の入ったバケツを手か hotbar に持っていない（荷の中からは落下中に持ち替えない）' };
   const before: HandBack | undefined = !have.held && typeof bot.quickBarSlot === 'number' ? { slot: bot.quickBarSlot, ...(bot.heldItem?.name ? { name: bot.heldItem.name } : {}) } : undefined;
+  const priorPour = memory.pour;
   const result = await clutch(bot, port, memory, clock, have, before);
   giveBackHand(bot, port, before);
-  return result;
+  const pour = memory.pour;
+  if (!pour || pour === priorPour) return result;
+  const observation = pour.status === 'water_observed' ? `waterObserved=あり（${pour.ticks}tick後）` : `waterObserved=なし（${pour.ticks}tick監視、設置未確認）`;
+  return { ...result, result: `${result.result}：${observation}` };
 }

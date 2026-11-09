@@ -1,7 +1,6 @@
 import { createLogger } from '../../../utils/logger.js';
 import { ConstantSkill, CustomBot } from '../types.js';
 import { activeActionCapabilities } from '../execution/ActionExecution.js';
-import { skillCategory } from '../execution/SkillExecutor.js';
 import { closeStaleWindow, equipWillClick } from '../utils/staleWindow.js';
 
 const log = createLogger('Minebot:Skill:autoWearArmor');
@@ -13,6 +12,11 @@ const PLACES: Array<{ destination: 'head' | 'torso' | 'legs' | 'feet' | 'off-han
   // A shield is worn on the arm: in the off hand it is there to be raised (see utils/shieldBlock).
   { destination: 'off-hand', ending: 'shield' },
 ];
+/** The body's own calls that click the pack (not through `equip`). */
+const PACK_CLICKERS = ['craft', 'toss', 'tossStack'] as const;
+/** The skills that work the pack or a window of it; while one runs, nothing is put on. */
+export const PACK_SKILLS = new Set(['craft-one', 'start-smelting', 'trade-with-villager', 'check-container', 'check-furnace',
+  'deposit-to-container', 'withdraw-from-container', 'withdraw-from-furnace', 'drop-item', 'use-stonecutter', 'brew-potion']);
 /** Weakest first: of two pieces carried for an empty place, the later one is put on. */
 const MATERIALS = ['leather', 'golden', 'chainmail', 'turtle', 'iron', 'diamond', 'netherite'];
 
@@ -41,8 +45,14 @@ export function armourToWear(worn: Record<string, string | null | undefined>, ca
  * It does not ask for the body. A constant skill waits for the body to be free, and a planner that has just
  * arrived somewhere walks on at once: the armour would stay in the pack for the whole walk into the fortress
  * (lab continuation L77m). Putting armour on needs no legs and no look, so it is done while walking as well.
- * What it must not cross is another use of the pack: it holds off while a window is open or anything but
- * walking is running, and every equip of the body, this one and the skills', goes through one queue.
+ * What it must not cross is another use of the pack: it holds off while a window is open, a craft or a toss
+ * is clicking the pack, or a skill that works the pack is running, and every equip of the body, this one and the
+ * skills', goes through one queue that a craft or a toss waits behind.
+ *
+ * It does not wait for an act to end. It used to hold off while anything but walking ran, and an act is not
+ * walking: in run 62 (2026-11-05) the body picked up iron armour and a shield in the middle of a fight's act and
+ * carried them through the next arrows. A fight, a dig or a pickup only equips (through the same queue), so a
+ * piece goes on between their equips.
  */
 class AutoWearArmor extends ConstantSkill {
   constructor(bot: CustomBot) {
@@ -83,6 +93,17 @@ class AutoWearArmor extends ConstantSkill {
       last = run.catch(() => undefined);
       return run;
     };
+    // A craft or a toss clicks the pack itself: it starts after the equips queued before it, and while it runs
+    // this skill puts nothing on (see `packBusy`).
+    for (const name of PACK_CLICKERS) {
+      if (typeof bot[name] !== 'function') continue;
+      const original = bot[name].bind(bot);
+      bot[name] = async (...args: unknown[]) => {
+        await last;
+        bot.packBusy = (bot.packBusy ?? 0) + 1;
+        try { return await original(...args); } finally { bot.packBusy -= 1; }
+      };
+    }
   }
 
   /**
@@ -101,10 +122,10 @@ class AutoWearArmor extends ConstantSkill {
 
   async runImpl() {
     this.queueEquips();
-    // Not with a chest or a workbench open: the clicks would land in that window. And not across a craft, a
-    // fight or a dig, which use the pack and the hands themselves.
-    if ((this.bot as any).currentWindow) return;
-    if (activeActionCapabilities(this.rootBot).some(name => !['query', 'movement'].includes(skillCategory(name)))) return;
+    // Not with a chest or a workbench open: the clicks would land in that window. And not across a craft or a
+    // toss, or a skill that works the pack, whose clicks these would cross.
+    if ((this.bot as any).currentWindow || ((this.rootBot as any).packBusy ?? 0) > 0) return;
+    if (activeActionCapabilities(this.rootBot).some(name => PACK_SKILLS.has(name))) return;
     const worn: Record<string, string | null> = {};
     for (const place of PLACES) worn[place.destination] = this.bot.inventory.slots[this.bot.getEquipmentDestSlot(place.destination)]?.name ?? null;
     const items = this.bot.inventory.items();

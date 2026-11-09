@@ -25,6 +25,7 @@ import { activeActionCapabilities, hasActiveSafetyLease, preemptLowerPriorityAct
 import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
 import { feetCentre, standing, walkGround } from '../src/services/minebot/utils/dragonWalk.js';
 import { bodyReader } from '../src/services/minebot/utils/localMap.js';
+import { watchShootDiagnostics } from '../src/services/minebot/utils/shootDiagnostics.js';
 import { bedHalves } from '../src/services/minebot/utils/bedRules.js';
 import { perchBedFoot, bedWallCells, bedCellSupported, supportedBedCells, descentBedLayouts, bedSelfEstimate, bedExposure, bedDamage, bedCentre, bedEyeReach, type DescentBedLayout } from '../src/services/minebot/utils/dragonBedGeometry.js';
 import { approachClear } from '../src/services/minebot/utils/dragonApproach.js';
@@ -612,6 +613,16 @@ scenes.crystal_caged = async () => {
   out.shotThroughBars = { lines: blocked.lines, ok: blocked.ok };
   // The bars on the arrow's way are taken out one by one, as `dig` would take them (only the ones on the way): each refusal names the bar; it is set to air and the shot is asked again.
   const taken: string[] = [];
+  // e1107b: the shot through the hole (2 bars taken) missed at 4°. The aim the body used and where each arrow went (its path, its last place) are kept.
+  const diagnostics: unknown[] = [];
+  const unwatch = watchShootDiagnostics(actor, event => { if (diagnostics.length < 12) diagnostics.push(event); });
+  const arrows = new Map<number, Array<[number, number, number]>>();
+  const onMove = (e: any) => {
+    if (e?.name !== 'arrow' || e.position.distanceTo(actor.entity.position) > 40) return;
+    const path = arrows.get(e.id) ?? []; if (path.length < 40) path.push([+e.position.x.toFixed(2), +e.position.y.toFixed(2), +e.position.z.toFixed(2)]); arrows.set(e.id, path);
+  };
+  actor.on('entityMoved', onMove); actor.on('entitySpawn', onMove);
+  out.body = { x: +actor.entity.position.x.toFixed(2), y: +actor.entity.position.y.toFixed(2), z: +actor.entity.position.z.toFixed(2) };
   let open = await act([{ do: 'shoot', target: `#${target.id}` }], 20);
   for (let i = 0; i < 8 && !open.ok && /iron_bars/u.test(open.lines.join(' ')); i++) {
     const cell = /\((-?\d+),(-?\d+),(-?\d+)\) の iron_bars/u.exec(open.lines.join(' '));
@@ -619,9 +630,17 @@ scenes.crystal_caged = async () => {
     await ask(`${END} setblock ${cell[1]} ${cell[2]} ${cell[3]} air`); taken.push(`${cell[1]},${cell[2]},${cell[3]}`);
     open = await act([{ do: 'shoot', target: `#${target.id}` }], 20);
   }
-  await sleep(500);
+  await sleep(1500);
+  actor.off('entityMoved', onMove); actor.off('entitySpawn', onMove); unwatch();
   out.barsTaken = taken;
   out.shotThroughHole = { lines: open.lines, ok: open.ok, crystalGone: actor.entities?.[target.id] === undefined };
+  out.bodyAtShot = { x: +actor.entity.position.x.toFixed(2), y: +actor.entity.position.y.toFixed(2), z: +actor.entity.position.z.toFixed(2) };
+  out.arrowPaths = [...arrows.entries()].map(([id, path]) => ({ id, first: path[0], last: path[path.length - 1], points: path.length, path: path.slice(0, 12) }));
+  out.shootDiagnostics = diagnostics;
+  // The cage around the hole as it stands after the shot (which cells of the face the first bar stood in are still bars, from 3 above the crystal down).
+  const read = bodyReader(actor);
+  const bx = Number(taken[0]?.split(',')[0] ?? NaN);
+  if (Number.isFinite(bx)) out.cageFace = [3, 2, 1, 0, -1].map(d => Math.round(target.y) + d).map(y => [-3, -2, -1, 0, 1, 2, 3].map(d => Math.floor(target.z) + d).map(z => (read(bx, y, z)?.name ?? '?').replace('iron_bars', '#').replace('air', '.')).join(' '));
   return out;
 };
 
@@ -754,11 +773,16 @@ scenes.bed = async () => {
   for (const [label, wallBetween] of [['bed past the head, wall between', true], ['bed past the head, in the open', false]] as Array<[string, boolean]>) {
     await perch(200);
     await flatten();
-    await ask(`${END} fill -2 ${g} 11 3 ${g + 5} 11 air replace obsidian`);
-    await ask(`${END} fill -1 ${g + 3} 8 2 ${g + 4} 11 air replace white_bed`);
-    await ask(`${END} fill -4 ${g} 6 5 ${g + 6} 15 air replace fire`); // the last bed's blast lit fires round it
-    await standAt(STAND.x, g, STAND.z);
-    await sleep(6000); // the dragon turns its head toward the body
+    // the last trial's wall, bed and fires, wherever the head pointed then
+    await ask(`${END} fill -12 ${g} -12 12 ${g + 6} 12 air replace obsidian`);
+    await ask(`${END} fill -12 ${g + 3} -12 12 ${g + 4} 12 air replace white_bed`);
+    await ask(`${END} fill -12 ${g} -12 12 ${g + 6} 12 air replace fire`);
+    // The body stands on the line the head already points along (lab e1107b: from the fixed point +z the head still pointed away after 6 s, the bed went
+    // past it 19 m off and the hand rightly said 届かない). 4 blocks past the bed's foot, then the head is read again.
+    const facing = liveHead();
+    const stand = facing ? { x: facing.centre.x + facing.dir.x * 6.2, z: facing.centre.z + facing.dir.z * 6.2 } : STAND;
+    await standAt(Number(stand.x.toFixed(2)), g, Number(stand.z.toFixed(2)));
+    await sleep(3000);
     const head = liveHead(), dragonNow = dragonEntity();
     const serverPos = (await ask(`${END} data get entity ${DRAGON} Pos`)).replace(/\s+/gu, ' ').slice(0, 120);
     // the bed past the head along the line from the dragon's middle, one pillar of end stone under its foot
@@ -767,7 +791,7 @@ scenes.bed = async () => {
     const bx = spot.x, bz = spot.z;
     await ask(`${END} fill ${bx} ${g} ${bz} ${bx} ${g + 2} ${bz} end_stone`);
     if (wallBetween) {
-      const wall = bedWallCells(spot, { ...STAND, y: g }, g, g + 4, 6);
+      const wall = bedWallCells(spot, { ...stand, y: g }, g, g + 4, 6);
       const first = wall[0], last = wall[wall.length - 1];
       await ask(`${END} fill ${first.x} ${first.y} ${first.z} ${last.x} ${last.y} ${last.z} obsidian`);
     }
@@ -777,7 +801,7 @@ scenes.bed = async () => {
     await ask(`${END} setblock ${bx} ${g + 3} ${bz} white_bed[facing=south,part=foot]`);
     await ask(`${END} setblock ${bx} ${g + 3} ${bz + 1} white_bed[facing=south,part=head]`);
     const seenBefore = { bed: [bx, g + 3, bz], atClient: actor.blockAt(new Vec3(bx, g + 3, bz))?.name ?? null, headHalfAtClient: actor.blockAt(new Vec3(bx, g + 3, bz + 1))?.name ?? null,
-      head: head ? [round(head.centre.x, 1), round(head.centre.z, 1)] : null, dragonAt: dragonNow ? [round(dragonNow.position.x, 1), round(dragonNow.position.z, 1)] : null, serverPos, dragonPhase: dragonNow ? dragonPhaseOf(actor, dragonNow) : null };
+      head: head ? [round(head.centre.x, 1), round(head.centre.z, 1)] : null, stand: [round(stand.x, 1), round(stand.z, 1)], headTurned: facing && head ? round(Math.acos(Math.max(-1, Math.min(1, facing.dir.dot(head.dir)))) * 180 / Math.PI, 0) : null, dragonAt: dragonNow ? [round(dragonNow.position.x, 1), round(dragonNow.position.z, 1)] : null, serverPos, dragonPhase: dragonNow ? dragonPhaseOf(actor, dragonNow) : null };
     log(`BED ${label}: before the hand ${JSON.stringify(seenBefore)}`);
     const run = await usePerchBed({ x: bx, y: g + 3, z: bz });
     await sleep(800);

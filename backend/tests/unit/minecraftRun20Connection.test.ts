@@ -96,9 +96,56 @@ describe('run 20: a far walk is planned a leg at a time', () => {
     expect((level.goal as any).constructor.name).toBe('GoalNearXZ');
     // Open ground (nothing to dig): the longer legs.
     expect(nextLeg({ entity: rockBot.entity, blockAt: () => ({ name: 'air', boundingBox: 'empty' }) }, goal).rock).toBe(false);
+    // end1108c S9: under the open sky, a place at about the body's height behind a hill is walked over the ground, not through it; a place
+    // well below (a stronghold) still gets the rock legs, and so does a body already under the ground.
+    const hillBot: any = { entity: { position: { x: 0.5, y: 69, z: 0.5 } },
+      blockAt: (p: { x: number; y: number; z: number }) => (p.y >= 71 && p.x <= 0 && p.x >= 0) ? null : p.y <= 90 ? solid : null };
+    const hillGoal = new goals.GoalNear(120, 69, 0, 4) as any;
+    const over = nextLeg(hillBot, hillGoal);
+    expect(over.rock).toBe(false);
+    expect((over.goal as any).constructor.name).toBe('GoalNearXZ');
+    expect(nextLeg(hillBot, new goals.GoalNear(90, 30, 0, 2) as any).rock).toBe(true);
+    hillBot.blockAt = (p: { y: number }) => p.y <= 90 ? solid : null;
+    expect(nextLeg(hillBot, hillGoal).rock).toBe(true);
+    // Leaves over the head are still the open sky.
+    hillBot.blockAt = (p: { x: number; y: number }) => p.x === 0 && p.y >= 71 && p.y <= 90 ? (p.y === 74 ? { name: 'oak_leaves', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' }) : p.y <= 90 ? solid : null;
+    expect(nextLeg(hillBot, hillGoal).rock).toBe(false);
     // The rock share counts a cell as dug when the feet or the head cell is solid.
     expect(rockShare(rockBot, { x: 0, y: -58, z: 0 }, { x: 10, y: -58, z: 0 })).toBe(1);
     expect(rockShare({ entity: rockBot.entity, blockAt: () => null }, { x: 0, y: -58, z: 0 }, { x: 10, y: -58, z: 0 })).toBe(0);
+  });
+
+  it('end1108f S9: over open ground a leg is the ground at its point, and a body under the ground going far climbs to the surface first', () => {
+    const stone = { name: 'stone', boundingBox: 'block' }, air = { name: 'air', boundingBox: 'empty' };
+    // Ground at y 69 (top block), a ravine down to y 10 at x 60..70, loaded within 200 m.
+    const world = (p: { x: number; y: number; z: number }) => {
+      if (Math.hypot(p.x, p.z) > 200) return null;
+      const top = p.x >= 60 && p.x <= 70 ? 10 : 62;
+      return p.y <= top ? stone : air;
+    };
+    const surface: any = { entity: { position: { x: 0, y: 63, z: 0 } }, blockAt: world };
+    const far = new goals.GoalNear(600, 63, 0, 2) as any;
+    const leg = nextLeg(surface, far);
+    expect(leg).toMatchObject({ final: false, rock: false, via: { x: FAR_LEG_M, y: 11, z: 0 } });
+    expect((leg.goal as any).constructor.name).toBe('GoalNear');
+    // Off the ravine the point's height is the ground's.
+    expect(nextLeg(surface, far, 1).via!.y).toBe(63);
+    // 88 m under the ground, 600 m from the crossing: up 8 over the next 16 m, not along the shallow line.
+    const deep: any = { entity: { position: { x: 0.5, y: -25, z: 0.5 } }, blockAt: world };
+    const climb = nextLeg(deep, far);
+    expect(climb).toMatchObject({ final: false, rock: true, via: { y: -17 } });
+    expect(climb.via!.x).toBeGreaterThanOrEqual(16); expect(climb.via!.x).toBeLessThanOrEqual(17);
+    expect((climb.goal as any).constructor.name).toBe('GoalNear');
+    // Near the top the leg ends at the surface, and a goal about no height climbs the same way.
+    deep.entity.position = { x: 0.5, y: 58, z: 0.5 };
+    expect(nextLeg(deep, far).via!.y).toBe(63);
+    deep.entity.position = { x: 0.5, y: -25, z: 0.5 };
+    expect(nextLeg(deep, new goals.GoalNearXZ(600, 0, 3) as any).via!.y).toBe(-17);
+    // A place well below (a stronghold) keeps the rock legs along the line, and the Nether (a roof) keeps the old legs.
+    expect(nextLeg(deep, new goals.GoalNear(600, -60, 0, 2) as any).via!.y).toBeLessThan(-25);
+    const nether: any = { ...deep, game: { dimension: 'the_nether' } };
+    expect(nextLeg(nether, far).via!.y).toBeLessThan(-21);
+    expect((nextLeg({ ...surface, game: { dimension: 'the_nether' } }, far).goal as any).constructor.name).toBe('GoalNearXZ');
   });
 
   function walker(position: Vec3) {

@@ -8,6 +8,7 @@ import { probePath } from '../probeTools.js';
 import { cellWay, climbRise, doorOpen, installWalkRules, isDoorlike, isLeaves, isPortal, isTall, mapBlockOf, MAX_CLIMB, MAX_FALL, passable, PORTAL_WORDS, portalAim, standable, standableBeside, whyNotStand } from '../walkRules.js';
 import { cellText, guard, letGo, placeText, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { meterProgress, withProgress } from './progressUnits.js';
+import { holeUnderCentreWords, magmaAtFootprint } from '../magmaFootprint.js';
 
 const { goals } = pathfinder;
 
@@ -187,7 +188,7 @@ export interface SearchSaid { status: string; nodes: number }
  * Any other change of dimension during a walk (a death and a respawn elsewhere) is not: the act's watch stops with `dimension_changed`.
  */
 export const portalWalks = new WeakSet<object>();
-export interface GoOutcome { reached: boolean; timedOut: boolean; stuck: boolean; error: unknown; search: SearchSaid | null; opens: string[]; /** The body came into another dimension while it walked (a portal: arrival, not a failure). */ crossed?: boolean }
+export interface GoOutcome { reached: boolean; timedOut: boolean; stuck: boolean; error: unknown; search: SearchSaid | null; opens: string[]; /** The body came into another dimension while it walked (a portal: arrival, not a failure). */ crossed?: boolean; magma?: Cell }
 
 /** go's way of using goWith: its own stuck time, a test of work that holds the body still on purpose (a dig, a block laid), and a look at each route found. */
 export interface GoWithOptions {
@@ -203,6 +204,21 @@ export interface GoWithOptions {
  */
 export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, notes: WayNotes, options: GoWithOptions = {}): Promise<GoOutcome> {
   const bot = ctx.bot;
+  let magma: Cell | undefined;
+  const checkMagma = () => {
+    if (magma) return;
+    const p = bot.entity?.position, v = bot.entity?.velocity;
+    const read = (x: number, y: number, z: number) => readCell(bot, x, y, z)?.name;
+    const touching = magmaAtFootprint(read, p);
+    // The grounded physics velocity still has a downward component: the solid floor stops it, so keep the actual foot height.
+    const next = p && v ? { x: p.x + v.x, y: p.y, z: p.z + v.z } : null;
+    const unsafe = touching ?? magmaAtFootprint(read, next);
+    if (!unsafe) return;
+    magma = unsafe;
+    // Stop navigation once, then leave the existing off-magma reflex free to steer. No held reflex or wait is introduced.
+    bot.removeListener?.('physicsTick', checkMagma);
+    try { bot.pathfinder.stop(); bot.pathfinder.setGoal(null); } catch { /* the hand reports the floor below */ }
+  };
   const sprint = watchGroundSprint(bot);
   let route: any[] = [];
   let search: SearchSaid | null = null;
@@ -253,12 +269,14 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
   };
   bot.on?.('path_update', onRoute);
   bot.on?.('diggingCompleted', onDug);
+  bot.on?.('physicsTick', checkMagma);
   let last = bot.entity.position.clone(), lastMoveAt = Date.now(), stuck = false, crossed = false;
   const dimension0 = dimensionOf(bot);
   const watch = setInterval(() => {
     // A portal entered on the way carries the body off: the walk is over there (mb-llmc-cand 4), not stuck nor failed.
     if (!crossed && portalWalks.has(bot) && dimensionOf(bot) !== dimension0) { crossed = true; try { bot.pathfinder.stop(); bot.pathfinder.setGoal(null); } catch { /* over */ } return; }
     if (crossed) return;
+    if (magma) return;
     try { openAhead(); } catch { /* the walk goes on; a shut door stops it below */ }
     const now = bot.entity?.position;
     if (!now) return;
@@ -270,8 +288,12 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
   }, 150);
   let error: unknown = null, timedOut = false;
   try {
-    const done = await guard(ctx, Promise.resolve(bot.pathfinder.goto(goal)), Math.max(500, timeoutMs));
-    if (!done) timedOut = true;
+    checkMagma();
+    if (!magma) {
+      const done = await guard(ctx, Promise.resolve(bot.pathfinder.goto(goal)), Math.max(500, timeoutMs));
+      if (!done) timedOut = true;
+      checkMagma();
+    }
   } catch (caught) {
     if (caught instanceof StepStopped || /Action interrupted/u.test(String((caught as Error)?.message))) { clearInterval(watch); detach(); letGo(bot); throw caught; }
     error = caught;
@@ -281,9 +303,9 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
     // which digs): a pick-up that restored it dug a vein cell the mine hand was digging, a dig twice, found by a unit test that failed 1 in 2 under load.
     try { bot.pathfinder.setGoal(null); } catch { /* the walk's result stands */ }
   }
-  function detach() { bot.removeListener?.('path_update', onRoute); bot.removeListener?.('diggingCompleted', onDug); sprint.close(); }
+  function detach() { bot.removeListener?.('path_update', onRoute); bot.removeListener?.('diggingCompleted', onDug); bot.removeListener?.('physicsTick', checkMagma); sprint.close(); }
   if (!crossed && portalWalks.has(bot) && dimensionOf(bot) !== dimension0) crossed = true;
-  return { reached: !crossed && atGoal(bot, goal), timedOut: timedOut && !crossed, stuck: stuck && !crossed, error: crossed ? null : error, search, opens, crossed };
+  return { reached: !crossed && !magma && atGoal(bot, goal), timedOut: timedOut && !crossed, stuck: stuck && !crossed, error: crossed ? null : error, search, opens, crossed, ...(magma ? { magma } : {}) };
 }
 
 /** The dimension the body is in, as the server names it (`overworld`, `the_nether`, `the_end`, with or without `minecraft:`); '' when not known. */
@@ -302,6 +324,7 @@ export function dimensionWords(dimension: string): string {
 export function atGoal(bot: any, goal: any): boolean {
   const position = bot.entity?.position;
   if (!position || typeof goal?.isEnd !== 'function') return false;
+  if (magmaAtFootprint((x, y, z) => readCell(bot, x, y, z)?.name, position)) return false;
   const here = feetCell(bot)!;
   try { return !!goal.isEnd(new Vec3(here.x, here.y, here.z)); } catch { return false; }
 }
@@ -432,6 +455,7 @@ async function walkTo(ctx: StepContext, target: Cell, range: number, notes: WayN
     const gone = await goWith(ctx, leg.goal, ctx.deadline - Date.now(), notes);
     if (gone.crossed) return crossedOutcome(ctx, notes);
     const here = feetCell(bot)!;
+    if (gone.magma) return stopped(bot, 'unsafe', `足幅が ${cellText(gone.magma)} の magma_block に掛かるため歩きを止めた${holeUnderCentreWords((x, y, z) => readCell(bot, x, y, z)?.name, bot.entity?.position)}。安全な床へ離れてから`, gone.magma, here);
     if (gone.timedOut) { letGo(bot); return stopped(bot, 'timeout', `${cellText(target)} へ歩く途中で時間切れ（今 ${placeText(bot, here)}）`, here, started); }
     if (gone.reached) {
       if (leg.final) return null;

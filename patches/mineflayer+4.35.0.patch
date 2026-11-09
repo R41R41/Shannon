@@ -49,10 +49,39 @@ index bd0514e..d72f3f4 100644
          bot.emit('breath')
        }
 diff --git a/node_modules/mineflayer/lib/plugins/inventory.js b/node_modules/mineflayer/lib/plugins/inventory.js
-index 70db312..bec27a7 100644
+index 70db312..6e1aa99 100644
 --- a/node_modules/mineflayer/lib/plugins/inventory.js
 +++ b/node_modules/mineflayer/lib/plugins/inventory.js
-@@ -69,9 +69,15 @@ function inject (bot, { hideErrors }) {
+@@ -1,5 +1,6 @@
+ const assert = require('assert')
+ const { Vec3 } = require('vec3')
++const conv = require('../conversions')
+ const { once, sleep, createDoneTask, createTask, withTimeout } = require('../promise_utils')
+ 
+ module.exports = inject
+@@ -27,6 +28,21 @@ function inject (bot, { hideErrors }) {
+ 
+   let eatingTask = createDoneTask()
+   let sequence = 0
++  // Main-hand inventory changes do not end an off-hand use acknowledged by our own living flags.
++  // Metadata never starts a use locally: it can only preserve an already active one, or end it.
++  let activeOffhand = false
++  let offhandUseEntity = null
++  bot._client.on('entity_metadata', packet => {
++    if (packet.entityId !== bot.entity?.id) return
++    const key = bot.registry.entitiesByName.player?.metadataKeys?.indexOf('living_entity_flags') ?? -1
++    const flags = key < 0 ? null : packet.metadata?.find(entry => entry.key === key)?.value
++    if (typeof flags !== 'number') return
++    offhandUseEntity = (flags & 3) === 3 ? bot.entity : null
++    if ((flags & 1) === 0) bot.usingHeldItem = false
++  })
++  const clearOffhandUse = () => { activeOffhand = false; offhandUseEntity = null }
++  bot.on('death', clearOffhandUse)
++  bot.on('respawn', clearOffhandUse)
+ 
+   let nextActionNumber = 0 // < 1.17
+   let stateId = -1
+@@ -69,9 +85,15 @@ function inject (bot, { hideErrors }) {
      if (packet.entityId === bot.entity.id && packet.entityStatus === 9 && !eatingTask.done) {
        eatingTask.finish()
      }
@@ -69,3 +98,39 @@ index 70db312..bec27a7 100644
    let previousHeldItem = null
    bot.on('heldItemChanged', (heldItem) => {
      // we only disable the item if the item type or count changes
+@@ -84,6 +106,7 @@ function inject (bot, { hideErrors }) {
+     if (!eatingTask.done) {
+       eatingTask.finish()
+     }
++    if (bot.usingHeldItem && activeOffhand && offhandUseEntity === bot.entity && bot.inventory.slots[45]) return
+     bot.usingHeldItem = false
+   })
+ 
+@@ -112,6 +135,8 @@ function inject (bot, { hideErrors }) {
+   }
+ 
+   function activateItem (offHand = false) {
++    activeOffhand = offHand
++    if (!offHand || !bot.usingHeldItem) offhandUseEntity = null
+     bot.usingHeldItem = true
+     sequence++
+ 
+@@ -128,12 +153,17 @@ function inject (bot, { hideErrors }) {
+       bot._client.write('use_item', {
+         hand: offHand ? 1 : 0,
+         sequence,
+-        rotation: { x: 0, y: 0 }
++        // The server applies this rotation before using the item, including an off-hand shield.
++        rotation: {
++          x: conv.toNotchianYaw(bot.entity.yaw),
++          y: conv.toNotchianPitch(bot.entity.pitch)
++        }
+       })
+     }
+   }
+ 
+   function deactivateItem () {
++    clearOffhandUse()
+     const body = {
+       status: 5,
+       location: new Vec3(0, 0, 0),

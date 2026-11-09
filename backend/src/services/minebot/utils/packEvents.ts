@@ -113,7 +113,7 @@ export function trackPack(bot: PackBody): { finish(reasons: HandReasons, record:
  */
 export function handReasons(hand: { do: string; fuel?: string; item?: string; op?: string; slot?: string }): HandReasons | null {
   switch (hand.do) {
-    case 'place': case 'pillarUp': return { loss: 'placed' };
+    case 'place': case 'pillarUp': case 'bed_burst': return { loss: 'placed' };
     case 'dig': return { gain: 'picked' };
     case 'pickup': return { gain: 'picked' };
     case 'walk': case 'go': case 'attack': case 'fight': case 'wait': return { gain: 'picked', loss: 'placed' };

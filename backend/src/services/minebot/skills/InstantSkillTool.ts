@@ -1,19 +1,21 @@
 import { StructuredTool } from '@langchain/core/tools';
 import { Vec3 } from 'vec3';
-import { z, ZodObject } from 'zod';
+import { z } from 'zod';
 import { CustomBot } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 
 const log = createLogger('Minebot:SkillTool');
+type InstantSkillSchema = z.ZodObject<z.ZodRawShape>;
 
 /**
  * InstantSkillをLangChainのStructuredToolに変換するクラス
  * スキルのパラメータからzodスキーマを動的生成
  */
-export class InstantSkillTool extends StructuredTool {
+// Keep the concrete Zod object below; LangChain's V3/V4 SchemaT inference recurses even for a fixed one-field object.
+export class InstantSkillTool extends StructuredTool<object, z.output<InstantSkillSchema>, z.input<InstantSkillSchema>, string> {
     name: string;
     description: string;
-    schema: ZodObject<any>;
+    schema: InstantSkillSchema;
     private bot: CustomBot;
 
     constructor(skill: any, bot: CustomBot) {
@@ -27,7 +29,7 @@ export class InstantSkillTool extends StructuredTool {
     /**
      * スキルパラメータからzodスキーマを構築
      */
-    private buildSchema(params: any[]): ZodObject<any> {
+    private buildSchema(params: any[]): InstantSkillSchema {
         return z.object(
             Object.fromEntries(
                 params.map((param: any) => {

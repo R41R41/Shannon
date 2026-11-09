@@ -12,6 +12,7 @@ import { Utils } from '../utils/index.js';
 import { installPlayerLoadedHandshake } from '../utils/playerLoadedHandshake.js';
 import { installRegistryRepairs } from '../utils/registryRepairs.js';
 import { installAirSupplyDefault } from '../utils/airSupplyDefault.js';
+import { installUseItemRotation } from '../utils/useItemRotation.js';
 import { edgeGuardPlugin } from '../utils/edgeGuard.js';
 import { breathingReflexPlugin } from '../utils/breathingReflex.js';
 import { exertionMeterPlugin } from '../utils/exertionMeter.js';
@@ -61,6 +62,8 @@ export async function createProbeBot(port: number, username = 'ShannonProbe', ac
   installPlayerLoadedHandshake(bot);
   installRegistryRepairs(bot);
   installAirSupplyDefault(bot);
+  // As production has it (client.ts): use_item written with the body's look, not rotation 0, 0 (end1108h8).
+  installUseItemRotation(bot);
   installMotionRecorder(bot);
   // 2026-10-28: the black box, as production has it (MINEBOT_BLACKBOX_DIR says where a lab writes it).
   installBlackBox(bot);

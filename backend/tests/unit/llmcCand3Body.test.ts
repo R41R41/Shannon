@@ -96,7 +96,7 @@ describe('run 37: the six walks that did not move, as the act\'s line now reads 
 
 // ===== 2. a drop does not take its own back =====
 
-function dropper(options: { solidNorth?: boolean; landAt?: (from: Vec3) => Vec3 | null; yaw?: number } = {}) {
+function dropper(options: { solidNorth?: boolean; solid?: (x: number, y: number, z: number) => boolean; landAt?: (from: Vec3) => Vec3 | null; yaw?: number } = {}) {
   const items = [{ name: 'cobblestone', type: 4, count: 64 }];
   const entities: Record<string, any> = {};
   const bot: any = Object.assign(new EventEmitter(), {
@@ -105,14 +105,19 @@ function dropper(options: { solidNorth?: boolean; landAt?: (from: Vec3) => Vec3 
     blockAt: (p: Vec3) => {
       const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
       // Stone under y 64; a wall of stone to the north at z -2 (head height) when asked.
-      const solid = y < 64 || (options.solidNorth && z === -2 && y >= 64 && y <= 66);
+      const solid = y < 64 || (options.solidNorth && z === -2 && y >= 64 && y <= 66) || !!options.solid?.(x, y, z);
       return { name: solid ? 'stone' : 'air', boundingBox: solid ? 'block' : 'empty', position: new Vec3(x, y, z) };
     },
     lookAt: vi.fn(async () => undefined),
     toss: vi.fn(async (_type: number, _meta: unknown, count: number) => {
       items[0].count -= count;
       const lands = (options.landAt ?? ((from: Vec3) => from.offset(5, 0, 0)))(bot.entity.position);
-      if (lands) entities['77'] = { id: 77, name: 'item', position: lands };
+      // As mineflayer shows it: the item is first where it was spawned (at the hand) and is moved when the server tells its move.
+      if (lands) {
+        const item = { id: 77, name: 'item', position: bot.entity.position.offset(0, 1.3, 0) };
+        entities['77'] = item;
+        setTimeout(() => { item.position = lands; }, 400);
+      }
     }),
   });
   const ctx = { bot, stop: new AbortController().signal, deadline: Date.now() + 30_000, facing: 'north' as const, base: { x: 0, y: 64, z: 0 } };
@@ -120,17 +125,17 @@ function dropper(options: { solidNorth?: boolean; landAt?: (from: Vec3) => Vec3 
 }
 
 describe('drop: level toward the freest way, where it lay, and whether it is far enough not to be picked up again (run 37: 8 full packs, ~150 s)', () => {
-  it('a wall to the north (the way she faces): thrown east, level; the stones lay 5 m away; "拾い直さない" is said', async () => {
+  it('a wall to the north (the way she faces): thrown south behind her, level; the stones lay 5 m away (read after they moved); "拾い直さない" is said', async () => {
     const { bot, ctx } = dropper({ solidNorth: true });
     const out = await drop(ctx, { items: [{ item: 'cobblestone' }] });
     expect(out.ok).toBe(true);
     // Level: the look is at the height of the eyes (64 + 1.62), eight cells along the way thrown.
     const aimed = bot.lookAt.mock.calls[0][0] as Vec3;
-    expect(aimed.x).toBeGreaterThan(5);
+    expect(aimed.z).toBeGreaterThan(5);
     expect(aimed.y).toBeCloseTo(65.62, 2);
-    expect(aimed.z).toBeCloseTo(0.5, 2);
+    expect(aimed.x).toBeCloseTo(0.5, 2);
     expect(out.text).toContain('cobblestone×64 を投げた（残り0）');
-    expect(out.text).toContain('東へ水平に投げた');
+    expect(out.text).toContain('。南へ水平に投げた');
     expect(out.text).toContain('落ちた先 (5,64,0)（足から横 5.0m）');
     expect(out.text).toContain('3m 以上離れたので、そこへ歩いて戻らない限り拾い直さない');
   });
@@ -142,11 +147,30 @@ describe('drop: level toward the freest way, where it lay, and whether it is far
     expect(out.text).toContain('近い（3m 未満）: ここに立ち続ける・近くを歩くと拾い直す。離れてから続ける');
   });
 
-  it('the way she faces is kept when it is as free as any', async () => {
-    const { bot, ctx } = dropper({ yaw: -Math.PI / 2 });  // yaw -π/2: east
+  it('the way behind her (where she came from) is taken when it is as free as any, not the way she faces (where she goes next)', async () => {
+    const { bot, ctx } = dropper({ yaw: -Math.PI / 2 });  // yaw -π/2: facing east
     const out = await drop(ctx, { items: [{ item: 'cobblestone' }] });
-    expect(out.text).toContain('東へ水平に投げた');
-    expect((bot.lookAt.mock.calls[0][0] as Vec3).x).toBeGreaterThan(5);
+    expect(out.text).toContain('。西へ水平に投げた');
+    expect((bot.lookAt.mock.calls[0][0] as Vec3).x).toBeLessThan(-5);
+  });
+
+  it('end1109s02: a tunnel dug on the slant (each compass way free one cell) is thrown along its slant', async () => {
+    // Open at y 64-65 only on a zigzag toward the northeast: the cells with x + z of 0 or 1 and x >= 0.
+    const open = (x: number, z: number) => x >= 0 && (x + z === 0 || x + z === 1);
+    const { bot, ctx } = dropper({ yaw: Math.PI * 3 / 4, solid: (x, y, z) => y >= 64 && y <= 65 && !open(x, z) });  // facing southwest; behind her is northeast
+    const out = await drop(ctx, { items: [{ item: 'cobblestone' }] });
+    expect(out.text).toContain('北東へ水平に投げた（その向きの空きは頭の高さで 6 マス以上）');
+    const aimed = bot.lookAt.mock.calls[0][0] as Vec3;
+    expect(aimed.x).toBeGreaterThan(5);
+    expect(aimed.z).toBeLessThan(-5);
+  });
+
+  it('a slant whose corner is shut on both sides is not open (an item does not pass between two blocks that touch at a corner)', async () => {
+    // Only the diagonal cells toward the northeast are open, with stone on both sides of each corner; the west way is open too.
+    const open = (x: number, z: number) => (x === -z && x >= 0) || (z === 0 && x <= 0);
+    const { ctx } = dropper({ yaw: Math.PI / 4, solid: (x, y, z) => y >= 64 && y <= 65 && !open(x, z) });  // facing northwest-ish; behind is southeast
+    const out = await drop(ctx, { items: [{ item: 'cobblestone' }] });
+    expect(out.text).toContain('。西へ水平に投げた');
   });
 
   it('a cell given as the text "3,64,0" is a cell: looked at, not "16m 内にいない"', async () => {

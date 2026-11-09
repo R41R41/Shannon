@@ -167,6 +167,10 @@ export interface DamageEventData extends BaseEventData {
     possibleSource?: string;    // 攻撃元（わかる場合）
     /** What the body itself can tell is hurting it, when no attacker is named (burning, in lava, starving, poisoned). */
     harm?: string;
+    /** The closed cause when no attacker is named (`hot_floor@x,y,z`, `on_fire`, `wither`, … `environment`; never 'unknown'). */
+    cause?: string;
+    /** The reflex holding the body when the blow came (`lava-escape`, `floor-flee` …). */
+    reflex?: string;
 }
 
 /**

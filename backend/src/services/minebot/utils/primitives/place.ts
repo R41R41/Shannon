@@ -2,6 +2,7 @@ import { Vec3 } from 'vec3';
 import { bedHalves, isBedName } from '../bedRules.js';
 import { equipToHandVerified } from '../equipVerified.js';
 import { type Cell } from '../localMap.js';
+import { centreInColumn } from '../tunnelWalk.js';
 import { noteOwned } from '../ownedBlocks.js';
 import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, findItem, guard, inventoryCount, isAirLike, placeText, stopped,
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
@@ -96,6 +97,12 @@ function withNearby(bot: any, cell: Cell, text: string, room: number): string {
   return out;
 }
 
+/** True when `cell` is only under the edge of the body's box: not in the column its middle stands in (a step to that column's middle frees it). */
+function overlapOnly(bot: any, cell: Cell): boolean {
+  const at = bot.entity?.position;
+  return !!at && (Math.floor(at.x) !== cell.x || Math.floor(at.z) !== cell.z);
+}
+
 /** Which of the body's cells a cell is, in plain words (the feet's, the head's, or one between). */
 function ownCellWord(bot: any, cell: Cell): string {
   const at = bot.entity.position;
@@ -158,6 +165,13 @@ async function placeCells(ctx: StepContext, args: PlaceArgs, tally: { laid: numb
     if (!REPLACEABLE.has(there.name)) {
       return result(stopped(bot, 'occupied', withNearby(bot, cell, `${placeText(bot, cell)} は埋まっている（そのマスは ${cellNow(bot, cell)}）`, room), cell));
     }
+    // S1 lab (2026-11-08): a body that stops 0.1 off its column's middle (a go's range 0.6) has its box over the next column, and a wall
+    // there was refused as the feet's cell three times running while blazes shot in. A cell of the next column is stepped off (sneaking,
+    // to the middle of the feet's own column, 0.8 s at most) as a player does; the body's own column is still refused.
+    if (bodyCells(bot.entity.position).some(own => own.x === cell.x && own.y === cell.y && own.z === cell.z) && overlapOnly(bot, cell)) {
+      const feet = bot.entity.position;
+      await centreInColumn(bot as never, new Vec3(Math.floor(feet.x), Math.floor(feet.y), Math.floor(feet.z)));
+    }
     if (bodyCells(bot.entity.position).some(own => own.x === cell.x && own.y === cell.y && own.z === cell.z)) {
       return result(stopped(bot, 'body_in_cell', withNearby(bot, cell, `${placeText(bot, cell)} は${ownCellWord(bot, cell)}（先に動く。真下に置いて上がるなら pillarUp）`, room), cell));
     }
@@ -187,10 +201,24 @@ async function placeCells(ctx: StepContext, args: PlaceArgs, tally: { laid: numb
     const [dx, dy, dz] = DIRECTIONS[side];
     const face = new Vec3(-dx, -dy, -dz);
     const countBefore = inventoryCount(bot, args.block);
+    let changed: StepOutcome | null = null;
+    const beforeSend = () => {
+      if (ctx.stop.aborted || Date.now() >= ctx.deadline) throw new StepStopped('placement_interrupted');
+      // Equip and native look yield to moving entities. The initial cell check is no longer sufficient.
+      if (bodyCells(bot.entity.position).some(own => own.x === cell.x && own.y === cell.y && own.z === cell.z)) {
+        changed = stopped(bot, 'body_in_cell', `${placeText(bot, cell)} は${ownCellWord(bot, cell)}になったので置かない`, cell);
+      } else {
+        const now = creatureIn(bot, cell);
+        if (now) changed = stopped(bot, 'creature_in_cell', `${placeText(bot, cell)} に ${now.name} が入ったので置かない`, cell);
+      }
+      if (changed) throw new Error('Placement cell changed before send');
+    };
     try {
-      const placed = await guard(ctx, Promise.resolve(bot.placeBlock(reference, face)), 4000);
+      beforeSend();
+      const placed = await guard(ctx, Promise.resolve(bot.placeBlock(reference, face, beforeSend)), 4000);
       if (!placed) throw new Error('timeout');
     } catch (error) {
+      if (changed) return result(changed);
       if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
       // The library waits for the server's block update; it may come late or the library may miss it: look at the cell itself.
       await wait(ctx, 300);

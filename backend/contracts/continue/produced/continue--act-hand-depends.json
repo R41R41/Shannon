@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "15002255fef1dd027994ecc8229f43147f511499",
- "madeAt": "2026-11-04T16:15:56.412Z",
+ "bodyRevision": "6bd37e0931835019862bda3f5ba9a67b7cd7c769",
+ "madeAt": "2026-11-05T10:01:06.606Z",
  "answers": "continue/act-hand-depends",
  "fixtureSha256": "c3dec58dfcc48becde35e2e95e4371f7f62a4558b6412e1b9cb3a26a484bb8ac",
  "substitute": "a dig out of reach stands for the go that stops stuck",

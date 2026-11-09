@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { activateItemFacing } from '../activateItemFacing.js';
-import { bedHalves, isBedName } from '../bedRules.js';
+import { bedHalves, isBedName, leaveBed } from '../bedRules.js';
 import { equipToHandVerified } from '../equipVerified.js';
 import { feetCell, type Cell } from '../localMap.js';
 import { noteSpawnBed } from '../ownedBlocks.js';
@@ -8,7 +8,7 @@ import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, find
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { BED_HALF_WAIT_MS } from './place.js';
 import { compassOf, eyeReportOf, EYE_FATE_MS, EYE_WATCH_MS, watchEyeFlight } from '../huntEyeFlight.js';
-import { barterWithPiglin } from '../huntBarter.js';
+import { barterMany, barterWithPiglin } from '../huntBarter.js';
 import { blastAt } from '../crystalBlast.js';
 import { entityHealth } from '../mapMarks.js';
 import { boxDistance, partBox } from '../dragonParts.js';
@@ -28,7 +28,7 @@ import { endDragonOf } from '../dragonState.js';
  *     anything else on a creature (`entity`), or in the air.
  * The item is the one asked for (`item`), else what the hand holds. What came of it is read back from the world.
  */
-export interface UseArgs { item?: string; at?: Cell; against?: string; entity?: string }
+export interface UseArgs { item?: string; at?: Cell; against?: string; entity?: string; /** Gold to piglins only: up to this many ingots in the one hand (utils/huntBarter barterMany). */ count?: number }
 
 const BEDS = /_bed$/u;
 const WORKED = /(_door|_trapdoor|_fence_gate|^lever|_button)$/u;
@@ -139,7 +139,7 @@ async function sleepInBed(ctx: StepContext, cell: Cell, asked: any): Promise<Ste
   }
   try { noteSpawnBed(bot, halves ? [halves.foot, halves.head] : [cell], String(asked.name)); } catch { /* the ledger is a help */ }
   const woke = await waitUntil(ctx, () => !bot.isSleeping, 15_000, 200);
-  if (!woke) { try { await bot.wake(); } catch { /* up */ } }
+  if (!woke) { try { await leaveBed(bot as never); } catch { /* up */ } }
   return { ok: true, text: `${cellText(cell)} のベッドで寝た${woke ? '（朝になって起きた）' : '（15秒で起きた。夜はまだ）'}。リスポーン地点はこのベッド${late >= 20 ? `（頭のブロックが来るまで ${late}ms 待った）` : ''}`, at: cell };
 }
 
@@ -225,7 +225,7 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
     const target = findEntity(bot, args.entity);
     if (!target) return stopped(bot, 'target_not_found', `${args.entity} が近く（16m）にいない`);
     // Gold to a piglin is an exchange, one whole: the offer, the six seconds of looking, and what comes back taken (utils/huntBarter).
-    if (name === 'gold_ingot' && target.name === 'piglin') return barterWithPiglin(ctx, target);
+    if (name === 'gold_ingot' && target.name === 'piglin') return (args.count ?? 1) > 1 ? barterMany(ctx, target, args.count!) : barterWithPiglin(ctx, target);
     if (target.position.distanceTo(bot.entity.position) > 4) return stopped(bot, 'out_of_reach', `${target.name}（${cellText(cellOf(target.position))}）に届かない（${target.position.distanceTo(bot.entity.position).toFixed(1)}m）`, cellOf(target.position));
     await guard(ctx, Promise.resolve(bot.lookAt(target.position.offset(0, (target.height ?? 1) * 0.6, 0), true)), 1000);
     bot.useOn(target);
@@ -242,11 +242,22 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
     try { bot.deactivateItem(); } catch { /* released */ }
     return { ok: true, text: `${name} を使った（残り${inventoryCount(bot, name)}、前は${count}）` };
   }
-  const cell = args.at;
-  const block = blockAt(bot, cell);
+  let cell = args.at;
+  let block = blockAt(bot, cell);
   if (!block) return stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell);
-  const distance = eyeDistance(bot, cell);
-  if (distance > USE_REACH) return stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell);
+  let distance = eyeDistance(bot, cell);
+  // end1109o02 (11/9): an empty bucket at a pool's source 6.1 m away took seven hands of go (limit_dig, no_floor, dead_end) and two minutes,
+  // while other sources of the same pool were nearer. Any source of the same liquid is the same fill: one in reach and in sight is used.
+  let instead = '';
+  if (name === 'bucket' && (block.name === 'water' || block.name === 'lava') && (distance > USE_REACH || liquidLevel(block) !== 0)) {
+    const near = reachableSource(bot, block.name);
+    if (near) {
+      instead = `指した ${cellText(cell)} は${distance > USE_REACH ? `届かない（${distance.toFixed(1)}m）` : '流れ'}ので、同じ${block.name === 'water' ? '水' : '溶岩'}の届く源 ${cellText(near)} を汲む。`;
+      cell = near; block = blockAt(bot, near); distance = eyeDistance(bot, near);
+    }
+  }
+  if (distance > USE_REACH) return stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`
+    + (name === 'bucket' && (block.name === 'water' || block.name === 'lava') ? `。${USE_REACH}m 内に見えて届く${block.name === 'water' ? '水' : '溶岩'}の源は無い: 源の隣の立てる所へ go してから use` : ''), cell);
   // A bed (r8: before any item is looked at; the bed is slept in with an empty hand). In the Nether and the End it cannot be slept in: the right click is a blast, and a use hand
   // at a bed there is the planner asking for it (the body never does it by itself).
   if (BEDS.test(block.name)) return /(^|:)(the_end|the_nether)$/u.test(String(bot.game?.dimension ?? '')) ? blowBed(ctx, cell, block) : sleepInBed(ctx, cell, block);
@@ -264,21 +275,33 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
       return stopped(bot, 'not_filled', `${placeText(bot, cell)} の ${block.name} を汲めなかった（${between
         ? `目との間の ${cellText(between.cell)} が ${between.name}` : '視線が届かないか、手前に何かある'}。今 ${cellNow(bot, cell)}）`, cell);
     }
-    return { ok: true, text: `${cellText(cell)} の ${block.name} 源を汲んだ（${filled}）`, at: cell };
+    return { ok: true, text: `${instead}${cellText(cell)} の ${block.name} 源を汲んだ（${filled}）`, at: cell };
   }
   // A full bucket into the cell given.
   if (name === 'water_bucket' || name === 'lava_bucket') {
-    if (!isAirLike(block) && block.name !== 'water' && block.name !== 'lava') return stopped(bot, 'occupied', `${placeText(bot, cell)} は ${cellNow(bot, cell)}（空いたマスを指す）`, cell);
-    const neighbour = neighbourFor(bot, cell, args.against);
-    if (!neighbour) return stopped(bot, 'nothing_to_set_against', `${placeText(bot, cell)} の周りに当てる固いブロックが無い`, cell);
+    const open = (b: any) => !!b && (isAirLike(b) || b.name === 'water' || b.name === 'lava');
+    let into = cell;
+    let against = args.against;
+    if (!open(block)) {
+      // The game's own click: a solid block and the face clicked, the liquid going to the cell on that side. The planner asks it that way
+      // (stronghold s06 2026-11-09: `use water_bucket <the block under the feet> face=up`, then `<the block beside a dug hole> face=north`, both refused).
+      const offset = args.against ? DIRECTIONS[args.against] : undefined;
+      if (!offset) return stopped(bot, 'occupied', `${placeText(bot, cell)} は ${cellNow(bot, cell)}（注ぐのは空いたマス。固いブロックを指すなら face= に注ぐ側の面）`, cell);
+      const beyond = { x: cell.x + offset[0], y: cell.y + offset[1], z: cell.z + offset[2] };
+      if (!open(blockAt(bot, beyond))) return stopped(bot, 'occupied', `${placeText(bot, cell)} の${DIRECTION_JA[args.against!]}の ${cellText(beyond)} は ${cellNow(bot, beyond)}（注ぐのは空いたマス）`, beyond);
+      into = beyond;
+      against = oppositeOf(args.against!);
+    }
+    const neighbour = neighbourFor(bot, into, against);
+    if (!neighbour) return stopped(bot, 'nothing_to_set_against', `${placeText(bot, into)} の周りに当てる固いブロックが無い`, into);
     const [dx, dy, dz] = DIRECTIONS[neighbour.side];
-    const reference = { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz };
+    const reference = { x: into.x + dx, y: into.y + dy, z: into.z + dz };
     await activateItemFacing(bot, faceCentre(reference, oppositeOf(neighbour.side)));
     const liquid = name === 'water_bucket' ? 'water' : 'lava';
-    const ok = await waitUntil(ctx, () => blockAt(bot, cell)?.name === liquid || bot.heldItem?.name === 'bucket', 1500);
-    if (!ok) return stopped(bot, 'not_poured', `${placeText(bot, cell)} に ${liquid} を注げなかった（今 ${cellNow(bot, cell)}）`, cell);
+    const ok = await waitUntil(ctx, () => blockAt(bot, into)?.name === liquid || bot.heldItem?.name === 'bucket', 1500);
+    if (!ok) return stopped(bot, 'not_poured', `${placeText(bot, into)} に ${liquid} を注げなかった（今 ${cellNow(bot, into)}）`, into);
     await wait(ctx, 150);
-    return { ok: true, text: `${cellText(cell)} に ${liquid} を注いだ（${DIRECTION_JA[neighbour.side]}の ${neighbour.block.name} に当てて。今 ${cellNow(bot, cell)}）`, at: cell };
+    return { ok: true, text: `${cellText(into)} に ${liquid} を注いだ（${DIRECTION_JA[neighbour.side]}の ${neighbour.block.name} に当てて。今 ${cellNow(bot, into)}）`, at: into };
   }
   // Fire into the cell given (a portal's inside).
   if (name === 'flint_and_steel' || name === 'fire_charge') {
@@ -340,6 +363,23 @@ export function lineBlocker(bot: any, cell: Cell): { cell: Cell; name: string } 
     if (block && block.boundingBox === 'block') return { cell: at, name: String(block.name) };
   }
   return null;
+}
+
+/** The nearest source of `liquid` (level 0) within the use reach of her eyes with nothing solid on the line to it; null when none. */
+export function reachableSource(bot: any, liquid: string): Cell | null {
+  const eye = bot.entity?.position;
+  if (!eye) return null;
+  const base = { x: Math.floor(eye.x), y: Math.floor(eye.y + 1.62), z: Math.floor(eye.z) }, r = Math.ceil(USE_REACH);
+  let best: Cell | null = null, bestDistance = Infinity;
+  for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) for (let dz = -r; dz <= r; dz++) {
+    const at = { x: base.x + dx, y: base.y + dy, z: base.z + dz };
+    const block = blockAt(bot, at);
+    if (!block || block.name !== liquid || liquidLevel(block) !== 0) continue;
+    const distance = eyeDistance(bot, at);
+    if (distance > USE_REACH || distance >= bestDistance || lineBlocker(bot, at)) continue;
+    best = at; bestDistance = distance;
+  }
+  return best;
 }
 
 const oppositeOf = (side: string) => ({ down: 'up', up: 'down', north: 'south', south: 'north', east: 'west', west: 'east' } as Record<string, string>)[side];

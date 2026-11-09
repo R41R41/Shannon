@@ -86,6 +86,22 @@ describe('eat, equip and drop (r43-reflex-ate-first)', () => {
     expect(outcome).toMatchObject({ ok: true, goal: 'already', code: 'food_full' });
     expect(outcome.text).toContain('満腹（20/20）');
   });
+  it('eat lowers a raised shield first: the server starts no meal while the shield is in use (S1 lab 11/8: 17/20 among blazes, nothing eaten)', async () => {
+    const items = [{ name: 'cooked_porkchop', count: 7, type: 5 }];
+    const bot = body(items, 17);
+    const order: string[] = [];
+    bot.shieldBlock = { enabled: true, up: true };
+    bot.equip = async (item: any) => { bot.heldItem = item; };
+    bot.deactivateItem = () => { order.push('lower'); };
+    bot.consume = async () => {
+      order.push(bot.shieldBlock.up ? 'eat behind the shield' : 'eat');
+      if (!bot.shieldBlock.up) { items[0].count = 6; bot.food = 20; }
+    };
+    const outcome = await eat(ctx(bot), { item: 'cooked_porkchop' });
+    expect(order).toEqual(['lower', 'eat']);
+    expect(outcome.ok).toBe(true);
+    expect(bot.shieldBlock.drawUntil).toBeUndefined();          // the hold is let go after the meal
+  });
   it('equip: the item already in the hand (or worn) is "already"', async () => {
     const bot = body([{ name: 'iron_sword', count: 1, type: 9 }]);
     bot.heldItem = { name: 'iron_sword' };
@@ -428,6 +444,29 @@ describe('attack: a creature that went out of sight is not a dead one (attack-ta
     deathLedgerOf(seen);
     seen.emit('entityDead', { id: 12, name: 'zombie' });
     expect(await fight(ctx(seen), { target: '#12' })).toMatchObject({ ok: true, goal: 'already', code: 'target_dead' });
+  }, 30_000);
+
+  // end1109p09: `fight magma_cube range=6` "2 体を倒す" ended on the first kill; the second struck through the head's 20 s turn and she died.
+  it('fight by a hostile kind: a kill with seconds left fights the next of that kind within the range; one beyond it, or named by id, is left', async () => {
+    const pair = body([{ name: 'iron_sword', count: 1, type: 9 }]);
+    deathLedgerOf(pair);
+    const cube = (id: number, x: number) => ({ id, name: 'magma_cube', type: 'hostile', height: 1.04, width: 1.04, position: new Vec3(x, 64, 0.5), isValid: true, velocity: new Vec3(0, 0, 0) });
+    pair.entities[21] = cube(21, 2.5);
+    pair.entities[22] = cube(22, 3.5);
+    pair.entities[23] = cube(23, 14.5);
+    const struck: number[] = [];
+    Object.assign(pair, { heldItem: { name: 'iron_sword' }, lookAt: async () => undefined, look: async () => undefined,
+      attack: (entity: any) => { struck.push(entity.id); pair.emit('entityDead', entity); delete pair.entities[entity.id]; } });
+    pair.entity.height = 1.8;
+    const out = await fight(ctx(pair), { target: 'magma_cube', range: 6, seconds: 20 });
+    expect(out).toMatchObject({ ok: true, code: 'target_killed' });
+    expect(struck).toEqual([21, 22]);
+    expect(out.text).toMatch(/^fight 済 magma_cube 2 体倒した（#21・#22）/u);
+    expect(pair.entities[23]).toBeDefined();
+    pair.entities[24] = cube(24, 2.5);
+    pair.entities[25] = cube(25, 3.5);
+    expect(await fight(ctx(pair), { target: 24, seconds: 20 })).toMatchObject({ ok: true, code: 'target_killed' });
+    expect(pair.entities[25]).toBeDefined();
   }, 30_000);
 });
 

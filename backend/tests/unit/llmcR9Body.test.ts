@@ -39,6 +39,7 @@ const STONE: Cell = { name: 'stone', boundingBox: 'block', diggable: true, hardn
 const COBBLE = { name: 'cobblestone', type: 1, count: 16 };
 const IRON_SWORD = { name: 'iron_sword', type: 20, count: 1 };
 const IRON_PICKAXE = { name: 'iron_pickaxe', type: 21, count: 1 };
+const SHIELD = { name: 'shield', type: 22, count: 1 };
 
 /** An open floor of stone under y 64 (the run's piglin was on level ground). */
 const field = (_x: number, y: number, _z: number): Cell => (y < 64 ? STONE : AIR);
@@ -67,7 +68,9 @@ function scene(shape: (x: number, y: number, z: number) => Cell, at: Vec3, optio
     registry: { blocksByName: { cobblestone: { id: 1 }, stone: { id: 2 } }, entitiesByName: { piglin: { type: 'hostile' }, zombie: { type: 'hostile' } }, itemsByName: {}, items: {} },
     heldItem: null, inventory: { items: () => options.items ?? [], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,
     executingSkill: false, interruptExecution: false, clearControlStates: vi.fn(), look: vi.fn(async () => undefined), lookAt: vi.fn(async () => undefined),
-    equip: vi.fn(async (item: any) => { bot.heldItem = item; }), consume: vi.fn(async () => undefined), stopDigging: () => undefined,
+    equip: vi.fn(async (item: any, destination: string) => { if (destination === 'off-hand') bot.inventory.slots[45] = item; else bot.heldItem = item; }),
+    activateItem: vi.fn(() => { bot.usingHeldItem = true; }), deactivateItem: vi.fn(() => { bot.usingHeldItem = false; }),
+    consume: vi.fn(async () => undefined), stopDigging: () => undefined,
     attack: vi.fn((entity: any) => {
       bot.__swings.push(entity.id);
       setTimeout(() => {
@@ -116,7 +119,7 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
   it('the first blow taken at 2.1 m: a blow back (r8 stepped one cell away three times, was caught, and said it would do no more)', async () => {
     const clock = { at: 50_000_000 };
     const mob = piglin(1677, 2.6, 64, 0.5);
-    const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: mob }, now: () => clock.at });
+    const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE, SHIELD], mobs: { 1677: mob }, now: () => clock.at });
     await hurtTo(bot, clock, 11);
     await rounds(bot, clock, 1);
     // Two blows, both landed; the piglin has 16 and iron takes 6 a blow in the world of this test: 4 left.
@@ -138,7 +141,7 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
 
   it('run 45 (+929): the first blow of the next hand waits for the weapon too (it came 0.14 to 0.2 s after the last one, for a fifth of the damage)', async () => {
     const clock = { at: 50_500_000 };
-    const { bot } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+    const { bot } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE, SHIELD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
     const times: number[] = [];
     const attack = bot.attack;
     bot.attack = (...rest: unknown[]) => { times.push(Date.now()); return attack.apply(bot, rest); };
@@ -152,7 +155,7 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
 
   it('an act running stops as a reflex and says the blows (the receipt the planner reads)', async () => {
     const clock = { at: 51_000_000 };
-    const { bot } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+    const { bot } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, SHIELD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
     const acting = runAct(bot, ACT_HANDS.parse([{ do: 'wait', seconds: 5 }, { do: 'jump' }]), undefined, undefined, { tickMs: 20 });
     await settle(60);
     await hurtTo(bot, clock, 11);
@@ -174,7 +177,7 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
       expect(meleeLines(ledger)[0].detail, label).toMatch(/^近接の piglin #1677 2\.1m: 間 \(1,64,0\) に cobblestone を置いた。足場: 空所なし 今2\.1m 体力/u);
     }
     // Seven is above six: the blow.
-    const seven = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+    const seven = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE, SHIELD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
     await hurtTo(seven.bot, clock, 7);
     await rounds(seven.bot, clock, 1);
     expect(seven.bot.__swings).toHaveLength(2);
@@ -192,13 +195,13 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
 
   it('no chase: an enemy out of the eye\'s reach (3.3 m to its box) or behind a wall is left, though the body was just hurt', async () => {
     const clock = { at: 53_000_000 };
-    const far = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD], mobs: { 1677: piglin(1677, 4.1, 64, 0.5) }, now: () => clock.at });
+    const far = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, SHIELD], mobs: { 1677: piglin(1677, 4.1, 64, 0.5) }, now: () => clock.at });
     await hurtTo(far.bot, clock, 11);
     await rounds(far.bot, clock, 2);
     expect(far.bot.__swings).toEqual([]);
     expect(far.bot.entity.position).toEqual(new Vec3(0.5, 64, 0.5));
     expect(meleeLines(far.ledger)).toHaveLength(0);
-    const wall = scene(walled, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+    const wall = scene(walled, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, SHIELD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
     await hurtTo(wall.bot, clock, 11);
     await rounds(wall.bot, clock, 2);
     expect(wall.bot.__swings).toEqual([]);
@@ -206,14 +209,15 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
 
   it('a hurt that nothing melee is near for, a shooter, a creeper, a kind the planner fights by choice (above the flee\'s health): no blow', async () => {
     const clock = { at: 54_000_000 };
-    const fight = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+    const fight = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, SHIELD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
     fight.bot.engagements = [{ kinds: ['piglin'] }];
     await hurtTo(fight.bot, clock, 11);
     await rounds(fight.bot, clock, 1);
     expect(fight.bot.__swings).toEqual([]);
     for (const name of ['blaze', 'skeleton', 'creeper']) {
-      const mob = { id: 3, name, type: 'hostile', height: 1.8, width: 0.6, position: new Vec3(2.6, 64, 0.5) };
-      const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD], mobs: { 3: mob }, now: () => clock.at });
+      // A blaze within 2.5 m is struck since end1108h21 (CONTACT_SHOOTERS); 2.7 m off it is still only a shooter.
+      const mob = { id: 3, name, type: 'hostile', height: 1.8, width: 0.6, position: new Vec3(name === 'blaze' ? 3.2 : 2.6, 64, 0.5) };
+      const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, SHIELD], mobs: { 3: mob }, now: () => clock.at });
       await hurtTo(bot, clock, 11);
       await rounds(bot, clock, 1);
       expect(bot.__swings, name).toEqual([]);
@@ -223,7 +227,7 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
 
   it('five blow-hands in an episode at most; then it says so, and leaves the decision to the planner', async () => {
     const clock = { at: 55_000_000 };
-    const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5, 1000) }, now: () => clock.at, damage: 1 });
+    const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, SHIELD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5, 1000) }, now: () => clock.at, damage: 1 });
     await hurtTo(bot, clock, 11);
     await rounds(bot, clock, 6);
     const lines = meleeLines(ledger);
@@ -235,7 +239,7 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
 
   it('A-6 (7): after the cap was told, no new hand of any kind (a block between included) until the episode ends', async () => {
     const clock = { at: 57_000_000 };
-    const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: piglin(1677, 2.6, 64, 0.5, 1000) }, now: () => clock.at, damage: 1 });
+    const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE, SHIELD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5, 1000) }, now: () => clock.at, damage: 1 });
     await hurtTo(bot, clock, 11);
     await rounds(bot, clock, 6);
     expect(meleeLines(ledger).filter(entry => entry.kind === 'melee')).toHaveLength(5);
@@ -253,11 +257,11 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
 
   it('a blow back stops when the health falls to 6 in the hand (the next hand is a block between)', async () => {
     const clock = { at: 56_000_000 };
-    const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: piglin(1677, 2.6, 64, 0.5, 1000) }, now: () => clock.at, damage: 1 });
+    const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE, SHIELD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5, 1000) }, now: () => clock.at, damage: 1 });
     await hurtTo(bot, clock, 11);
     const running = (async () => { clock.at += 300; tick(bot); })();
     await running;
-    await settle(40);
+    await vi.waitFor(() => expect(bot.__swings).toHaveLength(1), { timeout: 3000, interval: 5 });
     bot.health = 4.5;
     await vi.waitFor(() => expect(bot.floorReflexes.busy).toBeNull(), { timeout: 5000, interval: 5 });
     expect(bot.__swings).toHaveLength(1);
@@ -266,23 +270,23 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
   }, 20_000);
 });
 
-describe('the hands of a floor: a block between, two up, and the rim as r8 had it', () => {
+describe('the hands of a floor: a block between, three up, and the rim as r8 had it', () => {
   const choice = (shape: (x: number, y: number, z: number) => Cell, items: any[], enemyAt: [number, number, number], health = 15) => {
     const { bot } = scene(shape, new Vec3(0.5, 64, 0.5), { health, items, mobs: { 1: piglin(1677, ...enemyAt) } });
     const threats = reflexes.meleeThreatsNear(bot);
     return reflexes.meleeChoice(bot, threats, { hands: 0, beingHit: true });
   };
-  it('an enemy in the next cell (1.4 m): no cell to put a block in, so two blocks up; a roof: no pillar, a step away', () => {
-    expect(choice(field, [COBBLE], [1.9, 64, 0.5]).hand).toMatchObject({ kind: 'pillar', block: 'cobblestone', n: 2, detail: '2段積んで上がった' });
-    // One block is not two.
-    const one = choice(field, [{ ...COBBLE, count: 1 }], [1.9, 64, 0.5]);
+  it('an enemy in the next cell (1.4 m): no cell to put a block in, so three blocks up; a roof: no pillar, a step away', () => {
+    expect(choice(field, [COBBLE], [1.9, 64, 0.5]).hand).toMatchObject({ kind: 'pillar', block: 'cobblestone', n: 3, detail: '3段積んで上がった' });
+    // Two blocks do not clear a wither skeleton's reach.
+    const one = choice(field, [{ ...COBBLE, count: 2 }], [1.9, 64, 0.5]);
     expect(one.hand?.kind).toBe('step');
     // A roof over the head: the pillar is not made (the cell over the head is stone), the r8 step away is.
     const roof = choice(roofed, [COBBLE], [1.9, 64, 0.5]);
     expect(roof.hand?.kind).toBe('step');
   });
   it('at a rim no blow is struck and no pillar made, with a sword in the pack: r8\'s step off the rim (the bridge and ledge are r8\'s tests)', () => {
-    const { bot } = scene(ledge, new Vec3(5.5, 55, 0.5), { health: 15.5, items: [IRON_SWORD], mobs: { 2: piglin(2, 8.5, 55, 0.5) } });
+    const { bot } = scene(ledge, new Vec3(5.5, 55, 0.5), { health: 15.5, items: [IRON_SWORD, SHIELD], mobs: { 2: piglin(2, 8.5, 55, 0.5) } });
     const result = reflexes.meleeChoice(bot, reflexes.meleeThreatsNear(bot), { hands: 0, beingHit: true });
     expect(result.hand).toMatchObject({ kind: 'step' });
     expect(result.hand.detail).toContain('空所から離れる向きへ');

@@ -2,7 +2,7 @@ import { canHarvest } from '../toolChoice.js';
 import { feetCell, type Cell } from '../localMap.js';
 import { blockAt, cellNow, cellText, eyeDistance, findItem, freeSlots, placeText, stopped, wait,
   type StepContext, type StepOutcome } from './common.js';
-import { dig } from './dig.js';
+import { cheaperThanAsked, dig } from './dig.js';
 import { pickup } from './pickup.js';
 import { canWorkOn } from './getNear.js';
 import { go } from './go.js';
@@ -26,6 +26,8 @@ const MAX_TRACE = 256;
 const DEFAULT_COUNT = 8;
 const DEFAULT_SECONDS = 60;
 const DEFAULT_MAX_DIG = 16;
+/** The rock a way to an ore is dug through, said in a stop that had no dig list (end1109o04). */
+const ROCK_ROAD = 'stone,dirt,gravel,andesite,diorite,granite,tuff,deepslate';
 /** A dig that fails this many times in a row stops the hand (something is wrong that another cell will not mend). */
 const FAILS_IN_A_ROW = 3;
 /** The longest the way to one cell may take, and how many cells that cannot be reached end the hand (the cells behind the same rock will not be reached either). */
@@ -95,10 +97,14 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   }
   // The tool: the one asked for must make this block drop; else some tool carried must (dig picks the quickest of them).
   const sample = blockAt(bot, starts[0]);
+  let keptNote = '';
   if (args.tool && args.tool !== 'hand') {
     const asked = findItem(bot, args.tool);
     if (!asked) return stopped(bot, 'no_tool', `mine 止まった no_tool: ${args.tool} を持っていない`, starts[0]);
     if (!canHarvest(sample, asked)) return stopped(bot, 'no_tool', `mine 止まった no_tool: ${args.tool} では ${block} は何も落ちない（掘れる道具: ${harvesters(bot, sample)}）`, starts[0]);
+    // end1109o05: dig takes the cheaper tool that also makes the block drop; the result says so once, so the next tool= is left off.
+    const cheaper = cheaperThanAsked(bot, sample, asked);
+    if (cheaper) keptNote = `。${block} は ${cheaper.name} で足りるので ${asked.name} は取っておいた（減りが大きい道具は、それでしか落ちない物だけに使う）`;
   } else if (!args.tool && sample.harvestTools && !((bot.inventory?.items?.() ?? []) as any[]).some(item => canHarvest(sample, item))) {
     return stopped(bot, 'no_tool', `mine 止まった no_tool: ${block} を掘って落とす道具を持っていない（掘れる道具: ${harvesters(bot, sample)}）`, starts[0]);
   }
@@ -208,7 +214,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   const aside = avoided.length ? `。掘らなかった: ${avoided.slice(0, 3).map(entry => entry.why).join('／')}${avoided.length > 3 ? ` ほか${avoided.length - 3}` : ''}` : '';
   const last = dugCells[dugCells.length - 1] ?? starts[0];
   if (result.dug >= count) {
-    return { ok: true, at: last, text: `mine 済 ${block} ${result.dug} 個（${got ? `${got} を得た` : '拾っていない'}）・たどった ${result.visited} マス${road}${lost}${aside}` };
+    return { ok: true, at: last, text: `mine 済 ${block} ${result.dug} 個（${got ? `${got} を得た` : '拾っていない'}）・たどった ${result.visited} マス${road}${keptNote}${lost}${aside}` };
   }
   const unreached = skipped.filter(entry => entry.kind === 'unreachable');
   if (unreached.length) {
@@ -220,7 +226,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     return problem('no_block', avoided.length ? `掘れるマスが無い: ${avoided[0].why}` : `${block} のつながりに掘れるマスが無い`, starts[0]);
   }
   // The vein ran out before the count: that is an end, not a failure.
-  return { ok: true, at: last, text: `mine 済 ${block} ${result.dug} 個（${got ? `${got} を得た` : '拾っていない'}）・たどった ${result.visited} マス・${capped ? `${MAX_TRACE} マスたどって止めた（つながりがまだ続く）` : 'つながりが尽きた'}（ほしい ${count} 個に足りない）${road}${lost}${aside}` };
+  return { ok: true, at: last, text: `mine 済 ${block} ${result.dug} 個（${got ? `${got} を得た` : '拾っていない'}）・たどった ${result.visited} マス・${capped ? `${MAX_TRACE} マスたどって止めた（つながりがまだ続く）` : 'つながりが尽きた'}（ほしい ${count} 個に足りない）${road}${keptNote}${lost}${aside}` };
 
   /**
    * Gets the body to where it can dig the cell: the hand `go` to a cell beside it (any of its six faces), digging only what `canDig` names and no more than what is left
@@ -244,7 +250,10 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     if (!gone.ok && gone.reason === 'limit_time' && Date.now() >= ctx.deadline) return { fatal: true, reason: 'limit_time', text: `${seconds} 秒の上限に着いた` };
     if (!gone.ok && gone.reason === 'limit_time') return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ ${APPROACH_SECONDS} 秒近づいても届かない` };
     const allowed = roadLeft > 0 ? `許された物（${roadWords.join('・')}）だけを掘っても` : '掘らずに（canDig が無い）';
-    return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ${allowed}届く道が無い（${why.slice(0, 70)}）` };
+    // end1109o04: iron ore 14 blocks down "had no way without digging"; the hand was not sent again with a dig list, and she called the
+    // iron far and waited for the night. Without one, the stop says the same hand with the rock to dig.
+    const retry = roadLeft > 0 ? '' : `。同じ mine に dig=${ROCK_ROAD} を足せば、その物だけ掘って近づく（maxDig が道の上限。鉱石は岩の中にあるので、掘る道なら普通は届く）`;
+    return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ${allowed}届く道が無い（${why.slice(0, 70)}）${retry}` };
   }
 }
 

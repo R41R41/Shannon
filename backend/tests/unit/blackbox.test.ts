@@ -103,7 +103,7 @@ describe('heavy or light', () => {
   });
   it('run 59 leg 2: a search that ran out of time and says the waypoint to take goes back to the planner the first time at a place, and is held the second', () => {
     const seen = new Set<string>();
-    const timeout = 'go 止まった search_timeout: 道探しが 5 秒で終わらない（道の有無は不明。2,719 マス調べた、(14,71,-14) まで・あと 86m） (14,71,-12) 道 15 歩・掘 0・置 6・引き直し 3 回。10m 以内の中継点へ go か、dig と walk の階段・縦穴で';
+    const timeout = 'go 止まった search_timeout: 道探しが 5 秒で終わらない（道の有無は不明。2,719 マス調べた、(14,71,-14) まで・あと 86m） (14,71,-12) 道 15 歩・掘 0・置 6・引き直し 3 回。同じ方角の 20〜40m 先の立てる所を中継点にして go を出し直すか、dig と walk の階段・縦穴で（1 マスずつ手で掘ると 1 分に数 m しか進まない）';
     expect(heavyReason(lines(timeout) as never, 9000, 18, false, seen, 't')).toBeNull();
     expect(heavyReason(lines(timeout) as never, 9000, 18, false, seen, 't')).toBe('explained:go/search_timeout');
   });

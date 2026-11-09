@@ -264,3 +264,57 @@ describe('every equip of the body closes a window left open when it would click 
     expect(closeStaleWindow({})).toBe(false);
   });
 });
+describe('armour picked up in the middle of an act goes on (run 62: iron armour and a shield carried through the next arrows)', () => {
+  const SLOTS: Record<string, number> = { head: 5, torso: 6, legs: 7, feet: 8, 'off-hand': 45 };
+  function body() {
+    const calls: string[] = [];
+    const bot: any = Object.assign(new EventEmitter(), {
+      entity: { id: 9, position: new Vec3(0, 64, 0) }, currentWindow: null,
+      inventory: { slots: [] as any[], items: () => [{ name: 'iron_chestplate', slot: 20 }, { name: 'shield', slot: 21 }] },
+      getEquipmentDestSlot: (place: string) => SLOTS[place],
+      equip: vi.fn(async (item: any, place: string) => { calls.push(`equip ${item.name} ${place}`); }),
+      craft: vi.fn(async () => { calls.push('craft start'); await new Promise(resolve => setTimeout(resolve, 30)); calls.push('craft end'); }),
+    });
+    const skill: any = new AutoWearArmor(bot);
+    return { bot, skill, calls };
+  }
+  const held = (bot: any, capability: string) => {
+    let finish!: () => void;
+    const work = executeAction(bot, capability, 0, async () => { await new Promise<void>(resolve => { finish = resolve; }); return { success: true, result: 'ended' }; });
+    return { done: async () => { finish(); await work; } };
+  };
+
+  it('puts the chestplate and the shield on while an act (a fight, a pickup) is running', async () => {
+    const { bot, skill, calls } = body();
+    const act = held(bot, 'act');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await skill.runImpl();
+    expect(calls).toEqual(['equip iron_chestplate torso', 'equip shield off-hand']);
+    await act.done();
+  });
+
+  it('puts nothing on while a craft clicks the pack, and the craft waits for an equip already queued', async () => {
+    const { bot, skill, calls } = body();
+    skill.queueEquips();
+    const crafting = bot.craft({}, 1);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(bot.packBusy).toBe(1);
+    await skill.runImpl();
+    expect(calls).toEqual(['craft start']);
+    await crafting;
+    expect(bot.packBusy).toBe(0);
+    const equipping = bot.equip({ name: 'iron_chestplate', slot: 20 }, 'torso');
+    const second = bot.craft({}, 1);
+    await Promise.all([equipping, second]);
+    expect(calls.slice(2)).toEqual(['equip iron_chestplate torso', 'craft start', 'craft end']);
+  });
+
+  it('puts nothing on while a skill that works the pack (craft-one, a furnace) runs', async () => {
+    const { bot, skill, calls } = body();
+    const craft = held(bot, 'craft-one');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await skill.runImpl();
+    expect(calls).toEqual([]);
+    await craft.done();
+  });
+});

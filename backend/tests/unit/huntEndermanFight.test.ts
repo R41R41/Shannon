@@ -246,7 +246,8 @@ describe('fight an enderman from a roofed hole', () => {
     console.log('[ender 3]', lineOf(json));
     expect(json.ok).toBe(false);
     expect(lineOf(json)).toMatch(/enderman_not_visible|not_visible/u);
-    expect(lineOf(json)).toContain('stone');
+    // end1109p08b (body 0f988d0a): a roof site in view leads the line (its cell first), and the 160-character clip may cut what stands on the line after it.
+    expect(lineOf(json)).toMatch(/stone|屋根の場所 \(-?\d+,-?\d+,-?\d+\) へ go/u);
     expect(field.stats.stareTicks).toBe(0);
   }, 60_000);
 
@@ -374,6 +375,34 @@ describe('fight an enderman from a roofed hole', () => {
       expect(field.stats.hitsOnBot).toBe(0);
     } finally { field.stop(); }
   }, 60_000);
+});
+
+describe('a kill with seconds left watches on (end1109p02)', () => {
+  it('kills a second enderman about in the same hand and says both kills with their drops', async () => {
+    const field = makeField({ at: new Vec3(12.5, FLOOR, 0.5) });
+    const metadata: unknown[] = [...field.mob.metadata]; metadata[CREEPY] = true; metadata[STARED] = true;
+    field.bot.entities[201] = { ...field.mob, id: 201, metadata, health: 40, hurtAt: 0, position: new Vec3(2.2, FLOOR, 0.5) };
+    // The field's tick removes only its own mob after death; the second goes the same way.
+    field.bot.on('entityDead', (e: any) => { if (e.id === 201) setTimeout(() => { e.isValid = false; delete field.bot.entities[201]; field.bot.emit('entityGone', e); }, 600); });
+    try {
+      const { json } = await act(field, [{ do: 'fight', target: 'enderman', seconds: 50 }]);
+      console.log('[ender chain]', lineOf(json).slice(0, 400));
+      expect(json.ok).toBe(true);
+      expect(lineOf(json)).toMatch(/2 体倒した/u);
+      expect(lineOf(json)).toContain('#200');
+      expect(lineOf(json)).toContain('#201');
+    } finally { field.stop(); }
+  }, 90_000);
+  it('gives the seconds back after a kill with no other enderman about', async () => {
+    const field = makeField({ at: new Vec3(12.5, FLOOR, 0.5) });
+    const since = Date.now();
+    try {
+      const { json } = await act(field, [{ do: 'fight', target: 'enderman', seconds: 50 }]);
+      expect(json.ok).toBe(true);
+      expect(lineOf(json)).not.toContain('見張');
+      expect(Date.now() - since).toBeLessThan(30_000);
+    } finally { field.stop(); }
+  }, 90_000);
 });
 
 describe('roof centre and short eye contact', () => {

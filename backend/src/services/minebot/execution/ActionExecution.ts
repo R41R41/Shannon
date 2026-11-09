@@ -5,6 +5,8 @@ import type { ActionPhase, ActionProgress, ActionStatus, ActionTrace } from './a
 import type { SkillResult } from '../types/skillParams.js';
 import { logger } from '../../../utils/logger.js';
 import type { Handover, HandoverReservation } from '../integration/commonFca/continueContract.js';
+import { shieldActivation } from './shieldActivation.js';
+import { bedBurstPackets, type BedBurstSend } from '../utils/bedBurst.js';
 
 interface ActionHost {
   executingSkill: boolean;
@@ -39,7 +41,10 @@ interface Context {
   shieldDelegated?: boolean;
   /** Continue contracts (4): the handover this action was taken over through (set when it took the lock from a reflex it had reserved). */
   handover?: Handover;
+  /** Internal floor-melee adoption of an already active idle guard; never an A6 confirmed handover. */
+  idleShield?: IdleShieldStamp;
 }
+interface IdleShieldStamp { state: object; since: number; epoch: number; entity: unknown; client: unknown; dimension: unknown }
 /**
  * The deepest a skill may call skills inside skills. Ordinary work goes four or five deep (mine-block, dig-block-at, drop-item,
  * move-to); run 22 went on without end (dig-block-at's tidy, drop-item's pit dug through dig-block-at, its tidy again...) on
@@ -114,8 +119,32 @@ export async function waitForActionQuiescence(bot: object): Promise<void> {
  * (the tidy's hold) saw a new bot at every level (run 22). The parent's fence is not lost: a child action is aborted with its parent,
  * and the child's own owner is checked here.
  */
-export function createMotorPort<T extends object>(given: T): T {
-  return portFor(given, currentAction(actionHost(given)));
+export type SleepMotorGuard = (operation: 'sleep' | 'wake' | 'leave_bed') => boolean | void;
+const sleepGuards = new WeakMap<Context, SleepMotorGuard>();
+const sleepClients = new WeakSet<object>();
+function assertSleepOwner(owner: Context | undefined, guard: SleepMotorGuard, operation: Parameters<SleepMotorGuard>[0]): void {
+  const root = owner?.root ?? owner;
+  if (!owner || owner.settled || root?.settled || owner.trace.quiescent || root?.trace.quiescent
+    || (operation === 'sleep' && (owner.controller.signal.aborted || root?.controller.signal.aborted))) throw new Error('Sleep motor owner expired');
+  if (guard(operation) === false) throw new Error('Sleep motor guard refused');
+}
+/** Native sleep calls activateBlock internally; its final write can follow an await after the public method returned.
+ * Only a context that explicitly installed the sleep guard is checked. All other owners/packets keep the original write. */
+function guardSleepClient(client: { write?: (name: string, params: Record<string, unknown>) => unknown } | undefined): void {
+  if (!client?.write || sleepClients.has(client)) return;
+  const write = client.write;
+  client.write = function(name, params, ...rest: unknown[]) {
+    const owner = contextStorage.getStore(), guard = owner && sleepGuards.get(owner);
+    if (guard && name === 'block_place') assertSleepOwner(owner, guard, 'sleep');
+    if (guard && name === 'entity_action' && params?.actionId === 'leave_bed') assertSleepOwner(owner, guard, 'leave_bed');
+    return Reflect.apply(write, this, [name, params, ...rest]);
+  };
+  sleepClients.add(client);
+}
+export function createMotorPort<T extends object>(given: T, sleepGuard?: SleepMotorGuard): T {
+  const bot = actionHost(given), owner = currentAction(bot);
+  if (sleepGuard && owner) { sleepGuards.set(owner, sleepGuard); guardSleepClient((bot as { _client?: Parameters<typeof guardSleepClient>[0] })._client); }
+  return portFor(given, owner, sleepGuard);
 }
 
 /** What a motor operation was, for the record of the operations (continue contracts, 8): the time, the kind, a short detail. */
@@ -162,7 +191,7 @@ function noteMotorOp<T extends object>(bot: T, owner: Context | undefined, key: 
 }
 
 /** The motor port of one owner: what `createMotorPort` makes for the action that is running, and what the resident shield acts through while an owner has delegated it (4). */
-function portFor<T extends object>(given: T, owner: Context | undefined): T {
+function portFor<T extends object>(given: T, owner: Context | undefined, sleepGuard?: SleepMotorGuard): T {
   const bot = actionHost(given);
   const assertMotorActive = () => {
     if (owner && (owner.controller.signal.aborted || owner.settled || (owner.root ?? owner).trace.quiescent)) throw new Error('Motor owner expired');
@@ -171,6 +200,11 @@ function portFor<T extends object>(given: T, owner: Context | undefined): T {
   const writes = new Set(['equip', 'moveSlotItem', 'setQuickBarSlot', 'consume', 'look', 'lookAt', 'attack', 'activateItem', 'deactivateItem',
     'setControlState', 'clearControlStates', 'dig', 'unconfirmedDig', 'stopDigging', 'placeBlock', 'activateBlock', 'openContainer', 'openFurnace']);
   const paths = new Set(['setGoal', 'goto', 'stop', 'setMovements']);
+  // Optional only for the sleep adapter. A wake may release a cancelled owner's bed while it still owns its lease;
+  // a settled/reclaimed owner may never wake a successor. Existing unguarded ports retain their behavior.
+  const assertSleep = (operation: Parameters<SleepMotorGuard>[0]) => {
+    if (sleepGuard) assertSleepOwner(owner, sleepGuard, operation);
+  };
   const path = (value: any) => new Proxy(value, { get(target, key) {
     const field = Reflect.get(target, key, target);
     return typeof field === 'function' ? (...args: unknown[]) => { if (paths.has(String(key))) { assertMotorActive(); noteMotorOp(bot, owner, String(key), args); } return field.apply(target, args); } : field;
@@ -178,6 +212,17 @@ function portFor<T extends object>(given: T, owner: Context | undefined): T {
   const port = new Proxy(bot, { get(target, key) {
     const field = Reflect.get(target, key, target);
     if (key === 'pathfinder' && field) return path(field);
+    if (sleepGuard && key === '_client' && field) { guardSleepClient(field); return new Proxy(field, { get(client, name) {
+      const value = Reflect.get(client, name, client);
+      if (name === 'write' && typeof value === 'function') return (packet: string, params: Record<string, unknown>) => {
+        if (packet !== 'entity_action' || params?.actionId !== 'leave_bed') throw new Error('Sleep motor port only permits leave_bed');
+        assertSleep('leave_bed'); return value.call(client, packet, params);
+      };
+      return typeof value === 'function' ? value.bind(client) : value;
+    } }); }
+    if (sleepGuard && (key === 'sleep' || key === 'wake') && typeof field === 'function') return (...args: unknown[]) => {
+      assertSleep(key); if (key === 'sleep') noteMotorOp(bot, owner, key, args); return field.apply(target, args);
+    };
     return typeof field === 'function' ? (...args: unknown[]) => { if (writes.has(String(key))) { assertMotorActive(); noteMotorOp(bot, owner, String(key), args); } return field.apply(target, args); } : field;
   } });
   motorHosts.set(port, bot);
@@ -194,6 +239,65 @@ export function bindActionCallback<Args extends unknown[]>(
     // A queued native event must not revive cancelled/completed action progress.
     if (context.controller.signal.aborted || context.settled || (context.root ?? context).trace.quiescent) return;
     contextStorage.run(context, () => callback(...args));
+  };
+}
+
+type BedCell = { x: number; y: number; z: number };
+export interface OwnedBedUse { foot: BedCell; head: BedCell; actionId: string }
+/** The evidence consumer captures its task now, rather than attributing a delayed old use to the next task. */
+const bedUseCaptures = new WeakMap<object, Set<() => (use: OwnedBedUse) => void>>();
+export function watchOwnedBedUses(bot: object, capture: () => (use: OwnedBedUse) => void): () => void {
+  const host = actionHost(bot), captures = bedUseCaptures.get(host) ?? new Set();
+  bedUseCaptures.set(host, captures); captures.add(capture);
+  return () => { captures.delete(capture); };
+}
+
+/** A deliberately narrow raw motor port. It can send only the actor's actual position and this bed's generated packets.
+ * Every synchronous packet is fenced separately; event callbacks cannot revive an expired act or borrow a later owner. */
+export function createBedBurstMotor(bot: object, foot: BedCell, head: BedCell, fence: () => string | null) {
+  const host: any = actionHost(bot), owner = currentAction(bot), root = owner && (owner.root ?? owner), client = host._client;
+  if (!owner || !root || !owner.physical || root.safetyLease || root.progress.capability !== 'act') throw new Error('Bed burst requires an owned act');
+  // Validate the fixed layout before exposing a writer, even if no burst is eventually sent.
+  bedBurstPackets(foot, head, 0, 0, false, 1);
+  const fixedFoot = { ...foot }, fixedHead = { ...head };
+  const sinks = [...(bedUseCaptures.get(host) ?? [])].map(capture => capture());
+  const entity = host.entity, dimension = host.game?.dimension;
+  let closed = false, lifeChanged = false;
+  const invalidate = () => { lifeChanged = true; };
+  const lifeEvents = ['death', 'respawn', 'spawn', 'game', 'end'];
+  for (const event of lifeEvents) host.on(event, invalidate);
+  const close = () => { closed = true; for (const event of lifeEvents) host.removeListener(event, invalidate); };
+  const assert = () => {
+    if (closed || owner.controller.signal.aborted || owner.settled || root.settled || root.trace.quiescent
+      || !(active.get(host)?.has(root)) || host._client !== client) throw new Error('Motor owner expired');
+    if ([...(active.get(host) ?? [])].some(other => other.physical && !other.settled && (other.root ?? other) !== root)) throw new Error('Motor owner conflict');
+    if (lifeChanged || host.entity !== entity || host.game?.dimension !== dimension || !(host.health > 0)) throw new Error('Bed burst life or world changed');
+    const refusal = fence(); if (refusal) throw new Error(`Bed burst fence: ${refusal}`);
+  };
+  return {
+    assert,
+    close,
+    position: () => {
+      assert();
+      const p = host.entity?.position;
+      if (!p || ![p.x, p.y, p.z].every(Number.isFinite)) throw new Error('Bed burst position unknown');
+      client.write('position', { x: p.x, y: p.y, z: p.z, flags: { onGround: !!host.entity.onGround, hasHorizontalCollision: false } });
+      noteMotorOp(host, owner, 'bed_burst.position', [p]);
+    },
+    burst: (sequence: number, yaw: number, pitch: number, tick: () => number, sent: (receipt: BedBurstSend) => void) => {
+      assert();
+      for (const packet of bedBurstPackets(fixedFoot, fixedHead, yaw, pitch, !!host.entity.onGround, sequence)) {
+        assert();
+        const p = host.entity.position;
+        const receipt: BedBurstSend = { ...packet, tick: tick(), position: { x: p.x, y: p.y, z: p.z }, yaw: host.entity.yaw,
+          pitch: host.entity.pitch, written: false };
+        client.write(packet.name, packet.data);
+        receipt.written = true;
+        noteMotorOp(host, owner, `bed_burst.${packet.stage}`, [packet.stage === 'use' ? fixedHead : fixedFoot]);
+        if (packet.stage === 'use') for (const sink of sinks) { try { sink({ foot: { ...fixedFoot }, head: { ...fixedHead }, actionId: root.progress.actionId }); } catch { /* evidence never authorizes a motor operation */ } }
+        sent(receipt);
+      }
+    },
   };
 }
 
@@ -406,6 +510,27 @@ export function handoverOf(bot: object): Handover | undefined {
   return context ? (context.root ?? context).handover : undefined;
 }
 
+function readyIdleShield(bot: object): IdleShieldStamp | null {
+  const host: any = actionHost(bot), state = host.shieldBlock;
+  const index = host.registry?.entitiesByName?.player?.metadataKeys?.indexOf('living_entity_flags') ?? -1;
+  const flags = index >= 0 ? host.entity?.metadata?.[index] : undefined;
+  const activation = shieldActivation(state), since = state?.activatedAt;
+  if (!state?.enabled || !state.up || host.usingHeldItem !== true || !(host.health > 0)
+    || host.inventory?.slots?.[host.getEquipmentDestSlot?.('off-hand') ?? 45]?.name !== 'shield'
+    || typeof flags !== 'number' || (flags & 3) !== 3 || !Number.isFinite(since) || Date.now() - since < 250
+    || !activation || activation.at !== since || activation.epoch !== (state.lifeEpoch ?? 0) || activation.entity !== host.entity || activation.client !== host._client
+    || activation.dimension !== host.game?.dimension) return null;
+  return { state, since, epoch: state.lifeEpoch ?? 0, entity: host.entity, client: host._client, dimension: host.game?.dimension };
+}
+/** Only the acquiring floor safety owner may reuse this measured, same-life guard. No new raise is made ready here. */
+export function inheritedIdleShield(bot: object): 'kept' | 'lost' | null {
+  const context = currentAction(bot), root = context?.root ?? context, held = root?.idleShield, now = readyIdleShield(bot);
+  if (!held) return null;
+  return context && root && !context.controller.signal.aborted && !root.settled && !root.trace.quiescent && now
+    && held.state === now.state && held.since === now.since && held.epoch === now.epoch && held.entity === now.entity
+    && held.client === now.client && held.dimension === now.dimension ? 'kept' : 'lost';
+}
+
 /** The root action's counts and times copied to its trace (what the result's execution carries to the body's receipt). */
 function syncTrace(context: Context): void {
   context.trace.lockAt = context.lockAt;
@@ -416,6 +541,8 @@ function syncTrace(context: Context): void {
 
 export async function executeAction(
   bot: ActionHost, capability: string, timeoutMs: number, work: () => Promise<SkillResult>, options: { legacyExecutingSkill?: boolean; priority?: number; waitForQuiescence?: boolean; safetyLease?: boolean;
+    /** Internal only: the floor selected a shield step/full barrier. No skill/schema parameter exposes this. */
+    preserveIdleMeleeShield?: boolean;
     /** Continue contracts (4): this action is the command a handover was reserved for; verify is its last check (the target is still there, the life is the same). */
     handover?: { command: string; verify(): boolean } } = {},
 ): Promise<SkillResult> {
@@ -524,6 +651,13 @@ export async function executeAction(
   active.set(bot, contexts);
   contexts.add(context);
   if (physical) {
+    const shield = (bot as { shieldBlock?: { idleMeleeGuard?: boolean } }).shieldBlock;
+    if (shield?.idleMeleeGuard) {
+      const idleShield = options.preserveIdleMeleeShield && context.safetyLease && capability === 'floor-melee' ? readyIdleShield(bot) : null;
+      shield.idleMeleeGuard = false;
+      if (idleShield) { context.idleShield = idleShield; context.shieldDelegated = true; }
+      else if (!(handover?.confirmed && handover.shield === 'kept')) lowerShield(bot);
+    }
     // Only after acquiring ownership: the previous cancelled action has settled.
     bot.interruptExecution = false;
     if (context.legacyExecutingSkill) bot.executingSkill = true;
@@ -538,6 +672,9 @@ export async function executeAction(
   }, 50) : undefined;
   if (timeoutMs > 0) timeout = setTimeout(() => controller.abort('timeout'), timeoutMs);
   let leaseReclaim: ReturnType<typeof setTimeout> | undefined;
+  const guardLifeHost = bot as ActionHost & { on?(event: string, listener: () => void): unknown; removeListener?(event: string, listener: () => void): unknown };
+  const guardLifeEvents = context.idleShield ? ['death', 'respawn', 'spawn', 'game', 'end'] : [];
+  const guardLifeChanged = () => controller.abort('life_or_world_changed');
   /** Once only: when runImpl settles, or when a cancelled action that never does has its lease reclaimed. */
   const settle = () => {
     if (context.settled) return;
@@ -547,6 +684,7 @@ export async function executeAction(
     if (interruptPoll) clearInterval(interruptPoll);
     externalSignal?.removeEventListener('abort', abortFromTask);
     controller.signal.removeEventListener('abort', onAbort);
+    for (const event of guardLifeEvents) guardLifeHost.removeListener?.(event, guardLifeChanged);
     const now = Date.now();
     if (context.trace.containment) context.trace.containment.settledAt = now;
     context.settled = true;
@@ -604,6 +742,7 @@ export async function executeAction(
       duration: Date.now() - startedAt, execution: structuredClone(context.trace) });
   };
   controller.signal.addEventListener('abort', onAbort, { once: true });
+  for (const event of guardLifeEvents) guardLifeHost.on?.(event, guardLifeChanged);
   emit(context);
   if (controller.signal.aborted) onAbort();
   const running = contextStorage.run(context, async () => {

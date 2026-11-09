@@ -1,4 +1,4 @@
-import { isThreatEntity } from './hostileMobHints.js';
+import { isLikelyHostileMobName, isThreatEntity } from './hostileMobHints.js';
 
 /**
  * Who owns a fight (run 21): the planner chose to fight a skeleton and a creeper in a cave three times (combat, combat-engage,
@@ -48,6 +48,9 @@ export function headCombatOwnerEnabled(): boolean {
  */
 export function markHeadCombat(bot: object, skillName: string, kinds: string[] | null, now = Date.now(), target?: number): () => void {
   if (!HEAD_COMBAT_SKILLS.has(skillName) || !headCombatOwnerEnabled()) return () => undefined;
+  // run62 (02:34:22〜37): 豚との fight の印が 20 秒の猶予ごと床を握り、スケルトンの矢 5 発の間 cover も逃走も動かず、丸腰で死んだ。
+  // 印は、体を傷つけうる相手との戦いの時だけ立てる（狩り・家畜は印を立てない。床の反射はふだんどおり動く）。
+  if (!fightsAHostile(bot as CombatBody, kinds, target, now)) return () => undefined;
   const marks = ((bot as CombatBody).headCombat ??= []);
   prune(marks, now);
   const mark: Mark = { skill: skillName, kinds: (kinds?.length ? kinds : ['*']).map(kind => kind.toLowerCase()), startedAt: now,
@@ -67,6 +70,21 @@ export function holdMeleeForHead(bot: object, now = Date.now()): () => void {
   const mark: Mark = { skill: 'fight', kinds: ['*'], startedAt: now };
   marks.push(mark);
   return () => { const index = marks.indexOf(mark); if (index >= 0) marks.splice(index, 1); };
+}
+
+/** 中立だが打てば打ち返す種類と、竜の戦いの相手。名前の表に無くても印を立てる。 */
+const FIGHTS_BACK = new Set(['zombified_piglin', 'piglin', 'enderman', 'wolf', 'iron_golem', 'llama', 'trader_llama', 'polar_bear', 'bee', 'panda', 'goat', 'dolphin',
+  'ender_dragon', 'end_crystal', 'wither', 'shulker', 'guardian', 'elder_guardian']);
+/** 戦う相手が体を傷つけうる種類か（`*` は「敵なら何でも」なので立てる）。的の id が見えていればその名前で、無ければ種類の名前で読む。 */
+export function fightsAHostile(bot: CombatBody, kinds: string[] | null, target?: number, now = Date.now()): boolean {
+  const named = target !== undefined ? bot.entities?.[target]?.name : undefined;
+  const names = (named ? [named] : kinds?.length ? kinds : ['*']).map(kind => String(kind ?? '').toLowerCase());
+  return names.some(name => {
+    if (!name || name === '*') return true;
+    if (FIGHTS_BACK.has(name) || isLikelyHostileMobName(name, now)) return true;
+    const entity = target !== undefined ? bot.entities?.[target] : undefined;
+    return isThreatEntity({ name, type: entity?.type, metadata: entity?.metadata }, bot.registry?.entitiesByName?.[name]?.type, now, bot as never);
+  });
 }
 
 function prune(marks: Mark[], now: number): void {

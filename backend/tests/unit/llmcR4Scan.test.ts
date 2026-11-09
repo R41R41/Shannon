@@ -40,10 +40,10 @@ function plain(put: Put) {
 /**
  * The world: `radius` chunks round chunk 0,0, every column plain but these (block coordinates):
  *   chunk (1,0):  an oak tree at (20, 64..68, 4) and a birch at (26, 64..66, 10);
- *   chunk (0,2):  a village: a bell (5,64,37), beds, chests, hay, farmland and wheat;
+ *   chunk (0,2):  a village: a bell (5,64,37), beds, chests, hay, farmland and wheat; and iron ore buried in the rock under it (8,40,40);
  *   chunk (-2,0): a lake: water sources y 58..63 over x -32..-17, z 0..15, and its flowing edge at y 63 (level 1) on x -17;
  *   chunk (2,-2): an open lava pool (36..39, 63, -28..-25) of 16 sources, and a covered one (44..45, 50, -28..-27) under stone;
- *   chunk (0,-3): a spawner (6,30,-40), rails (y 30) x 0..11, cobwebs;
+ *   chunk (0,-3): a spawner (6,30,-40), rails (y 30) x 0..11, cobwebs, and iron ore in the corridor's roof (3,33,-48), open to its air;
  *   chunk (3,3):  a nether portal (52,64,52)..(52,66,53) in obsidian.
  */
 function build(radius: number, options: { trees?: boolean } = {}) {
@@ -56,6 +56,7 @@ function build(radius: number, options: { trees?: boolean } = {}) {
       plain(put);
       put(5, 64, 5, 'bell'); put(2, 64, 2, 'red_bed'); put(2, 64, 9, 'white_bed'); put(9, 64, 2, 'chest'); put(9, 64, 9, 'barrel'); put(12, 64, 12, 'hay_block');
       for (let x = 0; x < 6; x++) { put(x, 63, 14, 'farmland'); put(x, 64, 14, 'wheat'); }
+      put(8, 40, 8, 'iron_ore');
     }),
     '-2,0': column(put => {
       plain(put);
@@ -71,6 +72,7 @@ function build(radius: number, options: { trees?: boolean } = {}) {
       for (let x = 0; x < 12; x++) for (let y = 30; y <= 32; y++) put(x, y, 0, 'air');
       for (let x = 0; x < 12; x++) put(x, 30, 0, 'rail');
       put(6, 30, 8, 'spawner'); put(6, 31, 8, 'air'); put(2, 31, 0, 'cobweb'); put(9, 31, 0, 'cobweb');
+      put(3, 33, 0, 'deepslate_iron_ore');
     }),
     '3,3': column(put => {
       plain(put);
@@ -138,7 +140,9 @@ describe.skipIf(!L)('the scan of the loaded chunks', () => {
     const all = scan.rows.join('\n');
     // eslint-disable-next-line no-console
     console.log(`[scan rows]\n${all}\n[scan text] ${scan.text}`);
-    expect(all).toContain('原木 oak ×5 最寄り (20,64,4) 東 13m・同じ高さ');
+    expect(all).toContain('原木 oak ×5');
+    expect(all).toContain('下端候補 (20,64,4)');
+    expect(all).toContain('経路未確認');
     expect(all).toContain('原木 birch ×3');
     expect(all).toContain('村の鐘 ×1 最寄り (5,64,37) 南 29m');
     expect(all).toMatch(/ベッド ×2 最寄り \(\d+,64,\d+\)/u);
@@ -147,6 +151,11 @@ describe.skipIf(!L)('the scan of the loaded chunks', () => {
     expect(all).toMatch(/溶岩の溜まり 源 16 最寄り \(36,63,-25\) 北東 \d+m・下 1 上は空気（覆い無し）/u);
     expect(all).toMatch(/溶岩の溜まり 源 4 最寄り \(44,50,-27\) 北東 \d+m・下 14 上は.*覆い/u);
     expect(all).toContain('廃坑のレール（y≤60） ×12');
+    // 1107b: the nearest iron ore (buried) and the nearest open to the air (the corridor's roof), with their ways.
+    expect(all).toMatch(/鉄鉱石 ×2 最寄り \(8,40,40\) 南 32m・下 24 ｜空気に面した最寄り \(3,33,-48\) 北\S* 56m・下 31/u);
+    expect(scan.text).toMatch(/空気に面した鉄鉱石が 北\S* 56m・下 31/u);
+    // 1107b: how to reach it and what it is for.
+    expect(scan.text).toMatch(/空気に面した鉄鉱石が 北\S* 56m・下 31（石のツルハシで vertical（shaft）で y33 まで下り mine で掘る。3 個で鉄のツルハシ）/u);
     expect(all).toMatch(/スポナー 最寄り \(6,30,-40\) 北 \d+m・下 34 近くに zombie/u);
     expect(all).toContain('ネザーポータル ×6');
     expect(scan.text).toMatch(/^読み込み済みの 81 チャンク（約 \d+m 先まで）を調べた。原木は oak が 東 13m・同じ高さ。/u);

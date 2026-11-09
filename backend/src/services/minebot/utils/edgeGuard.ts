@@ -82,23 +82,31 @@ export function stepOffDrop(bot: Pick<EdgeGuardBot, 'blockAt'>, x: number, y: nu
  * corner sweeps over the drop while the body stays supported, and left a paid
  * run (L17) pushing at a rim until its move timed out.
  */
-export function edgeRisk(bot: Pick<EdgeGuardBot, 'blockAt'>, x: number, y: number, z: number, health: number): number | null {
+export function edgeRisk(bot: Pick<EdgeGuardBot, 'blockAt'>, x: number, y: number, z: number, health: number, allowedDrop = 0): number | null {
   const floorY = Math.floor(y - 0.01);
   const below = bot.blockAt(new Vec3(x, floorY, z));
   if (!below || below.boundingBox === 'block') return null;
   const { drop } = columnFall(bot, x, z, y, floorY);
-  return fallIsDangerous(drop, health) ? drop : null;
+  return fallIsDangerous(drop, health, allowedDrop) ? drop : null;
 }
 
-/** Vanilla fall damage is one point per block beyond three. */
-export function fallIsDangerous(drop: number, health: number): boolean {
+/** What a drop the mover asked for (`allowedDrop`) must leave the body: a landing at fewer points than this is refused all the same. */
+export const ALLOWED_DROP_HEALTH_LEFT = 8;
+/**
+ * Vanilla fall damage is one point per block beyond three. A drop no deeper than `allowedDrop` (a go given
+ * maxDrop) is not dangerous while the landing leaves ALLOWED_DROP_HEALTH_LEFT points: end1109f22 (a go with maxDrop 8
+ * and 10 to the floor of a Nether valley beside a fortress, health 20) was planned over a 6-block rim by the route
+ * search and held back at it by this guard 30 times in ten minutes; three points of damage was the whole cost.
+ */
+export function fallIsDangerous(drop: number, health: number, allowedDrop = 0): boolean {
   if (!Number.isFinite(drop)) return drop > 0;
   const damage = Math.max(0, Math.ceil(drop - 3));
+  if (drop <= allowedDrop && health - damage >= ALLOWED_DROP_HEALTH_LEFT) return false;
   return damage >= 3 || damage >= health;
 }
 
 /** Exposed on the bot as `bot.edgeGuard`; `enabled` can be cleared by a mover that means to drop. */
-export interface EdgeGuardState { enabled: boolean; stops: number; refusedCells: Map<string, number> }
+export interface EdgeGuardState { enabled: boolean; stops: number; refusedCells: Map<string, number>; /** set by a go given maxDrop, for as long as it runs */ allowedDrop?: number }
 
 /** Extra path cost, per step, of a cell the guard recently refused, and how long the memory lasts. */
 export const REFUSED_CELL_COST = 20;
@@ -138,7 +146,7 @@ const CLIP_STEPS = 20;
  * once airborne, so the whole arc is judged at take-off.
  */
 export function predictJumpFall(engine: PhysicsEngine, world: unknown, bot: EdgeGuardBot,
-  controls: Record<string, boolean>, startY: number, health = bot.health ?? 20): number {
+  controls: Record<string, boolean>, startY: number, health = bot.health ?? 20, allowedDrop = 0): number {
   const state = new PlayerState(bot, controls) as SimulatedState;
   let peak = Math.max(startY, state.pos.y);
   for (let tick = 0; tick < JUMP_HORIZON_TICKS; tick++) {
@@ -149,10 +157,37 @@ export function predictJumpFall(engine: PhysicsEngine, world: unknown, bot: Edge
     // The engine resolves the vertical move at the old footprint first, so a
     // descending arc can report ground while the body has already passed the
     // rim; judge the landing by what is under the footprint, with margin.
-    if (state.onGround) return edgeRisk(bot, state.pos.x, state.pos.y, state.pos.z, health) ?? Math.max(0, peak - state.pos.y);
+    if (state.onGround) return edgeRisk(bot, state.pos.x, state.pos.y, state.pos.z, health, allowedDrop) ?? Math.max(0, peak - state.pos.y);
   }
   const below = stepOffDrop(bot, state.pos.x, state.pos.y, state.pos.z);
   return Number.isFinite(below) ? peak - state.pos.y + below : Infinity;
+}
+
+/** Whether a body with its feet at `p` is in water, as the game counts it (the box shrunk 0.4 top and bottom). */
+function wetAt(bot: Pick<EdgeGuardBot, 'blockAt'>, p: Vec3): boolean {
+  for (let x = Math.floor(p.x - HALF_WIDTH); x <= Math.floor(p.x + HALF_WIDTH); x++) {
+    for (let z = Math.floor(p.z - HALF_WIDTH); z <= Math.floor(p.z + HALF_WIDTH); z++) {
+      for (let y = Math.floor(p.y + 0.401); y <= Math.floor(p.y + 1.399); y++) {
+        const block = bot.blockAt(new Vec3(x, y, z));
+        if (block && isWater(block)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** In the water, or just over its face (a swimmer's jump): water in the body or within a block and a half under its feet. */
+function afloat(bot: Pick<EdgeGuardBot, 'blockAt'>, p: Vec3): boolean {
+  if (wetAt(bot, p)) return true;
+  for (let x = Math.floor(p.x - HALF_WIDTH); x <= Math.floor(p.x + HALF_WIDTH); x++) {
+    for (let z = Math.floor(p.z - HALF_WIDTH); z <= Math.floor(p.z + HALF_WIDTH); z++) {
+      for (let y = Math.floor(p.y - 1.5); y <= Math.floor(p.y); y++) {
+        const block = bot.blockAt(new Vec3(x, y, z));
+        if (block && isWater(block)) return true;
+      }
+    }
+  }
+  return false;
 }
 
 function releaseHorizontal(bot: EdgeGuardBot): void {
@@ -171,8 +206,25 @@ function releaseHorizontal(bot: EdgeGuardBot): void {
  * deliberately (at most a point of damage). Returns the refused drop, or null.
  */
 export function judgeAppliedTick(bot: EdgeGuardBot, before: { position: Vec3; onGround: boolean; inLava?: boolean },
-  jumpFall: (() => number) | null): number | null {
+  jumpFall: (() => number) | null, allowedDrop = 0): number | null {
   const entity = bot.entity;
+  // end1109s12 S9: a body afloat in a pool at a ravine rim swam out over the 33-block drop on a fight's chase (forward and jump held)
+  // and died; with no footing the guard below never looked. A tick of its own that takes a swimming body out of the water to a place
+  // over a dangerous fall is taken back sideways, when where it was is not over one: it stays at the water's edge, and a fall straight
+  // down (out of the bottom of a waterfall) is not its own step and is left alone. A swimmer's jump lifts it clear of the face for a
+  // few ticks, so a body just over the water counts as afloat too (only there: a jump over a dry crack is judged at take-off).
+  // The engine's own isInWater is measured where the tick began, so where the body is now is read from the blocks.
+  if (entity && !before.onGround && afloat(bot, before.position) && !wetAt(bot, entity.position) && !entity.isInLava
+    && HORIZONTAL_CONTROLS.some(control => control !== 'sprint' && bot.getControlState(control))) {
+    const health = bot.health ?? 20;
+    const drop = stepOffDrop(bot, entity.position.x, entity.position.y, entity.position.z);
+    if (!fallIsDangerous(drop, health)
+      || fallIsDangerous(stepOffDrop(bot, before.position.x, entity.position.y, before.position.z), health)) return null;
+    entity.position.set(before.position.x, entity.position.y, before.position.z);
+    entity.velocity.x = 0;
+    entity.velocity.z = 0;
+    return drop;
+  }
   // A swimming body is left to the swimming reflexes. One standing in a shallow stream is not: the current
   // carries it with no key pressed, and a stream running over a ravine rim took a body over a 24-block drop
   // while it stood in it (paid run L90, eight minutes in). Standing, the same edge holds in water as on land.
@@ -195,7 +247,7 @@ export function judgeAppliedTick(bot: EdgeGuardBot, before: { position: Vec3; on
   if (entity.velocity.y > 0) {
     if (!bot.getControlState('jump') || !jumpFall) return null;
     const fall = jumpFall();
-    if (!fallIsDangerous(fall, health)) return null;
+    if (!fallIsDangerous(fall, health, allowedDrop)) return null;
     entity.position.set(before.position.x, before.position.y, before.position.z);
     entity.velocity.set(0, 0, 0);
     entity.onGround = true;
@@ -213,11 +265,11 @@ export function judgeAppliedTick(bot: EdgeGuardBot, before: { position: Vec3; on
   // drop it never got there, and held the pose for the whole move with the
   // bridge not begun (paid run L50).
   const atBrink = bot.getControlState('sneak')
-    || edgeRisk(bot, before.position.x, before.position.y, before.position.z, health) !== null;
+    || edgeRisk(bot, before.position.x, before.position.y, before.position.z, health, allowedDrop) !== null;
   const unsafe = (x: number, z: number): number | null => {
-    if (!atBrink) return edgeRisk(bot, x, after.y, z, health);
+    if (!atBrink) return edgeRisk(bot, x, after.y, z, health, allowedDrop);
     const drop = stepOffDrop(bot, x, after.y, z);
-    return fallIsDangerous(drop, health) ? drop : null;
+    return fallIsDangerous(drop, health, allowedDrop) ? drop : null;
   };
   const drop = unsafe(after.x, after.z);
   if (drop === null) return null;
@@ -272,8 +324,9 @@ export function installEdgeGuard(bot: EdgeGuardBot & { physics?: PhysicsEngine; 
       const attempted = bot.entity.position.clone();
       let drop: number | null = null;
       try {
+        const allowed = state.allowedDrop ?? 0;
         drop = judgeAppliedTick(bot, before, bot.controlState
-          ? () => predictJumpFall(lookahead, world, bot, bot.controlState!, before.position.y) : null);
+          ? () => predictJumpFall(lookahead, world, bot, bot.controlState!, before.position.y, bot.health ?? 20, allowed) : null, allowed);
       } catch { /* never break the physics tick */ }
       if (drop === null) return;
       state.stops++;

@@ -8,6 +8,7 @@ import * as geometry from '../../src/services/minebot/utils/dragonBedGeometry.js
 import { partBox, isPerched, type P3 } from '../../src/services/minebot/utils/dragonParts.js';
 import { bedHalves } from '../../src/services/minebot/utils/bedRules.js';
 import { DEN_DIRECTIONS } from '../../src/services/minebot/utils/huntEndermanDen.js';
+import { OBSIDIAN_LIMITS } from '../../src/services/minebot/utils/obsidianContract.js';
 
 const source = fs.readFileSync(new URL('../../scripts/minecraft-end-fight-probe.ts', import.meta.url), 'utf8');
 const section = '// ' + source.split('// ===== end_bed_kill:')[1].split('// ===== end end_bed_kill =====')[0];
@@ -16,7 +17,7 @@ const bedUseRefusal: (input: any) => string | null = new Function('scenes', comp
 // Read the real schemas/range checker without importing the live body's service graph.
 const actSource = fs.readFileSync(new URL('../../src/services/minebot/instantSkills/act.ts', import.meta.url), 'utf8');
 const schema = actSource.slice(actSource.indexOf('const Pos ='), actSource.indexOf('export const ACT_STOP_IF'));
-const ACT_HANDS = new Function('z', 'DEN_DIRECTIONS', ts.transpileModule(schema.replace(/export /gu, ''), { compilerOptions: { module: ts.ModuleKind.None } }).outputText + '\nreturn ACT_HANDS;')(z, DEN_DIRECTIONS);
+const ACT_HANDS = new Function('z', 'DEN_DIRECTIONS', 'OBSIDIAN_LIMITS', ts.transpileModule(schema.replace(/export /gu, ''), { compilerOptions: { module: ts.ModuleKind.None } }).outputText + '\nreturn ACT_HANDS;')(z, DEN_DIRECTIONS, OBSIDIAN_LIMITS);
 const goSource = fs.readFileSync(new URL('../../src/services/minebot/utils/primitives/go.ts', import.meta.url), 'utf8');
 const goNode = ts.createSourceFile('go.ts', goSource, ts.ScriptTarget.Latest, true).statements.find(s => ts.isFunctionDeclaration(s) && s.name?.text === 'goProblem')!;
 const goProblem = new Function(ts.transpileModule(goNode.getText().replace(/export /gu, ''), { compilerOptions: { module: ts.ModuleKind.None } }).outputText + '\nreturn goProblem;')();

@@ -517,6 +517,14 @@ describe('vertical: stops of the stairs (stop-cases)', () => {
     expect(outcome.progress).toMatchObject({ done: 1 });
   });
 
+  it('the same cave with cobblestone held: the step over it is laid and the stairs go on (run 62, two stairs down at y 5 stopped no_floor)', async () => {
+    const sim = sim0(world('andesite', 64, [column('air', 0, 55, 62, 2)]), [0, 64, 0], [PICK, { name: 'cobblestone', count: 16 }]);
+    const outcome = await drive(sim, run(sim, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 60, canPlace: ['cobblestone'] })));
+    expect(outcome.code).not.toBe('no_floor');
+    expect(workOf(outcome).placedConfirmed).toBeGreaterThanOrEqual(1);
+    expect(outcome.progress?.done).toBeGreaterThan(1);
+  });
+
   it('limit_dig: gravel that falls back into a cell is dug again and every dig counts', async () => {
     const stack = (sim: HandsSim) => {
       const original = sim.bot.dig;

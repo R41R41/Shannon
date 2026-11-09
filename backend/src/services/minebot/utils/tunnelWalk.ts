@@ -14,8 +14,9 @@ import type { CustomBot } from '../types/CustomBot.js';
 import { createLogger } from '../../../utils/logger.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 import { actionDelay } from '../execution/observedWait.js';
-import { assertActionActive } from '../execution/ActionExecution.js';
-import { chooseTool } from './toolChoice.js';
+import { assertActionActive, nativeActionHost } from '../execution/ActionExecution.js';
+import { lifeOf } from './life.js';
+import { chooseTool, handDigForWay } from './toolChoice.js';
 import { digBlockVerified } from './digBlockVerified.js';
 import { trailOf } from './stairLine.js';
 import { explainShaftRefusal, shaftStepRefusal } from './shaftDown.js';
@@ -219,7 +220,7 @@ export function estimateStep(bot: WorldBot, from: Cell, to: Cell, ctx: { blocks:
     let dig = 1500;
     try {
       const tool = chooseTool(block as never, items as never[], { requireHarvest: !!block.harvestTools, effects }) as { type: number } | null;
-      if (!tool && block.harvestTools) return null;   // by hand it drops nothing and takes seconds: not a way to tunnel
+      if (!tool && block.harvestTools && !handDigForWay(block as never, items as never[])) return null;   // by hand it drops nothing: a way only for a body with no pickaxe, through the soft ones (run 62 #19)
       const time = Number(block.digTime?.(tool ? tool.type : null, false, false, false, [], effects));
       if (Number.isFinite(time) && time > 0) dig = time;
     } catch { /* the figure stands */ }
@@ -303,7 +304,7 @@ export async function digCell(bot: CustomBot, cell: Cell): Promise<boolean> {
   if (!block || block.boundingBox === 'empty') return true;
   const tool = chooseTool(block as never, bot.inventory.items() as never[], { requireHarvest: !!block.harvestTools, effects: (bot.entity as unknown as { effects?: unknown })?.effects ?? {} }) as { type: number; slot: number } | null;
   if (tool && (bot.heldItem?.type !== tool.type || bot.heldItem?.slot !== tool.slot)) await bot.equip(tool as never, 'hand');
-  else if (!tool && block.harvestTools) return false;
+  else if (!tool && block.harvestTools && !handDigForWay(block as never, bot.inventory.items() as never[])) return false;
   await digBlockVerified(bot, block as never);
   return blockOf(bot, cell)?.boundingBox === 'empty';
 }
@@ -354,19 +355,35 @@ export async function moveOneCell(bot: CustomBot, start: Cell, to: Cell, extraDr
  * shaftDownOne, apart for the vertical hand (primitives/vertical), which digs the floor itself (it counts and limits its digs).
  */
 export async function centreInColumn(bot: CustomBot, feet: Vec3): Promise<string | null> {
+  const body = bot.entity, dimension = bot.game?.dimension;
+  const host = nativeActionHost(bot), life = lifeOf(host)?.view();
+  const sameBody = () => {
+    const nowLife = lifeOf(host)?.view();
+    return bot.entity === body && bot.game?.dimension === dimension && (bot.health ?? 20) > 0
+      && (!life || !!nowLife && life.life === nowLife.life && life.deathEpoch === nowLife.deathEpoch && life.dimensionSince === nowLife.dimensionSince);
+  };
   const centre = feet.offset(0.5, 0, 0.5);
-  const off = () => Math.max(Math.abs(bot.entity.position.x - centre.x), Math.abs(bot.entity.position.z - centre.z));
+  const off = () => Math.max(Math.abs(body.position.x - centre.x), Math.abs(body.position.z - centre.z));
+  if (!sameBody()) return 'body_changed';
   if (off() > 0.2) {
     try {
-      await bot.lookAt(centre.offset(0, 1.6, 0), true);
-      bot.setControlState('sneak', true);
-      bot.setControlState('forward', true);
-      for (let tick = 0; tick < 16 && off() > 0.15; tick++) { assertActionActive(bot); await sleep(bot, 50); }
+      // A hit can keep carrying the body sideways after the first aim. Steer from its current position, within the same 16 ticks.
+      for (let tick = 0; tick < 16 && off() > 0.15; tick++) {
+        assertActionActive(bot);
+        if (!sameBody()) return 'body_changed';
+        await bot.lookAt(centre.offset(0, 1.6, 0), true);
+        assertActionActive(bot);
+        if (!sameBody()) return 'body_changed';
+        bot.setControlState('sneak', true);
+        bot.setControlState('forward', true);
+        await sleep(bot, 50);
+      }
     } finally {
       bot.setControlState('forward', false);
       bot.setControlState('sneak', false);
     }
-    if (off() > 0.2 || Math.floor(bot.entity.position.y) !== feet.y) return 'not_centred';
+    if (!sameBody()) return 'body_changed';
+    if (off() > 0.2 || Math.floor(body.position.y) !== feet.y) return 'not_centred';
   }
   return null;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
-import { assertNoLavaRelease, installLavaDigGuard, SupportDigError, supportDropIfDug, isBurning, LavaReleaseError, lavaReflexTick, lavaReleasedBy, routeOutOfLava, shouldDouse, standsOnMagma } from '../../src/services/minebot/utils/lavaSafety.js';
+import { assertNoLavaRelease, installLavaDigGuard, SupportDigError, supportDropIfDug, isBurning, LavaReleaseError, lavaReflexTick, lavaReleasedBy, routeOutOfLava, shouldDouse, standsOnMagma, coverMagmaUnder } from '../../src/services/minebot/utils/lavaSafety.js';
 
 const stone = { name: 'stone', boundingBox: 'block' }, air = { name: 'air', boundingBox: 'empty' }, lava = { name: 'lava', boundingBox: 'empty' };
 /** Stone everywhere except the listed cells. */
@@ -250,19 +250,99 @@ describe('a body on magma crouches, which the game leaves unburnt (paid run L94:
   // A magma floor at y=70 for x <= 1; netherrack from x = 2 on.
   const field: Record<string, any> = {};
   for (let x = -4; x <= 5; x++) { field[`${x},70,0`] = x <= 1 ? magma : { name: 'netherrack', boundingBox: 'block' }; field[`${x},71,0`] = air; field[`${x},72,0`] = air; }
-  it('crouches while on it and lets the crouch go once off it, without taking the keys that move the body', () => {
+  it('crouches while on it and lets the crouch go once off it, without taking the keys that move the body or setting the held reflex', () => {
     const controls: Record<string, boolean> = { forward: true };
     const bot = body(field, new Vec3(0.5, 71, 0.5), { health: 12, setControlState: (c: string, v: boolean) => { controls[c] = v; } });
     expect(standsOnMagma(bot)).toBe(true);
     const state: any = { engaged: false, engagements: 0, clearTicks: 0 };
-    expect(lavaReflexTick(bot, state)).toBe('engaged');
-    expect(state.in).toBe('magma');
+    expect(lavaReflexTick(bot, state)).toBe('magma');
+    // run62: magma set `engaged`, which reflexHeld read as lava-escape, and every act hand on the rim came back not_run.
+    expect(state.engaged).toBe(false);
+    expect(state.engagements).toBe(0);
+    expect(state.magma.engagements).toBe(1);
+    expect(controls).toEqual({ forward: true, sneak: true });
+    // A moving body is left to whoever moves it.
+    for (let tick = 1; tick <= 10; tick++) { bot.entity.position = new Vec3(0.5 - tick * 0.1, 71, 0.5); lavaReflexTick(bot, state); }
     expect(controls).toEqual({ forward: true, sneak: true });
     bot.entity.position = new Vec3(3.5, 71, 0.5);
     expect(standsOnMagma(bot)).toBe(false);
     for (let tick = 0; tick < 5; tick++) expect(lavaReflexTick(bot, state)).toBeNull();
-    expect(lavaReflexTick(bot, state)).toBe('released');
+    expect(lavaReflexTick(bot, state)).toBe('magma-off');
     expect(controls).toEqual({ forward: true, sneak: false });
+  });
+
+  it('walks a body that stands still on it to the nearest cell off it, crouched on the level, and stops the walk once off', () => {
+    const controls: Record<string, boolean> = {}, looks: number[] = [];
+    const bot = body(field, new Vec3(1.5, 71, 0.5), { health: 12, setControlState: (c: string, v: boolean) => { controls[c] = v; }, look: (yaw: number) => { looks.push(yaw); } });
+    const state: any = { engaged: false, engagements: 0, clearTicks: 0 };
+    for (let tick = 0; tick < 6; tick++) lavaReflexTick(bot, state);
+    expect(controls.forward).toBeUndefined();
+    lavaReflexTick(bot, state);
+    expect(controls).toMatchObject({ forward: true, sprint: false, jump: false, sneak: true });
+    // Toward +x (netherrack from x = 2): yaw atan2(-dx, -dz) with dx > 0.
+    expect(looks.at(-1)).toBeCloseTo(Math.atan2(-1, 0));
+    bot.entity.position = new Vec3(2.5, 71, 0.5);
+    lavaReflexTick(bot, state);
+    expect(controls).toMatchObject({ forward: false, jump: false, sneak: true });
+    expect(state.engaged).toBe(false);
+  });
+
+  it('steps down uncrouched off a rim of magma whose centre is over a hole (run62, c1: the broken portal)', () => {
+    // A hole at (0, 70, 0) with stone under it; magma round it. The body stands at x = 0.75: its centre over the hole, its width on the magma at x = 1.
+    const rim: Record<string, any> = { '0,70,0': air, '0,71,0': air, '0,72,0': air };
+    for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) { rim[`${x},70,${z}`] = magma; rim[`${x},71,${z}`] = air; rim[`${x},72,${z}`] = air; }
+    const controls: Record<string, boolean> = {};
+    const bot = body(rim, new Vec3(0.75, 71, 0.5), { health: 12, setControlState: (c: string, v: boolean) => { controls[c] = v; }, look: () => undefined });
+    expect(standsOnMagma(bot)).toBe(true);
+    expect(routeOutOfLava(bot, bot.entity.position, { offMagma: true })?.[0]).toMatchObject({ x: 0.5, y: 70, z: 0.5 });
+    // Without the magma rule the rim beside it would do.
+    expect(routeOutOfLava(bot, bot.entity.position)?.[0]).toMatchObject({ x: 1.5, y: 71 });
+    const state: any = { engaged: false, engagements: 0, clearTicks: 0 };
+    for (let tick = 0; tick < 7; tick++) lavaReflexTick(bot, state);
+    expect(controls).toMatchObject({ forward: true, sneak: false, jump: false });
+  });
+
+  it('puts a block down when there is no cell off it in reach', async () => {
+    const sea: Record<string, any> = {};
+    for (let x = -8; x <= 8; x++) for (let z = -8; z <= 8; z++) { sea[`${x},70,${z}`] = magma; sea[`${x},71,${z}`] = air; sea[`${x},72,${z}`] = air; sea[`${x},73,${z}`] = air; }
+    const cover = vi.fn(async () => true);
+    const controls: Record<string, boolean> = {};
+    const bot = body(sea, new Vec3(0.5, 71, 0.5), { health: 12, setControlState: (c: string, v: boolean) => { controls[c] = v; }, coverMagma: cover });
+    const state: any = { engaged: false, engagements: 0, clearTicks: 0 };
+    for (let tick = 0; tick < 7; tick++) lavaReflexTick(bot, state);
+    expect(cover).toHaveBeenCalledTimes(1);
+    expect(state.magma.covering).toBe(true);
+    lavaReflexTick(bot, state);
+    expect(cover).toHaveBeenCalledTimes(1);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(state.magma.covers).toBe(1);
+    expect(state.magma.covering).toBe(false);
+  });
+
+  it('fills the hole under the centre, or rises a block on magma all round, with a common block, and puts the held item back', async () => {
+    const placed: Array<{ ref: Vec3; face: Vec3 }> = [], equipped: string[] = [];
+    const tools = (extra: Record<string, unknown>) => ({ heldItem: { name: 'iron_pickaxe' }, inventory: { items: () => [{ name: 'obsidian' }, { name: 'cobblestone' }] },
+      equip: async (item: { name: string }) => { equipped.push(item.name); }, placeBlock: async (ref: { position: Vec3 }, face: Vec3) => { placed.push({ ref: ref.position, face }); },
+      setControlState: () => undefined, ...extra });
+    const located = (cells: Record<string, any>) => ({ blockAt: (p: Vec3) => ({ ...(cells[`${p.x},${p.y},${p.z}`] ?? stone), position: p }) });
+    const hole = { '0,70,0': air, '0,71,0': air, '0,72,0': air, '1,70,0': magma };
+    const rimBody = { ...located(hole), entity: { position: new Vec3(0.75, 71, 0.5) }, ...tools({}) } as any;
+    expect(await coverMagmaUnder(rimBody)).toBe(true);
+    expect(placed[0]).toMatchObject({ ref: { x: 0, y: 69, z: 0 }, face: { x: 0, y: 1, z: 0 } });
+    expect(equipped).toEqual(['cobblestone', 'iron_pickaxe']);
+    // Magma all round: jump, then put the block on the magma under the centre.
+    const open = { '0,70,0': magma, '0,71,0': air, '0,72,0': air, '0,73,0': air };
+    const riser: any = { ...located(open), entity: { position: new Vec3(0.5, 71, 0.5) } };
+    Object.assign(riser, tools({ setControlState: (c: string, v: boolean) => { if (c === 'jump' && v) riser.entity.position = new Vec3(0.5, 72.1, 0.5); } }));
+    expect(await coverMagmaUnder(riser)).toBe(true);
+    expect(placed[1]).toMatchObject({ ref: { x: 0, y: 70, z: 0 }, face: { x: 0, y: 1, z: 0 } });
+    // end1109f18: the centre over a one-wide lava source, the width on the magma rim beside it: the lava cell is filled from the stone under it.
+    const pool = { '0,70,0': lava, '0,71,0': air, '0,72,0': air, '-1,70,0': magma };
+    const overLava = { ...located(pool), entity: { position: new Vec3(0.2, 71, 0.5) }, ...tools({}) } as any;
+    expect(await coverMagmaUnder(overLava)).toBe(true);
+    expect(placed[2]).toMatchObject({ ref: { x: 0, y: 69, z: 0 }, face: { x: 0, y: 1, z: 0 } });
+    // Nothing common to put down: no cover.
+    expect(await coverMagmaUnder({ ...rimBody, inventory: { items: () => [{ name: 'obsidian' }] } })).toBe(false);
   });
 });
 

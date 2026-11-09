@@ -118,6 +118,15 @@ describe('repeat: the hands again, from where the feet are', () => {
     expect(parse(result)).toMatchObject({ ok: false, stoppedBy: 'noProgress', stoppedWhy: '進まない: 1 回目が何も変えなかった', repeat: { done: 1, of: 5 } });
   });
 
+  it('1107b: a pass of holding still (wait) is time passing, not no_progress', async () => {
+    moves = false;
+    const { bot } = body();
+    const result = await runAct(bot, hands([{ do: 'wait', seconds: 0 }]), undefined, undefined, { repeat: 3 });
+    moves = true;
+    expect(result.success).toBe(true);
+    expect(parse(result)).toMatchObject({ ok: true, repeat: { done: 3, of: 3 } });
+  });
+
   it('a hand that fails stops the act on its pass (the rest of the passes are not run)', async () => {
     moves = true;
     const { bot } = body();
@@ -167,12 +176,12 @@ describe('hurt and fall stop any act', () => {
     expect(result.success).toBe(true);
   });
 
-  it('the loss while a kind she accepted is within 6 m is not counted', async () => {
+  it('a loss while waiting is counted even with an accepted kind within 6 m (end1108h20: a blaze accepted, 15 s wait, 20 -> 14.8 unsaid)', async () => {
     const { bot } = body();
     bot.entities = { 5: { id: 5, name: 'zombie', type: 'hostile', position: new Vec3(3.5, 64, 0.5), height: 1.9 } };
     setTimeout(() => { bot.health = 10; }, 60);
     const result = await runAct(bot, hands([{ do: 'wait', seconds: 0.5 }]), undefined, undefined, { tickMs: 20, accept: ['zombie'] });
-    expect(result.success).toBe(true);
+    expect(result.failureType).toBe('damage_taken');
     // The same loss with no accept stops it.
     const other = body();
     other.bot.entities = bot.entities;

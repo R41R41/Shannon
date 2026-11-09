@@ -60,3 +60,56 @@ export function explainShaftRefusal(bot: ShaftBody, feet: Vec3, why: string): st
     default: return why;
   }
 }
+
+/** A floor counts as a perch in the air when at least this many of its four sides are open down to the ground this far or more. */
+const PERCH_DROP = 4;
+const PERCH_SIDES = 3;
+const GROUND_SCAN = 48;
+/** Still water this deep under a perch's side takes a fall from any height. */
+const POOL_DEPTH = 2;
+
+/**
+ * end1109 S9 (h32b, 17:12 to the end): a go laid a stair 16 high into the open air and stopped on it; the head's stair down took one step to a ledge on the
+ * pillar's side (no face to lay the next step on: no_floor, "another shape, or lay a foothold"), and the head, told nothing of the shaft, waited out the
+ * night on the ledge, 0 m/s for seven minutes. A player on a column of their own blocks digs down through it. When the feet stand on a perch in the air,
+ * the way down said exactly: the shaft from here, or from the column beside (the top of the pillar a ledge hangs on), or back the way laid; null when the
+ * body is not on a perch.
+ */
+export function airPerchHint(bot: ShaftBody, feet: Vec3): string | null {
+  const floor = bot.blockAt(feet.offset(0, -1, 0));
+  if (!floor || floor.boundingBox !== 'block') return null;
+  let open = 0, ground: number | null = null;
+  let pool: { at: Vec3; depth: number } | null = null;
+  for (const [dx, dz] of SIDES) {
+    const side = bot.blockAt(feet.offset(dx, -1, dz));
+    if (!side || side.boundingBox === 'block' || LIQUIDS.has(side.name)) continue;
+    for (let d = 2; d <= GROUND_SCAN; d++) {
+      const block = bot.blockAt(feet.offset(dx, -d, dz));
+      if (!block) break;
+      if (block.boundingBox !== 'block' && !LIQUIDS.has(block.name)) continue;
+      if (d - 1 >= PERCH_DROP) {
+        open++; ground = Math.max(ground ?? -Infinity, feet.y - d + 1);
+        let depth = 0;
+        while (depth < POOL_DEPTH && bot.blockAt(feet.offset(dx, -d - depth, dz))?.name === 'water') depth++;
+        if (depth >= POOL_DEPTH && !pool) pool = { at: feet.offset(dx, -d, dz), depth };
+      }
+      break;
+    }
+  }
+  if (open < PERCH_SIDES || ground === null) return null;
+  const drop = feet.y - ground;
+  // end1109s10 S9 (262 to 634 s): a go laid a stair 24 over a sea and stopped on it; told only to dig a shaft or walk back, the head
+  // tried the go again three times (search_timeout) and waited a minute before a slip dropped it into the water unhurt. Water breaks
+  // any fall, and a go with waterOk may drop into it from any height: the one step off is named first.
+  if (pool) return `宙の足場（落差 ${drop}）: 隣の下 (${pool.at.x},${pool.at.y},${pool.at.z}) は深さ ${pool.depth} 以上の水。水に落ちれば傷を受けない: go ${pool.at.x},${pool.at.y},${pool.at.z} waterOk range=1 で飛び降りる`;
+  if (shaftStepRefusal(bot, feet) === null) return `宙の足場（落差 ${drop}）: ここから vertical down shape=shaft toY=${ground} で真下へ下りられる`;
+  for (const [dx, dz] of SIDES) {
+    for (const dy of [0, -1, 1]) {
+      const cell = feet.offset(dx, dy, dz);
+      const at = bot.blockAt(cell), above = bot.blockAt(cell.offset(0, 1, 0));
+      if (!at || !above || at.boundingBox === 'block' || above.boundingBox === 'block') continue;
+      if (shaftStepRefusal(bot, cell) === null) return `宙の足場（落差 ${drop}）: 隣の (${cell.x},${cell.y},${cell.z}) へ移り vertical down shape=shaft toY=${ground} で下りる`;
+    }
+  }
+  return `宙の足場（落差 ${drop}）で真下の列は固くない: 置いてきた足場を go で戻り地面へ`;
+}

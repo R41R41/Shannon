@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
 import { describe, expect, it, vi } from 'vitest';
+import { installPromptPlace } from '../../src/services/minebot/utils/promptPlace.js';
 
 // The parts of act, one by one (design mb-llm-centric 4: "部品ごとの小さな試験"): what each refuses and how exactly it says so.
 // A fake body; the server-confirmed dig and the dig guard's reading of hostiles are replaced, nothing else.
@@ -99,6 +100,63 @@ describe('dig', () => {
 });
 
 describe('place', () => {
+  it.each([true, false])('rechecks a creature after aiming and before a native placement (enters=%s)', async enters => {
+    const item = { name: 'cobblestone', count: 3, type: 1 };
+    const bot = body([item]); bot.heldItem = item;
+    const creature = { id: 7, name: 'wither_skeleton', width: .7, height: 2.4, position: new Vec3(5, 64, .5) };
+    bot.entities[7] = creature;
+    bot.lookAt = vi.fn(async () => { if (enters) creature.position = new Vec3(1.5, 64, .5); });
+    const native = bot._placeBlockWithOptions = vi.fn(async (reference: any, face: Vec3, options: any) => {
+      expect(options.forceLook).toBe('ignore');
+      const destination = reference.position.plus(face);
+      bot.__blocks.set(`${destination.x},${destination.y},${destination.z}`, { name: 'cobblestone', boundingBox: 'block' });
+    });
+    installPromptPlace(bot);
+    const outcome = await place(ctx(bot), { block: 'cobblestone', at: [{ x: 1, y: 64, z: 0 }] });
+    expect(bot.lookAt).toHaveBeenCalledTimes(1);
+    expect(outcome.ok).toBe(!enters);
+    if (enters) {
+      expect(outcome.reason).toBe('creature_in_cell');
+      expect(outcome.progress).toMatchObject({ done: 0, left: 1 });
+      expect(native).not.toHaveBeenCalled();
+    } else expect(native).toHaveBeenCalledTimes(1);
+  });
+
+  // S1 lab 11/8: the body stood at x 141.1 and a wall at x 140 was refused as its feet's cell three times while blazes shot in.
+  it.each([true, false])('steps to the middle of its own column before a cell only under its box\'s edge (moves=%s)', async moves => {
+    const item = { name: 'cobblestone', count: 3, type: 1 };
+    const bot = body([item]); bot.heldItem = item;
+    bot.entity.position = new Vec3(1.1, 64, 0.5);
+    bot.lookAt = vi.fn(async () => undefined);
+    const controls: string[] = [];
+    bot.setControlState = (control: string, on: boolean) => {
+      if (on) controls.push(control);
+      if (moves && control === 'forward' && on) bot.entity.position = new Vec3(1.5, 64, 0.5);
+    };
+    const native = bot._placeBlockWithOptions = vi.fn(async (reference: any, face: Vec3) => {
+      const destination = reference.position.plus(face);
+      bot.__blocks.set(`${destination.x},${destination.y},${destination.z}`, { name: 'cobblestone', boundingBox: 'block' });
+    });
+    installPromptPlace(bot);
+    const outcome = await place(ctx(bot), { block: 'cobblestone', at: [{ x: 0, y: 64, z: 0 }] });
+    expect(controls).toEqual(expect.arrayContaining(['sneak', 'forward']));
+    if (moves) {
+      expect(outcome.ok).toBe(true);
+      expect(native).toHaveBeenCalledTimes(1);
+    } else {
+      expect(outcome.reason).toBe('body_in_cell');
+      expect(native).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does not step for its own column (the feet\'s cell is refused as before)', async () => {
+    const bot = body([{ name: 'cobblestone', count: 3, type: 1 }]);
+    const controls: string[] = [];
+    bot.setControlState = (control: string, on: boolean) => { if (on) controls.push(control); };
+    expect((await place(ctx(bot), { block: 'cobblestone', at: [{ x: 0, y: 64, z: 0 }] })).reason).toBe('body_in_cell');
+    expect(controls).toEqual([]);
+  });
+
   it('refuses a taken cell, the body\'s own cell, a cell with nothing to set against, and a block not carried', async () => {
     const stoneItem = [{ name: 'cobblestone', count: 3, type: 1 }];
     const bot = body(stoneItem);
@@ -235,6 +293,32 @@ describe('the small parts', () => {
     expect(flowing.reason).toBe('not_source');
     expect(flowing.text).toContain('流れ 3');
   });
+  it('a full bucket at a solid block with a face pours into the cell on that side (stronghold s06: the waterfall down to a cave)', async () => {
+    const pour = () => {
+      const bot = body([{ name: 'water_bucket', count: 1, type: 8 }]);
+      bot.heldItem = { name: 'water_bucket', type: 8 };
+      const looked: Vec3[] = [];
+      Object.assign(bot, { lookAt: async (p: Vec3) => { looked.push(p); }, _client: { write: () => undefined },
+        activateItem: () => { bot.heldItem = { name: 'bucket', type: 7 }; } });
+      return { bot, looked };
+    };
+    const under = pour();
+    const feet = await use(ctx(under.bot), { item: 'water_bucket', at: { x: 0, y: 63, z: 0 }, against: 'up' });
+    expect(feet).toMatchObject({ ok: true, at: { x: 0, y: 64, z: 0 } });
+    expect(under.looked[0]).toMatchObject({ x: 0.5, y: 64, z: 0.5 });
+    const hole = pour();
+    hole.bot.__blocks.set('1,63,-1', { name: 'air', boundingBox: 'empty' });
+    const beside = await use(ctx(hole.bot), { item: 'water_bucket', at: { x: 1, y: 63, z: 0 }, against: 'north' });
+    expect(beside).toMatchObject({ ok: true, at: { x: 1, y: 63, z: -1 } });
+    expect(hole.looked[0]).toMatchObject({ x: 1.5, y: 63.5, z: 0 });
+    const shut = pour();
+    const behind = await use(ctx(shut.bot), { item: 'water_bucket', at: { x: 1, y: 63, z: 0 }, against: 'north' });
+    expect(behind.reason).toBe('occupied');
+    expect(behind.text).toContain('(1,63,-1)');
+    const bare = await use(ctx(pour().bot), { item: 'water_bucket', at: { x: 1, y: 63, z: 0 } });
+    expect(bare.reason).toBe('occupied');
+    expect(bare.text).toContain('face=');
+  });
   it('attack hold stands still and strikes only what comes within reach', async () => {
     const { attack } = await import('../../src/services/minebot/utils/primitives/attack.js');
     const bot = body();
@@ -268,6 +352,21 @@ describe('r2: a stop says what is round it (scene replay 2026-10-21)', () => {
     expect(reachFacts(bot, { x: 0, y: 64, z: 0 }, { x: 2, y: 64, z: 0 })).toBe('');
   });
 
+  it('end1109o02: an empty bucket finds a source of the same pool in reach and sight; with none, the stop says to go beside one', async () => {
+    const { reachableSource } = await import('../../src/services/minebot/utils/primitives/use.js');
+    const pool = body([{ name: 'bucket', count: 1, type: 7 }]);
+    pool.__blocks.set('1,64,0', { name: 'water', boundingBox: 'empty', getProperties: () => ({ level: 3 }) });
+    pool.__blocks.set('2,64,0', { name: 'water', boundingBox: 'empty', getProperties: () => ({ level: 0 }) });
+    pool.__blocks.set('2,64,3', { name: 'water', boundingBox: 'empty', getProperties: () => ({ level: 0 }) });
+    expect(reachableSource(pool, 'water')).toEqual({ x: 2, y: 64, z: 0 });
+    expect(reachableSource(pool, 'lava')).toBeNull();
+    const far = body([{ name: 'bucket', count: 1, type: 7 }]);
+    far.heldItem = { name: 'bucket', type: 7 };
+    far.__blocks.set('7,64,0', { name: 'water', boundingBox: 'empty', getProperties: () => ({ level: 0 }) });
+    const out = await use(ctx(far), { item: 'bucket', at: { x: 7, y: 64, z: 0 } });
+    expect(out.reason).toBe('out_of_reach');
+    expect(out.text).toContain('届く水の源は無い');
+  });
   it('a bucket that could not reach its water names the stone between', () => {
     const bot = body();
     bot.__blocks.set('3,64,0', { name: 'water', boundingBox: 'empty' });

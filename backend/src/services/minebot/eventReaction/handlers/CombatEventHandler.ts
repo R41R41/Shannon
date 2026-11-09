@@ -329,15 +329,16 @@ export class CombatEventHandler {
                 const dmg = eventData as DamageEventData;
                 const hpInfo = `ダメージ（-${dmg.damage.toFixed(1)}HP、残り${dmg.currentHealth.toFixed(1)}/20）`;
                 const hasAttacker = dmg.possibleSource && dmg.possibleSource !== 'unknown';
+                const held = dmg.reflex ? `反射 ${dmg.reflex} が身体を握っています。` : '';
                 if (hasAttacker) {
                     // 敵による攻撃 → 逃走最優先、行動制限厳格
-                    return `緊急: ${hpInfo}。攻撃元: ${dmg.possibleSource}。${EMERGENCY_HOSTILE_GUIDANCE_JA}`;
+                    return `緊急: ${hpInfo}。攻撃元: ${dmg.possibleSource}。${held}${EMERGENCY_HOSTILE_GUIDANCE_JA}`;
                 }
                 // No attacker: say what the body can tell is hurting it, and what is wanted, not a list of
                 // means. (The old sentence told every such case to eat, to ask a player for food, to hunt or
                 // to wait; a burning body waited.)
-                return `緊急: ${hpInfo}。攻撃してきた相手は見当たりません。`
-                    + `${dmg.harm ?? '何に削られたかは身体からは分かりません（落下のように一度きりのこともある）'}。`
+                return `緊急: ${hpInfo}。攻撃してきた相手は見当たりません。原因: ${dmg.cause ?? 'environment'}。${held}`
+                    + `${dmg.harm ?? '身体の状態からは続いている害は見えません（落下・サボテンのように一度きりのこともある）'}。`
                     + '【目的】体力を削っているものを止める（その場に留まって続くなら、まず離れる）。止まったら、食料があれば食べて回復する。大規模なクラフト・採掘・建築は後回しにする。';
             }
             case 'suffocation': {

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ACT_CONDITION, type ActCondition } from '../../utils/actConditions.js';
 import type { MinecraftControlCommand as Command } from './minecraftControlContract.js';
 import { dependStateOf, isReliable, keepVerdict, type DependState, type GoalOutcome, type ItemOutcome, type QueueRef, type RunEnd } from './continueContract.js';
+import { actQueueMilliseconds, OBSIDIAN_ACT_MAX_MS } from '../../utils/obsidianContract.js';
 
 /**
  * The body's queue of `act` items (the head's `tq/contract.md` section 3; design: the head hands the body what to do next while an item runs,
@@ -21,7 +22,7 @@ const MADE_IN = z.object({
 }).strict();
 const ENVELOPE = z.object({
   item: z.string().regex(ID), after: z.string().regex(ID).nullable(), node: z.string().max(64).nullable(),
-  pre: ACT_CONDITION.optional(), maxMs: z.number().int().min(1000).max(180_000),
+  pre: ACT_CONDITION.optional(), maxMs: z.number().int().min(1000).max(OBSIDIAN_ACT_MAX_MS),
   startBy: z.string().refine(value => Number.isFinite(Date.parse(value))),
   queue: z.string().min(1).max(200),
   dependsOn: z.array(z.string().regex(ID)).max(3).optional(),
@@ -41,7 +42,7 @@ export function readEnvelope(command: Command): QueueEnvelope | null | undefined
   if (command.queue === undefined) return undefined;
   if (command.kind !== 'skill' || command.skill !== 'act') return null;
   const parsed = ENVELOPE.safeParse(command.queue);
-  return parsed.success ? parsed.data : null;
+  return parsed.success && parsed.data.maxMs <= actQueueMilliseconds(command.arguments) ? parsed.data : null;
 }
 
 export type Admission = 'start' | 'wait' | { failureType: 'queue_after_gone' | 'queue_busy' | 'queue_full'; result: string };
@@ -146,12 +147,15 @@ export class BodyQueue {
     const survivors: Command[] = [];
     for (const command of this.waiting) {
       const item = command.queue!.item, list = command.queue!.dependsOn, queue = command.queue!.queue ?? ended.queue;
-      // R3-2: after a danger nothing waiting starts, whatever it says it depends on.
-      if (danger) {
+      // R3-2: after a danger nothing waiting starts, whatever it says it depends on. One exception (end1109f09: four blaze attacks in a row were
+      // dropped while the blaze stood 4m away, and the head could never strike): when the danger is the fight's own target still alive, an item
+      // whose hands fight or attack is the answer to that danger, so it stays.
+      if (danger && !(danger.startsWith('fight_target:') && fightsBack(command))) {
         dropped.push({ command, code: 'depends_failed', item: failedItem, danger });
         gone.set(item, { queue, item });
         continue;
       }
+      if (danger) { survivors.push(command); kept.push({ command, item: failedItem, code: ended.unit.goal }); continue; }   // the strike above: kept whatever it depends on
       if (!Array.isArray(list)) {
         dropped.push({ command, code: 'depends_failed', item: failedItem });
         gone.set(item, { queue, item });
@@ -216,6 +220,19 @@ export function notStarted(envelope: QueueEnvelope, now: number, check?: (pre: A
 }
 
 export const droppedBecause = (item: string, why: string) => `捨てた: 前の項目 ${item} が止まった（${why}）。手は動いていない`;
+/** Whether a waiting act's hands strike (attack or fight, as words or as {"do": ...}). */
+export function fightsBack(command: Command): boolean {
+  const hands = (command.arguments as { hands?: unknown } | undefined)?.hands;
+  if (!Array.isArray(hands)) return false;
+  return hands.some(hand => {
+    let word = '';
+    if (typeof hand === 'string') {
+      const text = hand.trim();
+      if (text.startsWith('{')) { try { word = String(JSON.parse(text)?.do ?? ''); } catch { word = ''; } } else word = text.split(/\s+/u)[0] ?? '';
+    } else if (hand && typeof hand === 'object') word = String((hand as { do?: unknown }).do ?? '');
+    return word === 'attack' || word === 'fight';
+  });
+}
 /** The words of an item dropped after a danger (R3-2): the head reads them as a stop, and the item was not started. */
 export const droppedByDanger = (item: string, danger: string) => danger.startsWith('fight_target:')
   ? `捨てた: 前の項目 ${item} の戦いの相手（${danger.slice('fight_target:'.length)}）が ${FIGHT_THREAT_RANGE_M}m 内で生きている。安全のため始めていない（手は動いていない）`

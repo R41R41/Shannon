@@ -9,6 +9,7 @@ import { closingSpeed, secondsToContact } from '../utils/threatTracker.js';
 import { seesBodyAt, threatExposure } from '../utils/threatExposure.js';
 import { REACH_MAX_MOBS, REACH_RANGE, reachBudgets, threatReachOf } from '../utils/threatReach.js';
 import { isSelfDropped } from '../utils/selfDropped.js';
+import { isThreatEntity, NEUTRAL_UNTIL_STRUCK } from '../utils/hostileMobHints.js';
 import { isSealedIn } from '../utils/shelter.js';
 import { builtAroundStatus } from '../utils/builtAround.js';
 import { creeperLit } from '../utils/creeperFuse.js';
@@ -311,7 +312,13 @@ export function captureWorldObservation(bot?: unknown, options: { threatReach?: 
         // Only what the body has measured: approach rate and the time it leaves.
         const closing = closingSpeed(observedBot, entity.id);
         const contact = secondsToContact(range, closing);
-        const kind = observedBot?.registry?.entitiesByName?.[entity.name ?? '']?.type ?? entity.type ?? 'unknown';
+        const registryKind = observedBot?.registry?.entitiesByName?.[entity.name ?? '']?.type ?? entity.type ?? 'unknown';
+        // The game files a zombified piglin, a piglin and an enderman as "hostile"; the body's one rule (isThreatEntity) says
+        // they leave her alone until struck (a piglin: while she wears gold). Rig end1109f01: an unprovoked zombified piglin
+        // came 5 m near, cut the act as an urgent hostile and stood in the threats, so the decision struck it, its whole
+        // group answered and she died. Such a one is 'neutral' here: among the creatures, not the threats.
+        const kind = registryKind === 'hostile' && NEUTRAL_UNTIL_STRUCK.includes(String(entity.name ?? '').toLowerCase())
+          && !isThreatEntity(entity as never, registryKind, Date.now(), observedBot as never) ? 'neutral' : registryKind;
         // A hostile with rock all round between it and the body: near, but it can neither see nor get here. Within SIGHT_RANGE every
         // hostile is said both ways: run 18's fast decisions twice set out to fight zombies behind a wall, with nothing in the
         // observation to tell them from the ones in the open (only the sealed ones were marked).

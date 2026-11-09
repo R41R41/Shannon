@@ -75,6 +75,21 @@ export function chooseTool<T extends ToolLike>(block: BlockLike, items: T[], opt
 }
 
 /** Uses left before a tool breaks, or null when it does not wear (or nothing is known of it). */
+/** The hardest block a body with no pickaxe digs by hand to get out: 1.6 (stone 1.5 is 7.5 s, netherrack 0.4 is 2 s; cobblestone 2, end stone 3, obsidian stay shut). */
+export const HAND_DIG_MAX_HARDNESS = 1.6;
+/**
+ * Run 62 (03:46, the synthesis's #19): with no pickaxe and no block, the body stood in a Nether valley 16 below its gate and every way up
+ * was a stair to carve in netherrack, which "needs a pickaxe" (it drops nothing by hand) and so was no way at all. To move, a block that
+ * drops nothing by hand still breaks, in seconds: a body that carries no pickaxe may dig the soft ones (hardness at most
+ * HAND_DIG_MAX_HARDNESS) to make its way. One with a pickaxe digs as before, with the pickaxe.
+ */
+export function handDigForWay(block: { harvestTools?: unknown; hardness?: number | null } | null | undefined, items: Array<{ name?: string }>): boolean {
+  if (!block) return false;
+  if (!block.harvestTools) return true;
+  if (items.some(item => /_pickaxe$/u.test(String(item?.name ?? '')))) return false;
+  const hardness = Number(block.hardness);
+  return Number.isFinite(hardness) && hardness >= 0 && hardness <= HAND_DIG_MAX_HARDNESS;
+}
 export function usesLeft(item: { maxDurability?: number; durabilityUsed?: number } | null | undefined): number | null {
   if (!item || !(Number(item.maxDurability) > 0)) return null;
   return Math.max(0, Number(item.maxDurability) - Number(item.durabilityUsed ?? 0));

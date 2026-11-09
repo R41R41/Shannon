@@ -73,6 +73,33 @@ describe('EndermanCamp terrain-only exit', () => {
       expect(f.controls.forward).toBe(false);
     } finally { camp.release(); }
   });
+
+  // end1108h29: about eight not_visible stops all read 屋根外の注視 0/2, and nothing said why the step out was never taken.
+  it('says why the step out is not taken when no exit cell has a floor', async () => {
+    const holes = Object.fromEntries([[2, 0], [-2, 0], [0, 2], [0, -2]].map(([x, z]) => [`${x},-1,${z}`, 'air']));
+    const f = fixture({ '6,2,0': 'warped_stem', ...holes }), camp = new EndermanCamp(f.ctx, f.live), now = Date.now();
+    try {
+      await camp.advance(f.live, now, 12, false);
+      expect(endermanCampObservation(f.bot)!.exits).toHaveLength(0);
+      const out: any = await camp.advance(f.live, now + 9_000, 12, false);
+      expect(out.kind).toBe('stop');
+      expect(out.outcome.text).toContain('屋根外の注視 0/2、出ない理由: 4 方向の 2 マス先に、平らな床と空いた通り道が無い');
+    } finally { camp.release(); }
+  });
+
+  it('says another enemy near the exit holds the step back', async () => {
+    const f = fixture({ '6,2,0': 'warped_stem' }), camp = new EndermanCamp(f.ctx, f.live), now = Date.now();
+    f.bot.entities[300] = { id: 300, name: 'enderman', position: new Vec3(2.5, 0, 4.5), isValid: true };
+    f.bot.entities[301] = { id: 301, name: 'enderman', position: new Vec3(2.5, 0, -4.5), isValid: true };
+    f.bot.entities[302] = { id: 302, name: 'enderman', position: new Vec3(-2.5, 0, 4.5), isValid: true };
+    try {
+      await camp.advance(f.live, now, 12, false);
+      expect(endermanCampObservation(f.bot)!.exits).toHaveLength(0);
+      const out: any = await camp.advance(f.live, now + 9_000, 12, false);
+      expect(out.kind).toBe('stop');
+      expect(out.outcome.text).toMatch(/出ない理由: (出口の 8m 内に別の敵|出られる \d 方向のどこからも目が見えない)/);
+    } finally { camp.release(); }
+  });
 });
 
 describe('temporary roof support visibility', () => {

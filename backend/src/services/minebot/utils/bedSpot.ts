@@ -45,6 +45,17 @@ const KEEP_BLOCKS = new Set(['obsidian', 'crying_obsidian', 'bedrock', 'reinforc
 const SIDES: Array<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]];
 const DIRECTIONS: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
+/**
+ * end1109o11: a floor the body uses instead of building on. Two nights the sleep chose the cell over a crafting table she had set down
+ * beside her: the place is a right click on the floor, which opened the table, no bed came ("the server did not answer within 1500ms")
+ * and the same cell was chosen again (the first night waited about 6.5 minutes, the next 1.5). A bed is never set on one.
+ */
+const FLOOR_OPENS = new Set(['note_block', 'jukebox', 'dispenser', 'dropper', 'hopper', 'crafter', 'chiseled_bookshelf', 'decorated_pot']);
+export const floorOpensWhenUsed = (block: any): boolean => {
+  const name = String(block?.name ?? '');
+  return !!block && (PROTECTED_UTILITY_BLOCKS.has(name) || FLOOR_OPENS.has(name) || /(?:_door|_trapdoor|_bed|_shulker_box)$/u.test(name));
+};
+
 const isLiquid = (block: any) => !!block && LIQUIDS.has(String(block.name));
 const hurts = (block: any) => !!block && (HURTS.has(String(block.name)) || isLiquid(block));
 const isSolid = (block: any) => !!block && block.boundingBox === 'block';
@@ -104,7 +115,7 @@ export function planBedSpot(world: BedWorld, position: { x: number; y: number; z
       for (const cell of [pos, head]) {
         const floor = cell.offset(0, -1, 0);
         const block = at(world, floor);
-        if (isSolid(block) && !hurts(block)) continue;
+        if (isSolid(block) && !hurts(block) && !floorOpensWhenUsed(block)) continue;
         // A hole in the floor: one cell is filled, if there is ground under it and the filler can be put on it.
         const below = at(world, floor.offset(0, -1, 0));
         if (!block || !options.isFree(block) || !isSolid(below) || hurts(below) || !within(floor)) { ok = false; break; }

@@ -17,6 +17,7 @@ export function stepLabel(step: StepLike): string {
     case 'go': return `go → ${step.goals?.length ? `${step.goals.length}か所のどれか` : pos(step.to)}`;
     case 'dig': case 'place': return `${step.do}${step.block ? ` ${step.block}` : ''} ${at}`.trim();
     case 'use': return `use ${step.item ?? '手の物'}${at ? ` ${at}` : ''}${step.target !== undefined ? ` → ${step.target}` : ''}`;
+    case 'bed_burst': return `bed_burst ${step.target ?? ''} 最大${step.count ?? '?'}床 ${at}`.trim();
     case 'craft': return `craft ${step.item}×${step.count ?? 1}`;
     case 'attack': case 'shoot': return `${step.do} ${step.target ?? at}`;
     case 'fight': return `fight ${step.target ?? ''}${(step as { stance?: string }).stance === 'flee' ? ' 逃げ' : ''}`.trim();

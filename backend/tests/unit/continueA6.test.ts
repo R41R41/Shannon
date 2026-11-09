@@ -161,9 +161,10 @@ describe('A-6 (8): a last stand\'s wait between blows ends when the action is st
     const swings: number[] = [];
     const bot: any = Object.assign(new EventEmitter(), {
       entity: { id: 1, position: new Vec3(0.5, 64, 0.5), yaw: 0, pitch: 0, onGround: true }, health: 4, game: { dimension: 'overworld' }, entities: { 7: target },
-      heldItem: null, inventory: { items: () => [], slots: [] }, executingSkill: false, interruptExecution: false,
+      heldItem: null, inventory: { items: () => [], slots: Object.assign(new Array(46).fill(null), { 45: { name: 'shield' } }) }, executingSkill: false, interruptExecution: false,
       setControlState: () => undefined, clearControlStates: () => undefined, look: async () => undefined, lookAt: async () => undefined,
       deactivateItem: () => undefined, stopDigging: () => undefined, attack: vi.fn((entity: any) => { swings.push(entity.id); }),
+      activateItem: () => { bot.usingHeldItem = true; },
     });
     let elapsed = -1, result: any;
     const running = executeAction(bot, 'floor-last-stand', 5000, async () => {
@@ -173,7 +174,8 @@ describe('A-6 (8): a last stand\'s wait between blows ends when the action is st
       elapsed = Date.now() - t0;
       return { success: true, result: 'x' };
     }, { priority: 250, safetyLease: true, waitForQuiescence: false });
-    await delay(120);
+    await vi.waitFor(() => expect(swings).toEqual([7]), { timeout: 3000, interval: 5 });
+    await delay(20);
     const [root] = physicalRoots(bot);
     cancelAction(bot, root.actionId, 'interrupted');
     await running;

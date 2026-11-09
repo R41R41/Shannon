@@ -231,6 +231,12 @@ export interface ScanCategory {
   keep?: number;
   /** Only cells with yMin <= y <= yMax. */
   yMin?: number; yMax?: number;
+  /**
+   * A second list made from the same cells (a state belongs to one category only): the cells `accept` takes, its nearest `keep` (1107b: iron ore
+   * with a face open to the air). `accept` is asked only of a cell nearer than that list's keep-th so far, so its count is of the cells asked
+   * and taken, not of all.
+   */
+  also?: { key: string; keep?: number; accept: (x: number, y: number, z: number) => boolean };
 }
 export interface ScanCellHit { name: string; x: number; y: number; z: number; distance: number }
 export interface SlicedScanResult {
@@ -281,11 +287,20 @@ export async function scanLoadedCategories(bot: ScanBot, categories: ScanCategor
       for (let state = block.minStateId; state <= last; state++) { table[state] = index; stateName[state] = name; }
     }
   });
-  const keep = categories.map(category => Math.max(1, category.keep ?? 16));
+  // The second lists (`also`) after the categories, at their own indices.
+  const alsoAt = categories.map(() => -1);
+  const alsos: Array<{ key: string; keep?: number; accept: (x: number, y: number, z: number) => boolean }> = [];
+  categories.forEach((category, index) => {
+    if (!category.also) return;
+    alsoAt[index] = categories.length + alsos.length;
+    alsos.push(category.also);
+    found.set(category.also.key, { count: 0, hits: [] });
+  });
+  const keep = [...categories, ...alsos].map(category => Math.max(1, category.keep ?? 16));
   const bands = categories.map(category => [category.yMin ?? -Infinity, category.yMax ?? Infinity] as const);
-  const lists = categories.map(category => found.get(category.key)!);
+  const lists = [...categories, ...alsos].map(category => found.get(category.key)!);
   /** What a later hit of the category must be nearer than to be kept (the keep-th nearest so far). */
-  const threshold = categories.map(() => Infinity);
+  const threshold = keep.map(() => Infinity);
   const trim = (index: number) => {
     const hits = lists[index].hits;
     hits.sort((a, b) => a.distance - b.distance);
@@ -307,6 +322,12 @@ export async function scanLoadedCategories(bot: ScanBot, categories: ScanCategor
     lists[index].count++;
     const dx = ox - x - 0.5, dy = oy - y, dz = oz - z - 0.5;
     const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const second = alsoAt[index];
+    if (second >= 0 && distance < threshold[second] && alsos[second - categories.length].accept(x, y, z)) {
+      lists[second].count++;
+      lists[second].hits.push({ name, x, y, z, distance });
+      if (lists[second].hits.length >= 2 * keep[second]) trim(second);
+    }
     if (distance >= threshold[index]) return;
     lists[index].hits.push({ name, x, y, z, distance });
     if (lists[index].hits.length >= 2 * keep[index]) trim(index);
@@ -368,7 +389,7 @@ export async function scanLoadedCategories(bot: ScanBot, categories: ScanCategor
     result.reachMetres = Math.max(result.reachMetres, Math.round(centre));
     if (slicer.due()) await slicer.pause();
   }
-  categories.forEach((_category, index) => trim(index));
+  keep.forEach((_keep, index) => trim(index));
   slicer.end();
   result.ms = Math.round(performance.now() - started);
   result.longestSliceMs = Math.round(slicer.longest * 10) / 10;

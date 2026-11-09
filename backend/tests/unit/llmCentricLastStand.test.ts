@@ -39,9 +39,10 @@ function fixture(options: { health?: number; items?: any[]; mobs?: Record<string
     health: options.health ?? 3, food: 20, game: { dimension: 'overworld' },
     entities: options.mobs ?? { 2: { id: 2, name: 'zombie', position: new Vec3(2.5, 65, 0.5), height: 1.95 } } as Record<string, any>,
     registry: { blocksByName: { cobblestone: { id: 1 } } }, heldItem: null,
-    inventory: { items: () => options.items ?? [], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,
+    inventory: { items: () => options.items ?? [], slots: Object.assign(new Array(46).fill(null), { 45: { name: 'shield' } }) }, controlState: {} as Record<string, boolean>,
     executingSkill: false, interruptExecution: false, clearControlStates: vi.fn(), look: vi.fn(async () => undefined), lookAt: vi.fn(async () => undefined),
     equip: vi.fn(async (item: any) => { bot.heldItem = item; }), consume: vi.fn(async () => undefined), attack: vi.fn(),
+    activateItem: vi.fn(() => { bot.usingHeldItem = true; }), deactivateItem: vi.fn(() => { bot.usingHeldItem = false; }),
     placeBlock: vi.fn(async (reference: any, face: Vec3) => { const at = reference.position.plus(face); blocks.set(`${at.x},${at.y},${at.z}`, { name: 'cobblestone', boundingBox: 'block' }); }),
     setControlState: vi.fn((key: string, value: boolean) => {
       calls.push([key, value]);

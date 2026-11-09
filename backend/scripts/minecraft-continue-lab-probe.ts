@@ -19,7 +19,7 @@ import { SceneSaver, selfNames } from '../src/services/minebot/utils/sceneSave.j
 import { bodyRevision } from '../src/services/minebot/utils/bodyRevision.js';
 import { executeAction, createMotorPort, physicalRoots, preemptLowerPriorityActions } from '../src/services/minebot/execution/ActionExecution.js';
 import { opLogOf } from '../src/services/minebot/utils/opLog.js';
-import { runCover } from '../src/services/minebot/utils/floorReflexes.js';
+import { meleeChoice, meleeEpisode, meleeThreatsNear, runCover } from '../src/services/minebot/utils/floorReflexes.js';
 import { eat } from '../src/services/minebot/utils/primitives/body.js';
 import { itemFoodPoints } from '../src/services/minebot/utils/foodPoints.js';
 import { localMapFor, MAP_PENDING } from '../src/services/minebot/utils/localMap.js';
@@ -80,8 +80,10 @@ async function connect(): Promise<{ actor: any; body: NativeCommonFcaBody }> {
   const loop = new CommonFcaControlLoop({ baseUrl: 'http://127.0.0.1:9', token: 'lab', serverId: 'continue-lab', actuator: body, connectionId: 'lab-connection-1', pollMilliseconds: 40,
     fetcher: (async (_url: unknown, init: { body: string }) => {
       const poll = JSON.parse(init.body);
-      for (const receipt of poll.receipts ?? []) { receipts.set(receipt.id, receipt); }
+      lastPollObservation = poll.observation;
+      for (const receipt of poll.receipts ?? []) { receipts.set(receipt.id, receipt); recordTerminalReceipt(receipt, poll.observation); }
       const commands = outbox.splice(0, 8);
+      for (const command of commands) sentCommands.set(command.id, command);
       return { ok: true, json: async () => ({ schemaVersion: 1, mode: 'common-fca', headBoot: 'hb-lab', commands, cancel: cancels.splice(0), acknowledged: (poll.receipts ?? []).map((r: any) => r.id) }) };
     }) as never });
   loop.start();
@@ -90,10 +92,40 @@ async function connect(): Promise<{ actor: any; body: NativeCommonFcaBody }> {
 }
 const outbox: any[] = [], cancels: string[] = [];
 const receipts = new Map<string, any>();
+const sentCommands = new Map<string, any>(), receiptEvidence = new Map<string, any>();
+let lastPollObservation: unknown = null, receiptJournalError: string | null = null;
 let currentLoop: CommonFcaControlLoop | null = null;
 let commandNumber = 0;
 /** A release closes its session in the control loop (the head opens a new one for what follows): the lab's acts after a release use the next. */
 let sessionNumber = 0;
+/** Read existing poll state and public ownership only; diagnostics never ask the body for an extra observation. */
+function probeSnapshot(observation: unknown = lastPollObservation) {
+  return { at: new Date().toISOString(), observation, busy: currentLoop?.busy ?? null, leaseHeld: currentLoop?.leaseHeld ?? null,
+    physicalRoots: current ? physicalRoots(current) : [], actHandNow: current?.actHandNow ?? null };
+}
+function recordTerminalReceipt(receipt: any, observation: unknown): void {
+  try {
+    const text = JSON.stringify({ command: sentCommands.get(receipt.id) ?? null, receipt, ...probeSnapshot(observation) });
+    fs.appendFileSync(path.join(out, 'terminal-receipts.jsonl'), text + '\n');
+    receiptEvidence.set(receipt.id, JSON.parse(text));
+  } catch (error) { receiptJournalError ??= String((error as Error)?.message ?? error); }
+}
+/** A release closes this session only after the same body's explicit stopped/released ACK. */
+async function releaseWith(incident: Record<string, unknown> = {}) {
+  const id = 'lab:release' + (++commandNumber);
+  const context = { scopeKey: 'lab', taskId: 'continue-lab-task', taskRevision: 1, bodyId: 'minecraft:continue-lab', sessionId: 'continue-session' + (sessionNumber ? '-' + sessionNumber : ''), generation: 1, goal: 'lab', completionCondition: 'none', incident };
+  outbox.push({ schemaVersion: 1, id, serverId: 'continue-lab', connectionId: 'lab-connection-1', kind: 'release', context, stop: { context, requestId: id, reason: 'cancel' },
+    lease: { id: 'continue-lease', generation: 1, holder: 'continue-lab-task' }, deadlineAt: new Date(Date.now() + 30_000).toISOString() });
+  const until = Date.now() + 20_000;
+  while (!receipts.has(id) && Date.now() < until) await sleep(15);
+  const receipt = receipts.get(id), stop = receipt?.stop;
+  const acknowledged = receipt?.id === id && receipt.connectionId === 'lab-connection-1' && receipt.outcome === 'completed' && receipt.inputsReleased === true
+    && stop?.state === 'stopped' && stop.inputsReleased === true && stop.requestId === id && stop.bodyId === context.bodyId
+    && stop.sessionId === context.sessionId && stop.generation === context.generation;
+  let parsed: any = null; try { parsed = JSON.parse(receipt?.result ?? ''); } catch { parsed = null; }
+  if (acknowledged) sessionNumber++;
+  return { receipt, incident: parsed?.incident ?? null, acknowledged, evidence: receiptEvidence.get(id) ?? null };
+}
 /** What the head would put on a command: the life and what its decision read, from the body's observation. */
 function made(body: NativeCommonFcaBody, over: Record<string, unknown> = {}) {
   const observation = body.observe(); const s = observation.state as any;
@@ -139,6 +171,112 @@ const opLines = (): any[] => {
   if (!file || !fs.existsSync(file)) return [];
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
 };
+
+/** Move onto a separate supported pad before filling the arena or removing the old pillar. */
+async function prepareLayingArena(actor: any, label: string): Promise<void> {
+  await ask('kill @e[type=!player]');
+  await ask('fill 23 99 23 25 99 25 minecraft:stone');
+  await ask('fill 23 100 23 25 103 25 minecraft:air');
+  await ask(`tp ${ACTOR} 24.5 100 24.5`);
+  const safe = () => { const p = actor.entity?.position; return p && Math.floor(p.x) === 24 && Math.floor(p.z) === 24 && p.y >= 99.99 && p.y <= 100.6; };
+  const until = Date.now() + 5000;
+  while (!safe() && Date.now() < until) await sleep(30);
+  const entry: any = { label, safePadObserved: !!safe(), before: probeSnapshot() };
+  ((report.layingBoundaries ??= []) as any[]).push(entry);
+  if (!entry.safePadObserved) throw new Error(`LAYING_SETUP_POSITION_UNCONFIRMED:${label}`);
+  const released = await releaseWith();
+  entry.release = released;
+  if (!released.acknowledged) throw new Error(`LAYING_SETUP_RELEASE_UNCONFIRMED:${label}`);
+  entry.safeAfterRelease = !!safe();
+  if (!entry.safeAfterRelease) throw new Error(`LAYING_SETUP_POSITION_CHANGED_AFTER_RELEASE:${label}`);
+  await ask('fill -8 60 -8 8 99 8 minecraft:stone');
+  await ask('fill -8 100 -8 8 120 8 minecraft:air');
+  await reset(actor);
+  entry.ready = probeSnapshot();
+}
+
+/** A hand-start row plus its still-current act owner and placement phase, never a fixed sleep. */
+async function waitForLayingHand(command: string, actor: any, timeoutMs = 10_000): Promise<any> {
+  const until = Date.now() + timeoutMs;
+  let started: any = null;
+  while (Date.now() < until) {
+    const terminal = receipts.get(command);
+    if (terminal) return { ready: false, why: 'terminal_before_active_hand', receipt: terminal, evidence: receiptEvidence.get(command) ?? null, snapshot: probeSnapshot() };
+    started ??= opLines().find(row => row.kind === 'hand_start' && row.ids?.command === command);
+    const owner = started && physicalRoots(actor).find(root => root.capability === 'act' && root.actionId === started.holder?.actionId);
+    if (started && owner && actor.actHandNow === 'vertical-place') return { ready: true, handStart: started, owner, snapshot: probeSnapshot() };
+    await sleep(30);
+  }
+  return { ready: false, why: 'active_laying_hand_not_observed', handStart: started, snapshot: probeSnapshot() };
+}
+
+/** Fixture facts only: the real episode, current enemy and the prepared support plane. Never edits a reflex state. */
+function capFixtureWitness(actor: any, target: number | null) {
+  const position = actor.entity?.position, enemy = target === null ? null : actor.entities?.[target];
+  const episode = actor.floorReflexes?.melee;
+  let support: any = null;
+  if (position) { try { const block = actor.blockAt(new Vec3(Math.floor(position.x), FLOOR, Math.floor(position.z))); support = block ? { name: block.name, solid: block.boundingBox === 'block' } : null; } catch { /* unread remains null */ } }
+  return { at: Date.now(), health: actor.health, position: position ? { x: position.x, y: position.y, z: position.z } : null,
+    grounded: actor.entity?.onGround === true, support, heldItem: actor.heldItem?.name ?? null,
+    inventory: (actor.inventory?.items?.() ?? []).map((item: any) => ({ name: item.name, count: item.count })),
+    enemy: enemy?.position ? { id: enemy.id, name: enemy.name, distance: position?.distanceTo(enemy.position) ?? null,
+      position: { x: enemy.position.x, y: enemy.position.y, z: enemy.position.z }, valid: enemy.isValid !== false } : null,
+    episode: episode ? { ...episode } : null, episodeActive: meleeEpisode(actor), physicalRoots: physicalRoots(actor),
+    actHandNow: actor.actHandNow ?? null };
+}
+
+function capFixtureSupported(witness: ReturnType<typeof capFixtureWitness>): boolean {
+  return witness.health > 0 && witness.support?.solid === true && !!witness.position && witness.position.y >= FLOOR + .9
+    && Math.abs(witness.position.x) < 30 && Math.abs(witness.position.z) < 30;
+}
+
+
+/** One poll must satisfy the existing active, grounded, close hit-cap prerequisites together. Never borrow an earlier event pose. */
+function capFixtureReady(witness: ReturnType<typeof capFixtureWitness>, target: number | null, episodeSince: number | null,
+  began: number, sawOwnedMelee: boolean, hasAttack: boolean): boolean {
+  const episode = witness.episode;
+  return target !== null && episodeSince !== null && witness.episodeActive && episode?.target === target && episode.since === episodeSince
+    && typeof episode.cappedAt === 'number' && episode.cappedAt >= began && episode.lastKind === 'hit'
+    && witness.grounded && witness.enemy?.distance != null && witness.enemy.distance <= 3 && sawOwnedMelee && hasAttack;
+}
+
+
+/** Fixture only: one snapshot of the single north-neighbour previous-step floor, never a search or a movement command. */
+function stairsFixtureWitness(actor: any, began: number, initialY: number, ended: boolean) {
+  const p = actor.entity?.position, zombie = actor.registry?.entitiesByName?.zombie;
+  const position = p ? { x: p.x, y: p.y, z: p.z } : null;
+  const spawn = p ? { x: Math.floor(p.x) + .5, y: Math.floor(p.y) + 1, z: Math.floor(p.z) - .5 } : null;
+  const active = !ended && actor.actHandNow === 'vertical' && physicalRoots(actor).some(root => root.capability === 'act');
+  const digSent = opLines().some(entry => entry.kind === 'op' && entry.by === 'act' && ['dig','unconfirmedDig'].includes(entry.op) && Date.parse(entry.at) >= began);
+  const progressed = !!p && Number.isFinite(p.y) && p.y < initialY && digSent;
+  const base = { at: Date.now(), position, spawn, active, ended, hand: actor.actHandNow ?? null, progressed, digSent,
+    grounded: actor.entity?.onGround === true, ready: false, reason: '', cells: [] as Array<{ at: { x: number; y: number; z: number }; name: string | null; solid: boolean }> };
+  if (!active || !progressed || !base.grounded || !(actor.health > 0) || !p || !spawn) return { ...base, reason: 'stairs_not_active_progressing_and_grounded' };
+  const width = zombie?.width, height = zombie?.height, actorWidth = actor.entity?.width, actorHeight = actor.entity?.height;
+  if (![p.x,p.y,p.z,width,height,actorWidth,actorHeight].every(Number.isFinite) || width <= 0 || height <= 0 || actorWidth <= 0 || actorHeight <= 0)
+    return { ...base, reason: 'dimensions_unknown' };
+  const distance = Math.hypot(p.x-spawn.x,p.y-spawn.y,p.z-spawn.z);
+  if (distance > 3) return { ...base, reason: 'spawn_outside_existing_contact_range' };
+  if (Math.abs(p.x-spawn.x) < (actorWidth+width)/2 && Math.abs(p.z-spawn.z) < (actorWidth+width)/2
+    && p.y < spawn.y+height && p.y+actorHeight > spawn.y) return { ...base, reason: 'spawn_overlaps_actor' };
+  const read = (x: number,y: number,z: number) => {
+    let block: any = null; try { block = actor.blockAt(new Vec3(x,y,z)); } catch { /* unknown stays a refusal */ }
+    base.cells.push({ at: { x,y,z }, name: block?.name ?? null, solid: block?.boundingBox === 'block' }); return block;
+  };
+  // The previous stair is one block higher. Check its own actual body box, not a same-Y flat corridor through its support.
+  for (let x=Math.floor(spawn.x-width/2);x<Math.ceil(spawn.x+width/2);x++)
+    for (let z=Math.floor(spawn.z-width/2);z<Math.ceil(spawn.z+width/2);z++)
+      for (let y=Math.floor(spawn.y);y<Math.ceil(spawn.y+height);y++) {
+        const block=read(x,y,z); if (!block || !['air','cave_air','void_air'].includes(block.name)) return { ...base, reason: 'spawn_body_not_loaded_air' };
+      }
+  for (let x=Math.floor(spawn.x-zombie.width/2);x<Math.ceil(spawn.x+zombie.width/2);x++)
+    for (let z=Math.floor(spawn.z-zombie.width/2);z<Math.ceil(spawn.z+zombie.width/2);z++) {
+      const block=read(x,Math.floor(spawn.y)-1,z);
+      if (block?.boundingBox !== 'block' || !block.shapes?.some((shape: number[]) => shape.length === 6 && shape.every((v,i) => v === (i<3 ? 0 : 1))))
+        return { ...base, reason: 'spawn_support_not_observed_full_block' };
+    }
+  return { ...base, ready: true, reason: 'observed_previous_step_eligible', distance };
+}
 
 const report: Record<string, unknown> = { startedAt: new Date().toISOString(), bodyRevision: rev };
 let { actor, body } = { actor: null as any, body: null as any as NativeCommonFcaBody };
@@ -233,11 +371,16 @@ try {
 
   // ---- boundary 4: the handover from the melee reflex
   if (runs('handover')) {
-    await ask(`give ${ACTOR} minecraft:iron_sword 1`); await ask(`give ${ACTOR} minecraft:shield 1`); await ask(`item replace entity ${ACTOR} weapon.offhand with minecraft:shield`);
+    // Plain handover needs a real recent hit. An idle shield can prevent that trigger entirely;
+    // the independent handover_shield scene measures continuity with a shield actually raised.
     const trials: Array<Record<string, unknown>> = [];
+    const selection = { rule: 'first_actual_confirmed_floor_melee_with_completed_unit', fixedBeforeRun: true,
+      minimumObservedTrials: 3, allTrials: 'report.handoverTrials', groupChecks: 'nonempty_count_confirmation_rate_and_all_latencies',
+      meaning: 'positive_contract_witness_only_not_whole_run_pass', selectedTrial: null as number | null };
+    let producedHandover = false;
     for (let trial = 1; trial <= 6; trial++) {
       await reset(actor);
-      await ask(`give ${ACTOR} minecraft:iron_sword 1`); await ask(`item replace entity ${ACTOR} weapon.offhand with minecraft:shield`);
+      await ask(`give ${ACTOR} minecraft:iron_sword 1`);
       await ask(`effect give ${ACTOR} minecraft:resistance 600 1 true`);
       await sleep(800);
       await ask('summon minecraft:zombie 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}}}');
@@ -259,15 +402,26 @@ try {
         stopToSettledMs: handover && reservedAt ? Date.parse(handover.reflexSettledAt) - reservedAt : null,
         settledToLockMs: handover ? Date.parse(result.receipt.bodyTimes?.lockAt ?? '') - Date.parse(handover.reflexSettledAt) : null,
         reflexWaitMs: result.receipt.bodyTimes?.reflexWaitMs ?? null, outcome: result.receipt.outcome, unit: result.receipt.unit, shieldDuringHandoverRuns: null });
-      if (trial === 1) produce('control/r45-attack-waited-6-4s', 'control/r45-attack-waited-6-4s', { output: { trial: trials.at(-1), result: result.parsed } });
+      // The head's reader requires an actual floor-melee transfer and a finished act, not merely a seen reflex.
+      // Keep every trial (including failures) in the report; never manufacture a result for a missing first trial.
+      const unit = result.receipt.unit;
+      if (!producedHandover && handover?.from === 'floor-melee' && handover.confirmed === true && result.receipt.outcome === 'completed'
+        && unit?.goal === 'done' && unit.end === 'finished' && unit.released === true) {
+        selection.selectedTrial = trial;
+        produce('control/r45-attack-waited-6-4s', 'control/r45-attack-waited-6-4s', { selection: { ...selection }, output: { trial: trials.at(-1), result: result.parsed } });
+        producedHandover = true;
+      }
     }
     report.handoverTrials = trials;
+    report.handoverSelection = { ...selection, produced: producedHandover };
     const withReflex = trials.filter(entry => entry.reflex);
-    check('the melee reflex took the body with the zombie as its enemy in most of the trials', withReflex.length >= 3, `${withReflex.length}/${trials.length}`);
+    const enoughTrials = withReflex.length >= 3;
+    check('the melee reflex took the body with the zombie as its enemy in most of the trials', enoughTrials, `${withReflex.length}/${trials.length}`);
     const confirmed = withReflex.filter(entry => (entry.handover as any)?.confirmed === true);
-    check('an act for the same enemy takes the body over: confirmed, in most trials', confirmed.length >= Math.ceil(withReflex.length / 2), `${confirmed.length}/${withReflex.length}: ${JSON.stringify(withReflex.map(entry => (entry.handover as any)?.confirmed ?? null))}`);
-    check('the act waits far less than the 6.4 s of run 45', withReflex.every(entry => Number(entry.sentToLockMs) < 2500), JSON.stringify(withReflex.map(entry => entry.sentToLockMs)));
-    check('the shield is kept when it was up (shield "kept"), never lowered by the handover itself', confirmed.every(entry => !(entry.reflex as any).shieldUp || (entry.handover as any).shield === 'kept'), JSON.stringify(confirmed.map(entry => [(entry.reflex as any).shieldUp, (entry.handover as any).shield])));
+    const enoughConfirmed = enoughTrials && confirmed.length >= Math.ceil(withReflex.length / 2);
+    check('an act for the same enemy takes the body over: confirmed, in most trials', enoughConfirmed && producedHandover, `${confirmed.length}/${withReflex.length}: ${JSON.stringify(withReflex.map(entry => (entry.handover as any)?.confirmed ?? null))}`);
+    check('the act waits far less than the 6.4 s of run 45', enoughTrials && withReflex.every(entry => Number(entry.sentToLockMs) < 2500), JSON.stringify(withReflex.map(entry => entry.sentToLockMs)));
+    check('the confirmed plain handovers have no shield to preserve; the independent shield scene measures keeping it', enoughConfirmed && confirmed.every(entry => (entry.reflex as any).shieldUp === false && (entry.handover as any).shield === 'none'), JSON.stringify(confirmed.map(entry => [(entry.reflex as any).shieldUp, (entry.handover as any).shield])));
     measures.handover = { windowMs: 300, trials: trials.map(entry => ({ trial: entry.trial, sentToLockMs: entry.sentToLockMs, stopToSettledMs: entry.stopToSettledMs, settledToLockMs: entry.settledToLockMs, waitedMs: (entry.handover as any)?.waitedMs ?? null, confirmed: (entry.handover as any)?.confirmed ?? null, shield: (entry.handover as any)?.shield ?? null })) };
   }
 
@@ -371,30 +525,93 @@ try {
   }
 
   if (runs('cap_then_kind')) {
-    await reset(actor);
-    await ask('give ' + ACTOR + ' minecraft:iron_sword 1'); await ask('give ' + ACTOR + ' minecraft:cobblestone 16'); await ask('effect give ' + ACTOR + ' minecraft:resistance 600 1 true');
-    await sleep(500);
-    await ask('summon minecraft:zombie 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}},attributes:[{id:"minecraft:max_health",base:1000d}],Health:1000f}');
-    const began = Date.now();
-    let cappedAt = 0, lastEnd = 0;   // (an episode of an earlier scene keeps its cappedAt: only one told in this scene counts)
-    while (Date.now() - began < 40_000) { const at = actor.floorReflexes?.melee?.cappedAt; if (typeof at === 'number' && at >= began) { cappedAt = at; lastEnd = Number(actor.floorReflexes.melee.lastEnd ?? at); break; } await sleep(50); }
-    const capturedEvents = ((body.events as any)?.pending?.(64) ?? []).filter((event: any) => event.kind === 'reflex.capped' && Date.parse(event.at ?? '') >= began);
-    if (cappedAt) {
-      // the sword goes: what the choice would now be is a hand of another kind (a block between, a step), and it must not be made until the episode ends
+    const evidence: any = { fixture: 'single-zombie-natural-hit-then-shield', timeline: [], cappedEvents: [], precondition: false };
+    let died = false, target: number | null = null, actorEntity: any = null, episodeSince: number | null = null;
+    const onDeath = () => { died = true; };
+    const onCap = (data: any) => { if (data?.reflex === 'floor-melee') evidence.cappedEvents.push({ data, witness: capFixtureWitness(actor, target), snapshot: probeSnapshot() }); };
+    const sample = () => {
+      const witness = capFixtureWitness(actor, target);
+      if (evidence.timeline.length < 256) evidence.timeline.push(witness); else evidence.timelineDropped = (evidence.timelineDropped ?? 0) + 1;
+      if (witness.episode?.target === target && witness.physicalRoots.some(root => root.capability === 'floor-melee')) evidence.sawOwnedMelee = true;
+      if (died || actor.entity !== actorEntity || !capFixtureSupported(witness)) throw new Error('CAP_ACTOR_LIFE_OR_SUPPORT_LOST');
+      if (target !== null && (!witness.enemy?.valid || witness.enemy.id !== target)) throw new Error('CAP_TARGET_LOST');
+      return witness;
+    };
+    try {
+      await prepareLayingArena(actor, 'cap');
+      // A broad single support plane removes the old 33x33 platform's void edge from this cap fixture.
+      await ask('fill -32 99 -32 32 99 32 minecraft:stone'); await ask('fill -32 100 -32 32 103 32 minecraft:air');
+      const settlingUntil = Date.now() + 5000;
+      while (meleeEpisode(actor) && Date.now() < settlingUntil) await sleep(50);
+      if (meleeEpisode(actor)) throw new Error('CAP_PREVIOUS_EPISODE_ACTIVE');
+      actorEntity = actor.entity; actor.on('death', onDeath); actor.on('minebotReflexCapped', onCap);
+      await ask('give ' + ACTOR + ' minecraft:iron_sword 1'); await ask('give ' + ACTOR + ' minecraft:cobblestone 16'); await ask('effect give ' + ACTOR + ' minecraft:resistance 600 1 true');
+      const beforeHit = sample(); evidence.beforeHit = { witness: beforeHit, snapshot: probeSnapshot() };
+      await ask('summon minecraft:zombie 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}},attributes:[{id:"minecraft:max_health",base:1000d}],Health:1000f}');
+      const began = Date.now(), until = began + 40_000;
+      let hit: any = null;
+      while (Date.now() < until) {
+        const zombies = Object.values(actor.entities as Record<string, any>).filter((entity: any) => entity?.name === 'zombie' && entity.isValid !== false);
+        if (zombies.length === 1) target = zombies[0].id;
+        if (zombies.length > 1) throw new Error('CAP_TARGET_NOT_SINGLE');
+        const witness = sample();
+        if (target !== null && witness.enemy!.distance! <= 3 && witness.health < beforeHit.health) { hit = witness; break; }
+        await sleep(50);
+      }
+      if (!hit) throw new Error('CAP_NATURAL_HIT_NOT_OBSERVED');
+      evidence.naturalHit = { witness: hit, snapshot: probeSnapshot() };
+      // Only after real damage: an idle shield must not remove the ordinary single-enemy eligibility trigger.
+      await ask('item replace entity ' + ACTOR + ' weapon.offhand with minecraft:shield');
+      let capped: any = null;
+      while (Date.now() < until) {
+        const witness = sample(), episode = witness.episode;
+        if (episode?.target === target && episodeSince === null) episodeSince = episode.since;
+        if (episodeSince !== null && (!witness.episodeActive || episode?.since !== episodeSince || episode.target !== target)) throw new Error('CAP_EPISODE_CHANGED');
+        if (episodeSince !== null && typeof episode?.cappedAt === 'number' && episode.cappedAt >= began) {
+          const hasAttack = opLines().some(entry => entry.kind === 'op' && entry.by === 'floor-melee'
+            && Date.parse(entry.at) >= episodeSince! && entry.op === 'attack');
+          if (capFixtureReady(witness, target, episodeSince, began, evidence.sawOwnedMelee === true, hasAttack)) { capped = witness; break; }
+        }
+        await sleep(50);
+      }
+      const beforeCapOps = opLines().filter(entry => entry.kind === 'op' && entry.by === 'floor-melee' && Date.parse(entry.at) >= (episodeSince ?? Infinity));
+      evidence.beforeCapOps = beforeCapOps;
+      if (!capped || capped.episode.lastKind !== 'hit' || !capped.grounded || capped.enemy.distance > 3
+        || !evidence.sawOwnedMelee || !beforeCapOps.some(entry => entry.op === 'attack')) throw new Error('CAP_ACTIVE_GROUNDED_HIT_EPISODE_NOT_OBSERVED');
+      const hitCap = evidence.cappedEvents.some((event: any) => event.witness.episode?.since === episodeSince
+        && event.witness.episode?.cappedAt === capped.episode.cappedAt && event.data.limit === 'melee_hits'
+        && Number.isSafeInteger(event.data.count) && event.data.count > 0 && event.data.count === capped.episode.hits);
+      if (!hitCap) throw new Error('CAP_MELEE_HITS_EVENT_NOT_CONFIRMED');
+      evidence.atCap = { witness: capped, snapshot: probeSnapshot() };
+      const cappedAt = capped.episode.cappedAt, lastEnd = capped.episode.lastEnd;
       await ask('clear ' + ACTOR + ' minecraft:iron_sword'); await sleep(200);
-      // the episode lasts 4 s from its last hand (its lastEnd, before the cap was told): after that a new episode may choose any hand, so the window ends 200 ms before it
+      const changed = sample();
+      const threats = meleeThreatsNear(actor).filter(threat => threat.entity.id === target);
+      const choice = meleeChoice(actor, threats, { hands: changed.episode?.hands, chased: changed.episodeActive && changed.enemy!.distance! <= 3 });
+      evidence.changedChoice = { witness: changed, choice: { kind: choice.hand?.kind ?? null, why: choice.why, quiet: choice.quiet, footing: choice.footing }, snapshot: probeSnapshot() };
+      if (!changed.episodeActive || changed.episode?.since !== episodeSince || changed.episode?.cappedAt !== cappedAt
+        || changed.enemy!.distance! > 3 || !choice.hand || choice.hand.kind === 'hit') throw new Error('CAP_DIFFERENT_ELIGIBLE_KIND_NOT_OBSERVED');
+      // Same original window, ending before the real episode's 4 s tail; never wait through a death/new episode.
       const windowEnd = Math.min(cappedAt + 3500, lastEnd + 3800);
-      await sleep(Math.max(0, windowEnd + 100 - Date.now()));
+      if (windowEnd - Date.now() < 1000) throw new Error('CAP_OBSERVATION_WINDOW_TOO_SHORT');
+      while (Date.now() < windowEnd) {
+        const witness = sample();
+        if (!witness.episodeActive || witness.episode?.since !== episodeSince || witness.episode?.cappedAt !== cappedAt || witness.enemy!.distance! > 3) throw new Error('CAP_WINDOW_PRECONDITION_LOST');
+        await sleep(50);
+      }
       const after = opLines().filter(entry => entry.kind === 'op' && entry.by === 'floor-melee' && Date.parse(entry.at) > cappedAt + 400 && Date.parse(entry.at) < windowEnd);
       const placed = opLines().filter(entry => entry.kind === 'op' && entry.op === 'placeBlock' && Date.parse(entry.at) > cappedAt + 400 && Date.parse(entry.at) < windowEnd);
-      report.capThenKind = { cappedAt: new Date(cappedAt).toISOString(), lastEnd: new Date(lastEnd).toISOString(), windowMs: windowEnd - cappedAt, afterOps: after.slice(0, 6), placed: placed.length, capped: capturedEvents.map((event: any) => event.data) };
-      check('A-6 (10) cap: the melee reflex said reflex.capped once for the episode', capturedEvents.length >= 1, JSON.stringify(capturedEvents.map((event: any) => event.data)).slice(0, 300));
-      check('A-6 (10) cap: after the cap, with the hand kind that would be chosen changed (the sword gone), the reflex sends no new operation until the episode ends', after.length === 0 && placed.length === 0, JSON.stringify({ after: after.length, placed: placed.length }));
-    } else {
-      report.capThenKind = { cappedAt: null, health: actor.health };
-      check('A-6 (10) cap: the melee reflex reached its cap against an enemy with a thousand health', false, JSON.stringify(report.capThenKind));
-    }
-    await reset(actor);
+      Object.assign(evidence, { cappedAt: new Date(cappedAt).toISOString(), lastEnd: new Date(lastEnd).toISOString(), windowMs: windowEnd - cappedAt,
+        afterOps: after.slice(0, 6), placed: placed.length, precondition: true, final: { witness: sample(), snapshot: probeSnapshot() } });
+      report.capThenKind = evidence;
+      const events = evidence.cappedEvents.filter((event: any) => event.witness.episode?.since === episodeSince && event.witness.episode?.cappedAt === cappedAt);
+      check('A-6 (10) cap: the melee reflex said reflex.capped once for the episode', events.length === 1, JSON.stringify(events.map((event: any) => event.data)).slice(0, 300));
+      check('A-6 (10) cap: after the cap, with the hand kind that would be chosen changed (the sword gone), the reflex sends no new operation until the episode ends', after.length === 0 && placed.length === 0, JSON.stringify({ after: after.length, placed: placed.length, changedKind: choice.hand.kind }));
+    } catch (error) {
+      Object.assign(evidence, { precondition: false, failure: String((error as Error)?.message ?? error), final: { witness: capFixtureWitness(actor, target), snapshot: probeSnapshot() } });
+      report.capThenKind = evidence;
+      check('A-6 (10) cap: the melee reflex reached its cap against an enemy with a thousand health', false, JSON.stringify({ failure: evidence.failure, target, episodeSince }));
+    } finally { actor.removeListener('death', onDeath); actor.removeListener('minebotReflexCapped', onCap); await reset(actor); }
   }
 
   // ---- run 46 (hold 4): a go through rock with a hostile behind it that the exposure guard will not let be opened: it stops with the reason (or goes round), not in a box until its time
@@ -791,18 +1008,6 @@ try {
     report.listRaw = JSON.stringify(await ask('list'));
     log('LISTRAW ' + report.listRaw);
     const gameTime = async (): Promise<number | null> => { const text = await ask('time query gametime'); const m = /(\d+)/u.exec(text.replace(/§./gu, '')); return m ? Number(m[1]) : null; };
-    const releaseWith = async (incident: Record<string, unknown>) => {
-      const id = 'lab:release' + (++commandNumber);
-      const context = { scopeKey: 'lab', taskId: 'continue-lab-task', taskRevision: 1, bodyId: 'minecraft:continue-lab', sessionId: 'continue-session' + (sessionNumber ? '-' + sessionNumber : ''), generation: 1, goal: 'lab', completionCondition: 'none', incident };
-      outbox.push({ schemaVersion: 1, id, serverId: 'continue-lab', connectionId: 'lab-connection-1', kind: 'release', context, stop: { context, requestId: id, reason: 'cancel' },
-        lease: { id: 'continue-lease', generation: 1, holder: 'continue-lab-task' }, deadlineAt: new Date(Date.now() + 30_000).toISOString() });
-      const until = Date.now() + 20_000;
-      while (!receipts.has(id) && Date.now() < until) await sleep(15);
-      const receipt = receipts.get(id);
-      let parsed: any = null; try { parsed = JSON.parse(receipt?.result ?? ''); } catch { parsed = null; }
-      sessionNumber++;
-      return { receipt, incident: parsed?.incident ?? null };
-    };
     const headId = 'head:node_stalled:lab:' + Date.now();
     const notes = Array.from({ length: 25 }, (_, index) => 'decision row ' + index + ': lab note');
     const t0 = await gameTime(); await sleep(1500); const t1 = await gameTime();
@@ -973,40 +1178,74 @@ try {
   }
   // ---- amendment A-3: while stairs are dug, a melee reflex may start; only the placing of a vertical is a laying hand
   if (runs('laying')) {
-    await ask('fill -8 60 -8 8 99 8 minecraft:stone'); await ask('fill -8 100 -8 8 120 8 minecraft:air');
-    await reset(actor);
+    await prepareLayingArena(actor, 'stairs');
     await ask(`give ${ACTOR} minecraft:iron_sword 1`); await ask(`give ${ACTOR} minecraft:diamond_pickaxe 1`); await ask(`effect give ${ACTOR} minecraft:resistance 600 1 true`);
     await ask(`tp ${ACTOR} 0.5 100 -6.5`); await sleep(1500);
+    const began = Date.now(), until = began + 12500, initialY = actor.entity.position.y;
+    let ended = false, ready: ReturnType<typeof stairsFixtureWitness> | null = null, last: ReturnType<typeof stairsFixtureWitness> | null = null;
+    const reasons: Record<string,number> = {}; let samples = 0;
     const digging = act(body, { hands: [{ do: 'vertical', dir: 'down', shape: 'stairs', toward: 'south', toY: 86, canDig: ['stone', 'dirt'], maxDig: 80, liquid: 'stop', seconds: 60 }] }, { seconds: 90 });
-    await sleep(3500);
-    await ask(`execute at ${ACTOR} run summon minecraft:zombie ~ ~ ~-1.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}}}`);
-    let meleeSeen = false; const began = Date.now();
-    while (Date.now() - began < 9000 && !meleeSeen) { meleeSeen = physicalRoots(actor).some(root => root.capability === 'floor-melee' || root.capability === 'floor-flee' || root.capability === 'floor-last-stand'); await sleep(30); }
+    void digging.then(() => { ended = true; }, () => { ended = true; });
+    while (Date.now() < until && !ended) {
+      last = stairsFixtureWitness(actor,began,initialY,ended); samples++; reasons[last.reason] = (reasons[last.reason] ?? 0) + 1;
+      if (last.ready) { ready = last; break; }
+      await sleep(50);
+    }
+    let spawned = false, meleeSeen = false, enemy: any = null;
+    if (ready && !ended && Date.now() < until) {
+      await ask(`execute at ${ACTOR} run summon minecraft:zombie ${ready.spawn!.x} ${ready.spawn!.y} ${ready.spawn!.z} {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}}}`);
+      spawned = true;
+      while (Date.now() < until && !meleeSeen && !ended) {
+        const targets = Object.values(actor.entities as Record<string,any>).filter((e: any) => e?.name === 'zombie' && e.isValid !== false);
+        if (targets.length === 1) enemy = targets[0];
+        meleeSeen = !!enemy && physicalRoots(actor).some(root => root.capability === 'floor-melee' || root.capability === 'floor-flee' || root.capability === 'floor-last-stand');
+        if (!meleeSeen) await sleep(30);
+      }
+    }
     const dug = await digging;
-    check('while stairs are dug (not placing), an enemy that comes starts the melee reflex (vertical is not a laying hand then)', meleeSeen, JSON.stringify({ meleeSeen, stoppedBy: dug.parsed?.stoppedBy, code: dug.parsed?.lines?.[0]?.code }));
+    report.stairsMeleePrecondition = { status: ready && spawned && enemy ? 'observed' : 'precondition_unmet',
+      reason: !ready ? last?.reason ?? 'no_active_stairs_poll' : !spawned ? 'stairs_ended_before_summon' : !enemy ? 'actual_single_enemy_not_observed' : null,
+      began, until, totalWindowMs: 12500, samples, reasons, ready, last, spawned, meleeSeen,
+      actualEnemy: enemy ? { id: enemy.id, valid: enemy.isValid !== false, position: { x: enemy.position.x,y: enemy.position.y,z: enemy.position.z } } : null };
+    check('while stairs are dug (not placing), an enemy that comes starts the melee reflex (vertical is not a laying hand then)', meleeSeen,
+      JSON.stringify({ meleeSeen, precondition: (report.stairsMeleePrecondition as any).status, stoppedBy: dug.parsed?.stoppedBy, code: dug.parsed?.lines?.[0]?.code }));
     await ask('kill @e[type=!player]');
   }
 
   // ---- amendment A-2 (d): vertical is a laying hand: a reflex's note does not stop it in the middle of its placing; a reflex that takes the body still cuts it
   if (runs('laying')) {
-    await ask('fill -8 60 -8 8 99 8 minecraft:stone'); await ask('fill -8 100 -8 8 120 8 minecraft:air');
-    await reset(actor);
+    await prepareLayingArena(actor, 'pillar-first');
     await ask(`give ${ACTOR} minecraft:cobblestone 32`); await ask(`give ${ACTOR} minecraft:iron_sword 1`); await ask(`effect give ${ACTOR} minecraft:resistance 600 2 true`);
     await ask('summon minecraft:zombie 1.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}}}');
     const pillar = { do: 'vertical', dir: 'up', shape: 'pillar', toY: 108, canDig: ['stone'], canPlace: ['cobblestone'], maxPlace: 12, liquid: 'stop', seconds: 60 };
     const first = await act(body, { hands: [pillar] }, { seconds: 90 });
     const line = first.parsed?.lines?.[0];
-    check('a pillar with an enemy beside it is not stopped by a reflex note in the middle of its placing (stoppedBy is not reflex)', first.parsed?.stoppedBy !== 'reflex', JSON.stringify([first.parsed?.stoppedBy, line?.goal, line?.code, line?.progress?.done]));
-    await ask('fill -3 100 -3 3 120 3 minecraft:air');   // the first pillar's column stays: the body is put back in clear air
-    await reset(actor);
+    const firstStart = opLines().find(row => row.kind === 'hand_start' && row.ids?.command === first.command.id);
+    const firstReady = !!first.parsed && !!firstStart && Number(line?.progress?.work?.placedConfirmed ?? 0) > 0;
+    report.layingFirst = { command: first.command, receipt: first.receipt, parsed: first.parsed, handStart: firstStart ?? null, precondition: firstReady,
+      evidence: receiptEvidence.get(first.command.id) ?? null };
+    check('a pillar with an enemy beside it is not stopped by a reflex note in the middle of its placing (stoppedBy is not reflex)', firstReady && first.parsed.stoppedBy !== 'reflex', JSON.stringify({ precondition: firstReady, stoppedBy: first.parsed?.stoppedBy, unit: first.receipt.unit, line }));
+    if (!firstReady) throw new Error('LAYING_FIRST_HAND_PRECONDITION_FAILED');
+    await prepareLayingArena(actor, 'pillar-second');
     await ask(`give ${ACTOR} minecraft:cobblestone 32`);
-    const second = act(body, { hands: [{ ...pillar, toY: 112, maxPlace: 20 }] }, { seconds: 90 });
-    await sleep(2500);
+    const secondId = `lab:q${++commandNumber}`, cancelSecond = new AbortController();
+    const second = act(body, { hands: [{ ...pillar, toY: 112, maxPlace: 20 }] }, { seconds: 90, id: secondId, signal: cancelSecond.signal });
+    const witness = await waitForLayingHand(secondId, actor);
+    const stillOwns = witness.ready && !receipts.has(secondId) && actor.actHandNow === 'vertical-place'
+      && physicalRoots(actor).some(root => root.capability === 'act' && root.actionId === witness.owner.actionId);
+    report.layingSecond = { command: secondId, witness, precondition: stillOwns };
     // a reflex that takes the body (a meal on a safety lease) still cuts the hand
-    preemptLowerPriorityActions(actor, 200, 'floor-eat');
-    const meal = executeAction(actor, 'floor-eat', 3000, async () => { await sleep(300); return { success: true, result: 'ate' }; }, { priority: 200, safetyLease: true, waitForQuiescence: true });
-    const cut = await second; await meal;
-    check('a reflex that takes the body (a safety lease) still cuts the vertical hand', cut.parsed?.stoppedBy === 'reflex' || cut.receipt.failureType === 'interrupted_by_reflex' || cut.parsed?.lines?.[0]?.end === 'cut', JSON.stringify([cut.parsed?.stoppedBy, cut.receipt.failureType, cut.parsed?.lines?.[0]?.end, cut.parsed?.lines?.[0]?.cutBy]));
+    let meal: Promise<unknown> | null = null;
+    if (stillOwns) {
+      preemptLowerPriorityActions(actor, 200, 'floor-eat');
+      meal = executeAction(actor, 'floor-eat', 3000, async () => { await sleep(300); return { success: true, result: 'ate' }; }, { priority: 200, safetyLease: true, waitForQuiescence: true });
+    } else cancelSecond.abort('laying_precondition_failed');
+    const cut = await second;
+    const mealResult = await meal;
+    Object.assign(report.layingSecond as object, { receipt: cut.receipt, parsed: cut.parsed, evidence: receiptEvidence.get(secondId) ?? null, meal: mealResult });
+    check('a reflex that takes the body (a safety lease) still cuts the vertical hand', stillOwns && !!cut.parsed
+      && (cut.parsed.stoppedBy === 'reflex' || cut.receipt.failureType === 'interrupted_by_reflex' || cut.parsed.lines?.[0]?.end === 'cut'),
+      JSON.stringify({ precondition: stillOwns, why: witness.why ?? null, receipt: cut.receipt }));
     await ask('kill @e[type=!player]');
   }
   report.stats = null;
@@ -1015,6 +1254,7 @@ try {
 } catch (error) {
   check('the probe ran to its end', false, String((error as Error)?.stack ?? error).slice(0, 500));
 } finally {
+  if (receiptJournalError) check('terminal receipt evidence was persisted', false, receiptJournalError);
   report.measures = measures;
   report.checks = checks;
   const passed = checks.length > 0 && checks.every(entry => entry.passed);

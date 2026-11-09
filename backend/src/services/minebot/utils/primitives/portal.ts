@@ -26,6 +26,14 @@ export interface PortalArgs { at: Cell; axis: 'x' | 'z'; block?: string; enter?:
 export const PORTAL_DEFAULTS = { block: 'obsidian', enter: true, seconds: 60, maxPlace: 8 } as const;
 /** Vanilla lights a nether portal only in a frame of obsidian: crying obsidian is not one (no fire takes, and it is not counted). */
 const FRAME_BLOCKS = new Set(['obsidian']);
+/**
+ * S8 (2026-11-05; run 59 leg 2 at 14:34:37: "枠の (171,74,26) が grass_block", the frame 0/10, the at's floor being the frame's bottom row): the ground a frame or its
+ * inside may stand in, dug out before the frame is laid (a person digs the two cells of the bottom row into the ground, or the inside out of a hillside). Never what
+ * a village or a player made, nor a liquid. Crying obsidian (a ruined portal's frame) is dug too: it lights nothing and is in the way.
+ */
+const GROUND_IN_FRAME = /^(?:dirt|grass_block|coarse_dirt|podzol|mycelium|rooted_dirt|mud|clay|gravel|sand|red_sand|stone|cobblestone|mossy_cobblestone|granite|diorite|andesite|tuff|deepslate|cobbled_deepslate|calcite|dripstone_block|netherrack|basalt|smooth_basalt|blackstone|soul_sand|soul_soil|magma_block|crimson_nylium|warped_nylium|crying_obsidian|snow_block|snow|short_grass|tall_grass|fern|large_fern|dead_bush|[a-z_]*_roots|nether_sprouts|end_stone|terracotta|[a-z_]+_terracotta|sandstone|red_sandstone)$/u;
+/** What lights a portal, in the order tried: the flint and steel (it lasts), then a fire charge (one is used up; a ruined portal's chest often has one). */
+const IGNITERS = ['flint_and_steel', 'fire_charge'] as const;
 const IGNITE_WAIT_MS = 2500;
 const MAX_PLACE_TRIES = 3;
 
@@ -40,7 +48,7 @@ export function portalCells(at: Cell, axis: 'x' | 'z'): { frame: Cell[]; interio
   return { frame, interior, corners: [along(-1, -1), along(2, -1), along(-1, 3), along(2, 3)] };
 }
 
-interface Counts { placed: number; scaffold: number; removed: number; pillar: number; notes: string[] }
+interface Counts { placed: number; scaffold: number; removed: number; pillar: number; groundDug: number; notes: string[] }
 
 export async function portal(parent: StepContext, args: PortalArgs): Promise<StepOutcome> {
   const bot = parent.bot;
@@ -55,36 +63,68 @@ export async function portal(parent: StepContext, args: PortalArgs): Promise<Ste
   const ctx = limitedContext(parent, seconds);
   const read = readerOf(bot);
   const { frame, interior, corners } = portalCells(args.at, axis);
-  const counts: Counts = { placed: 0, scaffold: 0, removed: 0, pillar: 0, notes: [] };
+  const counts: Counts = { placed: 0, scaffold: 0, removed: 0, pillar: 0, groundDug: 0, notes: [] };
   const framed = (cell: Cell) => { const found = read(cell.x, cell.y, cell.z); return !!found && FRAME_BLOCKS.has(found.name); };
   const lit = () => interior.some(cell => read(cell.x, cell.y, cell.z)?.name === 'nether_portal');
   const progress = () => `枠 ${frame.filter(framed).length}/10`;
   const laid = () => frame.filter(framed).length - existingAtStart;
   const stop = (code: string, text: string, at?: Cell): StepOutcome => stopped(bot, code, `portal 止まった ${code}: ${text}（${progress()}${counts.scaffold ? `・足場 ${counts.scaffold} 個` : ''}）`, at);
 
-  // What the place holds: the frame's cells must be the frame's block or open; the inside open (or fire, or the portal already).
+  // What the place holds: the frame's cells must be the frame's block, open, or ground to be dug; the inside open (or fire, or the portal already), or ground to be dug.
   const alreadyLit = lit();
   const existing = frame.filter(framed).length;
   const existingAtStart = existing;
+  const igniter = () => IGNITERS.find(name => inventoryCount(bot, name) > 0) ?? null;
+  /** The ground in the frame's and the inside's cells, dug before the frame is laid (the highest first: what falls falls into a cell already open). */
+  const ground: Array<{ cell: Cell; name: string }> = [];
   if (!alreadyLit) {
     for (const cell of interior) {
       const found = read(cell.x, cell.y, cell.z);
       if (!found) return stop('blocked', `内側の ${cellText(cell)} は未ロード`, cell);
-      if (!isOpenCell(found) && found.name !== 'fire' && found.name !== 'nether_portal') return stop('blocked', `内側の ${cellText(cell)} が ${found.name}（空いていないとポータルにならない。壊すのは任せない）`, cell);
+      if (isOpenCell(found) || found.name === 'fire' || found.name === 'nether_portal') continue;
+      if (!GROUND_IN_FRAME.test(found.name)) return stop('blocked', `内側の ${cellText(cell)} が ${found.name}（空いていないとポータルにならない。地面の土・石の類なら掘るが、これは掘らない）`, cell);
+      ground.push({ cell, name: found.name });
     }
     for (const cell of frame) {
       const found = read(cell.x, cell.y, cell.z);
       if (!found) return stop('blocked', `枠の ${cellText(cell)} は未ロード`, cell);
-      if (!FRAME_BLOCKS.has(found.name) && !isOpenCell(found)) return stop('blocked', `枠の ${cellText(cell)} が ${found.name}（空いていない。壊すのは任せない）`, cell);
+      if (FRAME_BLOCKS.has(found.name) || isOpenCell(found)) continue;
+      if (!GROUND_IN_FRAME.test(found.name)) return stop('blocked', `枠の ${cellText(cell)} が ${found.name}（空いていない。地面の土・石の類なら掘るが、これは掘らない）`, cell);
+      // Crying obsidian breaks only to a diamond (or netherite) pickaxe in any time worth waiting (by hand: over 4 minutes a block).
+      if (found.name === 'crying_obsidian' && !inventoryCount(bot, 'diamond_pickaxe') && !inventoryCount(bot, 'netherite_pickaxe')) {
+        return stop('blocked', `枠の ${cellText(cell)} が crying_obsidian（掘るにはダイヤのツルハシが要る。泣く黒曜石では火が付かない）`, cell);
+      }
+      ground.push({ cell, name: found.name });
     }
     const missing = frame.length - existing;
     const have = inventoryCount(bot, block);
     if (have < missing) return stop('no_obsidian', `${block} を ${have} 個しか持っていない（枠に足りないのは ${missing} 個。枠は全部で 10 個、元からある ${existing} 個）`, args.at);
-    if (!inventoryCount(bot, 'flint_and_steel')) return stop('no_flint', '火打ち金（flint_and_steel）を持っていない', args.at);
+    // S8: a frame built and left unlit (enter: false) needs nothing to light it; a frame to go in through does.
+    if (enter && !igniter()) return stop('no_flint', '火打ち金（flint_and_steel）もファイヤーチャージ（fire_charge）も持っていない', args.at);
   }
   const scaffoldBlock = footingBlock(bot, args.canPlace, [...FRAME_BLOCKS, 'crying_obsidian']);
   const budget = () => (scaffoldBlock ? Math.max(0, Math.min(maxPlace - counts.scaffold - counts.pillar, inventoryCount(bot, scaffoldBlock))) : 0);
   const scaffolds: Cell[] = [];
+
+  // ---- the ground in the way ------------------------------------------------------------------------------------------------------------
+
+  /** The ground in the frame's and the inside's cells dug out, the highest first, each from a place outside the frame that reaches and sees it. */
+  const clearGround = async (): Promise<StepOutcome | null> => {
+    for (const { cell, name } of [...ground].sort((a, b) => b.cell.y - a.cell.y)) {
+      if (timeIsUp(ctx)) return stop('limit_time', `${seconds} 秒の上限に達した`, cell);
+      if (isOpenCell(read(cell.x, cell.y, cell.z))) continue;
+      const here = feetCell(bot)!;
+      const stands = standCells(read, cell, 5, cell.y - 3, cell.y + 3).filter(stand => !inside(stand) && eyeTo(stand, cell) <= DIG_REACH_PLAN && blockInSight(read, eyeAtCell(stand), cell).visible);
+      const stand = stands.find(s => sameCell(s, here)) ?? stands.sort((a, b) => dist(a, here) - dist(b, here))[0];
+      if (!stand) return stop('blocked', `枠の ${cellText(cell)} の ${name} を掘れる立ち位置が無い（枠の外から 4.8m 内で見える所）`, cell);
+      const moved = await moveTo(ctx, stand);
+      if (moved) return stop('stuck', `${cellText(cell)} を掘る立ち位置 ${cellText(stand)} に着けない: ${moved.text.slice(0, 70)}`, stand);
+      const dug = await dig(ctx, { at: [cell], collect: true });
+      if (!dug.ok) return stop('blocked', `枠の ${cellText(cell)} の ${name} を掘れなかった: ${dug.text.slice(0, 90)}`, cell);
+      counts.groundDug++;
+    }
+    return null;
+  };
 
   // ---- building -------------------------------------------------------------------------------------------------------------------------
 
@@ -256,7 +296,7 @@ export async function portal(parent: StepContext, args: PortalArgs): Promise<Ste
       if (!choice) return stop('stuck', `${cellText(args.at)} に火打ち金を当てられる立ち位置が無い（床・柱の面を 4.4m 内で見る所）`, args.at);
       const moved = await moveTo(ctx, choice.stand);
       if (moved) return stop('stuck', `火を点ける立ち位置 ${cellText(choice.stand)} に着けない: ${moved.text.slice(0, 70)}`, choice.stand);
-      const flint = await use(ctx, { item: 'flint_and_steel', at: choice.cell, against: choice.against });
+      const flint = await use(ctx, { item: igniter() ?? 'flint_and_steel', at: choice.cell, against: choice.against });
       if (!flint.ok && flint.reason !== 'not_lit' && flint.reason !== 'occupied') return stop('ignite_failed', `火を点けられなかった: ${flint.text.slice(0, 90)}`, args.at);
       if (await waitUntil(ctx, lit, IGNITE_WAIT_MS, 100)) return null;
     }
@@ -272,7 +312,7 @@ export async function portal(parent: StepContext, args: PortalArgs): Promise<Ste
     const start = dimensionOf(bot);
     const walked = await walk(ctx, { to: args.at, range: 0, sprint: false });
     const dimension = dimensionOf(bot);
-    const base = `枠 10 個${laid() ? `（置いた ${laid()}）` : ''}${counts.scaffold ? `・足場 ${counts.scaffold} 個（外した ${counts.removed}）` : ''}${counts.pillar ? `・柱 ${counts.pillar} 段（残した）` : ''}`;
+    const base = `枠 10 個${laid() ? `（置いた ${laid()}）` : ''}${counts.groundDug ? `・地面を ${counts.groundDug} 個掘った` : ''}${counts.scaffold ? `・足場 ${counts.scaffold} 個（外した ${counts.removed}）` : ''}${counts.pillar ? `・柱 ${counts.pillar} 段（残した）` : ''}`;
     if (walked.ok && walked.data?.crossedDimension) return { ...walked, text: `portal 済 ${base}・${fired}・入った（次元 ${dimension}）${counts.notes.length ? `・${counts.notes.join('・')}` : ''}`, data: { ...walked.data, crossedDimension: true } };
     if (walked.ok && dimension !== start) return { ...walked, text: `portal 済 ${base}・${fired}・入った（次元 ${dimension}）`, data: { crossedDimension: true } };
     if (walked.ok) return { ...walked, text: `portal 済 ${base}・${fired}・ポータルの中で待ったがまだ次元は変わらない（${walked.text.slice(0, 80)}）` };
@@ -284,17 +324,23 @@ export async function portal(parent: StepContext, args: PortalArgs): Promise<Ste
     try { if (!timeIsUp(ctx)) await clearScaffolds(); } catch { /* the stop stands as it is */ }
   };
 
+  let unlit = false;
   if (!alreadyLit) {
+    const cleared = await clearGround();
+    if (cleared) return cleared;
     const built = await build();
     if (built) { await tidy(); return built; }
     // Lit while the body may still stand where it laid the top (a pillar it cannot climb again), then the scaffolds out, then in.
-    const lighted = await light();
-    if (lighted) { await tidy(); return lighted; }
+    // S8: with nothing to light it (enter: false only), the frame is left built and unlit.
+    if (igniter()) {
+      const lighted = await light();
+      if (lighted) { await tidy(); return lighted; }
+    } else unlit = true;
   }
   await clearScaffolds();
   if (enter) return goIn();
-  const done = `枠 10 個${laid() ? `（置いた ${laid()}）` : ''}${counts.scaffold ? `・足場 ${counts.scaffold} 個（外した ${counts.removed}）` : ''}${counts.pillar ? `・柱 ${counts.pillar} 段（残した）` : ''}`;
-  return { ok: true, text: `portal 済 ${done}・${fired}・入らなかった（enter なし）${counts.notes.length ? `・${counts.notes.join('・')}` : ''}`, at: args.at };
+  const done = `枠 10 個${laid() ? `（置いた ${laid()}）` : ''}${counts.groundDug ? `・地面を ${counts.groundDug} 個掘った` : ''}${counts.scaffold ? `・足場 ${counts.scaffold} 個（外した ${counts.removed}）` : ''}${counts.pillar ? `・柱 ${counts.pillar} 段（残した）` : ''}`;
+  return { ok: true, text: `portal 済 ${done}・${unlit ? '点火は未（火打ち金もファイヤーチャージも無い。持てば同じ at・axis の portal で点けて入る）' : fired}・入らなかった（enter なし）${counts.notes.length ? `・${counts.notes.join('・')}` : ''}`, at: args.at };
 
 }
 

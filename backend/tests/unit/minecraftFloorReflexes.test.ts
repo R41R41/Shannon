@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { executeAction, physicalActionBusy } from '../../src/services/minebot/execution/ActionExecution.js';
-import { coverChoice, supportCells, creeperLit, floorEatChoice, floorRetreatTick, retreatThreat, shootersInReach, type FloorBody, type RetreatState } from '../../src/services/minebot/utils/floorReflexes.js';
+import { coverChoice, supportCells, creeperLit, floorEatChoice, floorRetreatTick, retreatThreat, shootersInReach, shootersSeeing, flyingShooterAbove, burningInSight, lastStandChoice, fleeThreat, fleeStart, unseenHeadingPlan, weaklyArmoured, type FloorBody, type FloorState, type RetreatState } from '../../src/services/minebot/utils/floorReflexes.js';
+import { markHeadCombat } from '../../src/services/minebot/utils/combatOwner.js';
 
 function body(patch: Partial<FloorBody> & { items?: { name: string }[]; slots?: ({ name: string } | null)[] } = {}) {
   const keys: Record<string, boolean> = {}, looks: number[] = [];
@@ -16,6 +17,22 @@ function body(patch: Partial<FloorBody> & { items?: { name: string }[]; slots?: 
 }
 const retreat = (): RetreatState => ({ engaged: false, ticks: 0, cooldown: 0, engagements: 0 });
 const add = (bot: FloorBody, id: number, entity: Record<string, unknown>) => { bot.entities![id] = { id, ...entity } as any; };
+
+describe('戦う印の間の食事はcover/fleeと同じ境で待つ', () => {
+  it.each([true, false])('wide=%s: 5より上は飢えても待ち、5以下では床が食べる', wide => {
+    const bot = body({ health: 5.21, food: 2, items: [{ name: 'cooked_beef' }] });
+    expect(floorEatChoice(bot, wide)?.name).toBe('cooked_beef');
+    const end = markHeadCombat(bot, 'fight', ['blaze']);
+    expect(floorEatChoice(bot, wide)).toBeNull();
+    for (const hp of [5, 4.7]) {
+      bot.health = hp;
+      expect(floorEatChoice(bot, wide)?.name).toBe('cooked_beef');
+    }
+    bot.health = 6; end();
+    // 相手が居ない時は猶予も解け、既存の食事に戻る。
+    expect(floorEatChoice(bot, wide)?.name).toBe('cooked_beef');
+  });
+});
 
 describe('cover digging preserves footing and a way back', () => {
   const field = () => {
@@ -67,6 +84,19 @@ describe('cover digging preserves footing and a way back', () => {
     const choice = f.choose({ line: true });
     expect(choice.cover, choice.why).toMatchObject({ kind: 'line', cell: { x: 2, y: 64, z: 0 } });
   });
+  it('e01 S11: never digs down into, or steps into, a lying breath cloud', () => {
+    const f = field();
+    const cloud = { centre: { x: 0.5, y: 63, z: 0.5 }, radius: 7 };
+    const choice = f.choose({ clouds: [cloud] });
+    expect(choice.cover?.kind, choice.why).not.toBe('dig');
+    expect(choice.why).toContain('竜の息の雲');
+    // A cloud at the feet's own height takes every step around too; one far off changes nothing.
+    f.bot.entities![2].position = new Vec3(4.5, 64, 0.5);
+    const free = f.choose({ clouds: [] });
+    const near = f.choose({ clouds: [{ centre: { x: 0.5, y: 64, z: 0.5 }, radius: 7 }] });
+    if (free.cover?.kind === 'step') expect(near.cover?.kind).not.toBe('step');
+    expect(f.choose({ clouds: [{ centre: { x: 40.5, y: 63, z: 0.5 }, radius: 7 }] }).cover?.kind).toBe(free.cover?.kind);
+  });
   it('still digs one step when it can land, climb back and reduce exposure', () => {
     const f = field(), choice = f.choose();
     expect(choice.cover, choice.why).toMatchObject({ kind: 'dig', cell: { x: 0, y: 63, z: 0 } });
@@ -86,6 +116,19 @@ describe('cover digging preserves footing and a way back', () => {
     expect(none.cover).toBeNull();
     expect(none.why).toContain('もう掘らない');
   });
+  it('end1108c S9: a step hides the body at first; after two steps of the episode, a block on the line or a run, never a third step', () => {
+    const f = field();
+    // A wall east of the body hides the cell south of it from the blaze (the line to it crosses x=1 at z≈1.2).
+    for (let y = 64; y <= 66; y++) for (let z = 1; z <= 3; z++) f.blocks.set(`1,${y},${z}`, 'stone');
+    const first = f.choose();
+    expect(first.cover, first.why).toMatchObject({ kind: 'step', to: { x: 0, y: 64, z: 1 } });
+    expect(f.choose({ steps: 1 }).cover).toMatchObject({ kind: 'step' });
+    const spent = f.choose({ steps: 2 });
+    expect(spent.cover, spent.why).toMatchObject({ kind: 'run', detail: expect.stringContaining('横に 2 回動いてもまた撃たれた') });
+    f.bot.inventory!.items = () => [{ name: 'cobblestone', count: 8 }] as any;
+    const lined = f.choose({ steps: 2, line: true });
+    expect(['line', 'run']).toContain(lined.cover?.kind);
+  });
   it('S2: counts the cells under the body that hold it up', () => {
     const f = field();
     expect(supportCells(f.bot, 64)).toEqual([{ x: 0, y: 63, z: 0 }]);
@@ -97,10 +140,10 @@ describe('cover digging preserves footing and a way back', () => {
 describe('floor reflexes (ADR-0010 D8, defence only)', () => {
   it('reads a lit creeper from its fuse state or its ignited flag', () => {
     const meta = (index: number, value: unknown) => { const m: unknown[] = []; m[index] = value; return m; };
-    expect(creeperLit({ position: new Vec3(0, 0, 0), metadata: meta(16, 1) })).toBe(true);
-    expect(creeperLit({ position: new Vec3(0, 0, 0), metadata: meta(18, true) })).toBe(true);
-    expect(creeperLit({ position: new Vec3(0, 0, 0), metadata: meta(16, -1) })).toBe(false);
-    expect(creeperLit({ position: new Vec3(0, 0, 0) })).toBe(false);
+    expect(creeperLit({ metadata: meta(16, 1) })).toBe(true);
+    expect(creeperLit({ metadata: meta(18, true) })).toBe(true);
+    expect(creeperLit({ metadata: meta(16, -1) })).toBe(false);
+    expect(creeperLit({})).toBe(false);
   });
 
   // Run 27 (LLM-centric): the step back from a lit creeper lasted about a second and three blocks, and the blast still took 16.4.
@@ -244,5 +287,98 @@ describe('floor reflexes (ADR-0010 D8, defence only)', () => {
     expect(retreatThreat(bot, arrows)).toBeNull();
     bot.entities![2].position = new Vec3(6, 65, 0);
     expect(retreatThreat(bot, arrows)?.kind).toBe('arrow');
+  });
+});
+
+describe('run62 #14 #17 #11: the floor among shooters', () => {
+  /** Stone floor under y 64, air above, with optional walls. */
+  const field = (walls: Array<[number, number, number]> = []) => {
+    const solid = new Set(walls.map(([x, y, z]) => `${x},${y},${z}`));
+    const bot = body({
+      health: 6, food: 10, items: [{ name: 'golden_carrot', count: 4 }, { name: 'cobblestone', count: 32 }] as any,
+      blockAt: (p: Vec3) => {
+        const at = p.floored(), name = at.y < 64 || solid.has(`${at.x},${at.y},${at.z}`) ? 'stone' : 'air';
+        return { name, boundingBox: name === 'stone' ? 'block' : 'empty', position: at };
+      },
+    } as Partial<FloorBody>);
+    bot.entity!.position = new Vec3(0.5, 64, 0.5);
+    (bot.entity as any).metadata = [0];
+    return bot;
+  };
+  const burn = (bot: FloorBody) => { (bot.entity as any).metadata = [1]; };
+
+  it('#14: a blaze 2.5 above and in sight stops the pillar of the last stand; level with the body, or out of sight, it does not', () => {
+    const bot = field();
+    bot.entities![9] = { id: 9, name: 'zombie', type: 'hostile', position: new Vec3(5.5, 64, 0.5), height: 1.95 } as any;
+    expect(lastStandChoice(bot, 'dig')?.kind).toBe('pillar');
+    add(bot, 20475, { name: 'blaze', position: new Vec3(3.5, 66.5, 0.5), height: 1.8 });
+    expect(flyingShooterAbove(bot)).toBe('blaze #20475');
+    expect(lastStandChoice(bot, 'dig')).toBeNull();
+    bot.entities![20475].position = new Vec3(0.5, 64, 5.5);
+    expect(flyingShooterAbove(bot)).toBeNull();
+    expect(lastStandChoice(bot, 'dig')?.kind).toBe('pillar');
+    const walled = field([[2, 64, 0], [2, 65, 0], [2, 66, 0], [2, 67, 0], [2, 68, 0], [2, 69, 0]]);
+    add(walled, 20475, { name: 'blaze', position: new Vec3(3.5, 66.5, 0.5), height: 1.8 });
+    expect(flyingShooterAbove(walled)).toBeNull();
+  });
+
+  it('#14: burning in sight of a blaze the floor does not eat above 5; at 5 or less it does; not burning it does', () => {
+    const bot = field();
+    add(bot, 20475, { name: 'blaze', position: new Vec3(5.5, 66, 0.5), height: 1.8 });
+    expect(floorEatChoice(bot)?.name).toBe('golden_carrot');
+    burn(bot);
+    expect(burningInSight(bot)).toBe(true);
+    expect(floorEatChoice(bot)).toBeNull();
+    bot.health = 4.95;
+    expect(floorEatChoice(bot)?.name).toBe('golden_carrot');
+  });
+
+  it('#11: armour 4 or less and no shield is a body the first arrow moves; a shield in the off hand or iron on the chest is not', () => {
+    expect(weaklyArmoured(field())).toBe(true);
+    const shielded = field(); shielded.inventory!.slots![45] = { name: 'shield' } as any;
+    expect(weaklyArmoured(shielded)).toBe(false);
+    const iron = field(); iron.inventory!.slots![6] = { name: 'iron_chestplate' } as any;
+    expect(weaklyArmoured(iron)).toBe(false);
+    const leather = field(); leather.inventory!.slots![6] = { name: 'leather_chestplate' } as any; leather.inventory!.slots![5] = { name: 'leather_helmet' } as any;
+    expect(weaklyArmoured(leather)).toBe(true);
+  });
+
+  it('#17: a skeleton that cannot see the body is no threat to run from; one that sees it is', () => {
+    const bot = field([[2, 64, 0], [2, 65, 0], [2, 66, 0]]);
+    bot.health = 4;
+    add(bot, 9727, { name: 'skeleton', type: 'hostile', position: new Vec3(5.5, 64, 0.5), height: 1.99 });
+    expect(fleeThreat(bot)).toBeNull();
+    delete bot.entities![9727];
+    add(bot, 9728, { name: 'skeleton', type: 'hostile', position: new Vec3(0.5, 64, 6.5), height: 1.99 });
+    expect(fleeThreat(bot)?.threats).toHaveLength(1);
+  });
+
+  it('#17: for 4 s after the cover cut the line, the low-health flee does not start (unless a melee enemy is within 4 m)', () => {
+    const bot = field();
+    bot.health = 4;
+    add(bot, 9727, { name: 'skeleton', type: 'hostile', position: new Vec3(0.5, 64, 6.5), height: 1.99 });
+    const now = 1_000_000;
+    const state = { retreat: { engaged: false, ticks: 0, cooldown: 0, engagements: 0 }, busy: null, retryAt: 0, engagements: { eat: 0, armor: 0, flee: 0 }, fleeStarts: [] } as FloorState;
+    state.coverCutAt = now - 1000;
+    expect(fleeStart(bot, state, now)).toBeNull();
+    add(bot, 5, { name: 'zombie', type: 'hostile', position: new Vec3(-2.5, 64, 0.5), height: 1.95 });
+    expect(fleeStart(bot, state, now)).not.toBeNull();
+    delete bot.entities![5];
+    expect(fleeStart(bot, { ...state, fleeEpisode: undefined, coverCutAt: now - 4500 }, now)).not.toBeNull();
+  });
+
+  it('#17: the flee takes a heading whose next cells the shooter cannot see, when there is one', () => {
+    // A wall along x = 2 from z = -6 to z = 1: the skeleton at (6.5, 64, 0.5) sees the body; north (z < 0) behind the wall is out of its sight.
+    const wall: Array<[number, number, number]> = [];
+    for (let z = -6; z <= 0; z++) for (const y of [64, 65, 66]) wall.push([2, y, z]);
+    const bot = field(wall);
+    bot.entity!.position = new Vec3(0.5, 64, 2.5);
+    add(bot, 9727, { name: 'skeleton', type: 'hostile', position: new Vec3(6.5, 64, 3.5), height: 1.99 });
+    const seeing = shootersSeeing(bot, shootersInReach(bot, bot.entity!.position), bot.entity!.position);
+    expect(seeing).toHaveLength(1);
+    const plan = unseenHeadingPlan(bot, [bot.entities![9727].position], undefined, seeing);
+    expect(plan).not.toBeNull();
+    const ahead = new Vec3(Math.floor(0.5 - Math.sin(plan!.yaw) * 3) + 0.5, 64, Math.floor(2.5 - Math.cos(plan!.yaw) * 3) + 0.5);
+    expect(ahead.z).toBeLessThan(2);
   });
 });

@@ -120,7 +120,7 @@ describe('probe sight, column, around', () => {
   it('sight: a creature in reach is told against the 3 m of a blow, to the nearest point of its box', () => {
     const answer = probeSight(world((_x, y) => flat(y)), eyeOf({ x: 0, y: 64, z: 0 }, true), { creature: { id: 7, name: 'zombie', position: { x: 2.5, y: 64, z: 0.5 } } });
     expect(answer).toMatchObject({ visible: true, reach: true, reachLimit: 3, distance: 1.7 });
-    expect(answer.text).toContain('打てるのは 3m まで');
+    expect(answer.text).toContain('剣で打てるのは 3m まで。弓は射線が通っている（shoot で届く）');
   });
 
   it('column: her drop first ("足の下 8 段は空気（落差 8）"), a hollow under rock, water and its depth, gravel, the runs', () => {
@@ -160,6 +160,15 @@ describe('probe sight, column, around', () => {
     expect(answer.text).toContain('は下 6 段が空気（落差 6）');
     expect(answer.text).toContain('zombie #7（敵）');
     expect(answer.text).toContain('こちらを向いて近づく 1.2m/s');
+  });
+
+  it("around: a calm enderman is said as angered by a look as well as a blow, a calm piglin as one that comes only when struck", () => {
+    const read = world((_x, y) => flat(y));
+    const enderman = { id: 9, name: 'enderman', position: { x: 4.5, y: 64, z: 0.5 }, hostile: false, neutral: true, closing: null };
+    const piglin = { id: 10, name: 'zombified_piglin', position: { x: -4.5, y: 64, z: 0.5 }, hostile: false, neutral: true, closing: null };
+    const answer = probeAround(read, { x: 0.5, y: 64, z: 0.5 }, [enderman, piglin], 8);
+    expect(answer.text).toContain('enderman #9（中立・目を合わせるか殴ると怒る）');
+    expect(answer.text).toContain('zombified_piglin #10（中立・殴らなければ来ない）');
   });
 });
 

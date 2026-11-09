@@ -395,7 +395,7 @@ export function probeSight(read: BlockReader, eye: [number, number, number], tar
   const between = solidBetween(read, eye, point).slice(0, 8).map(c => ({ at: c, name: nameOf(read(c.x, c.y, c.z)) }));
   const visible = between.length === 0, reach = distance <= reachLimit;
   const text = `${what}：${visible ? '見える（間に固いブロックは無い）' : `見えない。間に固いブロック ${between.length}${between.length >= 8 ? ' 以上' : ''}：${between.slice(0, 4).map(b => `${at(b.at)} ${b.name}`).join('、')}${between.length > 4 ? ' ほか' : ''}`}。`
-    + `目から ${round1(distance)}m（${reach ? '届く' : '届かない'}、${'block' in target ? `掘る・使う・置くは ${BLOCK_REACH}m まで` : '打てるのは 3m まで'}）`;
+    + `目から ${round1(distance)}m（${reach ? '届く' : '届かない'}、${'block' in target ? `掘る・使う・置くは ${BLOCK_REACH}m まで` : `剣で打てるのは 3m まで。弓は${visible ? '射線が通っている（shoot で届く）' : '射線がふさがっている'}`}）`;
   return { v: 1, kind: 'sight', text, visible, reach, reachLimit, distance: round1(distance), between, target: { at: cell, name } };
 }
 
@@ -506,7 +506,7 @@ function columnAbove(read: BlockReader, x: number, z: number, fromY: number, dig
 
 // ===== around =====
 
-export interface AroundCreature { id: number; name: string; at: Cell; dy: number; distance: number; hostile: boolean; visible: boolean; facing: boolean; closing: number | null }
+export interface AroundCreature { id: number; name: string; at: Cell; dy: number; distance: number; hostile: boolean; neutral?: boolean; visible: boolean; facing: boolean; closing: number | null }
 /** `bottom` (r8): what a drop ends on: `lava`, `water`, or the floor's block name. */
 export interface AroundDanger { kind: 'lava' | 'water' | 'drop' | 'fire'; at: Cell; distance: number; n?: number; bottom?: string }
 /**
@@ -527,7 +527,7 @@ export interface AroundAnswer {
    */
   footing?: { voids: number; deepest: number; lava: boolean; bridge: boolean; pillar: boolean; text: string };
 }
-export interface AroundEntity { id: number; name: string; position: { x: number; y: number; z: number }; yaw?: number; headYaw?: number; height?: number; hostile: boolean; closing?: number | null }
+export interface AroundEntity { id: number; name: string; position: { x: number; y: number; z: number }; yaw?: number; headYaw?: number; height?: number; hostile: boolean; neutral?: boolean; closing?: number | null }
 
 /** Whether a creature's face points at `to` within 30 degrees (mineflayer's yaw: 0 looks north, -z; turning left grows it). */
 function facesToward(entity: AroundEntity, to: { x: number; z: number }): boolean {
@@ -548,7 +548,7 @@ export function probeAround(read: BlockReader, position: { x: number; y: number;
     .filter(entry => entry.d <= r).sort((a, b) => a.d - b.d).slice(0, 12).map(({ entity, d }) => {
       const cell = { x: Math.floor(entity.position.x), y: Math.floor(entity.position.y + 1e-3), z: Math.floor(entity.position.z) };
       const visible = solidBetween(read, eye, [entity.position.x, entity.position.y + (entity.height ?? 1.8) * 0.85, entity.position.z]).length === 0;
-      return { id: entity.id, name: entity.name, at: cell, dy: cell.y - feet.y, distance: round1(d), hostile: entity.hostile, visible,
+      return { id: entity.id, name: entity.name, at: cell, dy: cell.y - feet.y, distance: round1(d), hostile: entity.hostile, neutral: !!entity.neutral, visible,
         facing: facesToward(entity, position), closing: typeof entity.closing === 'number' ? round1(entity.closing) : null };
     });
   // The blocks: lava and fire within r (±4 up and down), water, and the edges of a drop near her (within 6 on her level).
@@ -606,7 +606,7 @@ export function probeAround(read: BlockReader, position: { x: number; y: number;
     : danger.kind === 'fire' ? `火 ${at(danger.at)} ${wayWords(position, danger.at)}`
     : danger.kind === 'drop' ? `${at(danger.at)} ${wayWords(position, danger.at)} は下 ${danger.n} 段が空気（落差 ${danger.n}${danger.bottom === 'lava' ? '、底は溶岩' : ''}）`
     : `水 ${at(danger.at)} ${wayWords(position, danger.at)}（${danger.n} マス）`;
-  const creatureWords = (c: AroundCreature) => `${c.name} #${c.id}${c.hostile ? '（敵）' : ''} ${wayWords(position, c.at)} ${c.visible ? '見える' : '間に壁'}`
+  const creatureWords = (c: AroundCreature) => `${c.name} #${c.id}${c.hostile ? '（敵）' : c.neutral ? (c.name === 'enderman' ? '（中立・目を合わせるか殴ると怒る）' : '（中立・殴らなければ来ない）') : ''} ${wayWords(position, c.at)} ${c.visible ? '見える' : '間に壁'}`
     + `${c.facing ? (c.closing !== null && c.closing >= 0.3 ? `・こちらを向いて近づく ${c.closing}m/s` : '・こちらを向いている') : c.closing !== null && c.closing >= 0.3 ? `・近づく ${c.closing}m/s` : ''}`;
   const hostile = creatures.filter(c => c.hostile);
   // r8: the footing under her, first: what a push from a creature beside her would drop her from (the map shows no fall deeper than five).
@@ -615,7 +615,7 @@ export function probeAround(read: BlockReader, position: { x: number; y: number;
   const text = [
     footing ? `${footing.text}。` : '',
     dangers.some(d => d.kind !== 'water') ? `危ない：${dangers.filter(d => d.kind !== 'water').map(words).join('／')}。` : '',
-    creatures.length ? `${r}m 内の生き物 ${creatures.length}（敵 ${hostile.length}）：${creatures.slice(0, 8).map(creatureWords).join('／')}。` : `${r}m 内に生き物は無い。`,
+    creatures.length ? `${r}m 内の生き物 ${creatures.length}（敵 ${hostile.length}${creatures.some(c => c.neutral) ? `・中立 ${creatures.filter(c => c.neutral).length}` : ''}）：${creatures.slice(0, 8).map(creatureWords).join('／')}。` : `${r}m 内に生き物は無い。`,
     // `nearest.water` has no count (the copy with `n` is the one pushed to `found`): its words ended "（undefined マス）" (inspection s44).
     nearest.water ? words({ ...nearest.water, n: water }) + (waterBreakdown ? '。' : '') : '',
     waterBreakdown,

@@ -6,7 +6,7 @@ import { craftEvents } from './craftEvents.js';
 import { withWoodForms } from './woodRecipes.js';
 
 /** Between two rounds of a craft in the hand the server's answer is let settle this long (see the loop below). */
-const ROUND_SETTLE_MS = 250;
+export const ROUND_SETTLE_MS = 250;
 
 /**
  * craft: `count` of an item (design mb-llm-centric 2.3). A recipe of the 2x2 grid is made in the hand; one that needs the 3x3 uses a
@@ -45,6 +45,44 @@ function shortfall(bot: any, recipe: any, times: number): Array<{ name: string; 
 }
 
 /**
+ * What the planner can do about a shortfall, said with it (S5 rig, c1, 2026-11-05: a head asked craft ender_eye 12 with 11 powder and three rods in the pack, was told
+ * only "blaze_powder 1 short", and went on to craft one eye at a time, a pearl and a powder each, for a quarter of an hour): how many the pack makes now, and for each
+ * short ingredient that the pack itself makes (in the hand or at the table in reach), how many of it the pack holds the makings of and the craft that makes it.
+ */
+export function shortfallHelp(bot: any, recipe: any, short: Array<{ name: string; have: number; need: number }>, perCraft: number, table: any): string {
+  const parts: string[] = [];
+  let rounds = Infinity;
+  for (const entry of recipe.delta ?? []) {
+    if (entry.count >= 0) continue;
+    const name = String(bot.registry?.items?.[entry.id]?.name ?? entry.id);
+    rounds = Math.min(rounds, Math.floor(inventoryCount(bot, name) / -entry.count));
+  }
+  if (Number.isFinite(rounds) && rounds > 0) parts.push(`今作れるのは ${rounds * perCraft} 個`);
+  for (const lack of short) {
+    const id = bot.registry?.itemsByName?.[lack.name]?.id;
+    if (typeof id !== 'number') continue;
+    let recipes: any[] = [];
+    try { recipes = [...(bot.recipesAll?.(id, null, null) ?? []), ...(table ? bot.recipesAll?.(id, null, table) ?? [] : [])]; } catch { recipes = []; }
+    for (const sub of recipes) {
+      const each = Math.max(1, sub.result?.count ?? 1);
+      let subRounds = Infinity;
+      const from: string[] = [];
+      for (const entry of sub.delta ?? []) {
+        if (entry.count >= 0) continue;
+        const name = String(bot.registry?.items?.[entry.id]?.name ?? entry.id);
+        subRounds = Math.min(subRounds, Math.floor(inventoryCount(bot, name) / -entry.count));
+        from.push(`${name}×${-entry.count}`);
+      }
+      if (!Number.isFinite(subRounds) || subRounds < 1) continue;
+      const missing = lack.need - lack.have;
+      parts.push(`${lack.name} は ${from.join('+')} から ${each} 個ずつ作れる（持ち物で ${subRounds * each} 個まで。足りない ${missing} 個は craft item=${lack.name} count=${Math.ceil(missing / each) * each}、まとめては make item=${recipe.result?.id !== undefined ? String(bot.registry?.items?.[recipe.result.id]?.name ?? '') : ''} count=…）`);
+      break;
+    }
+  }
+  return parts.length ? `。${parts.join('。')}` : '';
+}
+
+/**
  * Continue contracts (1): progress in items (`done` what the pack gained of the item, `left` the count not yet made). `count` is how many MORE to make: a pack that
  * holds that many already is not "already".
  */
@@ -79,7 +117,7 @@ async function craftItem(ctx: StepContext, args: CraftArgs): Promise<StepOutcome
   if (!ready) {
     const best = all.map(recipe => ({ recipe, short: shortfall(bot, recipe, Math.ceil(count / perCraft(recipe))) }))
       .sort((a, b) => a.short.reduce((s, x) => s + x.need - x.have, 0) - b.short.reduce((s, x) => s + x.need - x.have, 0))[0];
-    return stopped(bot, 'missing_material', `${args.item}×${count} の材料が足りない: ${best.short.map(x => `${x.name} ${x.need - x.have}（持っている ${x.have}／要る ${x.need}）`).join('、')}`);
+    return stopped(bot, 'missing_material', `${args.item}×${count} の材料が足りない: ${best.short.map(x => `${x.name} ${x.need - x.have}（持っている ${x.have}／要る ${x.need}）`).join('、')}${shortfallHelp(bot, best.recipe, best.short, perCraft(best.recipe), table)}`);
   }
   const usesTable = ready.requiresTable === true;
   const times = Math.ceil(count / perCraft(ready));

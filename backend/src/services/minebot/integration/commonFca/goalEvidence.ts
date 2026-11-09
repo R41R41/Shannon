@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { watchOwnedBedUses } from '../../execution/ActionExecution.js';
 import type { BodyTaskContext } from './bodyControlContract.js';
 import type { MinecraftControlCommand, MinecraftSkillDefinition } from './minecraftControlContract.js';
 import { boxDistance, partBox, type DragonPart } from '../../utils/dragonParts.js';
@@ -54,6 +55,7 @@ const KILL_DRAGON = 'minecraft:end/kill_dragon';
  * The advancement `end/kill_dragon` is read from the server's advancement packets and told beside the proof when it came in during this connection.
  */
 export class NativeGoalEvidence {
+  private readonly stopOwnedBedUses: () => void;
   private current: { context: BodyTaskContext; key: string; connectionId: string; deadline: number } | null = null;
   private readonly proofs = new Map<string, Proof>();
   private readonly attacks = new Map<number, Witness>();
@@ -74,6 +76,14 @@ export class NativeGoalEvidence {
   private readonly hits = new Map<number, Hit>();
   private namesSeen = false;
   constructor(private readonly bot: any, private readonly now: () => number = Date.now) {
+    this.stopOwnedBedUses = watchOwnedBedUses(bot, () => {
+      const task = this.taskTag();
+      return use => {
+        if (!task || task !== this.taskTag() || !this.current || this.current.deadline <= this.now() || this.disconnected
+          || dimension(this.bot) !== 'the_end') return;
+        this.bedUsed = { x: use.head.x + .5, y: use.head.y + .5, z: use.head.z + .5, at: this.now(), task };
+      };
+    });
     this.originalAttack = bot.attack;
     this.attackTap = (...args: any[]) => {
       const result = this.originalAttack.apply(bot, args);
@@ -306,6 +316,7 @@ export class NativeGoalEvidence {
     };
   }
   dispose(): void {
+    this.stopOwnedBedUses();
     if (this.bot.attack === this.attackTap) this.bot.attack = this.originalAttack;
     if (this.bot.activateBlock === this.activateTap) this.bot.activateBlock = this.originalActivate;
     this.bot.removeListener('entityDead', this.onDeath); this.bot.removeListener('entityGone', this.onGone); this.bot.removeListener('entityHurt', this.onHurt);

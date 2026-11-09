@@ -1,4 +1,5 @@
 import { Vec3 } from 'vec3';
+import { magmaAtFootprint } from './magmaFootprint.js';
 import { createLogger } from '../../../utils/logger.js';
 import { executeAction, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
 import { activateItemFacing } from './activateItemFacing.js';
@@ -155,13 +156,15 @@ export function standsInFire(body: LavaBody): boolean {
  * from a fresh world at 39 minutes).
  */
 export function standsOnMagma(body: LavaBody): boolean {
-  const position = body.entity?.position;
-  if (!position) return false;
-  const y = Math.floor(position.y - 0.01);
-  for (const [dx, dz] of [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]) {
-    try { if (body.blockAt(new Vec3(Math.floor(position.x + dx), y, Math.floor(position.z + dz)))?.name === 'magma_block') return true; } catch { /* unloaded */ }
-  }
-  return false;
+  return magmaUnderFeet(body) !== null;
+}
+
+/** The magma block under the body's width (its centre's cell first), or null. */
+export function magmaUnderFeet(body: LavaBody): Vec3 | null {
+  const cell = magmaAtFootprint((x, y, z) => {
+    try { return body.blockAt(new Vec3(x, y, z))?.name; } catch { return null; }
+  }, body.entity?.position);
+  return cell ? new Vec3(cell.x, cell.y, cell.z) : null;
 }
 
 /**
@@ -170,13 +173,15 @@ export function standsOnMagma(body: LavaBody): boolean {
  * solid or water under them that is not lava). Null when the body is not in
  * lava's reach of such a place.
  */
-export function routeOutOfLava(world: LavaWorld, position: Vec3): Vec3[] | null {
+export function routeOutOfLava(world: LavaWorld, position: Vec3, options: { offMagma?: boolean } = {}): Vec3[] | null {
   const start = new Vec3(Math.floor(position.x), Math.floor(position.y + 0.2), Math.floor(position.z));
   const at = (cell: Vec3) => world.blockAt(cell);
   const fits = (feet: Vec3) => passable(at(feet)) && passable(at(feet.offset(0, 1, 0)));
   const clear = (feet: Vec3) => {
     if (burnsBody(at(feet)) || burnsBody(at(feet.offset(0, 1, 0)))) return false;
     const under = at(feet.offset(0, -1, 0));
+    // Off magma: a cell over magma is no place to stand either.
+    if (options.offMagma && under?.name === 'magma_block') return false;
     return !!under && !isLava(under) && (under.boundingBox === 'block' || under.name === 'water');
   };
   const key = (cell: Vec3) => `${cell.x},${cell.y},${cell.z}`;
@@ -211,12 +216,32 @@ interface ReflexBody extends LavaBody {
   lavaReflex?: LavaReflexState;
   /** Puts out the fire in the cells the body stands in (a quick dig); installed with the reflex. False: nothing was put out. */
   punchOutFire?: () => Promise<boolean>;
+  /** Puts a block where the body's centre rests (or rises a block on one), so that it stands on no magma; installed with the reflex. */
+  coverMagma?: () => Promise<boolean>;
 }
 export interface LavaReflexState {
-  engaged: boolean; engagements: number; clearTicks: number; in?: 'lava' | 'fire' | 'magma';
+  /** Lava or fire only: the body is taken (a lease, the keys each tick). Magma never sets it (MagmaState). */
+  engaged: boolean; engagements: number; clearTicks: number; in?: 'lava' | 'fire';
   /** The putting out of fire: one at a time, and given up on after PUNCH_FAILURES_MAX failures or PUNCH_EPISODE_MS of the same fire. */
   punch?: { running: boolean; startedAt: number; failures: number; episodeStart: number; lastFireAt: number };
+  magma?: MagmaState;
 }
+/**
+ * The magma reflex, apart from lava's: it takes no lease and is no held reflex, so the act's hand goes on (run62: magma set `engaged`, the act's wait
+ * for the reflex ran out, every hand of a dig on the broken portal's rim came back not_run while the body stood on the magma's edge and burnt).
+ */
+export interface MagmaState {
+  on: boolean; engagements: number; clearTicks: number;
+  /** Where the body stood still from, and since which tick on magma. */
+  anchor?: { x: number; z: number; tick: number };
+  ticks: number;
+  /** Walking the body off, from the tick it began (sticky until it is off). */
+  steeringSince?: number;
+  covering: boolean; covers: number; coverFailures: number;
+}
+
+/** Ticks still on magma before the body is walked off (it is not moving itself), and before a block is put down instead. */
+export const MAGMA_STILL_TICKS = 6, MAGMA_COVER_TICKS = 30, MAGMA_COVER_FAILURES_MAX = 3;
 /**
  * S2 (2026-11-02, the c1 blaze camp): a blaze's fireball leaves fire in the cells round the body, the body stands in it, and the reflex took the body out of its place and the act
  * out of its hands ('lava_escape' stops, one every few seconds). A body in fire that is not lava is first given a quick dig at the fire it stands in; only when that does not
@@ -228,6 +253,55 @@ export const PUNCH_GRACE_MS = 700, PUNCH_FAILURES_MAX = 2, PUNCH_EPISODE_MS = 20
 const RELEASE_TICKS = 6;
 
 /**
+ * One tick of the magma reflex. On magma the body crouches; a body that stands still on it (an act digging, waiting) is walked to the nearest
+ * cell off it, uncrouched for a step down (a crouch does not step off an edge), and with no such cell in reach, or still on it after
+ * MAGMA_COVER_TICKS, a block is put where its centre rests. Run62 (c1, a broken portal's rim): the centre was over the hole and only the
+ * body's width on magma; the head's digs went on, the body stood there and burnt.
+ */
+function magmaTick(bot: ReflexBody, state: LavaReflexState, onMagma: boolean): 'magma' | 'magma-off' | null {
+  const magma = state.magma ??= { on: false, engagements: 0, clearTicks: 0, ticks: 0, covering: false, covers: 0, coverFailures: 0 };
+  const position = bot.entity!.position;
+  if (!onMagma) {
+    if (!magma.on || magma.covering) return null;
+    // Off it, the walk stops at once: the next cell may be the edge of something worse.
+    if (magma.steeringSince !== undefined) { for (const control of ['forward', 'jump']) bot.setControlState(control, false); magma.steeringSince = undefined; }
+    if (++magma.clearTicks < RELEASE_TICKS) return null;
+    magma.on = false; magma.anchor = undefined; magma.ticks = 0;
+    bot.setControlState('sneak', false);
+    return 'magma-off';
+  }
+  magma.clearTicks = 0;
+  magma.ticks++;
+  let outcome: 'magma' | null = null;
+  if (!magma.on) { magma.on = true; magma.engagements++; magma.coverFailures = 0; outcome = 'magma'; }
+  if (!magma.anchor || Math.hypot(position.x - magma.anchor.x, position.z - magma.anchor.z) > 0.3) magma.anchor = { x: position.x, z: position.z, tick: magma.ticks };
+  if (magma.steeringSince === undefined && magma.ticks - magma.anchor.tick >= MAGMA_STILL_TICKS) magma.steeringSince = magma.ticks;
+  let sneak = true;
+  if (magma.steeringSince !== undefined && !magma.covering) {
+    let route: Vec3[] | null = null;
+    try { route = routeOutOfLava(bot, position, { offMagma: true }); } catch { route = null; }
+    const next = route?.[0];
+    const canCover = !!bot.coverMagma && magma.coverFailures < MAGMA_COVER_FAILURES_MAX;
+    if (next && (magma.ticks - magma.steeringSince < MAGMA_COVER_TICKS || !canCover)) {
+      const feetY = Math.floor(position.y + 0.2), down = next.y < feetY;
+      const dx = next.x - position.x, dz = next.z - position.z, far = Math.hypot(dx, dz) > (down ? 0.1 : 0.2);
+      if (far) bot.look?.(Math.atan2(-dx, -dz), 0, true);
+      bot.setControlState('forward', far);
+      bot.setControlState('sprint', false);
+      bot.setControlState('jump', next.y > feetY);
+      sneak = !down;
+    } else if (canCover) {
+      magma.covering = true;
+      bot.setControlState('forward', false);
+      void bot.coverMagma!().then(ok => { if (ok) magma.covers++; else magma.coverFailures++; }, () => { magma.coverFailures++; })
+        .finally(() => { magma.covering = false; if (magma.on) magma.steeringSince = magma.ticks; });
+    }
+  }
+  bot.setControlState('sneak', sneak);
+  return outcome;
+}
+
+/**
  * One physics tick of the lava reflex, run after every other mover has set
  * its keys. Lava takes a fifth of the body's health every half second:
  * nothing that waits for a plan is in time. In lava the body swims (jump)
@@ -235,9 +309,10 @@ const RELEASE_TICKS = 6;
  * it still swims up. A body stood still in a lava flow for the two seconds
  * it took to die, its emergency plan not yet begun (paid run L63).
  */
-export function lavaReflexTick(bot: ReflexBody, state: LavaReflexState): 'engaged' | 'released' | null {
+export function lavaReflexTick(bot: ReflexBody, state: LavaReflexState): 'engaged' | 'released' | 'magma' | 'magma-off' | null {
   const entity = bot.entity;
   if (!entity || (bot.health ?? 20) <= 0) {
+    if (state.magma) state.magma.on = false;
     if (!state.engaged) return null;
     state.engaged = false;
     return 'released';
@@ -245,23 +320,16 @@ export function lavaReflexTick(bot: ReflexBody, state: LavaReflexState): 'engage
   const inLava = entity.isInLava === true;
   // A block of fire is left the same way, on foot: there is nothing to swim up through.
   const inFire = !inLava && standsInFire(bot);
-  // On magma the body crouches, which the game leaves unburnt; whoever is moving it goes on doing so, slower.
-  const onMagma = !inLava && !inFire && standsOnMagma(bot);
-  if (onMagma) {
-    bot.setControlState('sneak', true);
-    state.clearTicks = 0;
-    if (state.engaged) return null;
-    state.engaged = true;
-    state.in = 'magma';
-    state.engagements++;
-    return 'engaged';
-  }
+  // Magma is its own reflex: it holds no lease and stops no act (MagmaState).
+  if (!state.engaged) {
+    const magma = magmaTick(bot, state, !inLava && !inFire && standsOnMagma(bot));
+    if (!inLava && !inFire) return magma;
+  } else if (state.magma) state.magma.on = false;
   if (!inLava && !inFire) {
     if (!state.engaged) return null;
     if (++state.clearTicks < RELEASE_TICKS) return null;
     state.engaged = false;
-    if (state.in === 'magma') bot.setControlState('sneak', false);
-    else for (const control of ['forward', 'jump', 'sprint']) bot.setControlState(control, false);
+    for (const control of ['forward', 'jump', 'sprint']) bot.setControlState(control, false);
     return 'released';
   }
   state.clearTicks = 0;
@@ -302,6 +370,56 @@ export function lavaReflexTick(bot: ReflexBody, state: LavaReflexState): 'engage
 /** Above breaking out for air (300): nothing else is as short of time. */
 const LAVA_ESCAPE_PRIORITY = 400;
 
+/** What is put over magma: common blocks, never what a later step needs (obsidian, planks, the table). */
+export const MAGMA_COVER_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'blackstone', 'stone', 'andesite', 'diorite', 'granite', 'tuff', 'deepslate', 'end_stone'];
+interface CoverBody extends ReflexBody {
+  heldItem?: { name?: string } | null;
+  inventory?: { items(): Array<{ name: string }> };
+  equip?(item: unknown, destination: string): Promise<unknown>;
+  placeBlock?(reference: unknown, face: Vec3): Promise<unknown>;
+}
+const settle = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Puts a block so that the body stands on no magma. The game burns a body through the block its centre rests on: with the centre over a hole
+ * (a rim of magma round it) the hole's cell under the centre is filled; on magma all round, the body rises one block on the magma under it.
+ * The held item is put back. False when there is no such block to put, no face to put it against, or no room to rise.
+ */
+export async function coverMagmaUnder(bot: CoverBody): Promise<boolean> {
+  const at = bot.entity?.position;
+  if (!at || !bot.equip || !bot.placeBlock) return false;
+  const items = bot.inventory?.items() ?? [];
+  const block = MAGMA_COVER_BLOCKS.map(name => items.find(item => item.name === name)).find(Boolean);
+  if (!block) return false;
+  const centre = new Vec3(Math.floor(at.x), Math.floor(at.y - 0.01), Math.floor(at.z));
+  const under = bot.blockAt(centre);
+  const solid = (cell: Vec3) => { try { return bot.blockAt(cell)?.boundingBox === 'block'; } catch { return false; } };
+  let reference: Vec3 | null = null, face: Vec3 | null = null, rise = false;
+  // end1109f18: a lava source under the centre (the body on a magma rim beside it) is a hole too: placing into lava replaces it.
+  if (under && under.boundingBox !== 'block') {
+    for (const [dx, dy, dz] of [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
+      if (solid(centre.offset(dx, dy, dz))) { reference = centre.offset(dx, dy, dz); face = new Vec3(0 - dx, 0 - dy, 0 - dz); break; }
+    }
+  } else if (under?.name === 'magma_block' && !solid(centre.offset(0, 3, 0))) {
+    reference = centre; face = new Vec3(0, 1, 0); rise = true;
+  }
+  if (!reference || !face) return false;
+  const held = bot.heldItem;
+  await bot.equip(block, 'hand');
+  try {
+    if (rise) {
+      bot.setControlState('jump', true);
+      for (let waited = 0; waited < 600 && (bot.entity?.position.y ?? 0) < centre.y + 2; waited += 50) await settle(50);
+      bot.setControlState('jump', false);
+      if ((bot.entity?.position.y ?? 0) < centre.y + 2) return false;
+    }
+    await bot.placeBlock(bot.blockAt(reference), face);
+    return true;
+  } finally {
+    if (held && held.name !== (block as { name: string }).name) await bot.equip(held, 'hand').catch(() => undefined);
+  }
+}
+
 export function installLavaReflex(bot: ReflexBody): void {
   if (bot.lavaReflex) return;
   const state: LavaReflexState = bot.lavaReflex = { engaged: false, engagements: 0, clearTicks: 0 };
@@ -331,12 +449,15 @@ export function installLavaReflex(bot: ReflexBody): void {
       return dug > 0;
     };
   }
+  if (!bot.coverMagma) bot.coverMagma = () => coverMagmaUnder(bot as unknown as CoverBody);
   bot.on('physicsTick', () => {
     let outcome: ReturnType<typeof lavaReflexTick> = null;
     try { outcome = lavaReflexTick(bot, state); } catch { return; }
-    if (outcome === 'engaged' && state.in === 'magma') {
-      // Crouching is all it takes; the body is not taken from what it is doing.
-      log.warn('🟧 マグマの上: しゃがんで（しゃがめば焼けない）マグマの無い所まで');
+    if (outcome === 'magma') {
+      // No lease and no held reflex: the act's hand goes on while the body crouches and, standing still, steps off.
+      log.warn('🟧 マグマの上: しゃがんで、止まっていれば一番近いマグマの無い足場へ降りる（無ければ丸石・土で覆う）');
+    } else if (outcome === 'magma-off') {
+      log.info(`🟧 マグマから離れた${state.magma?.covers ? `（覆った ${state.magma.covers} 回）` : ''}`);
     } else if (outcome === 'engaged') {
       log.warn(state.in === 'fire' ? '🔥 火の中に立っている: 火の無い足場へ出る' : '🌋 溶岩の中: 泳ぎ上がって、溶岩の無い足場へ出る');
       // The keys are set every tick here; the body is also taken, so that whatever else was moving it, or
@@ -348,8 +469,6 @@ export function installLavaReflex(bot: ReflexBody): void {
           { priority: LAVA_ESCAPE_PRIORITY, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true })
           .catch(() => undefined).finally(() => { release = null; });
       } catch { /* the keys are still set each tick */ }
-    } else if (outcome === 'released' && state.in === 'magma') {
-      log.info('🟧 マグマから離れた');
     } else if (outcome === 'released') {
       log.info(state.in === 'fire' ? '🔥 火から出た' : '🌋 溶岩から出た');
       release?.();

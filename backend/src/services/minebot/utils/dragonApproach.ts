@@ -5,6 +5,7 @@ import { fountainOf, STRIKE_REACH } from './dragonState.js';
 import { feetCentre, inland, walkGround, walkRoute, type WalkSearch, type WalkCell } from './dragonWalk.js';
 import { cellKey, type Cell } from './localMap.js';
 import { goWalkRouteChecker, worldWatchOf } from './primitives/go.js';
+import { dragonBedOffers, type DragonBedOffer } from './dragonBedOffer.js';
 
 /** Measured in the Shannon lab, 2026-11-02: docs/minecraft-end-fight.md, 止まり木の周期.
  * Samples, not an execution timer. Damage of about 50 can end a perch early. */
@@ -40,7 +41,10 @@ export interface DragonApproach {
   /** Retain these while perched, for the LLM to choose a go after phase 4. */
   retreat: Array<P3 & { walkMeters: number }>;
   /** Waiting footing 10 to 14 m from the perch centre, sideways of the facing (|side| <= 0.25), clear of the whole perch and reachable by a go-checked walk: where to wait before the sit and to go back to after it. Landing, take-off and the sit. */
-  wait?: Array<P3 & { walkMeters: number; walkSeconds: number; side: number; /** Always false: footing in the wing push zone or the breath (now or forecast) is not offered. */ inWingPush: false; inBreathNow: false }>;
+  wait?: Array<P3 & { walkMeters: number; walkSeconds: number; side: number; /** Always false: footing in the wing push zone or the breath (now or forecast) is not offered. */ inWingPush: false; inBreathNow: false;
+    /** While she flies and the body is far: open ground on the ring 12 m out on the body's side, its route not checked (go finds it); walkMeters is the straight line. */ straight?: true }>;
+  /** While perched and a bed is held: where to stand (same clear, go-checked footing as strike), what to build from there, where to click the bed and both estimates. The head chooses; nothing is done by the body. */
+  bed?: DragonBedOffer[];
 }
 
 /** Same grown contact boxes as the reflex by default; walking can report wing push separately. Always exclude the future flame, even in the early safe window. */
@@ -71,6 +75,7 @@ const approachCache = new WeakMap<object, { key: string; at: number; value: Drag
 const APPROACH_CACHE_MS = 900, APPROACH_SCAN_MS = 60, APPROACH_TOTAL_MS = 120;
 export function dragonApproach(bot: any, dragon: any, phase: number | null, perch = fountainOf(bot)): DragonApproach | undefined {
   const landingOrTakeoff = phase === 3 || phase === 4;
+  if (phase !== null && FLYING.has(phase)) { approachCache.delete(bot); return waitAway(bot, dragon, perch); }
   if (!isPerched(phase) && !landingOrTakeoff) { approachCache.delete(bot); return undefined; }
   const me = bot.entity?.position, watch = worldWatchOf(bot);
   // A moved/growing cloud, vertical move or edited floor must invalidate basin routes even inside the 900 ms cache.
@@ -82,6 +87,70 @@ export function dragonApproach(bot: any, dragon: any, phase: number | null, perc
   if (value) approachCache.set(bot, { key, at: clock, value });
   return value;
 }
+/**
+ * Where to wait for the next sit while she flies (11/9, end lane): e01 and e02 waited 60 to 75 m out while she circled, so a sit (about 27 s) was
+ * mostly over before a bed could be set; waiting cells were offered only from the landing on, and only within the 32 m walk scan.
+ * Circling 0, strafing 1, heading to land 2, charging 8, hovering 10. Dying (9) offers nothing.
+ */
+const FLYING = new Set([0, 1, 2, 8, 10]);
+const AWAY_NEAR = 30, AWAY_RING = 12, AWAY_TURNS = [0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05];
+const awayCache = new WeakMap<object, { key: string; at: number; value: DragonApproach | undefined }>();
+function waitAway(bot: any, dragon: any, perch: P3 | null): DragonApproach | undefined {
+  const me = bot.entity?.position;
+  if (!perch || !me) return undefined;
+  const watch = worldWatchOf(bot), clouds = lyingCloudZones(bot);
+  const key = JSON.stringify([Math.floor(me.x), Math.floor(me.y), Math.floor(me.z), perch, clouds, watch.epoch, watch.tick]);
+  const held = awayCache.get(bot), clock = Date.now();
+  if (held && held.key === key && clock - held.at < APPROACH_CACHE_MS) return held.value;
+  const value = computeWaitAway(bot, dragon, perch, me, clouds);
+  awayCache.set(bot, { key, at: clock, value });
+  return value;
+}
+function computeWaitAway(bot: any, dragon: any, perch: P3, me: P3, clouds: ReturnType<typeof lyingCloudZones>): DragonApproach | undefined {
+  const start = performance.now(), deadline = start + APPROACH_TOTAL_MS;
+  const clear = (p: P3) => !clouds.some(zone => cloudReaches(zone.centre, zone.radius, p, 1));
+  const facing = { x: Math.sin(dragon?.yaw ?? 0), z: Math.cos(dragon?.yaw ?? 0) };
+  const sideOf = (p: P3) => { const dx = p.x - perch.x, dz = p.z - perch.z, r = Math.hypot(dx, dz) || 1; return (dx * facing.x + dz * facing.z) / r; };
+  const wait: NonNullable<DragonApproach['wait']> = [];
+  if (Math.hypot(me.x - perch.x, me.z - perch.z) <= AWAY_NEAR) {
+    // Near: the same go-checked walk as the landing's cells, any side (where she will face is not known before she lands).
+    const ground = walkGround(bot, { deadline: start + APPROACH_SCAN_MS, radius: 32, maxCells: 2500, safe: clear });
+    const verify = goWalkRouteChecker(bot, deadline);
+    const ring = ground.cells.map(node => ({ node, p: feetCentre(node.cell) }))
+      .filter(({ p }) => { const r = Math.hypot(p.x - perch.x, p.z - perch.z); return r >= 10 && r <= 14; })
+      .sort((a, b) => a.node.walkMeters - b.node.walkMeters);
+    for (const { node, p } of ring) {
+      if (performance.now() >= deadline) break;
+      if (wait.some(w => Math.hypot(w.x - p.x, w.z - p.z) < 3) || !verify(walkRoute(node))) continue;
+      wait.push({ ...p, walkMeters: node.walkMeters, walkSeconds: node.walkMeters / 4.317, side: sideOf(p), inWingPush: false, inBreathNow: false });
+      if (wait.length === 3) break;
+    }
+    if (wait.length) return { strike: [], stage: [], retreat: [], wait };
+  }
+  // Far, or no walk found near: open ground on the ring 12 m out, on the body's side of the perch first. The route is go's to find.
+  const bearing = Math.atan2(me.z - perch.z, me.x - perch.x);
+  for (const turn of AWAY_TURNS) {
+    const x = Math.floor(perch.x + Math.cos(bearing + turn) * AWAY_RING), z = Math.floor(perch.z + Math.sin(bearing + turn) * AWAY_RING);
+    const feet = openGround(bot, x, z, Math.floor(perch.y) + 6, Math.floor(perch.y) - 14);
+    if (!feet || !clear(feet) || wait.some(w => Math.hypot(w.x - feet.x, w.z - feet.z) < 3)) continue;
+    const straight = Math.hypot(feet.x - me.x, feet.z - me.z);
+    wait.push({ ...feet, walkMeters: straight, walkSeconds: straight / 4.317, side: sideOf(feet), inWingPush: false, inBreathNow: false, straight: true });
+    if (wait.length === 3) break;
+  }
+  return wait.length ? { strike: [], stage: [], retreat: [], wait } : undefined;
+}
+/** The top of a column: a full block under two passable, non-liquid cells. An unloaded cell gives nothing. */
+function openGround(bot: any, x: number, z: number, top: number, bottom: number): P3 | null {
+  const passable = (b: any) => !!b && b.boundingBox === 'empty' && !/water|lava|fire/.test(String(b.name));
+  for (let y = top; y >= bottom; y--) {
+    const below = bot.blockAt(new Vec3(x, y - 1, z));
+    if (!below) return null;
+    if (below.boundingBox !== 'block') continue;
+    return passable(bot.blockAt(new Vec3(x, y, z))) && passable(bot.blockAt(new Vec3(x, y + 1, z))) ? { x: x + 0.5, y, z: z + 0.5 } : null;
+  }
+  return null;
+}
+
 /** Landing and take-off: the parts are moving, so only the waiting footing is offered (by the facing the dragon has now). */
 function computeWaitOnly(bot: any, dragon: any, perch: P3 | null): DragonApproach | undefined {
   if (!perch || !bot.entity?.position) return undefined;
@@ -146,7 +215,32 @@ function computeApproach(bot: any, dragon: any, perch: P3 | null): DragonApproac
   const stage = stagePositions(bot, dragon, ground, strike, verify, deadline);
   let wait: DragonApproach['wait'];
   try { if (perch) { const found = waitPositions(bot, dragon, perch, ground, verify, deadline); if (found.length) wait = found; } } catch { /* optional field */ }
-  return { strike, stage, retreat, ...(wait ? { wait } : {}), ...extra };
+  let bed: DragonApproach['bed'];
+  try { const found = bedOffers(bot, dragon, ground, safe); if (found.length) bed = found; } catch { /* optional field */ }
+  return { strike, stage, retreat, ...(wait ? { wait } : {}), ...(bed ? { bed } : {}), ...extra };
+}
+
+/**
+ * Bed offers from the same safe ground graph, nearest the head first; their own 40 ms to find and 40 ms to check the walks (after the shared
+ * 120 ms), only with a bed in hand. Review 11/9 07:40: the walk check was the shared checker, whose 120 ms is usually spent by then, so every
+ * offer but one at the body's own feet was dropped.
+ */
+const BED_OFFER_MS = 40;
+function bedOffers(bot: any, dragon: any, ground: WalkSearch, safe: (feet: P3) => boolean): DragonBedOffer[] {
+  if (!(bot.inventory?.items?.() ?? []).some((item: any) => typeof item?.name === 'string' && item.name.endsWith('_bed'))) return [];
+  const head = partBox(dragon, 'head'), hx = (head.minX + head.maxX) / 2, hz = (head.minZ + head.maxZ) / 2, nodes = new Map<string, WalkCell>();
+  const stands = [] as Array<{ feet: P3; walkMeters: number }>;
+  for (const node of ground.cells) {
+    const p = feetCentre(node.cell);
+    if (Math.hypot(p.x - hx, p.z - hz) > 8 || !inland(ground.read, node.cell) || !safe(p)) continue;
+    stands.push({ feet: p, walkMeters: node.walkMeters }); nodes.set(cellKey(node.cell), node);
+  }
+  const deadline = performance.now() + BED_OFFER_MS, read = (p: P3) => bot.blockAt(new Vec3(p.x, p.y, p.z));
+  const offers = dragonBedOffers(bot, dragon, stands, read, deadline), verify = goWalkRouteChecker(bot, performance.now() + BED_OFFER_MS);
+  return offers.filter(offer => {
+    const node = nodes.get(cellKey({ x: Math.floor(offer.stand.x), y: Math.floor(offer.stand.y), z: Math.floor(offer.stand.z) } as Cell));
+    return !!node && verify(walkRoute(node));
+  });
 }
 
 /** The body's own walk into the 2–3.2 m ring, with no digging/placing. A one-level rise is offered only if go can really step up it. */

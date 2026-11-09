@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeSim, type Ground, type Sim } from '../helpers/physicsBody.js';
-import { go, sealedGoalWords } from '../../src/services/minebot/utils/primitives/go.js';
+import { digRuleOf, go, goMovements, sealedGoalWords, type GoState } from '../../src/services/minebot/utils/primitives/go.js';
 
 // Run 47 (hold 6): a go to (190,-13,180), where the place and the cell over it were clay and the go could dig stone and deepslate only. No search can end in a block that is not dug: each ran
 // its 5 s out, six times, 50 s in all. A place that is a block not on the list is said before any search, with the way out: dig it (canDig) or go to a cell beside it.
@@ -28,7 +28,7 @@ describe('a place that is a block the go may not dig', () => {
     const { value, elapsed } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }], canDig: ['stone', 'deepslate'], seconds: 60 } as never));
     expect(value.ok).toBe(false);
     expect(value.text).toMatch(/^go 止まった dead_end: 行き先 \(5,64,0\) は clay で canDig に無い。隣の立てる所 \(\d+,64,-?\d+\)/u);
-    expect(value.text).toContain('canDig に clay を足すか');
+    expect(value.text).toContain('掘り進むなら canDig に clay（遅い）');
     expect(value.text.length).toBeLessThanOrEqual(160);
     expect(elapsed).toBeLessThan(1_000);
   });
@@ -123,5 +123,53 @@ describe('a place beside water or under gravel that the search does not break (r
     const allowed = makeSim(gravel, { start: [0.5, FLOOR, 0.5], items: [{ name: 'stone_pickaxe', count: 1 }], digMs: 80 });
     const second = await drive(allowed, go(ctxOf(allowed) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }], canDig: ['stone', 'gravel'], maxDig: 30, seconds: 60 } as never));
     expect(second.value.text).not.toMatch(/落ちてくる|流れ込む/u);
+  });
+});
+
+// end1108h32 S9 (11/9): two gos to a place 199 m off inside the rock (stone not in canDig, as the S9 knowledge asks) came back dead_end at once:
+// the sealed check ran before the walk's raise to the ground over it (buriedSurface). A far place inside the rock is raised first, then walked to.
+describe('a far place inside the rock the go may not dig', () => {
+  // Open ground to x=80; a hill rises a block a step from x=51 (top y=64) to x=62 (top y=75) and stays at 75 to x=70.
+  const hill: Ground = (x, y, z) => {
+    if (Math.abs(x) > 80 || Math.abs(z) > 20) return null;
+    const top = x >= 51 && x <= 70 && Math.abs(z) <= 10 ? Math.min(75, 63 + (x - 50)) : FLOOR - 1;
+    return y <= top ? 'stone' : 'air';
+  };
+  it('more than 48 m off: raised to the ground over it and walked to, not refused as sealed', async () => {
+    const sim = makeSim(hill, { start: [0.5, FLOOR, 0.5] });
+    const { value } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 60, y: 62, z: 0 }], canDig: ['dirt'], seconds: 120 } as never), 150_000);
+    expect(value.reason).not.toBe('dead_end');
+    expect(value.text).toContain('(60,62,0)→y=74');
+    expect(value.ok).toBe(true);
+    expect(Math.floor(sim.bot.entity.position.y)).toBe(74);
+    expect(Math.abs(sim.bot.entity.position.x - 60.5)).toBeLessThan(2);
+  });
+  // end1109s01b S9: near legs at the height of the feet under a rising hill were refused, and the hint sent stone into canDig (a tunnel).
+  it('within 48 m with the ground at most 12 over it: raised too', async () => {
+    const sim = makeSim(hill, { start: [30.5, FLOOR, 0.5] });
+    const { value } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 60, y: 62, z: 0 }], canDig: ['dirt'], seconds: 90 } as never), 120_000);
+    expect(value.reason).not.toBe('dead_end');
+    expect(value.text).toContain('(60,62,0)→y=74');
+    expect(Math.floor(sim.bot.entity.position.y)).toBe(74);
+  });
+  it('within 48 m and deeper than 12: still said at once as sealed, the hint naming a place to stand first', async () => {
+    const sim = makeSim(hill, { start: [30.5, FLOOR, 0.5] });
+    const { value, elapsed } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 60, y: 55, z: 0 }], canDig: ['dirt'], seconds: 60 } as never));
+    expect(value.reason).toBe('dead_end');
+    expect(value.text).not.toContain('→y=');
+    expect(value.text).toContain('掘り進むなら canDig に stone（遅い）');
+    expect(elapsed).toBeLessThan(1_000);
+  });
+});
+
+// end1108h32 S9: with waterOk a laid step (1 + 2) was cheaper than a swum one (1 + 4), and the search bridged 39 blocks 13 m over a lake.
+describe('leave to swim makes a laid step dearer than a swum one', () => {
+  it('waterOk: placeCost over liquidCost; without it, laying stays the cheap way over water', () => {
+    const sim = makeSim(ground, { start: [0.5, FLOOR, 0.5] });
+    const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, exposed: new Map(), avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
+    const wet = goMovements(sim.bot, { maxDrop: 3, waterOk: true, maxDig: 0, maxPlace: 8, sprint: false }, digRuleOf(sim.bot.registry, []), ['cobblestone'], state);
+    expect(wet.placeCost).toBeGreaterThan(wet.liquidCost);
+    const dry = goMovements(sim.bot, { maxDrop: 3, waterOk: false, maxDig: 0, maxPlace: 8, sprint: false }, digRuleOf(sim.bot.registry, []), ['cobblestone'], state);
+    expect(dry.placeCost).toBeLessThan(dry.liquidCost);
   });
 });

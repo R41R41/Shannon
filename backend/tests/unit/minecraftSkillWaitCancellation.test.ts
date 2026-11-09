@@ -17,6 +17,7 @@ const SKILL_DIR = fileURLToPath(new URL('../../src/services/minebot/instantSkill
 
 /** Intentionally kept raw waits: file -> maximum count and why. Remove an entry once converted. */
 const RAW_WAIT_ALLOWLIST: Record<string, { max: number; reason: string }> = {
+  'act.ts': { max: 2, reason: 'S5 portal crossing: after a reflex cut a walk or portal hand on the sheet, the act gives the server up to PORTAL_CROSS_WAIT_MS (+600 ms) to move the body inside the stopped path and then writes the receipt; a cancel there must not skip the receipt' },
 };
 
 const RAW_WAIT_PATTERNS: Array<{ name: string; pattern: RegExp }> = [

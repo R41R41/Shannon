@@ -1,15 +1,15 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "15002255fef1dd027994ecc8229f43147f511499",
- "madeAt": "2026-11-04T16:15:56.335Z",
+ "bodyRevision": "6bd37e0931835019862bda3f5ba9a67b7cd7c769",
+ "madeAt": "2026-11-05T10:01:06.529Z",
  "answers": null,
  "fixtureSha256": null,
- "catalogHash": "8130653d6f80be02",
+ "catalogHash": "a6b3ba1427cc5ff2",
  "offered": [
   {
    "name": "act",
-   "description": "体に小さな手を最大12個まとめて頼む。体は順に動かし、手ごとに思ったとおりか確かめ、外れたら（失敗・反射・stopIf・満杯）そこで止めて、手ごとの1行（止まりは閉じた語・場所・そのマスの今の中身）と新しい地図を JSON で返す。体は回り道・置き場所・道具作り・片づけ・夜の睡眠・戦うかどうかを決めない。手: walk / go / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait / obsidian / portal / fight / mine / make / smelt / vertical。vertical: 縦に長く下る・上る。dir(down/up)・shape(stairs=階段 toward 必須 / shaft=真下の縦穴 down だけ / pillar=足の下に置いて真上 up だけ)・toY(足の y)・canDig(必須)・maxDig・canPlace・maxPlace・liquid(stop/seal/seal_water)・range・seconds。体は道探しをせず一段ずつ掘る・置く・歩くだけで、止まる時は「vertical 止まった <code>」の行と進んだ段数を返す。go: 行き先（to か goals）へ体が道を引いて着くまで行く。canDig の物だけ掘り・canPlace の物（持っている物）だけ置き、溶岩・火・マグマ・サボテンは避ける。止まる時は「go 止まった <code>」の行で理由を返す。obsidian: 挙げた溶岩の源（at、8 まで）に水を注いで黒曜石にして掘り、水を汲み戻す（立ち位置・注ぐ所・待ちは体。count・seconds・canPlace・maxPlace）。portal: at（枠の内側の左下）と axis（x か z）の枠 10 個を組み、火打ち金で点け、enter なら入る（足場は canPlace の物）。止まる時は「<手> 止まった <code>」の行で理由を返す。fight: 挙げた相手 target を戦い（stance=flee なら range m 離れるまで逃げ）、狙い・間合い・盾・クリティカル・低体力で食べる/退くは体がこなす。反射が優先。enderman は den:{entrance:{x,y,z},direction:north|east|south|west}（入口の絶対整数マス・壁の奥へ進む向き）と target:#id を渡すと、2高×1幅×2奥の横穴を4マスだけ掘り、天井・床・液体・空洞を確認してから入口外で目を合わせ、奥の2マス目へ戻り脚を打つ。待ちは20秒まで、被弾・hp<8で中止。倒せば入口外3mの落とし物だけ短く拾う（他の個体が近ければ拾わない）。denなしは従来の屋根方式。mine(block: 掘る種類 id, at: その鉱脈のマス1〜4, count, tool, collect, seconds, canDig・maxDig: 鉱脈へ行く道を掘ってよい物) は at のマスにつながった同じ種類だけを近い順に掘って拾う（ほかの鉱石は探さない）。make(item, count) は途中の物（板・棒など）を持ち物から順に作る（足りなければ何も作らず足りない物の一覧を返す。3x3 は近くの作業台、無ければ持っている物を置く）。smelt(items: [{item,count}], fuel, fuelCount, furnaces: 何基に分けるか, at: かまど, seconds) はかまどに分けて入れて燃料を足すまで（焼き上がりは待たず、取り出しは furnace op=take）。座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。attack style=shield_rush: target は見た blaze 1体の #id。seconds(5〜60、帰還込み)・retreatHp(1〜19)・retreatTo({x,y,z})・area({center:{x,y,z},radius:1〜16,maxDrop:0〜3})・shieldReserve(0〜335)・onCrossfire(retreat/continue)・pickup(target_drops/none)を全て指定。盾を上げたまま安全な床で詰め、目から当たり箱3m以内かつ視線が通れば打つ。撃破後は指定の落とし物を拾い、指定先へ戻る。再出撃・食事はしない。area外への退避はgoで歩き、cobblestone/netherrackを最大6個まで置ける。TARGET_LOST=死亡未確認で見失った、HEIGHT_UNREACHABLE=高くて届かない、NO_ATTACK_WINDOW=接近窓/安全な足場なし、CROSSFIRE=盾1方向で防げない、SHIELD_LOW=盾が残りの下限、RETREAT_BLOCKED=指定先へ帰れない/遮蔽なし、PICKUP_UNSAFE=安全に回収できない、TIME_LIMIT=帰還時間を含む期限、REFLEX=致死危険/床反射へ譲った、DEAD=死亡。各行の shieldRush は status(killed/retreated/failed/cut)・targetDead(true/false/null)・code・hits・rodsDelta(荷の増分)・hpMin/hpEnd・shieldBefore/After(残り)・elapsedMs・at・safe・pendingDrops。retreatHpで帰れた時はretreated/code:null。safeは指定先の足場と遮蔽を確認できた時だけtrue。fill: block（持っているブロック）・groups（1〜12組、各 {stand:{x,y,z},at:[{x,y,z},…1〜8マス]}）・retreatHp(1〜19)・retreatTo({x,y,z}、必須の帰還先の足)・seconds(5〜60、帰還込み)を全て指定。座標は絶対座標。probe kind=lane の standAt と group を元に、置くマスと順序は頭が選ぶ。体は順に歩き1マスずつ置き、置けない所を飛ばして最後に1周だけ再試行し、必ず指定先へ帰還を試みる。足場を妨げる火だけ最大2回消し、道に置かず、盾と飛来弾の反射はresidentに任せる。開始時に帰還先の足場・全マス分の手持ち・体力を確認し、不足なら動かず置かずfailed。毎マスと移動中にHP下限・帰還予約時間・反射を確認する。行のfill: status(done/partial/retreated/failed/cut)、code(HP_FLOOR/TIME_L",
+   "description": "体に小さな手を最大12個まとめて頼む。体は順に動かし、手ごとに思ったとおりか確かめ、外れたら（失敗・反射・stopIf・満杯）そこで止めて、手ごとの1行（止まりは閉じた語・場所・そのマスの今の中身）と新しい地図を JSON で返す。体は回り道・置き場所・道具作り・片づけ・夜の睡眠・戦うかどうかを決めない。手: walk / go / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait / obsidian / portal / fight / mine / make / smelt / vertical / sleep。bed_burst(at:[foot,head],target:#id,count:1〜5,seconds:1〜20) は頭が施工し選んだ配置で、今のphase2→3進入またはphase3内だけ短く設置起爆する。次の着地は待たず、配置・移動・退避・剣切替は別の手。rel:true・repeat併用不可。爆発確認数を返し、使用だけで討伐としない。vertical: 縦に長く下る・上る。dir(down/up)・shape(stairs=階段 toward 必須 / shaft=真下の縦穴 down だけ / pillar=足の下に置いて真上 up だけ)・toY(足の y)・canDig(必須)・maxDig・canPlace・maxPlace・liquid(stop/seal/seal_water)・range・seconds。体は道探しをせず一段ずつ掘る・置く・歩くだけで、止まる時は「vertical 止まった <code>」の行と進んだ段数を返す。go: 行き先（to か goals）へ体が道を引いて着くまで行く。canDig の物だけ掘り・canPlace の物（持っている物）だけ置き、溶岩・火・マグマ・サボテンは避ける。止まる時は「go 止まった <code>」の行で理由を返す。obsidian: 挙げた溶岩の源（at、1〜24）を水で固めて掘り、水を汲み戻す。同じ高さでつながった溜まりは一括注水し、固まった面から続けて掘る。下が溶岩なら水で覆う（count 省略は重複を除いた at の数、seconds 5〜300・既定90、canPlace・maxPlace）。portal: at（枠の内側の左下）と axis（x か z）の枠 10 個を組み、火打ち金で点け、enter なら入る（足場は canPlace の物）。止まる時は「<手> 止まった <code>」の行で理由を返す。fight: 挙げた相手 target を戦い（stance=flee なら range m 離れるまで逃げ）、狙い・間合い・盾・クリティカル・低体力で食べる/退くは体がこなす。反射が優先。enderman は den:{entrance:{x,y,z},direction:north|east|south|west}（入口の絶対整数マス・壁の奥へ進む向き）と target:#id を渡すと、2高×1幅×2奥の横穴を4マスだけ掘り、天井・床・液体・空洞を確認してから入口外で目を合わせ、奥の2マス目へ戻り脚を打つ。待ちは20秒まで、被弾・hp<8で中止。倒せば入口外3mの落とし物だけ短く拾う（他の個体が近ければ拾わない）。denなしは従来の屋根方式。mine(block: 掘る種類 id, at: その鉱脈のマス1〜4, count, tool, collect, seconds, canDig・maxDig: 鉱脈へ行く道を掘ってよい物) は at のマスにつながった同じ種類だけを近い順に掘って拾う（ほかの鉱石は探さない）。make(item, count) は途中の物（板・棒など）を持ち物から順に作る（足りなければ何も作らず足りない物の一覧を返す。3x3 は近くの作業台、無ければ持っている物を置く）。smelt(items: [{item,count}], fuel, fuelCount, furnaces: 何基に分けるか, at: かまど, seconds) はかまどに分けて入れて燃料を足すまで（焼き上がりは待たず、取り出しは furnace op=take）。sleep(item: ベッド id, seconds 10〜60) は近くのベッドか持っているベッドを足もとの周りに置いて寝て、朝になれば起きて拾い直す（寝る時と所は頭が決める。寝場所を掘って作らない）。寝られない時は「sleep 止まった <code>」: enemy_near（8m 内の敵の種類・数・最も近い距離）・not_night（夜まで何秒）・no_bed・no_bed_spot・bed_explodes・night_went_on。座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。attack style=shield_rush: target は見た blaze 1体の #id。seconds(5〜60、帰還込み)・retreatHp(1〜19)・retreatTo({x,y,z})・area({center:{x,y,z},radius:1〜16,maxDrop:0〜3})・shieldReserve(0〜335)・onCrossfire(retreat/continue)・pickup(target_drops/none)を全て指定。盾を上げたまま安全な床で詰め、目から当たり箱3m以内かつ視線が通れば打つ。撃破後は指定の落とし物を拾い、指定先へ戻る。再出撃・食事はしない。area外への退避はgoで歩き、cobblestone/netherrackを最大6個まで置ける。TARGET_LOST=死亡未確認で見失った、HEIGHT_UNREACHABLE=高くて届かない、NO_ATTACK_WINDOW=接近窓/安全な足場なし、CROSSFIRE=盾1方向で防げない、SHIELD_LOW=盾が残りの下限、RETREAT_BLOCKED=指定先へ帰れない/遮蔽なし、PICKUP_UNSAFE=安全に回収できない、TIME_LIMIT=帰還時間を含む期限、REFLEX=致死危険/床反射へ譲った、DEAD=死亡。各行の shieldRush は status(killed/retreated/failed/cut)・targetDead(true/false/null)・code・hits・rodsDelta(荷の増分)・hpMin/hpEnd・shieldBefore/After(残り)・elapsedMs・at・safe・pendingDrops。retreatHpで帰れた時はretreated/code:null。safeは指定先",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -47,7 +47,9 @@
           "make",
           "smelt",
           "vertical",
-          "fill"
+          "fill",
+          "bed_burst",
+          "sleep"
          ]
         },
         "to": {
@@ -133,8 +135,8 @@
           "additionalProperties": false,
           "required": []
          },
-         "maxItems": 16,
-         "description": "dig・place は順に全部、use・furnace・chest・shoot・drop は 1 つ、mine は鉱脈のマス（1〜4）、smelt は使うかまど（最大4）"
+         "maxItems": 24,
+         "description": "dig・place は順に全部（16まで）、obsidian は溶岩の源（24まで）、use・furnace・chest・shoot・drop は 1 つ、mine は鉱脈のマス（1〜4）、smelt は使うかまど（最大4）、bed_burst は絶対整数の [foot,head] 2セル"
         },
         "face": {
          "type": "string",
@@ -1007,7 +1009,7 @@
     "additionalProperties": false
    },
    "readOnly": false,
-   "maxDurationMs": 180000
+   "maxDurationMs": 320000
   },
   {
    "name": "view",
@@ -1076,7 +1078,7 @@
   },
   {
    "name": "probe",
-   "description": "調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ sight（target のブロックか生き物 #id が目から見えるか・届くか・間のブロック）/ column（x,z の縦の列。yFrom・yTo。落差・水・溶岩・砂利）/ around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）/ frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。lane（spawner の四方向のレーン計画。省略時は近い湧き場。丸石・建築順・支え・生き物・待ち場からの距離と危険。build の standAtCell は cells の足マス参照、group は同じ立ち位置で最大6マス、末尾の walk は from（既定は足）からの歩数、立ち位置なしは全て null。facts 末尾の standFact は standFacts の参照で noStand・blockedByCreature・fireNear。目から4.3以内で視線が通り、火・液体・マグマ・縁を避ける。計画のマスを避け、掘らず置かず四方向・上下1段までを2000マス探索し、歩数・従来順位の順に立ち位置を選ぶ。着けない場合は noStand: unreachable。go で立ち位置へ→同じ group の place、占有マスは組の末尾で再確認。fireNear は立ち位置なしなら null、安全なら false。読むだけ）。結果は JSON（text が先頭。危ない事実をそのまま書く）。",
+   "description": "調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ sight（target のブロックか生き物 #id が目から見えるか・届くか・間のブロック）/ column（x,z の縦の列。yFrom・yTo。落差・水・溶岩・砂利）/ around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）/ frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。lane（supportNow/visibleNowは現物観測。standAt/walkは先行する設置が成功した後の投影を含み、現在の足場・経路の保証ではない。各groupの前に実地形と支えを読み直す。spawner の四方向のレーン計画。省略時は近い湧き場。丸石・建築順・支え・生き物・待ち場からの距離と危険。build の standAtCell は cells の足マス参照、group は同じ立ち位置で最大6マス、末尾の walk は from（既定は足）からの歩数、立ち位置なしは全て null。facts 末尾の standFact は standFacts の参照で noStand・blockedByCreature・fireNear。目から4.3以内で視線が通り、火・液体・マグマ・縁を避ける。計画のマスを避け、先行設置が成功した地形も含め四方向・上下1段までを2000マス探索し、歩数・従来順位の順に立ち位置を選ぶ。着けない場合は noStand: unreachable。実地形を確認して go で立ち位置へ→同じ group の place、占有マスは組の末尾で再確認。fireNear は立ち位置なしなら null、安全なら false。読むだけ）。bedsite（target:#id。エンドの現在phase2進入から、実在庫かつ黒曜石12個以内のベッド配置候補・施工セル・立場を読む。初回はpacket_history_pending。施工や起爆はしない）。roofsite（エンダーマンの屋根を作れる所を radius（既定16）内で、そこから目の見えるエンダーマン（8〜48m）の数が多い順に5件。屋根に要るブロック数・距離つき。選んで go してから fight target=enderman）。結果は JSON（text が先頭。危ない事実をそのまま書く）。",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -1093,9 +1095,11 @@
        "frames",
        "camp",
        "lane",
-       "den"
+       "den",
+       "bedsite",
+       "roofsite"
       ],
-      "description": "path・sight・column・around・history・scan・worksite・frames・camp・lane・den"
+      "description": "path・sight・column・around・history・scan・worksite・frames・camp・lane・den・bedsite・roofsite"
      },
      "to": {
       "type": "object",

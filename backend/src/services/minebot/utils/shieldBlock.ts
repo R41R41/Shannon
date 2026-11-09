@@ -4,8 +4,10 @@ import { BALL_NAME, advance, type BallTrack } from './fireballDeflect.js';
 import { installToldVelocity, toldVelocity } from './toldVelocity.js';
 import { answerWith } from './reflexAnswers.js';
 import { isEngaged } from './engagement.js';
-import { isLikelyHostileMobName } from './hostileMobHints.js';
-import { reservationOf, shieldPort } from '../execution/ActionExecution.js';
+import { isLikelyHostileMobName, isThreatEntity } from './hostileMobHints.js';
+import { physicalActionBusy, reservationOf, shieldPort } from '../execution/ActionExecution.js';
+import { threatExposure } from './threatExposure.js';
+import { recordShieldActivation } from '../execution/shieldActivation.js';
 
 const log = createLogger('Minebot:ShieldBlock');
 
@@ -30,8 +32,8 @@ const log = createLogger('Minebot:ShieldBlock');
  *
  * And in a fight the planner chose, between the body's own blows: a hostile within a blow's reach is met with
  * the shield up, and the body strikes from behind it (a blow lands with the shield raised: lab, 2026-11-03). Two wither skeletons took an iron-clad body from full health to dead in sixteen
- * seconds while its shield hung on its arm (lab). Not outside such a fight: a raised shield slows the body to
- * a crawl, and one running away needs its legs.
+ * seconds while its shield hung on its arm (lab). While the head is thinking and no physical command or movement holds the body,
+ * a nearby threat is met with a passive shield. A moving command takes that idle guard down before its first operation: one running away needs its legs.
  */
 /** Ticks ahead a shot is followed. A skeleton's arrow from sixteen blocks takes ten. */
 const LOOK_AHEAD_TICKS = 24;
@@ -50,6 +52,20 @@ const HORIZONTAL = ['forward', 'back', 'left', 'right', 'sprint'] as const;
 /** Things in flight that are no attack: what the body throws, and what only looks like a shot. */
 /** How near a hostile has to stand for the shield to be kept up between blows. */
 const GUARD_DISTANCE = 4;
+/**
+ * The body's own arrow. It leaves from the eyes, so at its first word it is inside HIT_DISTANCE and was read as coming at the body in 0 ticks:
+ * end1108h13 (11/8) raised the shield, turned the look to it and stopped the legs after each shot among the blazes ("盾を構える（arrow、約0tick後）").
+ * A shot first seen this near the eyes is the body's own when a tick on takes it farther from them, or, with no speed told yet, while a draw holds or just ended.
+ */
+const OWN_SHOT_NEAR = 2.5;
+const OWN_SHOT_AFTER_DRAW_MS = 1500;
+export function ownShot(eyes: Vec3, at: Vec3, velocity: Vec3 | undefined, drawing: boolean): boolean {
+  if (at.distanceTo(eyes) > OWN_SHOT_NEAR) return false;
+  // It leaves from the eyes themselves (x and z of the body, 0.1 below the eyes), so the direction from the eyes says little: a shot upward
+  // at a blaze has a dot below 0 (end1108h14 still raised the shield 75 times). Whether a tick on takes it farther from the eyes is the test.
+  if (velocity && velocity.norm() > 0.05) return at.plus(velocity.scaled(0.1)).distanceTo(eyes) > at.distanceTo(eyes);   // a tenth of a tick: a whole one carries an incoming shot past the eyes
+  return drawing;
+}
 const HARMLESS = new Set(['ender_pearl', 'eye_of_ender', 'experience_bottle', 'egg', 'snowball', 'fishing_bobber', 'firework_rocket', 'splash_potion', 'lingering_potion']);
 
 /** A shot one tick on, by the game's rule for its kind. */
@@ -99,11 +115,32 @@ function hostileInReach(bot: ShieldBot): boolean {
   return false;
 }
 
+/** A waiting head leaves no physical owner: keep only the shield and look, never choose a step or a fight. */
+function idleMeleeThreat(bot: ShieldBot): any | null {
+  const at = bot.entity?.position;
+  if (!at || physicalActionBusy(bot) || reservationOf(bot) || HORIZONTAL.some(key => bot.getControlState?.(key))) return null;
+  let nearest: any | null = null, distance = GUARD_DISTANCE;
+  for (const entity of Object.values(bot.entities ?? {})) {
+    if (!entity?.position || entity.id === bot.entity?.id || entity.type === 'projectile') continue;
+    const name = String(entity.name ?? '').toLowerCase();
+    if (!isThreatEntity(entity, bot.registry?.entitiesByName?.[name]?.type, Date.now(), bot)) continue;
+    if (at.y >= entity.position.y + (entity.height ?? 1.8)) continue; // a pillar already put the feet above the enemy
+    const apart = entity.position.distanceTo(at);
+    if (apart > distance || threatExposure(bot, entity) === 'sealed') continue;
+    nearest = entity; distance = apart;
+  }
+  return nearest;
+}
+
 interface ShieldBot {
+  _client?: unknown;
+  game?: { dimension?: unknown };
   entity?: { id?: number; position: Vec3 };
   entities?: Record<string, any>;
   health?: number;
-  inventory?: { slots: Array<{ name: string } | null | undefined> };
+  inventory?: { slots: Array<{ name: string; durabilityUsed?: number; maxDurability?: number; slot?: number } | null | undefined> };
+  registry?: { version?: { '>='(version: string): boolean }; itemsByName?: { shield?: { maxDurability?: number } }; entitiesByName?: Record<string, { type?: string; metadataKeys?: string[] } | undefined> };
+  blockAt?(position: Vec3, extraInfos?: boolean): { boundingBox?: string } | null;
   getEquipmentDestSlot?(destination: string): number;
   look?(yaw: number, pitch: number, force?: boolean): unknown;
   attack?(...args: unknown[]): unknown;
@@ -118,8 +155,22 @@ interface ShieldBot {
 }
 /** `raised` counts the times the shield went up; `upTicks` the ticks it was held. */
 export interface ShieldBlockState { enabled: boolean; guard: boolean; raised: number; guards: number; upTicks: number; up: boolean; last?: string;
+  /** A passive guard while no physical command owns the body; acquisition releases it before the new owner's first operation. */
+  idleMeleeGuard?: boolean;
+  /** Native activation time and life generation, for adopting a guard already through its five-tick warmup. */
+  activatedAt?: number; lifeEpoch?: number;
+  /** Server-confirmed blocks (source unspecified), and small_fireball damage confirmed by a health fall; never raise/trajectory guesses. */
+  shieldCaught?: number; shieldMissed?: number;
+  /** サーバーのslot更新と左手の破損通知で確かめた摩耗の累計。持ち替え・死亡でも戻さない。 */
+  shieldWear?: number;
   /** A-6 (2, 9): the times the shield was lowered, and the times `deactivateItem` was called on the body; the handover's "kept" is read from these. */
-  lowered?: number; deactivateCalls?: number }
+  lowered?: number; deactivateCalls?: number;
+  /** A bow or crossbow draw holds the hands until this time (Date.now ms): the reflex neither raises, lowers nor turns the body meanwhile. */
+  drawUntil?: number;
+  /** When (Date.now ms) the last draw was released: an arrow seen at the eyes just after it is the body's own. */
+  drewAt?: number;
+  /** The last time (Date.now ms) a shot was seen coming at the body, for a draw to wait out a volley behind the shield. */
+  comingAt?: number }
 
 /**
  * Continue contracts (4): the shield's right belongs to the owner of the body (the root action that moves it). While an owner has delegated the
@@ -127,15 +178,115 @@ export interface ShieldBlockState { enabled: boolean; guard: boolean; raised: nu
  * refuses it. With no owner delegating, the resident shield acts on its own as before.
  */
 function shieldHand(bot: ShieldBot): ShieldBot { return (shieldPort(bot as object) as ShieldBot | null) ?? bot; }
+/** Record only after a real native activation; a later client/entity/world cannot inherit that activation. */
+export function noteShieldActivation(given: object): void {
+  const bot = given as ShieldBot, state = bot.shieldBlock;
+  if (state) {
+    state.activatedAt = Date.now();
+    recordShieldActivation(state, { at: state.activatedAt, epoch: state.lifeEpoch ?? 0, entity: bot.entity, client: bot._client, dimension: bot.game?.dimension });
+  }
+}
 /** The reflex's cap was told a moment ago and the shield it had up goes on for a short while (floorReflexes bridge). */
 function bridgeHoldsShield(bot: ShieldBot): boolean {
   const bridge = (bot as { floorReflexes?: { bridge?: { hold?: string; until?: number } } }).floorReflexes?.bridge;
   return !!bridge && bridge.hold === 'shield' && Date.now() < (bridge.until ?? 0);
 }
 
+/**
+ * A bow is drawn with the shield down (lab s1d1107, 2026-11-07: among blazes 0 arrows of 0 left the bow with the reflex on, 17 and 5 blazes with it off).
+ * The server starts no new use while an item is in use (LivingEntity.startUsingItem refuses while isUsingItem), so a draw begun behind a raised
+ * shield never starts, and the reflex's own lowering or raising during a draw releases or replaces it. Lowered here before the draw; the reflex keeps
+ * its hands off until the returned release is called (or `ms` has passed). Returns whether the shield had to come down.
+ */
+export function holdShieldForDraw(given: object, ms: number): { lowered: boolean; release: () => void } {
+  const bot = given as ShieldBot, state = bot.shieldBlock;
+  if (!state) return { lowered: false, release: () => {} };
+  const until = Date.now() + ms;
+  state.drawUntil = until;
+  let lowered = false;
+  if (state.up) {
+    state.up = false; state.idleMeleeGuard = false; state.activatedAt = undefined; state.lowered = (state.lowered ?? 0) + 1; lowered = true;
+    try { shieldHand(bot).deactivateItem?.(); } catch { /* nothing held */ }
+  }
+  return { lowered, release: () => { state.drewAt = Date.now(); if (state.drawUntil === until) state.drawUntil = undefined; } };
+}
+/** Milliseconds since a shot was last seen coming at the body (Infinity when none has been, or there is no shield reflex). */
+export function msSinceShotComing(given: object): number {
+  const at = (given as ShieldBot).shieldBlock?.comingAt;
+  return at === undefined ? Infinity : Date.now() - at;
+}
+
 export function installShieldBlock(bot: ShieldBot): void {
   if (bot.shieldBlock || typeof bot.on !== 'function') return;
-  const state: ShieldBlockState = bot.shieldBlock = { enabled: true, guard: true, raised: 0, guards: 0, upTicks: 0, up: false };
+  const state: ShieldBlockState = bot.shieldBlock = { enabled: true, guard: true, raised: 0, guards: 0, upTicks: 0, up: false, shieldCaught: 0, shieldMissed: 0, shieldWear: 0 };
+  for (const event of ['death', 'respawn', 'spawn', 'game', 'end']) bot.on(event, () => {
+    state.lifeEpoch = (state.lifeEpoch ?? 0) + 1; state.activatedAt = undefined;
+  });
+  // 1.21.5以降は blocks_attacks.block_sound（公式1.21.5更新履歴）。1.21.11のEntityEventには盾の29/30が無く、
+  // 受けた本人にも sound_effect が届く（位置は1/8マス単位）。mineflayerのsoundEffectHeardは使わない：
+  // node-minecraft-protocolは音のholder idを n-1 で返すが、minecraft-data 1.21.11のsoundsは1始まりで、
+  // registry.sounds[soundId] は1つ手前の音（item.shield.block の手前は block.shelf.take_item）を指しうる。
+  // 生のpacketで soundId と soundId+1 のどちらかが item.shield.block なら数え、どちらで合ったかを1度だけ記録する
+  // （ネザーで足元に棚の音は鳴らない。ずれが無い版では +1 側に盾の割れる音 item.shield.break が入りうる）。
+  // 体は走りながら受けるのでサーバーの位置と1〜2tickずれる。足元0.6マス内の成功音だけを数える。
+  // 音に攻撃元は無いので種別不明のまま。軌道・構え・摩耗を受けた回数にはしない。
+  const client = bot._client as { on?(event: string, listener: (...args: any[]) => void): unknown } | undefined;
+  const blockSound = bot.registry?.version?.['>=']('1.21.5') === true;
+  let soundOffsetTold = false;
+  client?.on?.('sound_effect', packet => {
+    if (!blockSound || !bot.entity?.position) return;
+    const sounds = (bot.registry as { sounds?: Record<number, { name?: string } | undefined> } | undefined)?.sounds;
+    const inline = packet.sound?.data?.soundName as string | undefined;
+    const soundId = packet.sound ? packet.sound.soundId : packet.soundId;
+    const isBlock = (name: unknown) => String(name ?? '').replace(/^minecraft:/u, '') === 'item.shield.block';
+    const offset = inline !== undefined ? (isBlock(inline) ? 'inline' : null)
+      : typeof soundId !== 'number' ? null
+        : isBlock(sounds?.[soundId]?.name) ? '+0' : isBlock(sounds?.[soundId + 1]?.name) ? '+1' : null;
+    if (!offset) return;
+    const at = new Vec3(packet.x / 8, packet.y / 8, packet.z / 8);
+    const near = (p: Vec3) => Math.abs(p.x - at.x) <= 0.6 && Math.abs(p.y - at.y) <= 0.6 && Math.abs(p.z - at.z) <= 0.6;
+    if (!near(bot.entity.position)) return;
+    // 同じ位置の別の生き物の盾かもしれない音は帰属させない。
+    if (Object.values(bot.entities ?? {}).some(entity => entity?.position && entity.id !== bot.entity?.id
+      && !['projectile', 'object', 'orb', 'other'].includes(String(entity.type)) && near(entity.position))) return;
+    if (!soundOffsetTold) { soundOffsetTold = true; log.info(`🛡 盾で受けた音（音id ${soundId ?? '名前'}、registryの${offset}で item.shield.block）`); }
+    state.shieldCaught!++;
+  });
+  // 古い版の29は受けたentityの通知。新しい版では音だけを使い、同じ受けを二重に数えない。
+  client?.on?.('entity_status', packet => {
+    if (packet.entityId !== bot.entity?.id) return;
+    if (!blockSound && packet.entityStatus === 29) state.shieldCaught!++;
+    // OFFHAND_BREAK=48。最後の打撃はslotのdamage更新を挟まず盾を消すので、残っていた耐久もここで足す。
+    // 単なる空slot（持ち替え・死亡・装備の初期化）は破損と推測しない。
+    const shield = bot.inventory?.slots?.[45];
+    if (packet.entityStatus === 48 && shield?.name === 'shield') {
+      const max = shield.maxDurability ?? bot.registry?.itemsByName?.shield?.maxDurability ?? 336;
+      state.shieldWear! += Math.max(0, max - Number(shield.durabilityUsed ?? 0));
+    }
+  });
+  // mineflayer inventoryのsetSlot:0はサーバーのset_slotを適用した後（old/newともPrismarine Item）。
+  // ローカルなequipのupdateSlotでは数えない。新品への持ち替えでdamageが減っても累計を減らさない。
+  bot.on('setSlot:0', (oldItem, newItem) => {
+    if ((newItem?.slot ?? oldItem?.slot) !== 45 || oldItem?.name !== 'shield' || newItem?.name !== 'shield') return;
+    state.shieldWear! += Math.max(0, Number(newItem.durabilityUsed ?? 0) - Number(oldItem.durabilityUsed ?? 0));
+  });
+  // damage_event's sourceDirectId is the damaging entity's id + 1 (sourceCauseId is the shooter, not its ball).
+  // Only a known small_fireball followed by a health fall counts. Mixed/absorption-only/late or unknown-source notices
+  // are left uncounted: neither entityHurt nor a shield being up proves a fireball cost health. Clear at each tick
+  // so a notice with no health update cannot be paired with a later burn. This deliberately undercounts ambiguous batches.
+  let health = Number(bot.health ?? 20);
+  const hurts: boolean[] = [];
+  client?.on?.('damage_event', packet => {
+    if (packet.entityId !== bot.entity?.id) return;
+    hurts.push(bot.entities?.[packet.sourceDirectId - 1]?.name === 'small_fireball');
+  });
+  bot.on('health', () => {
+    const now = Number(bot.health ?? health);
+    if (now < health && hurts.length === 1 && hurts[0]) state.shieldMissed!++;
+    health = now; hurts.length = 0;
+  });
+  bot.on('physicsTick', () => { hurts.length = 0; });
+  bot.on('respawn', () => { health = Number(bot.health ?? 20); hurts.length = 0; });
   // The body's own blow goes out from behind the raised shield (S2, 2026-11-03, lab: a still golem struck eight times with the shield up, down and up again lost 40 of 100 each way; the old
   // note that the server refuses such a blow was wrong). Lowering it for the blow left a five-tick gap at each blow.
   installToldVelocity(bot as any);
@@ -143,10 +294,13 @@ export function installShieldBlock(bot: ShieldBot): void {
   answerWith(bot, kind => state.enabled && bot.inventory?.slots?.[bot.getEquipmentDestSlot?.('off-hand') ?? 45]?.name === 'shield'
     && (bot as any).shootsAtBody?.(kind) === true);
   const seen = new Map<number, { said: Vec3; saidTick: number; velocity: Vec3; shooterNoted?: boolean }>();
+  const own = new Set<number>();
   let tick = 0, lastComing = -Infinity;
   // A-6 (2): while a handover reservation holds the shield (a shield:true reservation), the resident shield does not lower it: the act that takes the body takes the shield up.
   const lower = () => {
     if (state.up && reservationOf(bot as object)?.shield) return;
+    state.idleMeleeGuard = false;
+    state.activatedAt = undefined;
     if (state.up) { state.up = false; state.lowered = (state.lowered ?? 0) + 1; try { shieldHand(bot).deactivateItem?.(); } catch { /* nothing held */ } }
   };
   state.lowered = 0; state.deactivateCalls = 0;
@@ -166,7 +320,13 @@ export function installShieldBlock(bot: ShieldBot): void {
         const kind = String(entity.name ?? '');
         if (HARMLESS.has(kind) || (kind === BALL_NAME && bot.fireballDeflect?.enabled)) continue;
         alive.add(entity.id);
+        if (own.has(entity.id)) continue;
         let record = seen.get(entity.id);
+        if (!record && (kind === 'arrow' || kind === 'spectral_arrow')) {
+          const drawing = (state.drawUntil ?? 0) > Date.now() || Date.now() - (state.drewAt ?? -Infinity) <= OWN_SHOT_AFTER_DRAW_MS;
+          const told: Vec3 | undefined = toldVelocity(bot as any, entity.id) ?? entity.velocity;
+          if (ownShot(bot.entity.position.offset(0, 1.62, 0), entity.position, told, drawing)) { own.add(entity.id); continue; }
+        }
         if (!record || !record.said.equals(entity.position)) {
           // A new word from the server: the speed it sent with it, or, when it sent none, what the shot covered since its last word.
           const told: Vec3 | undefined = toldVelocity(bot as any, entity.id) ?? entity.velocity;
@@ -190,22 +350,34 @@ export function installShieldBlock(bot: ShieldBot): void {
         if (!soonest || coming.ticks < soonest.ticks) soonest = { entity, ticks: coming.ticks, position: track.position };
       }
       for (const id of seen.keys()) if (!alive.has(id)) seen.delete(id);
+      for (const id of own) if (!alive.has(id)) own.delete(id);
+      if (soonest && soonest.ticks <= RAISE_AHEAD_TICKS) state.comingAt = Date.now();
+      // A bow being drawn holds the hands: no raise (it would replace the draw), no lower (a release fires or wastes it), no turn.
+      if ((state.drawUntil ?? 0) > Date.now()) { state.idleMeleeGuard = false; return; }
       if (!shielded) { lower(); return; }
       // Lowered by another hand (a fight's own deactivateItem, a bow): what the body holds now says so, and the shield goes up again
       // when it is wanted, against what is coming or in a fight's guard.
-      if (state.up && bot.usingHeldItem === false) { state.up = false; state.lowered = (state.lowered ?? 0) + 1; }
+      if (state.up && bot.usingHeldItem === false) { state.up = false; state.activatedAt = undefined; state.lowered = (state.lowered ?? 0) + 1; }
       if (soonest && soonest.ticks > RAISE_AHEAD_TICKS && !state.up) soonest = null;      // coming, but not yet
       if (soonest) lastComing = tick;
       if (tick - lastComing > HOLD_TICKS) {
         // Nothing in flight. In a fight of the planner's choosing, the shield is kept up against whoever is in
         // reach of a blow; the look and the legs are the fight's own.
-        if (state.guard && isEngaged(bot) && hostileInReach(bot)) {
-          if (!state.up && !bot.usingHeldItem) { state.up = true; state.guards++; shieldHand(bot).activateItem?.(true); }
+        const fighting = state.guard && isEngaged(bot) && hostileInReach(bot);
+        const waiting = state.guard && !fighting ? idleMeleeThreat(bot) : null;
+        if (fighting || waiting) {
+          if (waiting && (state.up || !bot.usingHeldItem)) {
+            const dx = waiting.position.x - bot.entity.position.x, dz = waiting.position.z - bot.entity.position.z;
+            bot.look?.(Math.atan2(-dx, -dz), 0, true);
+          }
+          if (!state.up && !bot.usingHeldItem) { state.up = true; state.guards++; shieldHand(bot).activateItem?.(true); noteShieldActivation(bot); }
+          state.idleMeleeGuard = !!waiting && state.up;
           if (state.up) state.upTicks++;
         } else if (!bridgeHoldsShield(bot)) lower();
         return;
       }
       // Something is coming, or has only just passed: the shield is up and turned to it.
+      state.idleMeleeGuard = false;
       if (soonest) {
         const eyes = bot.entity.position.offset(0, 1.62, 0);
         const dx = soonest.position.x - eyes.x, dy = soonest.position.y - eyes.y, dz = soonest.position.z - eyes.z;
@@ -218,6 +390,7 @@ export function installShieldBlock(bot: ShieldBot): void {
         state.raised++;
         state.last = soonest ? `${soonest.entity.name} in ${soonest.ticks.toFixed(0)} ticks` : state.last;
         shieldHand(bot).activateItem?.(true);
+        noteShieldActivation(bot);
         log.info(`🛡 盾を構える（${soonest?.entity?.name ?? '飛来物'}、約${soonest ? soonest.ticks.toFixed(0) : '?'}tick後。累計${state.raised}回）`);
       }
       if (state.up) state.upTicks++;

@@ -59,3 +59,26 @@ describe('run51 hold1: an enemy hit can push the fight into lava', () => {
     expect(entry.kind).toBe('lava'); expect(entry.detail).toContain('始まった'); expect(entry.detail).toContain('脱出は未確認'); expect(entry.detail).not.toContain('脱出した');
   });
 });
+
+describe('end1109o08: a zombie below a pillar one wide is not gone down to', () => {
+  function pillar() {
+    const key2 = (p: Vec3) => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
+    const blocks = new Map<string, string>([['0,64,0', 'dirt'], ['0,65,0', 'dirt'], ['0,66,0', 'dirt']]);
+    const blockAt = (p: Vec3) => { const name = blocks.get(key2(p)) ?? (p.y < 64 ? 'stone' : 'air'); return { name, position: p.floored(), boundingBox: name === 'air' ? 'empty' : 'block' }; };
+    const zombie = { id: 77, name: 'zombie', type: 'hostile', position: new Vec3(3.5, 64, 0.5), height: 1.95, width: 0.6, isValid: true };
+    const attack = vi.fn(), setControlState = vi.fn();
+    const bot = Object.assign(new EventEmitter(), { health: 20, food: 20, entity: { position: new Vec3(0.5, 67, 0.5), yaw: 0, pitch: 0, onGround: true, velocity: new Vec3(0, 0, 0) },
+      blockAt, entities: { 77: zombie }, inventory: { items: () => [{ name: 'stone_sword', count: 1 }], slots: [] }, heldItem: { name: 'stone_sword' }, attack, setControlState,
+      lookAt: vi.fn(), version: '1.21.11' });
+    return { bot, attack, setControlState };
+  }
+  it('says the zombie cannot climb it and what to do, without a swing or a step', async () => {
+    const { bot, attack, setControlState } = pillar();
+    const out = await fight({ bot, stop: new AbortController().signal, deadline: Date.now() + 500, facing: {} as never, base: { x: 0, y: 67, z: 0 } } as never, { target: '#77', item: 'stone_sword' });
+    expect(out.ok).toBe(false);
+    expect(out.reason).toBe('unreachable');
+    expect(out.text).toContain('歩く敵はこの柱を登れない');
+    expect(out.text).toContain('attack hold');
+    expect(attack).not.toHaveBeenCalled(); expect(setControlState).not.toHaveBeenCalled();
+  });
+});

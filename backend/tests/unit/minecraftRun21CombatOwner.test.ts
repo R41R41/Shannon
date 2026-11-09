@@ -72,6 +72,38 @@ describe('combat owner: when the planner\'s fight holds the body', () => {
     expect(isHeadCombatActive(bot, began + 5_000)).toBe(false);
   });
 
+  it('run62 #9: a fight with a passive animal puts no mark (a pig by name or by its id); a hostile, a neutral one that strikes back and "*" do', () => {
+    const { bot } = fixture({ zombieAt: 5 });
+    bot.entities[256] = { id: 256, name: 'pig', type: 'passive', position: new Vec3(3, 65, 0), isValid: true };
+    markHeadCombat(bot, 'fight', ['pig'], Date.now(), 256);
+    markHeadCombat(bot, 'fight', ['sheep', 'cow']);
+    expect(bot.headCombat ?? []).toHaveLength(0);
+    expect(isHeadCombatActive(bot)).toBe(false);
+    for (const kinds of [['zombie'], ['wither_skeleton'], ['enderman'], ['blaze'], ['ender_dragon'], ['*']]) {
+      const fresh = fixture().bot;
+      markHeadCombat(fresh, 'fight', kinds);
+      expect(isHeadCombatActive(fresh), kinds.join()).toBe(true);
+    }
+    // The target's own kind decides when it is seen: an id of a zombie under a '*' list.
+    const named = fixture({ zombieAt: 3 }).bot;
+    markHeadCombat(named, 'fight', ['pig'], Date.now(), 2);
+    expect(isHeadCombatActive(named)).toBe(true);
+  });
+
+  it('run62 #10 with #9 (75bb25b8): the floor does not eat over a hostile fight above 5, and does eat over a pig hunt', async () => {
+    const hunt = fixture({ health: 6, food: 10, zombieAt: 30, items: [{ name: 'bread', count: 3 }] });
+    hunt.bot.entities[256] = { id: 256, name: 'pig', type: 'passive', position: new Vec3(3, 65, 0), isValid: true };
+    installFloorReflexes(hunt.bot, floorConfig({}));
+    markHeadCombat(hunt.bot, 'fight', ['pig'], Date.now(), 256);
+    tick(hunt.bot); await settle(10);
+    expect(hunt.bot.consume).toHaveBeenCalledTimes(1);
+    const fight = fixture({ health: 6, food: 10, zombieAt: 9, items: [{ name: 'bread', count: 3 }] });
+    installFloorReflexes(fight.bot, floorConfig({}));
+    markHeadCombat(fight.bot, 'fight', ['zombie'], Date.now(), 2);
+    tick(fight.bot); await settle(10);
+    expect(fight.bot.consume).toHaveBeenCalledTimes(0);
+  });
+
   it('a fight named for one kind holds only for that kind', () => {
     const { bot } = fixture({ zombieAt: 5 });
     const end = markHeadCombat(bot, 'attack-continuously', ['skeleton'], 1_000_000); end();
@@ -176,8 +208,8 @@ describe('combat owner: the floor leaves the planner\'s fight alone', () => {
     expect(bot.floorReflexes.busy).toBeNull();
   });
 
-  it('eating at health 6 or less still happens while the planner fights', async () => {
-    const eat = fixture({ health: 6, food: 10, zombieAt: 9, items: [{ name: 'bread', count: 3 }] });
+  it('eating at health 5 or less still happens while the planner fights (75bb25b8: above 5 the retreat of the fight goes first)', async () => {
+    const eat = fixture({ health: 5, food: 10, zombieAt: 9, items: [{ name: 'bread', count: 3 }] });
     installFloorReflexes(eat.bot, floorConfig({}));
     markHeadCombat(eat.bot, 'attack-nearest', ['*']);
     tick(eat.bot); await settle(10);

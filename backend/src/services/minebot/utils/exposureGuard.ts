@@ -16,6 +16,9 @@ const NEAREST = 4;
 
 /** A creeper that is not lit and at least this far (m) is no reason to stop a dig for a body in armour (run 24: a walk of 76 m ran out of time on it). */
 const ARMOURED_CREEPER_M = 5;
+/** Hoppers that only hit by touch and close slowly: in armour, one at least ARMOURED_CREEPER_M away does not hold a dig back either (end1109f06: magma cubes
+ *  9-10 m off in a basalt delta refused seven walls between the body and a blaze spawner 6 m above, and she waited behind them). */
+const ARMOURED_SLOW_HOPPERS = new Set(['magma_cube', 'slime']);
 
 interface GuardBody {
   inventory?: { slots?: Array<{ name?: string } | null | undefined> };
@@ -86,6 +89,7 @@ export function threatsExposedBy(bot: GuardBody, target: Vec3): ExposingThreat[]
     .map((entity: any) => ({ entity, distance: self.distanceTo(entity.position) }))
     .filter(entry => entry.distance <= radius)
     .filter(entry => !(armoured && entry.entity.name === 'creeper' && entry.distance >= ARMOURED_CREEPER_M && !creeperLit(entry.entity)))
+    .filter(entry => !(armoured && ARMOURED_SLOW_HOPPERS.has(String(entry.entity.name)) && entry.distance >= ARMOURED_CREEPER_M))
     .sort((a, b) => a.distance - b.distance)
     .slice(0, NEAREST);
   if (!near.length) return [];

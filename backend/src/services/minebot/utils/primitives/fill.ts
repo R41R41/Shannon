@@ -1,11 +1,12 @@
 import { actionSignal, nativeActionHost } from '../../execution/ActionExecution.js';
 import { reflexHeld, shootersInReach, shootersSeeing } from '../floorReflexes.js';
 import { feetCell, type Cell } from '../localMap.js';
+import { blockInSight } from '../probeTools.js';
 import { standableAt, standabilityFires, type Standability } from '../standability.js';
-import { blockAt, DIRECTIONS, inventoryCount, StepStopped, type StepContext, type StepOutcome } from './common.js';
+import { blockAt, DIRECTIONS, eyeDistance, inventoryCount, StepStopped, USE_REACH, type StepContext, type StepOutcome } from './common.js';
 import { dig } from './dig.js';
 import { go } from './go.js';
-import { place } from './place.js';
+import { bodyCells, place, PLACE_REPLACEABLE } from './place.js';
 
 export interface FillGroup { stand: Cell; at: Cell[] }
 export interface FillArgs { block: string; groups: FillGroup[]; retreatHp: number; retreatTo: Cell; seconds: number }
@@ -13,15 +14,15 @@ export type FillCode = 'HP_FLOOR' | 'TIME_LIMIT' | 'NO_STAND' | 'NO_BLOCKS' | 'R
 export interface FillResult {
   status: 'done' | 'partial' | 'retreated' | 'failed' | 'cut'; code: FillCode | null; placed: number; remaining: Cell[];
   skippedBy: { creature: number; reach: number; hazard: number; other: number };
-  /** The place hand's own reasons for the cells it skipped, counted (what `other` was). */
+  /** Placement failures and deferred cells/groups, counted again when checked on a later visit. */
   reasons?: Record<string, number>;
   hpMin: number; hpEnd: number; elapsedMs: number; at: Cell; safe: boolean; reached: boolean; seen: number;
 }
 export interface FillOutcome extends StepOutcome { fill: FillResult }
 export const FILL_DESCRIPTION = 'fill: block（持っているブロック）・groups（1〜12組、各 {stand:{x,y,z},at:[{x,y,z},…1〜8マス]}）・retreatHp(1〜19)・retreatTo({x,y,z}、必須の帰還先の足)・seconds(5〜60、帰還込み)を全て指定。'
-  + '座標は絶対座標。probe kind=lane の standAt と group を元に、置くマスと順序は頭が選ぶ。体は順に歩き1マスずつ置き、置けない所を飛ばして最後に1周だけ再試行し、必ず指定先へ帰還を試みる。足場を妨げる火だけ最大2回消し、道に置かず、盾と飛来弾の反射はresidentに任せる。'
+  + '座標は絶対座標。probe kind=lane の standAt と group を元に、置くマスと歩く順序は頭が選ぶ。指定の立ち位置を順に訪ね、goの成否によらず現在地から全groupの未完マスを近い順に置く。目から4.5以内で見え、固体の支えがあり、生き物も隣接する危険物も無いマスだけplaceする。立てない・着けないgroupと置けないマスは理由を数えて後回し。前周の設置が0個なら終了、最大6周で、必ず指定先へ帰還を試みる。新しい立ち位置は選ばず、足場を妨げる火だけ最大2回消し、道に置かず、盾と飛来弾の反射はresidentに任せる。'
   + '開始時に帰還先の足場・全マス分の手持ち・体力を確認し、不足なら動かず置かずfailed。毎マスと移動中にHP下限・帰還予約時間・反射を確認する。'
-  + '行のfill: status(done/partial/retreated/failed/cut)、code(HP_FLOOR/TIME_LIMIT/NO_STAND/NO_BLOCKS/RETREAT_BLOCKED/REFLEX/DEAD/null)、placed(実際に置いた数)、remaining(未完の座標、最大40)、skippedBy(creature/reach/hazard/other、再試行を含む失敗回数)、hpMin/hpEnd、elapsedMs、at(終了位置)、safe、reached、seen(終了位置で見える射手数)。'
+  + '行のfill: status(done/partial/retreated/failed/cut)、code(HP_FLOOR/TIME_LIMIT/NO_STAND/NO_BLOCKS/RETREAT_BLOCKED/REFLEX/DEAD/null)、placed(実際に置いた数)、remaining(未完の座標、最大40)、skippedBy(creature/reach/hazard/other、再確認を含む後回し・失敗回数)、reasons(理由別回数)、hpMin/hpEnd、elapsedMs、at(終了位置)、safe、reached、seen(終了位置で見える射手数)。'
   + 'doneは全マスが済み安全に帰還、partialは未完ありで帰還、retreatedはHP/時間で中止して帰還。reachedは指定先へ到着して立てており、燃焼も溶岩も無い事実。safeはそれに加えて見える射手が無い時だけtrue（射線を切った事実）。見られていても体力がretreatHp以上ならreached=trueでdone/partialになりうるが、safe=false・seen>0で、その場は射線が通っている。safe:falseの所で食べる・作る・待つを安全と読まない。REFLEX/cutとDEADはact全体を止める。反射・死亡・外部取消で体の所有権を失った時は帰還を強行しない。';
 
 /** The same boundary check is used by act and by the head's proposed contract. */
@@ -45,12 +46,15 @@ export function fillProblem(a: Record<string, any>): string | null {
 const cell = (p: Cell): Cell => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
 const same = (a: Cell | null, b: Cell) => !!a && a.x === b.x && a.y === b.y && a.z === b.z;
 const HAZARD = /^(fire|soul_fire|lava|magma_block|cactus|campfire|soul_campfire|wither_rose|sweet_berry_bush|powder_snow)$/u;
+const MAX_PASSES = 6;
+// The place hand's eye-to-centre formula, capped at the requested fill reach.
+const FILL_REACH = Math.min(4.5, USE_REACH);
 const WORDS: Record<FillCode, string> = {
-  HP_FLOOR: '体力の下限で設置をやめた', TIME_LIMIT: '帰還の時間を残して設置をやめた', NO_STAND: '帰還先または立ち位置に立てる足場がない',
+  HP_FLOOR: '体力の下限で設置をやめた', TIME_LIMIT: '帰還の時間を残して設置をやめた', NO_STAND: '帰還先に立てる足場がない',
   NO_BLOCKS: '全マス分のブロックを持っていない', RETREAT_BLOCKED: '指定先への安全な帰還を確認できない', REFLEX: '反射に体を譲った', DEAD: '体が死んだ',
 };
 
-/** One ordered build, one retry pass, then the planner's shelter. No choice of cells, fight, shield takeover or automatic resumption. */
+/** Bounded progress passes over the requested cells and stands, then the planner's shelter. No new cells or stands. */
 export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcome> {
   const problem = fillProblem(args);
   if (problem) throw new Error(`invalid_input: ${problem}`);
@@ -127,9 +131,48 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
   const skip = (reason?: string) => {
     const key = String(reason ?? 'none').slice(0, 40); reasons[key] = (reasons[key] ?? 0) + 1;
     if (reason === 'creature_in_cell') skippedBy.creature++;
-    else if (/reach|path|body_in_cell|stuck|dead_end/u.test(reason ?? '')) skippedBy.reach++;
+    else if (/reach|sight|path|body_in_cell|stuck|dead_end/u.test(reason ?? '')) skippedBy.reach++;
     else if (/hazard|fire|lava|magma|cactus/u.test(reason ?? '')) skippedBy.hazard++;
     else skippedBy.other++;
+  };
+  const placeFromHere = async () => {
+    // Revisit each cell at most once per stop, in eye-distance order. A later stop/pass may supply its missing face.
+    const pending = cells.filter(c => !c.done).sort((a, b) => eyeDistance(bot, a.at) - eyeDistance(bot, b.at));
+    for (const target of pending) {
+      if (stopped(true)) return;
+      const before = blockAt(bot, target.at);
+      if (before?.name === args.block) { target.done = true; continue; }
+      if (!before) { skip('unloaded'); continue; }
+      if (!PLACE_REPLACEABLE.has(before.name)) { skip('occupied'); continue; }
+      if (bodyCells(bot.entity.position).some(p => same(p, target.at))) { skip('body_in_cell'); continue; }
+      // Same creature-box intersection and exclusions as place, including boxes crossing into neighbouring cells.
+      const creature = (Object.values(bot.entities ?? {}) as any[]).some(e => {
+        if (!e?.position || e === bot.entity || e.name === 'item' || e.name === 'experience_orb' || e.type === 'projectile') return false;
+        const half = (e.width ?? 0.6) / 2, height = e.height ?? 1.8, p = target.at;
+        return e.position.x + half > p.x && e.position.x - half < p.x + 1 && e.position.z + half > p.z && e.position.z - half < p.z + 1
+          && e.position.y + height > p.y && e.position.y < p.y + 1;
+      });
+      if (creature) { skip('creature_in_cell'); continue; }
+      const adjacent = Object.values(DIRECTIONS).map(([x, y, z]) => blockAt(bot, { x: target.at.x + x, y: target.at.y + y, z: target.at.z + z }));
+      if ([before, ...adjacent].some(b => HAZARD.test(b?.name ?? ''))) { skip('hazard'); continue; }
+      if (!adjacent.some(b => b?.boundingBox === 'block')) { skip('no_support'); continue; }
+      if (eyeDistance(bot, target.at) > FILL_REACH) { skip('out_of_reach'); continue; }
+      const p = bot.entity.position;
+      if (!blockInSight((x, y, z) => {
+        const b = read(x, y, z);
+        return b ? { name: b.name, solid: b.boundingBox === 'block' || !!b.shapes?.length } : null;
+      }, [p.x, p.y + 1.62, p.z], target.at).visible) { skip('out_of_sight'); continue; }
+      let out: StepOutcome;
+      try { out = await perform(true, until - returnBudget(), part => place(part, { block: args.block, at: [target.at] })); }
+      catch (e) {
+        // Retain a server update arriving just before cancellation, as with the individual place hand.
+        if (blockAt(bot, target.at)?.name === args.block) { target.done = true; placed++; }
+        throw e;
+      }
+      if (out.ok) { target.done = true; placed += out.progress?.done ?? (out.goal === 'already' ? 0 : 1); }
+      else skip(out.reason);
+      ctx.progress?.(`まとめ置き ${placed}/${cells.length}`);
+    }
   };
   const seenNow = () => {
     const p = bot.entity?.position;
@@ -160,7 +203,8 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
     }
     preflight = false;
     try {
-      passes: for (let pass = 0; pass < 2; pass++) {
+      passes: for (let pass = 0; pass < MAX_PASSES; pass++) {
+        const beforePass = placed;
         for (const group of groups) {
           const pending = group.cells.filter(c => !c.done);
           if (!pending.length) continue;
@@ -168,31 +212,20 @@ export async function fill(ctx: StepContext, args: FillArgs): Promise<FillOutcom
           let state = standableAt(read, group.stand);
           if (state.why === 'fire_near') state = await clearFires(group.stand, true);
           if (stopped(true)) break passes;
-          if (!state.ok) { noStand(group.stand, '立ち位置', state); break passes; }
+          if (!state.ok) { for (const _ of pending) skip(`no_stand_${state.why}`); continue; }
           const walk = await move(group.stand, true);
           if (stopped(true)) break passes;
-          if (!walk.ok || !same(feetCell(bot), group.stand)) { for (const _ of pending) skip(walk.reason ?? 'out_of_reach'); continue; }
-          state = standableAt(read, group.stand);
-          if (state.why === 'fire_near') state = await clearFires(group.stand, true);
-          if (stopped(true)) break passes;
-          if (!state.ok) { noStand(group.stand, '立ち位置', state); break passes; }
-          for (const target of pending) {
+          if (!walk.ok || !same(feetCell(bot), group.stand)) {
+            for (const _ of pending) skip(walk.reason ?? 'out_of_reach');
+          } else {
+            state = standableAt(read, group.stand);
+            if (state.why === 'fire_near') state = await clearFires(group.stand, true);
             if (stopped(true)) break passes;
-            const before = blockAt(bot, target.at)?.name;
-            const near = [target.at, ...Object.values(DIRECTIONS).map(([x, y, z]) => ({ x: target.at.x + x, y: target.at.y + y, z: target.at.z + z }))];
-            if (before !== args.block && near.some(p => HAZARD.test(blockAt(bot, p)?.name ?? ''))) { skip('hazard'); continue; }
-            let out: StepOutcome;
-            try { out = await perform(true, until - returnBudget(), part => place(part, { block: args.block, at: [target.at] })); }
-            catch (e) {
-              // A server update may have arrived just before HP/time/reflex cancellation. Keep that completed cell in the receipt.
-              if (before !== args.block && blockAt(bot, target.at)?.name === args.block) { target.done = true; placed++; }
-              throw e;
-            }
-            if (out.ok) { target.done = true; placed += out.progress?.done ?? (out.goal === 'already' ? 0 : 1); }
-            else skip(out.reason);
-            ctx.progress?.(`まとめ置き ${placed}/${cells.length}`);
+            if (!state.ok) for (const _ of pending) skip(`no_stand_${state.why}`);
           }
+          await placeFromHere();
         }
+        if (placed === beforePass || cells.every(c => c.done)) break;
       }
     } catch {
       if (!stopped(false) && code === null) skippedBy.other++;

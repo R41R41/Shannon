@@ -151,7 +151,9 @@ export function planRoof(world: RoofWorld, cell: Cell3, toward?: { x: number; z:
       }
     }
     if (!found) { problems.push('屋根の最初の1個を当てる足場が作れない（周りに固いブロックが届かない）'); break; }
-    for (const c of found) { lay(c); if (c.y >= cy) supports.push(c); }
+    // A support above the caps (cy+3) stays: the caps hide it from under the roof, so it cannot be dug from there, and no line out from under a cap at
+    // cy+2 can rise to it within the 5x5 (end1109p01, 11/9: a support at feet+3 over a cap stopped three fights in a row on support_not_removed).
+    for (const c of found) { lay(c); if (c.y >= cy && c.y <= cy + 2) supports.push(c); }
   }
   if (targets.size) problems.push(`置けない屋根のマスが ${targets.size} ある（手が届かないか、当てる面が無い）`);
   return plan(order, caps.length);
@@ -185,13 +187,19 @@ export function atRoofCentre(position: Cell3, cell: Cell3): boolean {
     && Math.abs(position.z - (cell.z + 0.5)) <= ROOF_CENTRE_TOLERANCE + 1e-6 && Math.abs(position.y - cell.y) <= 0.1;
 }
 
-/** A visible point on the legs' AABB, within survival's 3m eye-to-point reach. The head/eye ray is deliberately irrelevant here. */
-export function endermanStrikePoint(read: BlockReader, from: Cell3, target: Cell3): Vec3 | null {
+/** A visible point on the legs' AABB, within survival's 3m eye-to-point reach. The head/eye ray is deliberately irrelevant here.
+ *  An already angry one has nothing left to provoke, so its body higher up may be struck as well (end1108h29: #985 stood a step below the
+ *  roof's floor; the line to its legs ran through the floor's rim, and it stayed "behind a wall" at 1.3m five times). */
+export const ENDERMAN_ANGRY_STRIKE_HEIGHTS = [ENDERMAN_LEGS, 1.0, 1.5, 2.0];
+export function endermanStrikePoint(read: BlockReader, from: Cell3, target: Cell3, heights: readonly number[] = [ENDERMAN_LEGS]): Vec3 | null {
   const x = Math.max(target.x - 0.29, Math.min(target.x + 0.29, from.x));
   const z = Math.max(target.z - 0.29, Math.min(target.z + 0.29, from.z));
-  const point = new Vec3(x, target.y + ENDERMAN_LEGS, z);
-  if (point.distanceTo(new Vec3(from.x, from.y + 1.62, from.z)) > 3) return null;
-  return endermanLine(read, from, point, 0).clear ? point : null;
+  const eye = new Vec3(from.x, from.y + 1.62, from.z);
+  for (const up of heights) {
+    const point = new Vec3(x, target.y + up, z);
+    if (point.distanceTo(eye) <= 3 && endermanLine(read, from, point, 0).clear) return point;
+  }
+  return null;
 }
 
 const CAMP_HAZARD = /^(lava|water|bubble_column|fire|soul_fire|magma_block|campfire|soul_campfire|cactus|sweet_berry_bush|wither_rose|powder_snow|cobweb|.*_portal|end_gateway)$/u;
@@ -331,7 +339,19 @@ export function roofSites(world: RoofWorld, around: Cell3, radius = 7, toward?: 
  * The roof's blocks: any building block but obsidian (kept for the gate and the dragon), the first kind with enough, else the kind there is most of. The head says
  * "丸石・土・ネザーラック等 11 個"; the site walk (moveToRoofSite) and the camp ask this one rule (Codex's pre-deploy review 6, 11/5: the camp took cobblestone only).
  */
-const ROOF_BLOCKS = BUILDING_BLOCKS.filter(name => name !== 'obsidian');
+// end1109p09 (11/9, warped forest): the head dug warped_wart_block for the roof and held 2 of them beside netherrack×1, yet the camp counted only
+// netherrack and said missing_item about 20 times (same place, same reason). Wart blocks are whole blocks an enderman does not carry off.
+const ROOF_BLOCKS = [...BUILDING_BLOCKS.filter(name => name !== 'obsidian'), 'warped_wart_block', 'nether_wart_block'];
+/**
+ * Every roof block carried, kinds mixed: the roof is laid one cell at a time and each cell takes whatever kind is in hand (roofBlockFor(bot, 1)),
+ * so the need is met by the total. Why: end1109p09 netherrack×1 + wart blocks were told "1 種類で" and the head looped digging.
+ */
+export function roofBlocksHeld(bot: { inventory?: { items?: () => Array<{ name: string; count: number }> } }): { total: number; kinds: Array<{ name: string; count: number }> } {
+  const have = new Map<string, number>();
+  for (const item of bot.inventory?.items?.() ?? []) if (ROOF_BLOCKS.includes(item.name)) have.set(item.name, (have.get(item.name) ?? 0) + item.count);
+  const kinds = [...have].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+  return { total: kinds.reduce((sum, kind) => sum + kind.count, 0), kinds };
+}
 export function roofBlockFor(bot: { inventory?: { items?: () => Array<{ name: string; count: number }> } }, need: number): { name: string; count: number } | null {
   const have = new Map<string, number>();
   for (const item of bot.inventory?.items?.() ?? []) if (ROOF_BLOCKS.includes(item.name)) have.set(item.name, (have.get(item.name) ?? 0) + item.count);

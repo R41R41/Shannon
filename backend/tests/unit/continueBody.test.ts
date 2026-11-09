@@ -408,6 +408,23 @@ describe('the receipt\'s size (contract 8): the lines of the older passes become
   });
 });
 
+describe('the safety cut keeps a strike at the fight target (end1109f09)', () => {
+  const made = { life: 1, dim: 'nether' as const, dimSince: 'd', bodyBoot: 'bb', connectionId: 'c', headBoot: 'h', obsSeq: 1 };
+  const Q = 't-run:hb-1:41';
+  const item = (id: string, hands: unknown[], dependsOn?: string[]) => ({ id: `skill:${id}`, kind: 'skill', skill: 'act', arguments: { hands }, queue: { item: id, after: 'q12', node: null, maxMs: 10_000, startBy: new Date(Date.now() + 60_000).toISOString(), queue: Q, madeIn: made, ...(dependsOn ? { dependsOn } : {}) } }) as never;
+  it('keeps attack/fight acts under fight_target, drops the rest; other dangers drop all', () => {
+    const run = (danger: string) => {
+      const queue = new BodyQueue();
+      queue.begin(item('q12', ['attack target=#5']));
+      queue.waiting.push(item('q13', ['attack target=#5']), item('q14', ['go 1,2,3']), item('q15', ['{"do":"fight","target":"blaze"}'], ['q12']), item('q16', ['dig 1,0,0 rel', 'attack target=#7']));
+      const judged = queue.judgeWaiting({ queue: Q, item: 'q12', unit: { goal: 'partial', end: 'cut', released: true } as never }, danger);
+      return { dropped: judged.dropped.map(entry => entry.command.queue?.item), kept: judged.kept.map(entry => entry.command.queue?.item) };
+    };
+    expect(run('fight_target:blaze')).toEqual({ dropped: ['q14'], kept: ['q13', 'q15', 'q16'] });
+    expect(run('hp_below')).toEqual({ dropped: ['q13', 'q14', 'q15', 'q16'], kept: [] });
+  });
+});
+
 describe('the safety cut (R3-2): what waits behind an item that ended in a danger does not start, even an item that depends on nothing', () => {
   const made = { life: 1, dim: 'overworld' as const, dimSince: 'd', bodyBoot: 'bb', connectionId: 'c', headBoot: 'h', obsSeq: 1 };
   const Q = 't-run:hb-1:41';

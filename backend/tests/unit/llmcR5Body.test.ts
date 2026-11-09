@@ -276,11 +276,11 @@ describe.skipIf(!L)('the scan at a spawn waits for the chunks (run 28: 25 of 441
     });
     installSpawnScan(bot, { minWaitMs: 20, settleMs: 20, pollMs: 5 });
     bot.emit('spawn');
-    await vi.waitFor(() => expect(bot.worldScan).toBeDefined(), { timeout: 5000, interval: 10 });
-    expect(bot.worldScan.chunks).toBe(441);
+    // The near chunks' preliminary scan comes first (worldScan.ts preliminaryStarted); wait for the full one.
+    await vi.waitFor(() => expect(bot.worldScan?.chunks).toBe(441), { timeout: 5000, interval: 10 });
     expect(bot.worldScan).toMatchObject({ radiusChunks: 10, viewDistance: 10 });
     expect(bot.worldScan.waitedMs).toBeGreaterThanOrEqual(290);
-    expect(bot.worldScan.rows[0]).toMatch(/^範囲 読み込み 441 チャンク・半径 10 チャンク（約 \d+m）・描画の距離 10（441 チャンクの 100%）・待ち [\d.]+ 秒$/u);
+    expect(bot.worldScan.rows[0]).toMatch(/^走査（計測基点 [^）]+）: 範囲 読み込み 441 チャンク・半径 10 チャンク（約 \d+m）・描画の距離 10（441 チャンクの 100%）・待ち [\d.]+ 秒$/u);
     expect(bot.worldScan.text).toContain('（読み込み 441 チャンク・半径 10 チャンク');
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { Vec3 } from 'vec3';
 import { installPromptPlace } from '../../src/services/minebot/utils/promptPlace.js';
 import { cancelNonSurvivalActions, executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 
@@ -13,6 +14,25 @@ function body(nativeMs: number, outcome: 'placed' | 'refused' = 'placed') {
 }
 
 describe('a placement the server does not answer does not hold the body (paid run L77t stood 3.3 seconds inside one, struck four times)', () => {
+  it('sends nothing if its owner is cancelled while aiming before the final cell check', async () => {
+    const bot = body(1);
+    let began!: () => void, finish!: () => void;
+    const aiming = new Promise<void>(resolve => { began = resolve; });
+    bot.lookAt = () => { began(); return new Promise<void>(resolve => { finish = resolve; }); };
+    installPromptPlace(bot);
+    const check = vi.fn();
+    const action = executeAction(bot, 'place-final-check', 5000, async () => {
+      await bot.placeBlock({ position: new Vec3(1, 63, 0) }, new Vec3(0, 1, 0), check);
+      return { success: true, result: 'placed' };
+    }, { waitForQuiescence: true });
+    await aiming;
+    cancelNonSurvivalActions(bot, 'test-cancel-during-aim');
+    finish();
+    expect((await action).failureType).toBe('interrupted');
+    expect(check).not.toHaveBeenCalled();
+    expect(bot.placed).toBe(0);
+  });
+
   it('passes a placement the server takes straight through, and a refusal the library reports', async () => {
     const taken = body(20);
     installPromptPlace(taken, 200);

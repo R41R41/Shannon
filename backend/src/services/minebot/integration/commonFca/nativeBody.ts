@@ -34,6 +34,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { installLife, type LifeKeeper } from '../../utils/life.js';
 import { freeSlots } from '../../utils/primitives/common.js';
 import { findEntity, isDying } from '../../utils/primitives/use.js';
+import { endermanStuckAway } from '../../utils/primitives/fight.js';
 import { FIGHT_THREAT_RANGE_M } from './bodyQueue.js';
 import { deathLedgerOf } from '../../utils/deathLedger.js';
 import { lapseOf, madenessOf, type BodyNow, type Lapse } from './lapse.js';
@@ -50,6 +51,7 @@ import { feetCell } from '../../utils/localMap.js';
 import { installPackTap, setReflexEventPrefix } from '../../utils/packEvents.js';
 import { utilitiesOf } from '../../utils/utilitiesScan.js';
 import { installHitRecord, recentHitsOf } from '../../utils/hitRecord.js';
+import { harmCause } from '../../utils/harm.js';
 import { endObservation } from '../../utils/dragonState.js';
 
 /** The body process's start-up id: a new one at each start. A command made for another start is not run (continue contracts, 2). */
@@ -254,7 +256,9 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         const spec = typeof hand.target === 'string' && /^#\d+$/u.test(hand.target.trim()) ? Number(hand.target.trim().slice(1)) : hand.target;
         const entity = typeof spec === 'number' ? (this.bot as { entities?: Record<number, any> }).entities?.[spec] : findEntity(this.bot, spec, FIGHT_THREAT_RANGE_M);
         const at = this.bot.entity?.position;
-        if (entity?.position && at && entity.position.distanceTo(at) <= FIGHT_THREAT_RANGE_M && !isDying(this.bot, entity)) return String(entity.name ?? hand.target);
+        // end1109p07b: an enderman that stuck angry and has not come since cannot reach the body: the gate dropped the very moves out to open ground
+        // (q43, q80) for #574 held on the ledges about the pocket. It is no danger to the next item.
+        if (entity?.position && at && entity.position.distanceTo(at) <= FIGHT_THREAT_RANGE_M && !isDying(this.bot, entity) && !endermanStuckAway(this.bot, entity)) return String(entity.name ?? hand.target);
       }
     } catch { /* a judgement that cannot be made is no danger: the item's own end decides */ }
     return null;
@@ -306,6 +310,9 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       // r10: the reflex that holds the body now (`floor-flee`, `floor-last-stand`, `floor-cover` ...), also in the gap between two of its hands, or
       // null. An act that comes now waits for it (see `afterReflex`); the head need not send one until this is null.
       reflexHeld: reflexHeld(this.bot),
+      // run62 #12: what is wearing the body down now, read from its own state (`hot_floor@x,y,z`, `lava`, `in_fire`, `on_fire`, `wither`,
+      // `poison`, `starve`, `drown`, `suffocation`), or null when nothing is. Never 'unknown'.
+      hurtBy: (() => { try { const cause = harmCause(this.bot as any); return cause === 'environment' ? null : cause; } catch { return null; } })(),
       // What the floor's budget is holding back right now (arrow, eat, armor, budget), or null: why no reflex came.
       floorSilenced: floorSilenced(this.bot),
       // Who holds the body in a fight: `head` (the planner's fight skill runs, or began within 20 s with its target near: the floor does
@@ -662,30 +669,40 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       breathing ||= Number.isFinite(until) && safetyLeaseCapabilities(this.bot).includes('auto-swim');
       return breathing ? Math.max(started + SAFETY_RELEASE_WAIT_MS, Math.min(until, started + BREATH_RELEASE_WAIT_MS)) : started + SAFETY_RELEASE_WAIT_MS;
     };
-    let waited = false;
-    while (physicalActionBusy(this.bot)) {
-      if (signal.aborted) {
-        if (!extend || !hasActiveSafetyLease(this.bot) || Date.now() >= bound()) return false;
-        waited = true;
+    // end1108h17 S7 (11/8): at a blaze camp the cover reflex stepped twice, 48 ms apart. The release waited for the first, and the second
+    // began while the plugin cleanup awaited: the receipt said inputs held, the head declared the outcome unknown and the task paused 21 s
+    // into the run. A safety reflex that begins during the release is waited for too, within the same bound.
+    for (let round = 0; ; round += 1) {
+      let waited = round > 0;
+      while (physicalActionBusy(this.bot)) {
+        // One that began during the cleanup is waited for only within the bound, whether or not the caller still waits.
+        if (signal.aborted || round > 0) {
+          if (!extend || !hasActiveSafetyLease(this.bot) || Date.now() >= bound()) return false;
+          waited = true;
+        }
+        await delay(10);
       }
-      await delay(10);
-    }
-    // The caller's time was spent waiting for the safety reflex: the cleanup that follows gets its own short bound.
-    if (waited) signal = AbortSignal.timeout(300);
-    try {
-      if (signal.aborted) return false;
-      let removeAbort = () => {};
-      const interrupted = new Promise<false>(resolve => { const abort = () => resolve(false);
-        signal.addEventListener('abort', abort, { once: true }); removeAbort = () => signal.removeEventListener('abort', abort); });
+      // The caller's time was spent waiting for the safety reflex: the cleanup that follows gets its own short bound.
+      if (waited) signal = AbortSignal.timeout(300);
       try {
-        const stopped = await Promise.race([Promise.resolve(this.bot.collectBlock?.cancelTask?.()).then(() => true), interrupted]);
-        if (!stopped || signal.aborted) return false;
-      } finally { removeAbort(); }
-      if (physicalActionBusy(this.bot)) return false; // A critical safety owner may start while plugin cleanup awaited.
-      this.bot.pathfinder?.stop(); this.bot.pathfinder?.setGoal(null);
-      this.bot.stopDigging?.(); this.bot.deactivateItem?.(); this.bot.clearControlStates();
-      return !physicalActionBusy(this.bot) && !Object.values(this.bot.controlState ?? {}).some(Boolean);
-    } catch { return false; }
+        if (signal.aborted) return false;
+        let removeAbort = () => {};
+        const interrupted = new Promise<false>(resolve => { const abort = () => resolve(false);
+          signal.addEventListener('abort', abort, { once: true }); removeAbort = () => signal.removeEventListener('abort', abort); });
+        try {
+          const stopped = await Promise.race([Promise.resolve(this.bot.collectBlock?.cancelTask?.()).then(() => true), interrupted]);
+          if (!stopped || signal.aborted) return false;
+        } finally { removeAbort(); }
+        // A critical safety owner may start while plugin cleanup awaited: waited for as above (a non-safety one still answers held).
+        if (physicalActionBusy(this.bot)) {
+          if (extend && hasActiveSafetyLease(this.bot) && Date.now() < bound()) continue;
+          return false;
+        }
+        this.bot.pathfinder?.stop(); this.bot.pathfinder?.setGoal(null);
+        this.bot.stopDigging?.(); this.bot.deactivateItem?.(); this.bot.clearControlStates();
+        return !physicalActionBusy(this.bot) && !Object.values(this.bot.controlState ?? {}).some(Boolean);
+      } catch { return false; }
+    }
   }
   closeEvidence(context: Command['context']): void { this.goalEvidence.cancel(context); }
   async dispose(): Promise<void> {

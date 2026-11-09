@@ -724,3 +724,25 @@ backendから既存Vitestで上記4ファイルを列挙し `--maxWorkers=1 --mi
 変更は指定コピーのprobe・geometry・関係試験／型検査補助・本節のみ。ラボはS1担当で未実行。反射・gazeGuard・dragonStrike・actの一覧・環境変数・fallClutch・`.codex-material/` は変更しない。VM／本体／DB／外部資料更新／commit／pushは行わない。
 
 ?????Windows????Node v24.21.0???? `minecraftEndBedKill` **35?**??? `minecraftDragonKillCompare` 65??`minecraftDragonNook` 10??`minecraftEndFullChain` 125??**4????235???**?`node tests/unit/checkEndBedKill.cjs` ?probe???????3 TS???????0?`git diff --check` ?????????????????????????????????env???????env??????HEAD `ea4b374` ?????????6??????????????
+
+## 2026-11-05：落下クラッチの統合候補（release は無効のまま）
+
+`FALL_CLUTCH_ENABLED=false` は引き続き全 floor mode 共通のリリース定数で、環境変数からは変えない。通常 client・common FCA・fullrun・M7 が同じ定数を使う。以下は実装・無料回帰の範囲であり、自動起動が有効になったという説明ではない。前節の 4.2 m／手か hotbar 限定／壁時計ポーリングは旧実装の記録である。
+
+`fallClutch.ts` は別枝の `0b17151`（source SHA `aebe9d2d…`）の位置 packet 後 `move` 同期版を取り込む候補とした。今の目から、短い落下予測で選んだ実支持面中心までの距離が 4.4 m 以下の時だけ、既存 motor port の `activateItem(false)` で注ぐ。予測した未来の目をサーバーの射程判定に使わない。Mineflayer の hand／sequence を保ち、raw packet の新しい書込口は増やさない。真下と隣接する着地点の実 footprint／full-cube 支持・未知や液体・手の変化を再検査し、実水セルの blockUpdate を送信事実と区別する。
+
+この最初の統合は手・hotbar のバケツだけを選び、pack からの持ち替えは旧版どおり拒否する。現行 native inventory は window_click の送信前にローカル slots/cursor を変更するため、最終送信だけの失効検査では後続 owner の在庫不変を保証できない。SDK 内部を広く覆わず、落下中に equip／moveSlotItem／clickWindow を呼ばない範囲を採る。死亡・respawn・spawn・game・end は当該 scope を永久に失効させ、同じ Entity が回復しても復活させない。旧 life の水のメモは新しい scoop の入口でも使わず、同じ life で強い反射に操作を取られた時の回収メモは保持する。失効した clutch 由来の注水・クリック・手戻しを防ぎ、親 executor に元からある cleanup の解放送信とは分けて検査する。
+
+別枝の実機 r243 は Minecraft 1.21.11／同 source SHA で 90.58 m の落下に対し、水セル (0,65,-3) の観測→着水→HP20 を記録している。一方、r236 は 10 m 落下で注水前着地・6 HP損失も記録する。速度・地形によって射程内の未接地 move が無い場合があり、任意の落下の救命保証ではない。今回の owner／life 境界と現行 patched inventory の組合せは新たな候補であり、この版の native 実機成功へ過去の記録を付け替えない。release true の判断と現 source／deps による1回の実機確認は取りまとめが別に行う。
+
+独立レビューで pack の local inventory 変化を確認したため、pack を含む中間候補8c87は不採用として別保存した。新候補の packet-order／life／水セル確認と、旧 modern 枝の pack 成功記録は分けて扱う。
+
+## 2026-11-05：controlled native-b 後の dev-enable 候補
+
+この追記は前節の「release 無効」時点を更新する private 開発候補である。採用済 BODY `6861229239b032dd7c8415d4ea9b3fd652d2a02d` に対し、`floorReflexes.ts` の `FALL_CLUTCH_ENABLED=false` を `true` にする1行だけを変更する。これは native-b で測った private overlay と同じ bytes（floor SHA `a5aa2393…` → `6e8a4126…`）で、既存 floor が有効な経路の通常自動入口を使う。新しい env toggle、raw packet authority、owner/life・時間・射程・手数の拡張は無い。pack のバケツは拒否したまま。本番反映や M7 起動・有料実走の承認を意味しない。
+
+Minecraft 1.21.11 の一回の隔離 native-b episode は、通常の floor installation と実 safety owner から各 arm の最初の落下を観測した。旧 d444・無効 gate・10 m の対照は clutch/use とも0、最低HP13。686・true の10/25/90 m はそれぞれ最低HP20、position packet→対応する move→owned 注水→実 source-water update→着水→owned 空バケツ使用→同じ水源の消失を記録した。各 arm は注水1＋回収1の use2、window_click0、最後は水バケツ1・空バケツ0・元の stone_sword、active owner 無し。timed OP0、server の死亡文0、停止・port/session/lock 解放を別に確認した。着地だけで自動回収や手戻しも成功したと推測せず、それぞれの証拠を保存している。
+
+正本は `status/clutch-native-hotbar-result-b-v2-20261105/` の `ISSUED.json` SHA `c544a92841b6f50a3a6634e94a2cf75ab5152e2684f0d8581adfaa6be757c7e6`、`result.json` SHA `c8f9ddf67b5b6d2d4a9709ed6b252e2cb698e05ad432f0eaf0e3ffc49fa49093`。server log SHA `d624bf672ccacbbe930613d27e73c574f70dc5d5a8830630e2043100312fc9c1`、source/tool/runtime の再照合 `private-verify.json` SHA `395a574115838700e28b4906646dfe0df432e1429c71ef46a602685cf179fa1e` は actual exit0。a の落下前 setup 失敗は別の原本として残し、clutch の成功・失敗へ読み替えない。
+
+この結果は同じ source/deps の held/hotbar 水バケツによる controlled vertical 10/25/90 m を各1回測った範囲である。実 M7 の dragon contact／水平 impulse、敵による owner preemption、pack 装備、未ロード・複雑地形、任意速度の落下や一般的な生存は未証明で、過去の M7 落下死を成功へ改めない。次の M7 は新採用 commit の全 Git ソース＋既存 lab21 を別に束縛し、whole Git 内が true なら追加の flag overlay を重ねない。native 合格だけから M7 生存・討伐の保証にはしない。

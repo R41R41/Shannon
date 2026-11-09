@@ -90,6 +90,8 @@ export function takeActReport(bot: object, since: number): ActReport | null {
  */
 const CLOSED: Record<string, string> = {
   out_of_reach: '届かない', cannot_reach: '届かない', not_opened: '届かない',
+  // end1108h16 (11/8): a blaze chase past its leash (12 m from the spawner, or 10 m from where it began).
+  leash: '届かない',
   // the End (2026-11-02): the dragon is not on its perch / the perch ended; a crystal too near or too far to shoot, or no clear line to it.
   not_perched: '届かない', perch_over: '時間切れ', too_close: '届かない', too_far: '届かない', line_blocked: '届かない', perched_immune: '届かない',
   wall: '一歩ではない', low_ceiling: '一歩ではない', drop: '一歩ではない', lava: '一歩ではない', no_path: '一歩ではない', stuck: '一歩ではない',
@@ -99,10 +101,17 @@ const CLOSED: Record<string, string> = {
   // obsidian and portal (2026-10-26): their lines carry the contract's own code; these words only count where they stopped.
   unreachable: '届かない', lava_danger: '溶岩が流れ込む', blocked: '置けない', ignite_failed: '置けない',
   unbreakable: '掘れない', no_harvest_tool: '掘れない', dig_unconfirmed: '掘れない', dig_failed: '掘れない', not_visible: '掘れない',
+  // end1109p05 (11/9): fight's not_visible is an enderman's eyes out of the line (the roof's own cap), not a dig: read as 掘れない the head dug
+  // its own cap (replay r4). act.ts gives fight's stop this reason for the word only; the outcome keeps not_visible.
+  eyes_not_visible: '届かない',
+  // end1109p05: an angry enderman that does not come up to the roof (15 stops) and a roof not done in time (3) both read 無い, which says nothing.
+  enderman_did_not_arrive: '届かない', build_stalled: '時間切れ',
   occupied: '置けない', body_in_cell: '置けない', creature_in_cell: '置けない', nothing_to_set_against: '置けない', not_placed: '置けない',
   not_set: '置けない', already_filled: '置けない', not_poured: '置けない', not_lit: '置けない', not_filled: '置けない', no_floor: '足場が無い',
-  inventory_full: '満杯', threat_exposed: '見られる', protected: '守られた物', lava_behind: '溶岩が流れ込む', footing: '足場が無い',
+  inventory_full: '満杯', threat_exposed: '見られる', protected: '守られた物', last_pickaxe_kept: '守られた物', lava_behind: '溶岩が流れ込む', footing: '足場が無い',
   timeout: '時間切れ', time_up: '時間切れ', reflex: '反射', interrupted_by_reflex: '反射', stop_if: 'stopIf',
+  // eat (S1 lab 11/8): food still in the pack that did not go down in the wait is not '無い'.
+  not_eaten: '時間切れ',
   no_progress: '進まない', damage_taken: '被弾', fell: '落下',
   breathing_work: '呼吸不足',
   // go (2026-10-26): its stops carry the contract's own code in the line; these words only count where it stopped.

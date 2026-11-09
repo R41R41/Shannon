@@ -1,5 +1,5 @@
 import { Bot, BotEvents, Dimension } from 'mineflayer';
-import { CommandManager } from 'mineflayer-cmd';
+import type { CommandManager } from 'mineflayer-cmd/lib/CommandManager.js';
 import pathfinderPkg from 'mineflayer-pathfinder';
 import { Block } from 'prismarine-block';
 import { Entity } from 'prismarine-entity';

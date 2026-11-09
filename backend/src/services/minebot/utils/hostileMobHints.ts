@@ -60,7 +60,7 @@ export function isLikelyHostileMobName(mobName: string, now = Date.now()): boole
  * Kinds the game itself sets down as hostile that leave the body alone until it gives them cause: they are a
  * threat once one has struck (see noteAttackedBy), not before.
  */
-const NEUTRAL_UNTIL_STRUCK: readonly string[] = ['zombified_piglin', 'piglin', 'enderman'];
+export const NEUTRAL_UNTIL_STRUCK: readonly string[] = ['zombified_piglin', 'piglin', 'enderman'];
 
 /**
  * Of the neutral kinds, those whose anger the server shows: the flag (by its name in the entity's data) it sets

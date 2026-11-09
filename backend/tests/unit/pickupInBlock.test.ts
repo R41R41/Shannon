@@ -30,3 +30,21 @@ describe('pickup: a drop inside a block', () => {
     expect(Math.abs(sim.bot.entity.position.x - 5.5)).toBeLessThanOrEqual(1.5);
   });
 });
+
+// end1108h7b S7: 「pickup target=blaze_rod」 from 10 m off took the nearest brick, failed on it, and never went for the rod.
+describe('pickup by name', () => {
+  const groundOpen: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y < FLOOR ? 'stone' : 'air');
+  it('walks past a nearer drop of another name to the one named, 10 m off', async () => {
+    const sim = makeHandsSim(groundOpen, { start: [0.5, FLOOR, 0.5] });
+    sim.bot.entities[901] = { id: 901, name: 'item', displayName: 'Item', type: 'other', position: new Vec3(2.5, FLOOR, 0.5), velocity: new Vec3(0, 0, 0), getDroppedItem: () => ({ name: 'nether_bricks', count: 1 }), metadata: [] };
+    sim.bot.entities[902] = { id: 902, name: 'item', displayName: 'Item', type: 'other', position: new Vec3(10.5, FLOOR, 0.5), velocity: new Vec3(0, 0, 0), getDroppedItem: () => ({ name: 'blaze_rod', count: 1 }), metadata: [] };
+    const { value } = await drive(sim, pickup(ctxOf(sim), { item: 'blaze_rod' }));
+    expect(sim.bot.entities[902]).toBeUndefined();
+    expect(value.ok).toBe(true);
+  });
+  it('says none of that name lies near, and that an arrow shot is no drop', async () => {
+    const sim = makeHandsSim(groundOpen, { start: [0.5, FLOOR, 0.5] });
+    const { value } = await drive(sim, pickup(ctxOf(sim), { item: 'arrow' }));
+    expect(value.text).toMatch(/24m 内に落ちている arrow は無い.*射った矢は落とし物ではない/u);
+  });
+});
