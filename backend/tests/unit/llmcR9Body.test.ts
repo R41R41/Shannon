@@ -58,7 +58,7 @@ const piglin = (id: number, x: number, y: number, z: number, health = 16) =>
  * A fake body in the Nether at `at` (feet): a physics tick, a ledger, the floor installed. A swing at a creature hurts it 20 ms later
  * (`damage` health, `entityHurt`; `entityDead` and gone at 0), as the game does.
  */
-function scene(shape: (x: number, y: number, z: number) => Cell, at: Vec3, options: { health?: number; items?: any[]; mobs?: Record<string, any>; now?: () => number; damage?: number } = {}) {
+function scene(shape: (x: number, y: number, z: number) => Cell, at: Vec3, options: { health?: number; items?: any[]; mobs?: Record<string, any>; now?: () => number; damage?: number; engage?: boolean } = {}) {
   const blocks = new Map<string, Cell>();
   const bot: any = Object.assign(new EventEmitter(), {
     __blocks: blocks, __dug: [] as string[], __placed: [] as string[], __jumped: false, __fakeMovements: true, __swings: [] as number[],
@@ -94,6 +94,8 @@ function scene(shape: (x: number, y: number, z: number) => Cell, at: Vec3, optio
     goto: vi.fn(async (goal: any) => { bot.entity.position = new Vec3(goal.x + 0.5, goal.y, goal.z + 0.5); }) };
   const ledger = ensureReflexLedger(bot);
   reflexes.installFloorReflexes(bot, floorConfig({}), { fleeTickMs: 1, now: options.now });
+  // These hands were written for the guarded melee logic: the engagement rule (11/10, which strikes a piglin of a bare body before it strikes) is off unless a scene asks for it.
+  if (!options.engage) bot.floorReflexes.engageNextAt = Infinity;
   return { bot, ledger };
 }
 const tick = (bot: EventEmitter) => bot.emit('physicsTick');
@@ -224,7 +226,7 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
       // 11/10 (the owner's engagement rule): an enemy that is after the body within 4 m is struck first, a shooter and a creeper (shield up) included;
       // before, only a blaze within 2.5 m was (CONTACT_SHOOTERS) and a creeper never.
       const mob = { id: 3, name, type: 'hostile', height: 1.8, width: 0.6, position: new Vec3(name === 'blaze' ? 3.2 : 2.6, 64, 0.5) };
-      const { bot } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, SHIELD], mobs: { 3: mob }, now: () => clock.at });
+      const { bot } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, SHIELD], mobs: { 3: mob }, now: () => clock.at, engage: true });
       await hurtTo(bot, clock, 11);
       await rounds(bot, clock, 1);
       expect(bot.__swings.length, name).toBeGreaterThan(0);

@@ -59,6 +59,7 @@ describe('the rule: who counts and when it holds', () => {
   it('counts neutral kinds only once they are after the body: a blow taken from them (by the server\'s cause id) or an enderman\'s anger flag', () => {
     const piglin = mob(8, 'piglin'), ender = mob(9, 'enderman', 3.1), wolf = mob(10, 'wolf', 3.0);
     const { bot, handlers } = fixture([piglin, ender, wolf]);
+    bot.inventory.slots[5] = { name: 'golden_helmet', count: 1 };   // gold on: a piglin leaves the body alone until it strikes
     expect(engageRead(bot, bot.floorReflexes)).toMatchObject({ n4: 0, n8: 0 });
     handlers.damage_event({ entityId: 1, sourceCauseId: 9, sourceDirectId: 9 });   // piglin #8 struck (ids are the game's plus one)
     expect(engageRead(bot, bot.floorReflexes)).toMatchObject({ n4: 1, n8: 1, inRule: true });
@@ -127,13 +128,32 @@ describe('the body strikes first', () => {
     expect(entries(bot).find(entry => entry.kind === 'melee_none' && entry.detail.includes('n4=3') && entry.detail.includes('decision=skip'))).toBeTruthy();
   });
 
-  it.each([['an enderman that is calm', mob(7, 'enderman', 2.4)], ['a piglin that has not struck', mob(7, 'piglin', 2.4)], ['a zombified piglin that has not struck', mob(7, 'zombified_piglin', 2.4)],
+  it.each([['an enderman that is calm', mob(7, 'enderman', 2.4)], ['a zombified piglin that has not struck', mob(7, 'zombified_piglin', 2.4)],
     ['a wolf', mob(7, 'wolf', 2.4)], ['an iron golem', mob(7, 'iron_golem', 2.4)]])('does not intercept %s', async (_name, enemy) => {
     const { bot } = fixture([enemy]);
     bot.emit('physicsTick');
     await idle(50);
     expect(bot.attack).not.toHaveBeenCalled();
     expect(bot.floorReflexes.melee).toBeUndefined();
+  });
+
+  it('a piglin goes for a body wearing no gold, so it is struck before it strikes; with a golden piece on it is left alone', async () => {
+    const bare = fixture([mob(7, 'piglin', 2.4)]);
+    bare.bot.emit('physicsTick');
+    await vi.waitFor(() => expect(bare.bot.attack).toHaveBeenCalled());
+    const gold = fixture([mob(7, 'piglin', 2.4)]);
+    gold.bot.inventory.slots[5] = { name: 'golden_helmet', count: 1 };
+    gold.bot.emit('physicsTick');
+    await idle(50);
+    expect(gold.bot.attack).not.toHaveBeenCalled();
+  });
+
+  it('a zombified piglin that has attacked the body before (not in the last 5 s) is still after it', async () => {
+    const { bot } = fixture([mob(7, 'zombified_piglin', 2.4)]);
+    const hint = await import('../../src/services/minebot/utils/hostileMobHints.js');
+    hint.noteAttackedBy('zombified_piglin');
+    bot.emit('physicsTick');
+    await vi.waitFor(() => expect(bot.attack).toHaveBeenCalled());
   });
 
   it('strikes a piglin once it has struck', async () => {
@@ -162,6 +182,33 @@ describe('the body strikes first', () => {
     await idle(50);
     expect(bot.attack).not.toHaveBeenCalled();
   });
+
+  it('yields to the lava reflex', async () => {
+    const { bot } = fixture([mob(7, 'zombie')]);
+    bot.lavaReflex = { engaged: true };
+    bot.emit('physicsTick');
+    await idle(50);
+    expect(bot.attack).not.toHaveBeenCalled();
+  });
+
+  it('one hand carries on to a second zombie in reach (its own engagement is not the planners)', async () => {
+    const { bot } = fixture([mob(7, 'zombie', 2.4, 0.5), mob(8, 'zombie', 2.5, 0.9)]);
+    bot.attack.mockImplementation((entity: any) => { delete bot.entities[entity.id]; });
+    bot.emit('physicsTick');
+    await vi.waitFor(() => expect(bot.attack).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    await vi.waitFor(() => expect(entries(bot).filter(entry => entry.kind === 'melee')).toHaveLength(1));
+  });
+
+  it('an enemy it cannot get at (in reach of nothing, a step toward it fails) is not walked toward again and again, and does not fill the ledger', async () => {
+    const { bot } = fixture([mob(7, 'zombie', 4.2, 0.5)]);
+    bot.emit('physicsTick');
+    await vi.waitFor(() => expect(bot.floorReflexes.engageFutile?.has(7)).toBe(true), { timeout: 4000 });
+    const walks = bot.setControlState.mock.calls.filter((call: any[]) => call[0] === 'forward' && call[1] === true).length;
+    for (let tick = 0; tick < 12; tick++) { bot.emit('physicsTick'); await idle(120); }
+    expect(bot.setControlState.mock.calls.filter((call: any[]) => call[0] === 'forward' && call[1] === true).length).toBe(walks);
+    expect(bot.attack).not.toHaveBeenCalled();
+    expect(entries(bot).filter(entry => entry.kind === 'melee')).toHaveLength(0);
+  }, 10_000);
 
   it('strikes nothing with no weapon at all (the old logic goes on)', async () => {
     const { bot } = fixture([mob(7, 'zombie')], { items: [] });
@@ -193,6 +240,23 @@ describe('creepers: their own technique', () => {
     expect(bot.activateItem).not.toHaveBeenCalled();
   });
 
+  it('the shield coming down in the middle of the hand ends it at once and gives the lit creeper back to the floor', async () => {
+    const { bot } = fixture([mob(7, 'creeper')], { shield: true });
+    bot.attack.mockImplementation(() => { bot.inventory.slots[45] = null; bot.usingHeldItem = false; });
+    bot.emit('physicsTick');
+    await vi.waitFor(() => expect(bot.attack).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(entries(bot).some(entry => entry.kind === 'melee' && entry.detail.includes('盾が下りた'))).toBe(true));
+    expect(bot.creeperDuel).toBeFalsy();
+  });
+
+  it('a creeper out of reach is not walked up to (it swells inside its own reach): no step toward it, no lease', async () => {
+    const { bot } = fixture([mob(7, 'creeper', 4.2, 0.5)]);
+    bot.emit('physicsTick');
+    await idle(80);
+    expect(bot.setControlState.mock.calls.some((call: any[]) => call[0] === 'forward' && call[1] === true)).toBe(false);
+    expect(bot.attack).not.toHaveBeenCalled();
+  });
+
   it('with no shield and low health a creeper is not struck', async () => {
     const { bot } = fixture([mob(7, 'creeper')], { health: 6 });
     bot.emit('physicsTick');
@@ -215,6 +279,16 @@ describe('D4: a stopIf end does not drop a following fight or attack item', () =
   };
   it('keeps the attack behind stop_if_* and damage_taken, drops the walk', () => {
     for (const danger of ['stop_if_hostile', 'stop_if_hp', 'damage_taken']) expect(run(danger)).toEqual({ dropped: ['q14'], kept: ['q13'] });
+  });
+  it('keeps the attack behind a cut by the melee reflex (the engagement rule strike), and still drops everything behind any other reflex', () => {
+    const queue = () => { const q = new BodyQueue(); q.begin(item('q12', ['go 1,2,3'])); q.waiting.push(item('q13', ['attack target=zombie']), item('q14', ['go 1,2,3'])); return q; };
+    const judged = (reflex: string) => {
+      const q = queue();
+      const out = q.judgeWaiting({ queue: Q, item: 'q12', unit: { goal: 'partial', end: 'cut', released: true, code: 'interrupted_by_reflex', reflex } as never }, 'interrupted_by_reflex');
+      return { dropped: out.dropped.map(entry => entry.command.queue?.item), kept: out.kept.map(entry => entry.command.queue?.item) };
+    };
+    expect(judged('floor-melee')).toEqual({ dropped: ['q14'], kept: ['q13'] });
+    for (const reflex of ['floor-flee', 'floor-retreat', 'lava', 'breath']) expect(judged(reflex)).toEqual({ dropped: ['q13', 'q14'], kept: [] });
   });
   it('still drops everything behind a reflex, a fall and the rest', () => {
     for (const danger of ['reflex', 'interrupted_by_reflex', 'fell']) expect(run(danger)).toEqual({ dropped: ['q13', 'q14'], kept: [] });

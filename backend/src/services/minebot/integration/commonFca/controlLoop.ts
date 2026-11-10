@@ -28,6 +28,8 @@ export interface CommonFcaActuator {
   /** Task queue: whether a condition (an item's `pre`) holds now, and in words what is lacking when it does not. Absent: a `pre` cannot be checked. */
   /** R3-2: the target of a fight or attack hand of this command, when it is alive within the body's threat range now (the name, for the words), else null. Absent: no such judgement. */
   fightTargetNear?(command: Command): string | null;
+  /** 11/11: the reflex that cut this command off (its capability name, e.g. `floor-melee`), when the body knows; asked once, after the command ended. */
+  reflexCutBy?(command: Command): string | null;
   check?(condition: ActCondition): { ok: boolean; words: string; /** The condition could not be judged (a furnace nobody recorded): the item is not started either way (continue contracts, 2). */ unknown?: boolean };
   /** Task queue: how far the running act is (its hand, its pass), without the command's id. */
   progress?(): Omit<MinecraftQueueProgress, 'id'> | null;
@@ -402,13 +404,17 @@ export class CommonFcaControlLoop {
    * An item ended (or did not start): what waits is judged by the dependency table; the first that is still waiting starts. The ones dropped say why
    * (`droppedBecause`, naming the item); the ones kept despite the failure say so (`keptDespite`, shown on their receipt later).
    */
-  private afterEnd(envelope: QueueEnvelope, unit: ItemEnd, key: string, command?: Command): void {
+  private afterEnd(envelope: QueueEnvelope, unitEnded: ItemEnd, key: string, command?: Command): void {
+    let unit = unitEnded;
     // R3-2 (the safety cut): an item that ended in a danger, or whose fight target is still alive near, leaves nothing that moves the body behind it.
     let danger: string | null = null;
     if (this.queue.waiting.length) {
       let near: string | null = null;
       try { near = command ? this.options.actuator.fightTargetNear?.(command) ?? null : null; } catch { near = null; }
       danger = dangerOfEnd(unit, near);
+      let by: string | null = null;
+      try { by = command ? this.options.actuator.reflexCutBy?.(command) ?? null : null; } catch { by = null; }
+      if (by) unit = { ...unit, reflex: by };
     }
     const judged = this.queue.judgeWaiting({ queue: envelope.queue, item: envelope.item, unit }, danger);
     for (const drop of judged.dropped) {

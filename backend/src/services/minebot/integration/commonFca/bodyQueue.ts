@@ -48,7 +48,7 @@ export function readEnvelope(command: Command): QueueEnvelope | null | undefined
 export type Admission = 'start' | 'wait' | { failureType: 'queue_after_gone' | 'queue_busy' | 'queue_full'; result: string };
 
 /** How an item ended, as the queue remembers it (what `dependsOn` is judged by). */
-export interface ItemEnd { goal: GoalOutcome; end: RunEnd; released: boolean; code?: string }
+export interface ItemEnd { goal: GoalOutcome; end: RunEnd; released: boolean; code?: string; /** The reflex that cut the item off, when the body says (`floor-melee`: the engagement rule's strike or a melee hand). */ reflex?: string }
 export interface Dropped { command: Command; code: 'depends_failed' | 'depends_unknown'; item?: QueueRef; /** The danger that ended the item before it (R3-2): the drop is for that, not for a dependency. */ danger?: string }
 export interface Kept { command: Command; item: QueueRef; code: string }
 
@@ -152,7 +152,11 @@ export class BodyQueue {
       // whose hands fight or attack is the answer to that danger, so it stays.
       // 11/10 (run 4, D4): the same for an item's own stopIf (`stop_if_hostile` ...) and a hit (`damage_taken`): the head queues the attack because
       // an enemy is on the body, and the stop that told so must not throw the answer away. A reflex, a fall and the rest still drop everything.
-      if (danger && !(fightsBack(command) && (danger.startsWith('fight_target:') || danger.startsWith(DANGER_STOP_PREFIX) || danger === 'damage_taken'))) {
+      // 11/11: the same for a cut by the body's own melee reflex (the engagement rule strikes before it is struck and cuts the act with it): the strike is the
+      // answer to the enemy, and the queued attack at it carries on after. A cut by any other reflex (lava, breath, flee, fall) still drops everything.
+      const answered = fightsBack(command) && (danger?.startsWith('fight_target:') || danger?.startsWith(DANGER_STOP_PREFIX) || danger === 'damage_taken'
+        || (ended.unit.reflex === 'floor-melee' && (danger === 'reflex' || danger === 'interrupted_by_reflex')));
+      if (danger && !answered) {
         dropped.push({ command, code: 'depends_failed', item: failedItem, danger });
         gone.set(item, { queue, item });
         continue;

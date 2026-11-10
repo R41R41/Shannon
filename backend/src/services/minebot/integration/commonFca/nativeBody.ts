@@ -263,6 +263,12 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     } catch { /* a judgement that cannot be made is no danger: the item's own end decides */ }
     return null;
   }
+  /** 11/11: the commands (act items) the body's melee reflex cut off, until the loop has asked (bounded). */
+  private readonly meleeCut = new Set<string>();
+  /** The reflex that cut this command off, when it was the melee reflex (the engagement rule's strike), else null. The loop asks once, when the item has ended. */
+  reflexCutBy(command: Command): string | null {
+    return this.meleeCut.delete(command.id) ? 'floor-melee' : null;
+  }
   /** Task queue: whether an item's condition holds now, and in words what is lacking when it does not. */
   check(condition: ActCondition): { ok: boolean; words: string; unknown?: boolean } {
     try {
@@ -593,6 +599,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         if (outcome === 'failed' && act.stoppedBy === 'reflex') failure = { failureType: 'interrupted_by_reflex', recoverable: true };
         const deciding = act.lines.find(line => (line.status === 'stopped' || line.status === 'failed') && line.code) ?? act.lines.find(line => line.status === 'stopped');
         const unitCode = deciding?.code ?? act.failureType;
+        if (cut?.by === 'floor-melee') { this.meleeCut.add(command.id); if (this.meleeCut.size > 32) this.meleeCut.delete(this.meleeCut.values().next().value as string); }
         this.units.set(command.id, { goal: act.outcome?.goal ?? 'unknown', end: act.outcome?.end ?? 'finished', released, ...(unitCode ? { code: unitCode } : {}) });
         return this.receipt(command, outcome, released, text, undefined, failure);
       }
