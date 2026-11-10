@@ -41,8 +41,10 @@ export const BOW_FULL_DRAW_S = 1.05;
 /**
  * Told once after arrows loosed at the dragon in flight (review 2026-11-10, KB1: a precedent spent 192 arrows on it before the crystals). The body is the part aimed at,
  * and a part other than the head takes a quarter and one more (partDamage: about 3 of an arrow's 9); a crystal that stands heals it back. The shot is not refused.
+ * It stands before the shots' own lines: act clips a hand's line at 160 characters, and at the end of the text three shots or more cut it off.
+ * "A crystal an arrow reaches": a caged one stops the arrow, and the head's knowledge leaves the cage for last.
  */
-const FLYING_DRAGON_LINE = '。飛んでいる竜は矢が当たりにくく、胴に当たっても傷は 1 本で約 3（体力 200。結晶が残る間は回復で消える）。結晶が残るなら矢は結晶に使う';
+const FLYING_DRAGON_LINE = '飛んでいる竜は矢が当たりにくく、胴に当たっても 1 本で体力 200 のうち約 3、結晶が残る間は回復で消える。矢の通る結晶が残るなら矢はそちらが先';
 /** An end crystal is shot from this far at the most (the arrow's range in the End). */
 export const CRYSTAL_SHOT_MAX = 64;
 
@@ -672,7 +674,11 @@ export async function shoot(ctx: StepContext, args: ShootArgs): Promise<StepOutc
     throw error;
   }
   const fired = results.filter(line => /^\d+発目/u.test(line)).length;
-  return finish({ ok: true, data: { arrowsLeft: arrowsLeft(), kills }, text: `${weaponName}で射った: ${results.join('、')}。当たり ${hits}/${fired}${kills ? `、倒した ${kills}` : ''}、矢の残り ${arrowsLeft()}${kind === 'blaze' ? spawnerLine(bot) : ''}${atFlyingDragon ? FLYING_DRAGON_LINE : ''}` });
+  const tally = `当たり ${hits}/${fired}${kills ? `、倒した ${kills}` : ''}、矢の残り ${arrowsLeft()}`;
+  // At the flying dragon the worth of the arrow and the tally come first, so that the 160 characters of act's line cut the later shots' details and not these.
+  const text = atFlyingDragon ? `${weaponName}で射った（${FLYING_DRAGON_LINE}）: ${tally}。${results.join('、')}`
+    : `${weaponName}で射った: ${results.join('、')}。${tally}${kind === 'blaze' ? spawnerLine(bot) : ''}`;
+  return finish({ ok: true, data: { arrowsLeft: arrowsLeft(), kills }, text });
 }
 
 /** The windows one shoot hand may open (one, and a second when the target moves round the corner). */

@@ -35,8 +35,20 @@ describe('the actual crystal path immediately before releasing a drawn bow', () 
   it('tells what an arrow at the flying dragon is worth, without refusing the shot', async () => {
     const f = fixture(); Object.assign(f.bot.entities[9], { name: 'ender_dragon', width: 16, height: 8, yaw: 0 });
     const out = await f.run(); expect(out.ok).toBe(true); expect(f.calls).toEqual(['draw', 'release']);
-    expect(out.text).toContain('1発目'); expect(out.text.match(/飛んでいる竜は矢が当たりにくく/gu)).toHaveLength(1); expect(out.text).toContain('結晶が残るなら矢は結晶に使う');
+    expect(out.text).toContain('1発目'); expect(out.text.match(/飛んでいる竜は矢が当たりにくく/gu)).toHaveLength(1); expect(out.text).toContain('矢の通る結晶が残るなら矢はそちらが先');
     const crystal = fixture(); expect((await crystal.run()).text).not.toContain('飛んでいる竜');
+  });
+  // act clips a hand's line at 160 characters (actReport's clip): with four shots what the head acts on (the crystals first, the tally) is still inside them.
+  it('keeps the flying dragon line and the tally inside the 160 characters act leaves of a volley of four', async () => {
+    const f = fixture(); Object.assign(f.bot.entities[9], { name: 'ender_dragon', width: 16, height: 8, yaw: 0 });
+    const result = shoot(f.ctx, { target: 9, charge: 1.05, weapon: 'bow', shots: 4 }); result.catch(() => {}); await vi.runAllTimersAsync();
+    const out = await result, kept = out.text.slice(0, 159);
+    expect(f.calls.filter(call => call === 'release')).toHaveLength(4); expect(out.text).toContain('4発目');
+    expect(kept).toContain('矢の通る結晶が残るなら矢はそちらが先'); expect(kept).toContain('当たり 0/4、矢の残り 0'); expect(kept).toContain('1発目');
+  });
+  it('does not tell the line when no arrow left the bow', async () => {
+    const f = fixture(); Object.assign(f.bot.entities[9], { name: 'ender_dragon', width: 16, height: 8, yaw: 0 }); f.bot.deactivateItem = () => { f.calls.push('release'); };
+    const out = await f.run(); expect(out.text).toContain('矢が出なかった'); expect(out.text).not.toContain('飛んでいる竜');
   });
   it('cancels by slot change when a wall is observed only after the last awaited look', async () => {
     const f = fixture(); f.finalLook(async () => { f.wall(); });
