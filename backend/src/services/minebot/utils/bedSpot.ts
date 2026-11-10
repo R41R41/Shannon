@@ -59,6 +59,8 @@ export const floorOpensWhenUsed = (block: any): boolean => {
 const isLiquid = (block: any) => !!block && LIQUIDS.has(String(block.name));
 const hurts = (block: any) => !!block && (HURTS.has(String(block.name)) || isLiquid(block));
 const isSolid = (block: any) => !!block && block.boundingBox === 'block';
+/** A door or fence gate the body opens by walking into it (minecraft-data gives them a full box); an iron door does not open by hand. */
+const opensByWalking = (block: any) => /(?:_door|_fence_gate)$/u.test(String(block?.name ?? '')) && block.name !== 'iron_door';
 const at = (world: BedWorld, cell: Vec3) => { try { return world.blockAt(cell) ?? null; } catch { return null; } };
 
 type Kind = 'free' | 'rock' | 'bad';
@@ -139,9 +141,11 @@ export function planBedSpot(world: BedWorld, position: { x: number; y: number; z
 export function walkableCells(world: BedWorld, position: { x: number; y: number; z: number }, steps: number, limit = 900): Map<string, number> {
   const start = new Vec3(Math.floor(position.x), Math.floor(position.y), Math.floor(position.z));
   const key = (cell: Vec3) => `${cell.x},${cell.y},${cell.z}`;
+  // A doorway is walked through (a bed inside a village house sits behind one): the path planner opens the door.
+  const blocks = (block: any) => isSolid(block) && !opensByWalking(block);
   const standable = (cell: Vec3) => {
     const feet = at(world, cell), head = at(world, cell.offset(0, 1, 0)), floor = at(world, cell.offset(0, -1, 0));
-    return !!feet && !!head && !!floor && !isSolid(feet) && !isSolid(head) && !hurts(feet) && !hurts(head) && isSolid(floor) && !hurts(floor);
+    return !!feet && !!head && !!floor && !blocks(feet) && !blocks(head) && !hurts(feet) && !hurts(head) && isSolid(floor) && !hurts(floor);
   };
   const seen = new Map<string, number>([[key(start), 0]]);
   let frontier = [start];
@@ -154,8 +158,8 @@ export function walkableCells(world: BedWorld, position: { x: number; y: number;
           if (seen.has(key(to)) || !standable(to)) continue;
           // A step up needs the cell over the one it leaves to be open; a drop needs the cell it falls through to be.
           const over = at(world, cell.offset(0, 2, 0));
-          if (dy === 1 && (!over || isSolid(over))) continue;
-          if (dy < 0 && isSolid(at(world, cell.offset(dx, 1, dz)))) continue;
+          if (dy === 1 && (!over || blocks(over))) continue;
+          if (dy < 0 && blocks(at(world, cell.offset(dx, 1, dz)))) continue;
           seen.set(key(to), step);
           next.push(to);
         }

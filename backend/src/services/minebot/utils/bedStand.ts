@@ -41,6 +41,8 @@ export interface BedStandOptions {
   isFree: (block: any) => boolean;
   /** A foot cell not to choose (a bed did not come there lately). */
   skip?: (cell: Vec3) => boolean;
+  /** A stand cell not to walk to (a walk there did not arrive lately). The body's own cell is never skipped. */
+  skipStand?: (cell: Vec3) => boolean;
   /** The cells a body at this place fills (a bed is never put into them). */
   bodyAt?: (at: { x: number; y: number; z: number }) => Vec3[];
 }
@@ -69,14 +71,14 @@ export function whatHides(bot: BedStandBot, cell: Vec3, from: Vec3 = bot.entity.
 }
 
 /** The stands in the order of preference: where the body is, then the cells it can walk to, nearest first. */
-function* stands(bot: BedStandBot, walk?: Map<string, number>): Generator<{ cell: Vec3; at: Vec3; here: boolean; steps: number }> {
+function* stands(bot: BedStandBot, walk?: Map<string, number>, skipStand?: (cell: Vec3) => boolean): Generator<{ cell: Vec3; at: Vec3; here: boolean; steps: number }> {
   const pos = bot.entity.position;
   const here = cellOf(pos);
   if (!bodyInHazard(bot)) yield { cell: here, at: pos, here: true, steps: 0 };
   for (const [key, steps] of walk ?? []) {
     const [x, y, z] = key.split(',').map(Number);
     const cell = new Vec3(x, y, z);
-    if (cell.equals(here)) continue;
+    if (cell.equals(here) || skipStand?.(cell)) continue;
     yield { cell, at: new Vec3(x + 0.5, y, z + 0.5), here: false, steps };
   }
 }
@@ -88,7 +90,7 @@ function* stands(bot: BedStandBot, walk?: Map<string, number>): Generator<{ cell
 export function planBedStand(bot: BedStandBot, options: BedStandOptions): BedStandPlan | null {
   const radius = options.radius ?? 3;
   const reach = Math.min(options.reach ?? STAND_USE_REACH, STAND_USE_REACH);
-  for (const stand of stands(bot, options.walk)) {
+  for (const stand of stands(bot, options.walk, options.skipStand)) {
     const body = options.bodyAt?.(stand.at) ?? [];
     const found: Array<{ foot: Vec3; head: Vec3; distance: number }> = [];
     for (let x = -radius; x <= radius; x++) for (let z = -radius; z <= radius; z++) for (const y of [0, -1, 1]) {

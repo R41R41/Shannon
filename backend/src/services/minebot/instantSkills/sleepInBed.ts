@@ -18,6 +18,8 @@ export const REPLACEABLE = new Set(['air', 'cave_air', 'void_air', 'short_grass'
   'leaf_litter', 'snow', 'vine', 'glow_lichen', 'seagrass']);
 /** The wider bed search: the steps of walk a stand may be from the body (run 21). */
 const BED_WALK_STEPS = 10;
+/** All the walks to a stand before the bed is set down, together (the hand has 45 s; the place and the sleep need about 20). */
+const STAND_WALK_BUDGET_MS = 20_000;
 /** The walk to a bed that is already there: a village bed can be most of sixteen blocks off. */
 const BED_APPROACH_STEPS = 24;
 const BED_APPROACH_CELLS = 3000;
@@ -111,6 +113,7 @@ class SleepInBed extends InstantSkill {
   findPlaceForBed(radius: number = 3, reach: number = STAND_USE_REACH, walk?: Map<string, number>): Vec3 | null {
     const plan = planBedStand(this.bot as unknown as BedStandBot, {
       radius, reach, walk, isFree: isFreeCell, skip: bedSpotFailedLately, bodyAt: bodyCells,
+      skipStand: cell => this.failedStands.has(`${cell.x},${cell.y},${cell.z}`),
     });
     this.plannedStand = plan && !plan.here ? plan.stand : null;
     return plan?.foot ?? null;
@@ -125,6 +128,9 @@ class SleepInBed extends InstantSkill {
     try { walk = walkableCells(this.bot as any, this.bot.entity.position, BED_WALK_STEPS); } catch { return null; }
     return this.findPlaceForBed(3, STAND_USE_REACH, walk);
   }
+
+  /** Stand cells a walk did not reach in this call: not chosen again (one unreachable stand would otherwise cost every attempt). */
+  private failedStands = new Set<string>();
 
   /** The cell to walk to before the bed is set down (null: the body is in the right place). */
   private plannedStand: Vec3 | null = null;
@@ -190,16 +196,13 @@ class SleepInBed extends InstantSkill {
   }
 
   /**
-   * The bed block this call set down at `foot`, read at its cell (run 6: `findBlock` within three blocks of the feet cell measures to the
-   * floored body cell, and a bed 3.3 away "was not there"). A bed a library search finds is accepted only when it is that bed: the foot cell
-   * or the cell beside it.
+   * The bed block this call set down, read at its foot cell (run 6: a library search within three blocks of the feet cell measures to the floored
+   * body cell, and a bed 3.3 away "was not there"). Only that cell: the cell was free when it was chosen, so a bed there is the one just set
+   * down. A bed a library search finds beside it may be another's (a village row, a villager's), and is never taken for it.
    */
   private bedPlacedAt(foot: Vec3): any | null {
     const direct = this.bot.blockAt(foot);
-    if (isBedName(direct?.name)) return direct;
-    const found = this.bot.findBlock?.({ matching: this.bot.isABed, maxDistance: 6 });
-    const p = found?.position;
-    return p && p.y === foot.y && Math.abs(p.x - foot.x) + Math.abs(p.z - foot.z) <= 1 ? found : null;
+    return isBedName(direct?.name) ? direct : null;
   }
 
   /**
@@ -486,21 +489,33 @@ class SleepInBed extends InstantSkill {
       // ベッドを設置できる場所を探す
       this.plannedHead = null;
       this.plannedStand = null;
+      this.failedStands.clear();
       let placePos: Vec3 | null = null;
       let hidden = '';
       // A spot is used from a stand (sleep range, reach, sight: utils/bedStand), the body's own cell first, then the nearest walk (run 21: a
       // rock passage one block wide, a wider cave a few steps off). A stand off the body's cell is walked to and the spot read again from
       // there; a walk that did not arrive marks the spot and the next one is tried (three walks at most). Nothing is dug here.
+      const walkStarted = Date.now();
+      let walkedAny = false;
       for (let attempt = 0; attempt <= 3; attempt++) {
         placePos = this.findPlaceForBed() ?? this.findWiderPlaceForBed();
         const stand = this.plannedStand as Vec3 | null;
         if (!placePos || !stand) break;
         if (attempt === 3) { noteBedSpotFailed(placePos); hidden = whatHides(this.bot as unknown as BedStandBot, placePos); placePos = null; break; }
+        // The walks share what is left of the hand's 45 s after the place, the wait to fall asleep and the wake (about 20 s): one budget.
+        const walkLeft = STAND_WALK_BUDGET_MS - (Date.now() - walkStarted);
+        if (walkLeft < 2_000) { hidden = ''; placePos = null; this.plannedStand = null; break; }
         this.bot.pathfinder.stop();
-        const walked = await gotoSafe(this.bot, new goals.GoalBlock(stand.x, stand.y, stand.z), { rockTravel: !options.noDig, timeoutMs: 15_000 });
+        const walked = await gotoSafe(this.bot, new goals.GoalBlock(stand.x, stand.y, stand.z), { rockTravel: !options.noDig, timeoutMs: Math.min(15_000, walkLeft) });
+        walkedAny = true;
         const now = this.bot.entity.position;
         const arrived = Math.floor(now.x) === stand.x && Math.floor(now.y) === stand.y && Math.floor(now.z) === stand.z;
-        if (!walked?.success && !arrived) { noteBedSpotFailed(placePos); hidden = whatHides(this.bot as unknown as BedStandBot, placePos); placePos = null; this.plannedStand = null; }
+        if (!walked?.success && !arrived) { this.failedStands.add(`${stand.x},${stand.y},${stand.z}`); noteBedSpotFailed(placePos); hidden = whatHides(this.bot as unknown as BedStandBot, placePos); placePos = null; this.plannedStand = null; }
+      }
+      // A mob that came during the walks is a reason not to lie down (the digging path below checks the same).
+      if (placePos && walkedAny) {
+        const mob = this.hostileWithinEight();
+        if (mob) return { success: false, result: `ベッドを置く場所へ歩く間に、近くに敵が来たため寝られません（${mob.name}が${mob.distance.toFixed(1)}m先にいます）`, failureType: 'hostile_near', recoverable: true };
       }
       if (!placePos && options.noDig) {
         const inHazard = bodyInHazard(this.bot as unknown as BedStandBot);

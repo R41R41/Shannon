@@ -15,7 +15,7 @@ vi.mock('../../src/services/minebot/utils/gotoSafe.js', () => ({ gotoSafe: vi.fn
 const { gotoSafe } = await import('../../src/services/minebot/utils/gotoSafe.js');
 const { default: SleepInBed, noteBedSpotFailed } = await import('../../src/services/minebot/instantSkills/sleepInBed.js');
 
-const SOLID = new Set(['stone', 'crafting_table']);
+const SOLID = new Set(['stone', 'crafting_table', 'oak_door']);
 type Fill = (x: number, y: number, z: number) => string;
 function world(fill: Fill) {
   const placed = new Map<string, string>();
@@ -164,6 +164,35 @@ describe('the bed set down is found at its cell, and the body stands where it ca
     expect(inventory).toHaveLength(1);
   });
 
+  it('a stand a walk did not reach is not walked to twice (review: three 15 s walks to the same cell)', async () => {
+    const X = 9500;
+    const w = world(flat(X));
+    for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) for (const y of [63, 64, 65]) noteBedSpotFailed(new Vec3(X + x, y, z));
+    const { skill } = sleeper(w, new Vec3(X + 0.5, 64, 0.5));
+    vi.mocked(gotoSafe).mockClear();
+    vi.mocked(gotoSafe).mockImplementation((async () => ({ success: false, error: 'no path' })) as any);
+    await skill.runImpl(false, false, { leaveIfNight: true, noDig: true });
+    vi.mocked(gotoSafe).mockImplementation((async () => ({ success: true })) as any);
+    const goals = vi.mocked(gotoSafe).mock.calls.map(call => { const g: any = call[1]; return `${g.x},${g.y},${g.z}`; });
+    expect(goals.length).toBeGreaterThan(0);
+    expect(new Set(goals).size).toBe(goals.length);
+  });
+
+  it('a bed that stands beside the cell is not taken for the one set down (a village row): not slept in, not dug up', async () => {
+    const w = world(flat(9800));
+    const { bot, skill, calls } = sleeper(w, new Vec3(9800.5, 64, 0.5));
+    bot.placeBlock = vi.fn(async (reference: any, face: Vec3) => {
+      const cell = reference.position.plus(face);
+      // The place did not come (no answer), and another bed stands next to the cell it was meant for.
+      bot.findBlock = vi.fn(() => ({ name: 'red_bed', position: cell.offset(1, 0, 0) }));
+      throw new Error('placeBlock did not answer within 1500ms');
+    });
+    const result = await skill.runImpl(false, false, { leaveIfNight: true, noDig: true });
+    expect(result.success).toBe(false);
+    expect(bot.sleep).not.toHaveBeenCalled();
+    expect(calls.some(call => call.startsWith('dig-block-at:'))).toBe(false);
+  });
+
   it('a sleep that fails after the place (too far) takes the bed back into the pack and says so', async () => {
     const w = world(flat(10_000));
     const { bot, skill, calls, inventory } = sleeper(w, new Vec3(10_000.5, 64, 0.5), {
@@ -222,6 +251,29 @@ describe('a bed that is already there is slept in from a stand that sees it', ()
     expect(result).toMatchObject({ success: true });
     expect(bot.sleep).toHaveBeenCalledTimes(1);
     expect(cellKey(bot.sleep.mock.calls[0][0].position)).toBe(cellKey(westBed[0]));
+  });
+
+  it('a bed inside a house behind a door is walked to: the door is a way in, not a wall (review)', async () => {
+    const door: Fill = (x, y, z) => {
+      if (y <= 63) return 'stone';
+      if (x === X + 1) return z === 0 && (y === 64 || y === 65) ? 'oak_door' : 'stone';
+      return 'air';
+    };
+    const w = world(door);
+    for (const cell of eastBed) w.placed.set(cellKey(cell), 'red_bed');
+    const { bot, skill } = sleeper(w, new Vec3(X + 0.5, 64, 0.5));
+    bot.findBlocks = vi.fn(() => [eastBed[0]]);
+    bot.inventory = { items: () => [] };
+    vi.mocked(gotoSafe).mockClear();
+    vi.mocked(gotoSafe).mockImplementation((async (_bot: any, goal: any) => {
+      bot.entity.position = new Vec3(goal.x + 0.5, goal.y, goal.z + 0.5);
+      return { success: true };
+    }) as any);
+    const result = await skill.runImpl(false, false, { leaveIfNight: true, noDig: true });
+    vi.mocked(gotoSafe).mockImplementation((async () => ({ success: true })) as any);
+    expect(result).toMatchObject({ success: true });
+    expect(vi.mocked(gotoSafe)).toHaveBeenCalled();
+    expect(bot.sleep).toHaveBeenCalledTimes(1);
   });
 
   it('with only the bed behind rock it says which block is between, and does not walk into the wall', async () => {
