@@ -43,6 +43,7 @@ import { make } from '../utils/primitives/make.js';
 import { smelt } from '../utils/primitives/smelt.js';
 import { fireSleepDue, sleep } from '../utils/primitives/sleep.js';
 import { bedBurst } from '../utils/primitives/bedBurst.js';
+import { steadyBeforeHand } from '../utils/primitives/footing.js';
 import { furnacesDueByNow } from '../utils/furnaceDone.js';
 import { handProblem } from '../utils/actHandRules.js';
 import { itemFoodPoints } from '../utils/foodPoints.js';
@@ -281,6 +282,12 @@ const SLOTS: Record<string, string> = { hand: 'hand', offhand: 'off-hand', 'off-
 
 /** A `furnace take` sent before the batch is due waits for it when no more than this many seconds are left. */
 export const TAKE_WAIT_DUE_SECONDS = 15;
+/** Run 6: a body that water carries or sinks is put on its feet before a hand works (utils/primitives/footing); what it did is the first words of the hand's line. */
+async function runHandSteady(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
+  const steady = await steadyBeforeHand(ctx, hand);
+  const outcome = await runHand(ctx, hand);
+  return steady ? { ...outcome, text: `${steady}。${outcome.text}` } : outcome;
+}
 async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
   const bot = ctx.bot;
   if (hand.den !== undefined && hand.do !== 'fight') return { ok: false, reason: 'invalid_input', text: 'den は fight enderman だけで使う' };
@@ -754,7 +761,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         carried = [sleptLine, await carryAway(ctx, travel, named)].filter(Boolean).join('。');
         opsBefore = motorOpsOf(bot);
       }
-      try { outcome = await runHand(ctx, hand); }
+      try { outcome = await runHandSteady(ctx, hand); }
       catch (error) {
         settleTrack();
         endFight();

@@ -91,10 +91,12 @@ describe('dig: a body carried out of reach while it digs', () => {
 describe('dig: the breathing refusal reaches the head', () => {
   it('keeps the budget and smaller-job advice in the act line and a breathing headline in recentStops', async () => {
     const sim = makeHandsSim(ground, { items: [{ name: 'diamond_pickaxe', count: 1 }] });
-    sim.world.set(0, FLOOR, 0, 'water');
-    sim.world.set(0, FLOOR + 1, 0, 'water');
+    // A pool wide enough that no dry stand lies within two cells (the body steps out of water before a hand when it can: footing.ts), so the refusal is what is shown.
+    for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) for (const y of [FLOOR, FLOOR + 1]) sim.world.set(x, y, z, 'water');
     sim.bot.oxygenLevel = 20;
     sim.bot.digTime = () => 20_000;
+    // The stub is the dig time this test wants: the game's-rules wrapper (digTimeIn) is not put over it.
+    sim.bot.digTimeVanilla = true;
     const native = vi.spyOn(sim.bot, 'dig');
     const { value } = await drive(sim, runAct(sim.bot, ACT_HANDS.parse([{ do: 'dig', at: [
       { x: 0, y: FLOOR, z: 0 }, { x: 1, y: FLOOR, z: 0 }, { x: 2, y: FLOOR, z: 0 }, { x: 3, y: FLOOR, z: 0 },

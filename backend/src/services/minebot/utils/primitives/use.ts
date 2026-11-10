@@ -7,6 +7,7 @@ import { noteSpawnBed } from '../ownedBlocks.js';
 import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, findItem, guard, inventoryCount, isAirLike, placeText, stopped,
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { BED_HALF_WAIT_MS } from './place.js';
+import { fillFromStand } from './fillStand.js';
 import { compassOf, eyeReportOf, EYE_FATE_MS, EYE_WATCH_MS, watchEyeFlight } from '../huntEyeFlight.js';
 import { barterMany, barterWithPiglin } from '../huntBarter.js';
 import { blastAt } from '../crystalBlast.js';
@@ -298,7 +299,15 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
       cell = near; block = blockAt(bot, near); distance = eyeDistance(bot, near);
     }
   }
-  if (distance > USE_REACH) return stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`
+  // Run 6 (49 hands, 400 s to a water bucket): the source is out of reach, a flow, or behind a wall from here. The body finds the dry floor to fill from (a clear line, or one wall block
+  // opened, the bucket filled and the wall closed again) in this one hand: the head does not have to find the stand.
+  let standNote = '';
+  if (name === 'bucket' && block.name === 'water' && (distance > USE_REACH || liquidLevel(block) !== 0 || lineBlocker(bot, cell))) {
+    const through = await fillFromStand(ctx, cell, 'water');
+    if (through && through.reason !== 'stand_unreachable') return through.ok ? { ...through, text: `${instead}${through.text}` } : through;
+    standNote = through ? `（${through.text}）` : '';
+  }
+  if (distance > USE_REACH) return stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）${standNote}`
     + (name === 'bucket' && (block.name === 'water' || block.name === 'lava') ? `。${USE_REACH}m 内に見えて届く${block.name === 'water' ? '水' : '溶岩'}の源は無い: 源の隣の立てる所へ go してから use` : ''), cell);
   // A bed (r8: before any item is looked at; the bed is slept in with an empty hand). In the Nether and the End it cannot be slept in: the right click is a blast, and a use hand
   // at a bed there is the planner asking for it (the body never does it by itself).

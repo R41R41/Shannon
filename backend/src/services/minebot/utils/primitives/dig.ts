@@ -15,6 +15,8 @@ import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, is
 import { pickup } from './pickup.js';
 import { withProgress } from './progressUnits.js';
 import { assessBreathingDig, assessBreathingWork, breathingWorkWords } from '../breathingWork.js';
+import { installVanillaDigTime } from '../digTimeIn.js';
+import { steadyInWater } from './footing.js';
 
 /**
  * dig: the cells in order (design mb-llm-centric 2.3). The tool is the one asked for, else the quickest carried that makes the block
@@ -37,6 +39,11 @@ export interface DigArgs {
    * only (act): mine, go and the reflexes that dig keep their own ways round.
    */
   openSight?: boolean;
+  /**
+   * Run 6: use's bucket opens the one wall between a dry floor and a water source, fills at once and closes the wall again (utils/primitives/fillStand); only that hand may dig a
+   * block that water touches. Not a hand's field.
+   */
+  wallOpen?: boolean;
 }
 
 /** At most this many blocks opened in one hand to see the cells asked. */
@@ -60,6 +67,20 @@ export function exposeAllows(exposeOk: boolean | string[] | undefined, kind: str
 }
 
 const MAX_CELLS = 16;
+/** What a stop for the water says first (run 6: the same words 14 times, the planner repeating the same dig): the action, not the arithmetic. */
+const BREATHING_NEXT = '頭が水: 足元に dirt か cobblestone を置くか流れの外へ。同じ手は繰り返さない。';
+
+/**
+ * The water beside or over a cell (a dig lets it in: water runs down and sideways, never up). Run 6: the body's own dig of the stone between its tunnel and an underground lake
+ * flooded the tunnel and it spent 480 s in it; go and mine already refuse this, a planner's dig did not. Null when no water touches the cell.
+ */
+export function waterBeside(bot: any, cell: Cell): Cell | null {
+  for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]] as const) {
+    const at = { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz };
+    if (blockAt(bot, at)?.name === 'water') return at;
+  }
+  return null;
+}
 const UNBREAKABLE = new Set(['bedrock', 'barrier', 'end_portal_frame', 'end_portal', 'end_gateway', 'command_block', 'structure_block', 'reinforced_deepslate']);
 
 /**
@@ -114,7 +135,7 @@ export function cheaperThanAsked(bot: any, block: any, asked: any): any | null {
   return cheaper && cheaper.type !== asked.type && wearCostSeconds(cheaper) < wearCostSeconds(asked) ? cheaper : null;
 }
 
-async function holdTool(ctx: StepContext, block: any, asked: string | undefined): Promise<{ held: string; fail?: StepOutcome }> {
+async function holdTool(ctx: StepContext, block: any, asked: string | undefined, fast = false): Promise<{ held: string; fail?: StepOutcome }> {
   const bot = ctx.bot;
   if (asked === 'hand') {
     if (bot.heldItem) { try { await guard(ctx, Promise.resolve(bot.unequip('hand')), 3000); } catch (error) { if (error instanceof StepStopped) throw error; } }
@@ -125,11 +146,12 @@ async function holdTool(ctx: StepContext, block: any, asked: string | undefined)
   if (asked) {
     item = findItem(bot, asked);
     if (!item) return { held: '', fail: stopped(bot, 'missing_item', `${asked} を持っていない（${block.name} を掘る道具に指定された）`) };
-    const cheaper = cheaperThanAsked(bot, block, item);
+    // Run 6: wear is not saved when every second is breath (a body in water or off its feet digs 5 to 25 times slower: the wooden pickaxe asked-down from the iron one took 26 s of a 15 s breath).
+    const cheaper = fast ? null : cheaperThanAsked(bot, block, item);
     if (cheaper) { kept = `（${item.name} は取っておいた）`; item = cheaper; }
   } else {
     const tools = (bot.inventory?.items?.() ?? []) as any[];
-    item = chooseTool(block, tools, { requireHarvest: true, effects: bot.entity?.effects });
+    item = chooseTool(block, tools, { requireHarvest: true, effects: bot.entity?.effects, fastest: fast });
     if (!item && block.harvestTools && !tools.some(tool => canHarvest(block, tool))) {
       return { held: '', fail: stopped(bot, 'no_harvest_tool', `${block.name} は持っている道具では何も落ちない（掘る道具が無い）。何も落ちなくても掘るなら tool:"hand"`) };
     }
@@ -167,6 +189,7 @@ export const DIG_DRIFT_OVERDUE_MS = 3000;
 
 async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promise<StepOutcome> {
   const bot = ctx.bot;
+  installVanillaDigTime(bot);
   const cells = args.at ?? [];
   if (!cells.length) return stopped(bot, 'invalid_input', 'dig には at（掘るマスの列）が要る');
   if (cells.length > MAX_CELLS) return stopped(bot, 'invalid_input', `dig は 1 手で ${MAX_CELLS} マスまで`);
@@ -228,6 +251,13 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     }
     const lava = lavaReleasedBy(bot, vecOf(cell));
     if (lava) return result(stopped(bot, 'lava_behind', `${placeText(bot, cell)} を掘ると、隣の溶岩 ${cellText({ x: lava.x, y: lava.y, z: lava.z })} が体の所へ流れ込む`, cell));
+    // A planner's dig of a block water touches near the body (a lake's wall) floods what the body stands in. A bucket is filled through such a wall by use (the body opens, fills and closes it).
+    const waterNext = args.openSight && !args.wallOpen ? waterBeside(bot, cell) : null;
+    const feetNow = feetCell(bot);
+    if (waterNext && feetNow && Math.hypot(cell.x - feetNow.x, cell.z - feetNow.z) <= 3 && blockAt(bot, feetNow)?.name !== 'water') {
+      return result(stopped(bot, 'water_behind', `${placeText(bot, cell)} の ${block.name} は隣の ${cellText(waterNext)} が水で、掘ると流れ込む（坑道が水没して出られなくなる）。`
+        + '水を汲みたいなら use bucket（体が壁を開けて汲んで塞ぐ）。水を避けて掘るなら別の列から', cell));
+    }
     let threats: ExposingThreat[] = [];
     try { threats = threatsExposedBy(bot, vecOf(cell)); } catch { threats = []; }
     const letIn = threats.filter(threat => !exposeAllows(args.exposeOk, threat.name));
@@ -237,13 +267,25 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       return result(stopped(bot, 'threat_exposed', `${placeText(bot, cell)} を開けると、今は届かない ${who} から見える・届くようになる。開けるなら exposeOk:true か exposeOk:["${letIn[0].name}"]（受け入れる種類）`, cell));
     }
     const exposing = threats.length > 0;
-    const tool = await holdTool(ctx, block, args.tool);
+    const tool = await holdTool(ctx, block, args.tool, bot.entity?.isInWater === true || bot.entity?.onGround === false);
     if (tool.fail) return result({ ...tool.fail, at: cell });
-    const workMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : NaN;
+    let workMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : NaN;
     // Other hands use this dig too: changing mine to dig cannot spend the return breath.
-    const breath = assessBreathingWork(bot, Number.isFinite(workMs) ? workMs / 1000 : Infinity, cell);
+    let breath = assessBreathingWork(bot, Number.isFinite(workMs) ? workMs / 1000 : Infinity, cell);
+    if (!breath.allowed) {
+      // Run 6 (14 refusals with the same words in a row): before the dig is refused for the water the body is in, the body is put on its feet (a block under the feet,
+      // the stream stopped, a bank), and the dig is judged again from there.
+      const steady = await steadyInWater(ctx, { toward: cell });
+      if (steady.acted) {
+        if (steady.words) done.push(steady.words);
+        const again = await holdTool(ctx, block, args.tool, bot.entity?.isInWater === true || bot.entity?.onGround === false);
+        if (again.fail) return result({ ...again.fail, at: cell });
+        workMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : NaN;
+        breath = assessBreathingWork(bot, Number.isFinite(workMs) ? workMs / 1000 : Infinity, cell);
+      }
+    }
     if (!breath.allowed) return stopped(bot, 'breathing_work',
-      `水中掘削を始めない: ${breathingWorkWords(breath)}${done.length ? `。済: ${done.join('、')}` : ''}`, cell);
+      `水中掘削を始めない: ${BREATHING_NEXT}${breathingWorkWords(breath)}${done.length ? `。済: ${done.join('、')}` : ''}`, cell);
     const guardState = bot.exposureDigGuard as { allowAt?: string } | undefined;
     if (exposing && guardState) guardState.allowAt = cellKey(cell);
     const started = Date.now();
@@ -276,7 +318,7 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       stopWatching();
       if (breathStopped) {
         letGo(bot);
-        return stopped(bot, 'breathing_work', `掘削中止: ${breathingWorkWords(breathStopped, true)}${done.length ? `。済: ${done.join('、')}` : ''}`, cell);
+        return stopped(bot, 'breathing_work', `掘削中止: ${BREATHING_NEXT}${breathingWorkWords(breathStopped, true)}${done.length ? `。済: ${done.join('、')}` : ''}`, cell);
       }
       if (drifted) {
         letGo(bot);

@@ -30,6 +30,7 @@ import { installAirSupplyDefault } from './utils/airSupplyDefault.js';
 import { installUseItemRotation } from './utils/useItemRotation.js';
 import { edgeGuardPlugin } from './utils/edgeGuard.js';
 import { breathingReflexPlugin } from './utils/breathingReflex.js';
+import { streamHoldPlugin } from './utils/primitives/footing.js';
 import { exertionMeterPlugin } from './utils/exertionMeter.js';
 import { threatTrackerPlugin } from './utils/threatTracker.js';
 import { toolWearPlugin } from './utils/toolWear.js';
@@ -189,6 +190,8 @@ export class MinebotClient extends BaseClient {
     // Last, so its physics tick listener has the final say over every mover's controls.
     this.bot.loadPlugin(edgeGuardPlugin);
     this.bot.loadPlugin(breathingReflexPlugin);
+    // Run 6: a body held in a stream between hands stops the stream (the owner: the reflex against being carried away never fired).
+    this.bot.loadPlugin(streamHoldPlugin);
     this.bot.loadPlugin(exertionMeterPlugin);
     this.bot.loadPlugin(threatTrackerPlugin);
     this.bot.loadPlugin(toolWearPlugin);

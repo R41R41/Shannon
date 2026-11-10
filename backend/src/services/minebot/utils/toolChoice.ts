@@ -36,25 +36,25 @@ export function canHarvest(block: BlockLike, item: { type: number } | null | und
 }
 
 /** Time in seconds plus wear, for breaking the block with this item (null: the bare hand). */
-function toolCost(block: BlockLike, item: ToolLike | null | undefined, effects: unknown = {}, enchants: unknown[] = []): number {
+function toolCost(block: BlockLike, item: ToolLike | null | undefined, effects: unknown = {}, enchants: unknown[] = [], ignoreWear = false): number {
   let ms: number;
   try { ms = Number(block.digTime(item ? item.type : null, false, false, false, enchants, effects)); } catch { return Infinity; }
   if (!Number.isFinite(ms)) return Infinity;
-  return ms / 1000 + wearCostSeconds(item);
+  return ms / 1000 + (ignoreWear ? 0 : wearCostSeconds(item));
 }
 
 /**
  * The item to break the block with, or null for the bare hand. `requireHarvest`: only items that make the block
  * drop (an ore wanted for its drop); otherwise the hand counts too (clearing a way).
  */
-export function chooseTool<T extends ToolLike>(block: BlockLike, items: T[], options: { requireHarvest?: boolean; effects?: unknown } = {}): T | null {
+export function chooseTool<T extends ToolLike>(block: BlockLike, items: T[], options: { requireHarvest?: boolean; effects?: unknown; /** The quickest tool whatever it wears (a body in water or off its feet: every second is breath). */ fastest?: boolean } = {}): T | null {
   const pick = (pool: T[]) => {
     const candidates: Array<T | null> = [null, ...pool];
     let best: T | null = null;
     let bestCost = Infinity;
     for (const item of candidates) {
       if (options.requireHarvest && !canHarvest(block, item)) continue;
-      const cost = toolCost(block, item, options.effects);
+      const cost = toolCost(block, item, options.effects, [], options.fastest === true);
       if (cost < bestCost) { bestCost = cost; best = item; }
     }
     return { best, bestCost };

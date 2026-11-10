@@ -100,7 +100,7 @@ const CLOSED: Record<string, string> = {
   not_arrived: '一歩ではない', target_unstandable: '一歩ではない', iron_door: '一歩ではない',
   // obsidian and portal (2026-10-26): their lines carry the contract's own code; these words only count where they stopped.
   unreachable: '届かない', lava_danger: '溶岩が流れ込む', blocked: '置けない', ignite_failed: '置けない',
-  unbreakable: '掘れない', no_harvest_tool: '掘れない', dig_unconfirmed: '掘れない', dig_failed: '掘れない', not_visible: '掘れない',
+  unbreakable: '掘れない', water_behind: '掘れない', no_harvest_tool: '掘れない', dig_unconfirmed: '掘れない', dig_failed: '掘れない', not_visible: '掘れない',
   // end1109p05 (11/9): fight's not_visible is an enderman's eyes out of the line (the roof's own cap), not a dig: read as 掘れない the head dug
   // its own cap (replay r4). act.ts gives fight's stop this reason for the word only; the outcome keeps not_visible.
   eyes_not_visible: '届かない',
