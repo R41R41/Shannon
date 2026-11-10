@@ -168,7 +168,7 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
 
   it('health 6 or less, or no blade: no blow. A block between (the planner\'s pickaxe is no blade); with nothing to put, a step away above the flee\'s health', async () => {
     const clock = { at: 52_000_000 };
-    for (const [label, health, items] of [['no blade', 11, [IRON_PICKAXE, COBBLE]], ['six', 6, [IRON_SWORD, COBBLE]]] as const) {
+    for (const [label, health, items] of [['no blade', 11, [IRON_PICKAXE, COBBLE]]] as const) {
       const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [...items], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
       await hurtTo(bot, clock, health);
       await rounds(bot, clock, 1);
@@ -176,9 +176,15 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
       expect(bot.__placed, label).toEqual(['1,64,0']);
       expect(meleeLines(ledger)[0].detail, label).toMatch(/^近接の piglin #1677 2\.1m: 間 \(1,64,0\) に cobblestone を置いた。足場: 空所なし 今2\.1m 体力/u);
     }
-    // Seven is above six: the blow.
+    // Six is at the flee's health: on the open field the flee runs first (film 11/10), so no blow and no block.
+    const six = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+    await hurtTo(six.bot, clock, 6);
+    await rounds(six.bot, clock, 1);
+    expect(six.bot.__swings).toEqual([]);
+    expect(six.bot.__placed).toEqual([]);
+    // Nine is above the flee's health (8; at or under it the flee goes first, film 11/10): the blow.
     const seven = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE, SHIELD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
-    await hurtTo(seven.bot, clock, 7);
+    await hurtTo(seven.bot, clock, 9);
     await rounds(seven.bot, clock, 1);
     expect(seven.bot.__swings).toHaveLength(2);
     // Nothing to put, no blade, health 15: a step away (r8's hand).

@@ -1434,8 +1434,11 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
     if (melee.length && (counterRefused(melee) || (!hasMeleeShield(bot) && melee[0].distance <= LAST_STAND_RANGE))) {
       if (skip === 'melee') return null;
       const choice = meleeChoice(bot, melee, { beingHit: true });
-      return choice.hand ? { kind: 'melee', hand: choice.hand,
-        detail: `${lead} ${choice.hand.detail}。足場: ${footingWords(choice.footing)} ${where}${fact}` } : null;
+      // film 11/10 (16:38 "低体力だが安全な逃げ道が無く走れなかった", then struck to 0): the flee had no way, and the melee hand gave none at
+      // its health (a step left is for the flee, which had just refused). The blade at the nearest in reach, a group too (not a heavy one).
+      const hand = choice.hand ?? (heavyRefused(melee) ? null : lastBlow(bot, melee, items));
+      return hand ? { kind: 'melee', hand,
+        detail: `${lead} ${hand.detail}。足場: ${footingWords(choice.footing)} ${where}${fact}` } : null;
     }
   }
   // (a) A threat in arm's reach that can get at the body. A lit creeper is never hit (the blast is the danger); an unlit one may be (the knock helps).
@@ -2146,7 +2149,9 @@ export type MeleeHand =
   /** r9, on a floor: a blow back at an enemy on the body, with a blade carried. */
   | { kind: 'hit'; target: FloorEntity; weapon: Item; detail: string;
       /** end1109o12: the blow when no other hand is left: no shield is raised, and it goes on at or under MELEE_HIT_HEALTH. */
-      bare?: boolean }
+      bare?: boolean;
+      /** film 11/10: a blow at an ordinary group (two or more walkers): only a heavy enemy stops it, not the count. */
+      crowd?: boolean }
   /** r9, on a floor: `n` blocks up under the feet, out of a melee enemy's reach. */
   | { kind: 'pillar'; block: string; n: number; detail: string };
 
@@ -2157,6 +2162,11 @@ function counterRefused(threats: MeleeThreat[]): string | null {
   // left). A blaze is a slow flier that burns by touch, not a pack that surrounds: blazes are not counted as a group.
   const walkers = threats.filter(({ entity }) => String(entity.name ?? '').toLowerCase() !== 'blaze').length;
   return heavy ? `${heavy.entity.name} には打ち返さない` : walkers >= 2 ? `近接の敵${threats.length}体には打ち返さない` : null;
+}
+
+/** A wither skeleton or a piglin brute among the threats: never countered by the floor, at any health or count. */
+function heavyRefused(threats: MeleeThreat[]): boolean {
+  return threats.some(({ entity }) => MELEE_NO_COUNTER.has(String(entity.name ?? '').toLowerCase()));
 }
 
 /** Include the intended target even when its old hand outlives an entity-list update. */
@@ -2319,6 +2329,14 @@ export function meleeChoice(bot: FloorBody, threats: MeleeThreat[], options: { h
       if (!reached) return { hand: null, why: '', footing: here, quiet: true };
       return { hand: { kind: 'hit', target: reached.entity, weapon: blade, detail: `${blade.name} で打ち返す` }, why: '', footing: here, quiet: false };
     }
+    // film 11/10 (15:40, 16:24): among two or three zombies the barrier, the shielded step and the pillar each failed in turn ("1段目が積めな
+    // かった", "creature_in_cell") while she was struck 18 → 0, the iron sword in the bag. Once a safety hand of the episode has been spent and
+    // she is still being hit, an ordinary group gets the blade like one enemy (a heavy one still does not): standing behind a wall that did
+    // not go up is struck all the same.
+    if (refusal && !heavyRefused(threats) && blade && options.beingHit && (options.hands ?? 0) >= 1) {
+      const reached = threats.find(({ entity }) => { try { return inReachOfBlow(bot, entity); } catch { return false; } });
+      if (reached) return { hand: { kind: 'hit', target: reached.entity, weapon: blade, detail: `守りの手が効かず ${blade.name} で打ち返す（${threats.length}体）`, crowd: true, ...(shield ? {} : { bare: true }) }, why: '', footing: here, quiet: false };
+    }
     if (refusal) why.push(refusal);
     const placed = blockBetween(!!refusal);
     if (placed) return { hand: placed, why: '', footing: here, quiet: false };
@@ -2332,7 +2350,7 @@ export function meleeChoice(bot: FloorBody, threats: MeleeThreat[], options: { h
     // end1109o12: with no step away either, the flee had no way and she stood while a lone zombie struck 4 times (11.7 → 0): the blow.
     if ((bot.health ?? 20) <= FLEE_HEALTH) {
       const cornered = !steps.some(step => step.footing.count <= here.count && step.gain >= MELEE_STEP_GAIN);
-      const blow = cornered && !refusal ? lastBlow(bot, threats, items) : null;
+      const blow = cornered && !heavyRefused(threats) ? lastBlow(bot, threats, items) : null;
       return blow ? { hand: blow, why: '', footing: here, quiet: false } : { hand: null, why: why.join('・'), footing: here, quiet: true };
     }
   }
@@ -2342,7 +2360,8 @@ export function meleeChoice(bot: FloorBody, threats: MeleeThreat[], options: { h
   why.push('下がる所が無い');
   // end1109o12: no shield, no block between, no pillar, no step: standing still is struck all the same, so one ordinary enemy in reach gets the
   // blade (the run62 #5 rule keeps a chosen counter behind a shield; this is only the hand when there is no other).
-  const blow = !rim && !counterRefused(threats) ? lastBlow(bot, threats, items) : null;
+  // film 11/10: a group too (only a heavy enemy is left alone): with no hand at all, being struck in a crowd is no safer than a blow.
+  const blow = !rim && !heavyRefused(threats) ? lastBlow(bot, threats, items) : null;
   if (blow) return { hand: blow, why: '', footing: here, quiet: false };
   return { hand: null, why: why.join('・'), footing: here, quiet: false };
 }
@@ -2352,7 +2371,7 @@ function lastBlow(bot: FloorBody, threats: MeleeThreat[], items: Item[]): MeleeH
   const blade = bestBlade(items);
   if (!blade) return null;
   const reached = threats.find(({ entity }) => { try { return inReachOfBlow(bot, entity); } catch { return false; } });
-  return reached ? { kind: 'hit', target: reached.entity, weapon: blade, detail: `ほかに手が無いので ${blade.name} で打ち返す（盾なし）`, bare: true } : null;
+  return reached ? { kind: 'hit', target: reached.entity, weapon: blade, detail: `ほかに手が無いので ${blade.name} で打ち返す（盾なし）`, bare: true, crowd: true } : null;
 }
 
 /** An enemy within reach of a blow (the eye to its box, MELEE_HIT_REACH) and in sight (nothing solid on the line), as `attack mode=hold` reads it. */
@@ -2537,8 +2556,10 @@ async function runHit(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, 
   const find = () => Object.values(bot.entities ?? {}).find(entity => entity === target || (entity?.id !== undefined && entity.id === target.id));
   const endGuard = beginEngagement(bot, [String(target.name ?? '')]);
   delegateShield(bot, true);
+  // film 11/10: a crowd blow is stopped only by a heavy enemy coming in, not by the count it was chosen against.
+  const refusedNow = (): string | null => hand.crowd ? (heavyRefused(meleeCandidates(bot)) ? '重い敵が来た' : null) : counterRefusedNow(bot, target);
   try {
-    const refusal = counterRefusedNow(bot, target);
+    const refusal = refusedNow();
     if (refusal) stopped = refusal;
     else if (!hand.bare && !await raiseMeleeShield(bot, port, target)) stopped = '盾を構えられない';
     for (let blow = 0; !stopped && blow < MELEE_BLOWS_PER_HAND && !dead; blow++) {
@@ -2546,7 +2567,7 @@ async function runHit(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, 
       // weapon is ready deals a fifth of its damage): the weapon's own wait is kept from the last blow, whichever hand struck it.
       const readyUntil = Math.min(Date.now() + 1_000, (raw.meleeBlowAt ?? 0) + bladeWaitMs(weapon.name));
       while (Date.now() < readyUntil && !actionSignal(motor)?.aborted) {
-        const refusal = counterRefusedNow(bot, target);
+        const refusal = refusedNow();
         if (refusal) { stopped = refusal; break; }
         if (!hand.bare && (bot.health ?? 0) <= MELEE_HIT_HEALTH) break;
         await abortableDelay(motor, Math.min(50, readyUntil - Date.now()));
@@ -2555,7 +2576,7 @@ async function runHit(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, 
       if (actionSignal(motor)?.aborted) { stopped = '止められた'; break; }
       const live = find();
       if (!live || !bot.entity) { stopped = '相手が見えなくなった'; break; }
-      const refusal = counterRefusedNow(bot, target);
+      const refusal = refusedNow();
       if (refusal) { stopped = refusal; break; }
       if (!hand.bare && (bot.inventory?.slots?.[shieldSlot(bot)]?.name !== 'shield' || bot.usingHeldItem === false)) { stopped = '盾を構え続けられない'; break; }
       if (!hand.bare && (bot.health ?? 0) <= MELEE_HIT_HEALTH) { stopped = `体力が${MELEE_HIT_HEALTH}以下になった`; break; }
@@ -3065,7 +3086,11 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     if (coverTick()) return;
     // r8: a melee enemy near, at the rim of a drop (or hurting the body on a floor): one minimal hand, before the flee and the last stand.
     // Run 43: the melee hand waits only for a fight that runs (`isHeadCombatRunning`), not for the grace after one ended.
-    if (!isHeadCombatRunning(bot) && meleeTick()) return;
+    // film 11/10 (15:40, 16:24): at low health the melee hand went first and spent its three hands (a pillar that would not go up, a wall
+    // "creature_in_cell"); the flee came only after, at 0.3 health. At or under the flee's health the flee is tried first; when it does not
+    // run (no way, its allowance spent), the melee hand follows below as before.
+    const lowFirst = config.flee && !headFight && (bot.health ?? 20) > 0 && (bot.health ?? 20) <= FLEE_HEALTH;
+    if (!lowFirst && !isHeadCombatRunning(bot) && meleeTick()) return;
     if (config.flee && !headFight) {
       let threat: ReturnType<typeof fleeStart> = null;
       try { threat = fleeStart(bot, state, now()); } catch { threat = null; }
@@ -3100,6 +3125,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         if (lastStand('low-health')) return;
       }
     }
+    if (lowFirst && !isHeadCombatRunning(bot) && meleeTick()) return;
     // The End: the last of the floor's hands, in a quiet moment: the water a clutch poured and was cut off before taking up again.
     if (scoopTick()) return;
     if (!budget && Date.now() < state.retryAt) return;

@@ -204,8 +204,8 @@ describe('the melee hand\'s conditions', () => {
       expect(meleeLines(cave.ledger).filter(entry => entry.kind === 'melee'), `opened ${opened}`).toHaveLength(expected);
       if (opened) expect(cave.bot.entity.position.x).toBe(-0.5);
     }
-    // A fight of the planner's choosing: left alone at 15.5, acted on at 7.
-    for (const [health, expected] of [[15.5, 0], [7, 1]] as const) {
+    // A fight of the planner's choosing: left alone at 15.5; at 7 (the flee's health) the flee is tried before the melee hand (film 11/10).
+    for (const [health, expected] of [[15.5, 0], [7, 0]] as const) {
       const fight = scene(bridge, tipAt, { health, items: [NETHERRACK], mobs: { 3: mob(3, 'wither_skeleton', 229.1, 55, 0.5) }, now: () => clock.at });
       fight.bot.engagements = [{ kinds: ['wither_skeleton'] }];
       await rounds(fight.bot, clock, 1);

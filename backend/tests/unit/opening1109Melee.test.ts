@@ -79,15 +79,25 @@ describe('end1109o12: with no other melee hand, one ordinary enemy gets the blad
     expect(bot.activateItem).not.toHaveBeenCalled();
   });
 
-  it('a step away comes first, a shield makes it the shielded blow; two enemies or a heavy one get no blow', () => {
+  it('a step away comes first, a shield makes it the shielded blow; two enemies get the blow too (film 11/10), a heavy one none', () => {
     const open = fixture([mob(7, 'zombie', 1.9)], { items: [SWORD], shield: false }).bot;
     expect(choose(open)?.kind).toBe('step');
     const shielded = cornered().bot;
     shielded.inventory.slots[45] = SHIELD;
     expect(choose(shielded)).toMatchObject({ kind: 'hit' }); expect((choose(shielded) as any).bare).toBeUndefined();
     const two = cornered([mob(7, 'zombie', 1.9), mob(8, 'zombie', 1.9, 0.9)]).bot;
-    expect(choose(two)?.kind).not.toBe('hit');
+    expect(choose(two)).toMatchObject({ kind: 'hit', crowd: true });
     const heavy = cornered([mob(7, 'wither_skeleton', 1.9)]).bot;
     expect(choose(heavy)?.kind).not.toBe('hit');
+  });
+
+  // film 11/10 (15:40): two zombies and a spider, the iron sword carried; the barrier and the pillar failed in turn while she was struck 18 → 0.
+  it('a group still on her after a safety hand of the episode gets the blade; the first hand of an episode is still a safety hand', () => {
+    const group = () => fixture([mob(7, 'zombie', 1.9), mob(8, 'zombie', 1.9, 0.9)], { items: [SWORD], shield: false }).bot;
+    expect(meleeChoice(group(), meleeThreatsNear(group()), { beingHit: true, hands: 0 }).hand?.kind).not.toBe('hit');
+    const later = group();
+    expect(meleeChoice(later, meleeThreatsNear(later), { beingHit: true, hands: 1 }).hand).toMatchObject({ kind: 'hit', crowd: true, bare: true });
+    const heavy = fixture([mob(7, 'wither_skeleton', 1.9), mob(8, 'zombie', 1.9, 0.9)], { items: [SWORD], shield: false }).bot;
+    expect(meleeChoice(heavy, meleeThreatsNear(heavy), { beingHit: true, hands: 1 }).hand?.kind).not.toBe('hit');
   });
 });
