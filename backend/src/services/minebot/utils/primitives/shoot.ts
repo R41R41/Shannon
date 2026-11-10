@@ -38,6 +38,11 @@ const CROSSBOW_SPEED = 3.15;
 const CROSSBOW_LOAD_MS = 1300;
 /** A bow is held 21 ticks before it is let go (full power from 20: a tick over). */
 export const BOW_FULL_DRAW_S = 1.05;
+/**
+ * Told once after arrows loosed at the dragon in flight (review 2026-11-10, KB1: a precedent spent 192 arrows on it before the crystals). The body is the part aimed at,
+ * and a part other than the head takes a quarter and one more (partDamage: about 3 of an arrow's 9); a crystal that stands heals it back. The shot is not refused.
+ */
+const FLYING_DRAGON_LINE = '。飛んでいる竜は矢が当たりにくく、胴に当たっても傷は 1 本で約 3（体力 200。結晶が残る間は回復で消える）。結晶が残るなら矢は結晶に使う';
 /** An end crystal is shot from this far at the most (the arrow's range in the End). */
 export const CRYSTAL_SHOT_MAX = 64;
 
@@ -456,6 +461,8 @@ export async function shoot(ctx: StepContext, args: ShootArgs): Promise<StepOutc
   const shots = Math.max(1, Math.min(8, Math.round(args.shots ?? 1)));
   const results: string[] = [];
   let hits = 0, noArrows = 0, kills = 0, letdowns = 0;
+  // An arrow loosed at the dragon in flight (a perched one is refused below): the result says what such an arrow is worth, the head chooses.
+  let atFlyingDragon = false;
   // The items lying about before the hand: a kill's drops are the ones that were not.
   const baseline = itemIds(bot);
   const dealt = new Set<number>();
@@ -646,6 +653,7 @@ export async function shoot(ctx: StepContext, args: ShootArgs): Promise<StepOutc
     const said = noArrow ? '矢が出なかった（弓を引けていない。手が他の物を使っていた見込み）'
       : live ? (live.name === 'end_crystal' ? (hurt ? 'クリスタルを壊した（爆発した）' : '外れた（クリスタルは残っている）') : hurt ? `当たった${health !== null ? `（残り体力 ${health}）` : ''}` : '外れた') : `${cellText(args.at!)} へ射った`;
     results.push(`${shot + 1}発目: ${said}（飛ぶ時間 ${(aim.ticks / 20).toFixed(1)}秒、仰角 ${(aim.pitch * 180 / Math.PI).toFixed(1)}°${where}）`);
+    if (!noArrow && live?.name === 'ender_dragon') atFlyingDragon = true;
     if (noArrows >= 2) { results.push('2 回続けて矢が出なかったので止めた'); break; }
     // A creature this arrow hurt that is now dying or gone: the kill, where, and what fell there.
     if (live && hurt && live.name !== 'end_crystal' && live.name !== 'ender_dragon') {
@@ -664,7 +672,7 @@ export async function shoot(ctx: StepContext, args: ShootArgs): Promise<StepOutc
     throw error;
   }
   const fired = results.filter(line => /^\d+発目/u.test(line)).length;
-  return finish({ ok: true, data: { arrowsLeft: arrowsLeft(), kills }, text: `${weaponName}で射った: ${results.join('、')}。当たり ${hits}/${fired}${kills ? `、倒した ${kills}` : ''}、矢の残り ${arrowsLeft()}${kind === 'blaze' ? spawnerLine(bot) : ''}` });
+  return finish({ ok: true, data: { arrowsLeft: arrowsLeft(), kills }, text: `${weaponName}で射った: ${results.join('、')}。当たり ${hits}/${fired}${kills ? `、倒した ${kills}` : ''}、矢の残り ${arrowsLeft()}${kind === 'blaze' ? spawnerLine(bot) : ''}${atFlyingDragon ? FLYING_DRAGON_LINE : ''}` });
 }
 
 /** The windows one shoot hand may open (one, and a second when the target moves round the corner). */

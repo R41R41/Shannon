@@ -31,6 +31,13 @@ describe('the actual crystal path immediately before releasing a drawn bow', () 
   it('releases once on unchanged clear terrain', async () => {
     const f = fixture(); expect((await f.run()).ok).toBe(true); expect(f.calls).toEqual(['draw', 'release']);
   });
+  // Review 2026-11-10 (KB1): an arrow at the dragon in flight is loosed as before, and the result says once what it is worth; a crystal's result does not carry the line.
+  it('tells what an arrow at the flying dragon is worth, without refusing the shot', async () => {
+    const f = fixture(); Object.assign(f.bot.entities[9], { name: 'ender_dragon', width: 16, height: 8, yaw: 0 });
+    const out = await f.run(); expect(out.ok).toBe(true); expect(f.calls).toEqual(['draw', 'release']);
+    expect(out.text).toContain('1発目'); expect(out.text.match(/飛んでいる竜は矢が当たりにくく/gu)).toHaveLength(1); expect(out.text).toContain('結晶が残るなら矢は結晶に使う');
+    const crystal = fixture(); expect((await crystal.run()).text).not.toContain('飛んでいる竜');
+  });
   it('cancels by slot change when a wall is observed only after the last awaited look', async () => {
     const f = fixture(); f.finalLook(async () => { f.wall(); });
     expect((await f.run()).text).toContain('矢の道'); expect(f.calls).toEqual(['draw', 'slot:1', 'slot:0']);
