@@ -27,7 +27,7 @@ const MAX_TRACE = 256;
 const DEFAULT_COUNT = 24;
 const DEFAULT_SECONDS = 60;
 const DEFAULT_MAX_DIG = 16;
-/** The rock a way to an ore is dug through, said in a stop that had no dig list (end1109o04). */
+/** The rock a way to an ore is dug through, said in a stop that had no dig list (end1109o04). `go` reads the words stone and dirt as its categories, so cobblestone, sandstone, terracotta, clay and the like are dug as well; never an ore. */
 const ROCK_ROAD = 'stone,dirt,gravel,andesite,diorite,granite,tuff,deepslate';
 /** A start cell that is no longer the block (dug already, or one off): the same kind within this many cells of it starts the hand (run 5 q45: no_block at once). */
 const START_TOLERANCE = 2;
@@ -89,7 +89,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   const ctx: StepContext = { ...ctx0, deadline: Math.min(ctx0.deadline, startedAt + seconds * 1000) };
   const count = clamp(Math.round(Number(args.count ?? DEFAULT_COUNT)), 1, 64);
   const collect = args.collect !== false;
-  // Ore lies inside rock: without a dig list the way is dug through natural rock only (never an ore, a chest or a built block), at most DEFAULT_MAX_DIG blocks.
+  // Ore lies inside rock: without a dig list the way is dug through the rock and earth words of ROCK_ROAD (never an ore, a chest, a door or a bed), at most DEFAULT_MAX_DIG blocks.
   const roadWords = args.canDig?.length ? [...args.canDig] : ROCK_ROAD.split(',');
   const roadBudget = clamp(Math.round(Number(args.maxDig ?? DEFAULT_MAX_DIG)), 0, 200);
   const asked = args.count !== undefined;
@@ -141,9 +141,10 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   const attempts = new Map<string, number>();
   let sincePick = 0, failsInARow = 0, missedNote = '', capped = false;
   let pocketDug = 0, pocketMs = 0, pocketDrops = 0;
+  const pocketTried = new Set<number>();
 
   /** Picks up what the dug cells dropped. 'full' when the pack has no room for it. */
-  const collectDrops = async (): Promise<'ok' | 'full'> => {
+  const collectDrops = async (walkIn = true): Promise<'ok' | 'full'> => {
     sincePick = 0; missedNote = '';   // what is said at the end is what the last pick-up left
     if (!collect || !dugCells.length) return 'ok';
     const at = bot.entity?.position;
@@ -158,14 +159,21 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     else if (!picked.ok) missedNote = `拾えなかった: ${picked.text}`;
     // A drop left in a pocket the dig opened (a dig reaches 5 m through cells it sees; the pick-up digs nothing): the body goes in through natural rock within a small fixed
     // budget and takes it. No wait is added; what still cannot be reached is told as before.
+    // maxDig 0 means no digging at all; the rock dug for a drop counts against the same budget as the road (a small floor each, so a drop one block in is still reached).
     const lying = () => drops.filter(entity => bot.entities?.[entity.id]);
-    for (const entity of lying()) {
+    let tried = false;
+    for (const entity of walkIn && roadBudget > 0 ? lying() : []) {
       if (pocketDrops >= POCKET_DROPS || pocketMs >= POCKET_SECONDS_ALL * 1000 || Date.now() >= ctx.deadline) break;
+      // Not one already walked to, not one an earlier walk took on the way, and none when the pack has no room (the pick-up left those).
+      if (pocketTried.has(entity.id) || !bot.entities?.[entity.id]) continue;
+      if (!roomForDrops(bot, block)) break;
+      pocketTried.add(entity.id);
+      tried = true;
       pocketDrops++;
       const began = Date.now();
       const spot = { x: Math.floor(entity.position.x), y: Math.floor(entity.position.y + 1e-3), z: Math.floor(entity.position.z) };
       const seconds = Math.max(5, Math.min(POCKET_SECONDS_EACH, (POCKET_SECONDS_ALL * 1000 - pocketMs) / 1000, (ctx.deadline - began) / 1000));
-      const gone = await go(ctx, { goals: [spot], range: 0, canDig: roadWords, maxDig: Math.max(POCKET_MIN_DIG, roadBudget - result.road), canPlace: undefined, seconds });
+      const gone = await go(ctx, { goals: [spot], range: 0, canDig: roadWords, maxDig: Math.max(POCKET_MIN_DIG, roadBudget - result.road - pocketDug), canPlace: undefined, seconds });
       pocketDug += Number(gone.data?.work?.dug ?? 0);
       if (bot.entities?.[entity.id]) {
         const taken = await pickup(ctx, { ids: [entity.id] });
@@ -173,13 +181,17 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       }
       pocketMs += Date.now() - began;
     }
-    if (missedNote && pocketDrops) missedNote = lying().length ? `${missedNote}（岩を掘って近づく手も試した）` : '';
+    if (missedNote && tried) missedNote = lying().length ? `${missedNote}（岩を掘って近づく手も試した）` : '';
     return 'ok';
   };
   const reachable = (cell: Cell): boolean => canWorkOn(bot, cell);
 
   while (result.dug < count) {
-    if (Date.now() >= ctx.deadline) return problem('limit_time', `${seconds} 秒の上限に着いた`, feetCell(bot) ?? undefined);
+    if (Date.now() >= ctx.deadline) {
+      // What the last cells dropped is taken before the stop (a short pick-up only: no walk into rock, no wait).
+      if (sincePick > 0) { ctx.deadline = Date.now() + 4000; await collectDrops(false); }
+      return problem('limit_time', `${seconds} 秒の上限に着いた`, feetCell(bot) ?? undefined);
+    }
     // The next cell: one that is within reach and seen first, then the nearest. A cell that is no longer the block (dug by something else) is dropped.
     let pick: { cell: Cell; near: boolean; dist: number } | null = null;
     for (const [key, cell] of open) {
@@ -295,10 +307,11 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     // The hand's own seconds are the hand's limit; the approach's cap is only that this cell was not reached in that time.
     if (!gone.ok && gone.reason === 'limit_time' && Date.now() >= ctx.deadline) return { fatal: true, reason: 'limit_time', text: `${seconds} 秒の上限に着いた` };
     if (!gone.ok && gone.reason === 'limit_time') return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ ${APPROACH_SECONDS} 秒近づいても届かない` };
-    const allowed = roadLeft > 0 ? `許された物（${roadWords.join('・')}）だけを掘っても` : '掘らずに（maxDig が 0）';
+    const spent = roadBudget > 0 && roadLeft === 0;
+    const allowed = roadLeft > 0 ? `許された物（${roadWords.join('・')}）だけを掘っても` : spent ? `道の掘り ${result.road} マス（maxDig ${roadBudget} を使い切った）で` : '掘らずに（maxDig が 0）';
     // end1109o04: iron ore 14 blocks down "had no way without digging"; the hand was not sent again with a dig list, and she called the
     // iron far and waited for the night. Without one, the stop says the same hand with the rock to dig.
-    const retry = roadLeft > 0 ? '' : `。maxDig を 1 以上にすれば（既定 ${DEFAULT_MAX_DIG}）、岩（${ROCK_ROAD}）を掘って近づく（鉱石は岩の中にあるので、掘る道なら普通は届く）`;
+    const retry = spent ? `。まだ遠いなら maxDig を ${roadBudget} より大きくする（ただし近くの別の鉱脈のほうが早くないか先に見る）` : roadLeft > 0 ? '' : `。maxDig を 1 以上にすれば（既定 ${DEFAULT_MAX_DIG}）、岩（${ROCK_ROAD}）を掘って近づく（鉱石は岩の中にあるので、掘る道なら普通は届く）`;
     return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ${allowed}届く道が無い（${why.slice(0, 70)}）${retry}` };
   }
 }

@@ -280,6 +280,31 @@ describe('mine on the practice ground', () => {
     expect(g.dugLog.filter(dug => dug.name !== 'iron_ore').every(dug => dug.name === 'stone')).toBe(true);
   }, 120_000);
 
+  it('run 5 B3 (maxDig 0): a drop in a sealed pocket is not walked to when the hand may dig nothing; it is told as not picked up', async () => {
+    const g = open();
+    g.fill([11, 64, 5], [13, 68, 12], 'stone');
+    g.set(11, 65, 8, 'iron_ore');
+    g.set(12, 66, 8, 'air');
+    g.give('stone_pickaxe', 1);
+    const realDig = g.bot.dig;
+    g.bot.dig = async (block: any) => {
+      const before = new Set(g.dropped().map((entity: any) => entity.id));
+      await realDig(block);
+      if (block.name !== 'iron_ore') return;
+      for (const entity of g.dropped() as any[]) {
+        if (before.has(entity.id)) continue;
+        delete (g.bot.entities as any)[entity.id];
+        g.drop('raw_iron', 1, new Vec3(12, 66, 8));
+      }
+    };
+    const outcome = await mine(stepContext(g.bot, undefined, 100), { block: 'iron_ore', at: [cell(11, 65, 8)], count: 1, maxDig: 0, seconds: 90 });
+    expect(g.dugLog.filter(dug => dug.name !== 'iron_ore')).toHaveLength(0);
+    expect(g.countOf('raw_iron')).toBe(0);
+    expect(outcome.text).toContain('拾えなかった');
+    expect(outcome.text).not.toContain('落とし物へ岩を');
+    expect(outcome.text).not.toContain('岩を掘って近づく手も試した');
+  }, 120_000);
+
   it('6. the act\'s own stop cuts the hand between two cells: the cells after it are not dug', async () => {
     const g = open();
     veinScene(g);
