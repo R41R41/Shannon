@@ -92,6 +92,10 @@ export async function craft(ctx: StepContext, input: CraftArgs): Promise<StepOut
   // 12:58Z of task 193a86b0: 「craft item=planks」 was refused twice; a generic wood name is the kind the pack holds.
   const args: CraftArgs = { ...input, item: resolveWoodName(bot, input.item) };
   const wanted = Math.max(1, Math.min(64 * 9, Math.round(args.count ?? 1)));
+  // The pack as the server holds it before the progress is counted from it and the recipe chosen (`craftSync.ts`, task 193a86b0): a copy
+  // that said 0 planks where the server held 5 would count +5 made by nothing.
+  if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
+  await syncPack(bot);
   const had = inventoryCount(bot, args.item);
   return withProgress(() => craftItem(ctx, args), () => {
     const gained = Math.max(0, inventoryCount(bot, args.item) - had);
@@ -104,9 +108,6 @@ async function craftItem(ctx: StepContext, args: CraftArgs): Promise<StepOutcome
   const item = bot.registry?.itemsByName?.[args.item];
   if (!item) return stopped(bot, 'invalid_item', `${args.item} は物の名前ではない`);
   const count = Math.max(1, Math.min(64 * 9, Math.round(args.count ?? 1)));
-  // The pack as the server holds it before the recipe is chosen from it (`craftSync.ts`, task 193a86b0).
-  if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
-  await syncPack(bot);
   const table = tableInReach(bot);
   const all: any[] = withWoodForms(bot, args.item, [...(bot.recipesAll?.(item.id, null, null) ?? []), ...(table ? bot.recipesAll?.(item.id, null, table) ?? [] : [])]);
   if (!all.length) {
@@ -125,9 +126,9 @@ async function craftItem(ctx: StepContext, args: CraftArgs): Promise<StepOutcome
       .sort((a, b) => a.short.reduce((s, x) => s + x.need - x.have, 0) - b.short.reduce((s, x) => s + x.need - x.have, 0))[0];
     return stopped(bot, 'missing_material', `${args.item}×${count} の材料が足りない: ${best.short.map(x => `${x.name} ${x.need - x.have}（持っている ${x.have}／要る ${x.need}）`).join('、')}${shortfallHelp(bot, best.recipe, best.short, perCraft(best.recipe), table)}`);
   }
-  if (!roomFor(bot, args.item)) return stopped(bot, 'full', `持ち物が満杯で ${args.item} を入れる所が無い（何も作っていない。要らない物を drop するか箱へ）`);
   const usesTable = ready.requiresTable === true;
   const times = Math.ceil(count / perCraft(ready));
+  if (!roomFor(bot, args.item, ready, times)) return stopped(bot, 'full', `持ち物が満杯で ${args.item} を入れる所が無い（何も作っていない。要らない物を drop するか箱へ）`);
   const before = inventoryCount(bot, args.item);
   if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
   const record = craftEvents(ctx, ready, args.item, false);

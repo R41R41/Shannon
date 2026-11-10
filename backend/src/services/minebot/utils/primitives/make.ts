@@ -106,6 +106,10 @@ export async function make(ctx: StepContext, input: MakeArgs): Promise<StepOutco
   // A generic wood name (「planks」) is the kind the pack holds (`craftSync.ts`, task 193a86b0).
   const args: MakeArgs = { ...input, item: resolveWoodName(bot, String(input.item ?? '')) };
   const wanted = Math.max(1, Math.min(64, Math.round(args.count ?? 1)));
+  // The pack as the server holds it before the progress is counted and the plan made from it (task 193a86b0: the copy said stripped_oak_log×3
+  // where the server held oak_log×10; a copy short of the result would count the resync as made).
+  if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
+  await syncPack(bot);
   const had = inventoryCount(bot, String(args.item ?? ''));
   return withProgress(() => makeItem(ctx, args), () => {
     const gained = Math.max(0, inventoryCount(bot, String(args.item ?? '')) - had);
@@ -120,9 +124,6 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
   if (!item) return fail(bot, 'no_recipe', `${name} は物の名前ではない`);
   const count = Math.max(1, Math.min(64, Math.round(args.count ?? 1)));
   if (!recipesFor(bot, name).length) return fail(bot, 'no_recipe', `${name} の作り方が無い（かまどで焼く物・掘る物・取引で得る物かもしれない）`);
-  // The plan is made from the pack as the server holds it (task 193a86b0: the copy said stripped_oak_log×3 where the server held oak_log×10).
-  if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
-  await syncPack(bot);
   const stock = new Map<string, number>();
   for (const entry of (bot.inventory?.items?.() ?? []) as Array<{ name: string; count: number }>) stock.set(entry.name, (stock.get(entry.name) ?? 0) + entry.count);
   const before = stock.get(name) ?? 0;

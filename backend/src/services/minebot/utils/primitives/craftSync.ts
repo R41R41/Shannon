@@ -12,11 +12,22 @@ export async function syncPack(bot: any): Promise<boolean> {
   try { return await resyncInventory(bot); } catch { return false; }
 }
 
-/** Room for `name` in the pack: a free slot, or a stack of it that is not full. A full pack takes a craft's result nowhere (13:03:58Z: the first failed planks). */
-export function roomFor(bot: any, name: string): boolean {
+/**
+ * Room for `name` in the pack: a free slot, a stack of it that is not full, or (with the recipe and its rounds) an ingredient the craft uses up
+ * whole, whose slot is free when the result comes. A full pack takes a craft's result nowhere (13:03:58Z: the first failed planks).
+ */
+export function roomFor(bot: any, name: string, recipe?: any, times = 1): boolean {
   if (freeSlots(bot) > 0) return true;
+  const items = (bot.inventory?.items?.() ?? []) as Array<{ name: string; count: number }>;
   const stack = Number(bot.registry?.itemsByName?.[name]?.stackSize ?? 64);
-  return ((bot.inventory?.items?.() ?? []) as Array<{ name: string; count: number }>).some(entry => entry.name === name && entry.count < stack);
+  if (items.some(entry => entry.name === name && entry.count < stack)) return true;
+  for (const entry of recipe?.delta ?? []) {
+    if (!(entry?.count < 0)) continue;
+    const ingredient = String(bot.registry?.items?.[entry.id]?.name ?? '');
+    const held = items.filter(item => item.name === ingredient).reduce((sum, item) => sum + item.count, 0);
+    if (ingredient && held > 0 && held <= -entry.count * Math.max(1, times)) return true;
+  }
+  return false;
 }
 
 /** The wood kinds the generic names are made in, in the order a kind is taken when the pack says nothing. */

@@ -31,4 +31,14 @@ describe('room for a craft\'s result', () => {
     expect(roomFor(full([['oak_planks', 64]]), 'oak_planks')).toBe(false);
     expect(roomFor(full([['oak_log', 3]]), 'stick')).toBe(false);
   });
+  it('counts an ingredient the craft uses up whole as room (its slot is free when the result comes)', () => {
+    const full = (items: Array<[string, number]>) => ({ ...bot(items), inventory: { items: () => items.map(([name, count]) => ({ name, count })), slots: Array.from({ length: 45 }, () => ({ name: 'x', count: 1 })) } });
+    const ids = Object.fromEntries(names.map((name, id) => [name, id]));
+    const items = names.map((name, id) => ({ id, name }));
+    const planks = { delta: [{ id: ids.oak_log, count: -1 }, { id: ids.oak_planks, count: 4 }] };
+    const withItems = (b: any) => ({ ...b, registry: { ...b.registry, items } });
+    expect(roomFor(withItems(full([['oak_log', 1]])), 'oak_planks', planks, 1)).toBe(true);
+    expect(roomFor(withItems(full([['oak_log', 3]])), 'oak_planks', planks, 3)).toBe(true);
+    expect(roomFor(withItems(full([['oak_log', 3]])), 'oak_planks', planks, 2)).toBe(false);
+  });
 });
