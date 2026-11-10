@@ -3,8 +3,8 @@ import { Vec3 } from 'vec3';
 import { createGround, stepContext, type Ground } from '../helpers/practiceGround.js';
 import { place } from '../../src/services/minebot/utils/primitives/place.js';
 import { make } from '../../src/services/minebot/utils/primitives/make.js';
-import { judgeStation, LEAVE_M, type StationFacts } from '../../src/services/minebot/utils/primitives/stations.js';
-import { noteStation, stationsOf } from '../../src/services/minebot/utils/primitives/stationLedger.js';
+import { judgeStation, stationMs, STATION_MIN_MS, STATION_MAX_MS, LEAVE_M, type StationFacts } from '../../src/services/minebot/utils/primitives/stations.js';
+import { noteStation, noteStationContents, stationsOf } from '../../src/services/minebot/utils/primitives/stationLedger.js';
 import { runAct, ACT_HANDS } from '../../src/services/minebot/instantSkills/act.js';
 
 // Run 5 (2026-11-11): four crafting tables and four furnaces were set down and left standing (16 planks, 32 cobblestone). The body takes a station it
@@ -155,4 +155,41 @@ describe('a table in reach is used, not put down again', () => {
     expect(outcome.ok, outcome.text).toBe(true);
     expect(g.placeLog).toHaveLength(1);
   }, 30_000);
+});
+
+describe('review fixes: time sized by the dig, a furnace with a batch and no burn notice stays', () => {
+  it('the time one station gets is its dig time plus the collect and pickup, between 6 and 10 s', () => {
+    const g = open();
+    g.set(10, 64, 8, 'crafting_table');
+    noteStation(g.bot, 'crafting_table', cell(10, 64, 8));
+    const station = stationsOf(g.bot)[0];
+    g.bot.digTime = () => 3750;
+    expect(stationMs(g.bot, station)).toBe(7250);
+    g.bot.digTime = () => 200;
+    expect(stationMs(g.bot, station)).toBe(STATION_MIN_MS);
+    g.bot.digTime = () => 60_000;
+    expect(stationMs(g.bot, station)).toBe(STATION_MAX_MS);
+  });
+
+  it('a furnace seen holding an input (no activeFurnaces entry: the burn was never confirmed) stays through a far go; emptied, it is taken', async () => {
+    const g = open();
+    g.give('furnace', 1); g.give('stone_pickaxe', 1);
+    await place(stepContext(g.bot), { block: 'furnace', at: [cell(10, 64, 8)] });
+    noteStationContents(g.bot, cell(10, 64, 8), true);
+    const stay = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'go', to: { x: 30, y: 64, z: 8 } }])));
+    expect(stay.lines[0].line).toContain('焼き途中');
+    expect(g.nameAt(10, 64, 8)).toBe('furnace');
+    g.bot.entity.position = new Vec3(9.5, 64, 9.5);
+    noteStationContents(g.bot, cell(10, 64, 8), false);
+    const taken = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'go', to: { x: 30, y: 64, z: 8 } }])));
+    expect(taken.lines[0].line).toContain('拾って持った');
+  }, 90_000);
+
+  it('the pickup note comes first in the line, so a clip keeps it', async () => {
+    const g = open();
+    g.give('crafting_table', 1);
+    await place(stepContext(g.bot), { block: 'crafting_table', at: [cell(10, 64, 8)] });
+    const act = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'go', to: { x: 30, y: 64, z: 8 } }])));
+    expect(act.lines[0].line.indexOf('拾って持った')).toBeLessThan(40);
+  }, 60_000);
 });

@@ -10,7 +10,11 @@ import { lifeOf } from '../life.js';
 export const STATION_BLOCKS = new Set(['crafting_table', 'furnace', 'blast_furnace', 'smoker']);
 export const STATION_MAX = 8;
 
-export interface Station { block: string; x: number; y: number; z: number; dim: string; life: number | null; told: boolean }
+export interface Station { block: string; x: number; y: number; z: number; dim: string; life: number | null; told: boolean;
+  /** A furnace whose input or output slot held something when the body last looked (a batch with no `activeFurnaces` entry: the burn was not observed). */
+  holds?: boolean;
+  /** Pickup attempts that left the station standing (stations.ts gives up after two) and when the last one began. */
+  tries?: number; lastTry?: number }
 
 const lists = new WeakMap<object, Station[]>();
 const dimOf = (bot: any) => String(bot?.game?.dimension ?? 'unknown');
@@ -31,6 +35,12 @@ export function noteStation(bot: object, block: string, cell: Cell): void {
   kept.push({ block, x: cell.x, y: cell.y, z: cell.z, dim: dimOf(bot), life: lifeNumber(bot), told: false });
   while (kept.length > STATION_MAX) kept.shift();
   lists.set(bot, kept);
+}
+
+/** What the furnace at `cell` holds, as the body last saw it in its window (written by furnaceWork; a station not in the list is not noted). */
+export function noteStationContents(bot: object, cell: Cell, holds: boolean): void {
+  const station = stationsOf(bot).find(other => other.x === cell.x && other.y === cell.y && other.z === cell.z && other.dim === dimOf(bot));
+  if (station) station.holds = holds;
 }
 
 export function forgetStation(bot: object, station: Station): void {

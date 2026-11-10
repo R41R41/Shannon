@@ -793,7 +793,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       }
       // A reflex's note held back while the hand laid blocks stops the act at the next hand's watch.
       settleTrack();
-      if (carried && outcome.ok) outcome = { ...outcome, text: `${outcome.text}。${carried}` };
+      // First in the line (the line is clipped, and a failed hand must still say that the station left the world).
+      if (carried) outcome = { ...outcome, text: `${carried}。${outcome.text}` };
       endFight();
       host.actHandNow = undefined;
       dug += dugCountOf(bot, dugBefore);

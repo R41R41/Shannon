@@ -1,6 +1,7 @@
 import { captureFurnaceProperties } from './furnaceProperties.js';
 import { type Cell } from '../localMap.js';
 import { itemsPerFuel } from '../fuelValues.js';
+import { noteStationContents } from './stationLedger.js';
 import { blockAt, cellText, eyeDistance, findItem, guard, inventoryCount, placeText, stopped, StepStopped, USE_REACH, wait,
   type StepContext, type StepOutcome } from './common.js';
 
@@ -142,6 +143,7 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     const fueled = input ? Math.min(input.count, Math.max(burning ? 1 : 0, Math.floor(coverage + 1e-9))) : 0;
     const unfueled = input ? input.count - fueled : 0;
     const remaining = input && burning !== null && state.progress !== null ? Math.max(0, fueled * secondsEach - progress * secondsEach) : null;
+    noteStationContents(bot, cell, !!(input || output));
     const host = bot as { activeFurnaces?: any[] };
     host.activeFurnaces = (host.activeFurnaces ?? []).filter(f => !(f.pos.x === cell.x && f.pos.y === cell.y && f.pos.z === cell.z));
     if (input && (fuel || burning) && remaining !== null) {

@@ -27,6 +27,9 @@ const MAX_CANDIDATES = 16;
 const TABLE_WALK_M = 16;
 /** With a table carried, one this near (metres) is still walked to first: it is not put down again beside one (run 5: a table put down 10 m from one standing). */
 const CARRIED_REUSE_WALK_M = 8;
+/** A table seen through rock or over a cliff is not walked to for the carried one's sake: the same height band, four seconds (the carried table goes down at once otherwise). */
+const CARRIED_REUSE_DY = 2;
+const CARRIED_REUSE_SECONDS = 4;
 const nameOf = (bot: any, id: number): string => String(bot.registry?.items?.[id]?.name ?? id);
 
 /** What a recipe takes: its ingredients by item name and count (the negative entries of the recipe's delta). */
@@ -144,7 +147,7 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
   if (state.steps.some(step => step.recipe.requiresTable === true)) {
     table = tableInReach(bot);
     if (!table) {
-      if (inventoryCount(bot, 'crafting_table') > 0) table = await walkToTable(ctx, CARRIED_REUSE_WALK_M, 8);
+      if (inventoryCount(bot, 'crafting_table') > 0) table = await walkToTable(ctx, CARRIED_REUSE_WALK_M, CARRIED_REUSE_SECONDS, CARRIED_REUSE_DY);
       if (table) {
         // a known table close by is the one used; the carried one stays in the pack
       } else if (inventoryCount(bot, 'crafting_table') > 0) {
@@ -181,11 +184,11 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
 }
 
 /** The nearest known table within `limit` metres, walked to (the way only) and returned when it is in reach then; else null. */
-async function walkToTable(ctx: StepContext, limit: number, seconds = 20): Promise<any> {
+async function walkToTable(ctx: StepContext, limit: number, seconds = 20, maxDy = Infinity): Promise<any> {
   const bot = ctx.bot;
   const near = nearestTable(bot);
   const feet = feetCell(bot);
-  if (!near || !feet || Math.hypot(near.x - feet.x, near.y - feet.y, near.z - feet.z) > limit) return null;
+  if (!near || !feet || Math.hypot(near.x - feet.x, near.y - feet.y, near.z - feet.z) > limit || Math.abs(near.y - feet.y) > maxDy) return null;
   const beside = [[1, 0], [-1, 0], [0, 1], [0, -1]].flatMap(([dx, dz]) => [0, -1, 1].map(dy => ({ x: near.x + dx, y: near.y + dy, z: near.z + dz })));
   await go(ctx, { goals: beside, range: 1, maxDrop: 3, seconds });
   return tableInReach(bot);
