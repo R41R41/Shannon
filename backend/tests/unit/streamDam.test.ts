@@ -31,7 +31,7 @@ describe('the water cells a flow comes from', () => {
     expect(waterLevel(sim.bot, { x: 0, y: FLOOR, z: 1 })).toBeNull();
     expect(flowingAt(sim.bot, { x: 0, y: FLOOR, z: 0 })).toBe(true);
     expect(flowingAt(sim.bot, { x: 0, y: FLOOR, z: -4 })).toBe(false);   // a source
-    expect(damBlockHeld(sim.bot)).toBe('cobblestone');                      // planks are not a dam; cobblestone before dirt
+    expect(damBlockHeld(sim.bot)).toBe('dirt');                             // planks are not a dam; dirt before cobblestone (the stuff of tools)
   });
   it('are upstream only: the lower levels toward the source, nearest first', () => {
     const sim = makeSim(tunnel, { start: [0.5, FLOOR, 0.5] });
@@ -45,12 +45,36 @@ describe('stanchStream', () => {
   it('lays a block in the nearest cell upstream and says the water at the feet is gone', async () => {
     const sim = makeSim(tunnel, { start: [0.5, FLOOR, 0.5], items: [{ name: 'cobblestone', count: 5 }] });
     dryAfterDam(sim);
-    const outcome = await run(stanchStream(ctxOf(sim) as never, { toward: { x: 0, y: FLOOR, z: -5 } }));
+    const outcome = await run(stanchStream(ctxOf(sim) as never));
     expect(sim.bot.placedBlocks).toEqual([`cobblestone@0,${FLOOR},-1`]);
     expect(outcome).toMatchObject({ attempted: true, stopped: true });
     expect(outcome.words).toMatch(/^流れを止めた: \(0,64,-1\) に cobblestone（上流）。足元の水は [\d.]+ 秒で消えた$/u);
     expect(outcome.words.length).toBeLessThanOrEqual(70);
     expect(flowingAt(sim.bot, { x: 0, y: FLOOR, z: 0 })).toBe(false);
+  });
+  it('says when the block closes the way on (a tunnel whose way goes upstream), so the planner goes round or digs', async () => {
+    const sim = makeSim(tunnel, { start: [0.5, FLOOR, 0.5], items: [{ name: 'dirt', count: 5 }] });
+    dryAfterDam(sim);
+    const outcome = await run(stanchStream(ctxOf(sim) as never, { toward: { x: 0, y: FLOOR, z: -5 } }));
+    expect(outcome).toMatchObject({ attempted: true, stopped: true, onRoute: true, at: { x: 0, y: FLOOR, z: -1 } });
+    expect(outcome.words).toContain('道の上');
+    expect(outcome.words).toContain('別の道か掘って');
+  });
+  it('lays in a cell off the way when there is one (the way on is not closed)', async () => {
+    // A flow at (0,0) fed from both sides: (1,0) lies toward the target at x=5, (-1,0) behind the body.
+    const world: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y < FLOOR ? 'stone' : y === FLOOR && z === 0 && x >= -1 && x <= 1 ? `water[level=${x === 0 ? 3 : 2}]` : 'air');
+    const sim = makeSim(world, { start: [0.5, FLOOR, 0.5], items: [{ name: 'dirt', count: 5 }] });
+    sim.bot.on('blockPlaced', () => { setTimeout(() => { for (const x of [-1, 0, 1]) if (sim.nameAt(x, FLOOR, 0)?.startsWith('water')) sim.world.set(x, FLOOR, 0, 'air'); }, 1000); });
+    const outcome = await run(stanchStream(ctxOf(sim) as never, { toward: { x: 5, y: FLOOR, z: 0 } }));
+    expect(sim.bot.placedBlocks).toEqual([`dirt@-1,${FLOOR},0`]);
+    expect(outcome).toMatchObject({ stopped: true, onRoute: false });
+  });
+  it('does not run past the limit of the caller (the seconds of a go), and says it was the time', async () => {
+    const sim = makeSim(tunnel, { start: [0.5, FLOOR, 0.5], items: [{ name: 'dirt', count: 5 }] });
+    const outcome = await run(stanchStream(ctxOf(sim) as never, { deadline: Date.now() + 1000 }));
+    expect(outcome).toMatchObject({ attempted: false, stopped: false });
+    expect(outcome.words).toContain('時間が足りない');
+    expect(sim.bot.placedBlocks).toEqual([]);
   });
   it('does nothing on dry ground or in a source', async () => {
     const sim = makeSim(tunnel, { start: [0.5, FLOOR, 2.5], items: [{ name: 'cobblestone', count: 5 }] });
@@ -69,7 +93,7 @@ describe('stanchStream', () => {
     const outcome = await run(stanchStream(ctxOf(sim) as never));
     expect(outcome).toMatchObject({ attempted: true, stopped: false });
     expect(outcome.words).toMatch(/^上流に dirt を \d 個置いたが足元の水は止まらない/u);
-    expect(sim.bot.placedBlocks.length).toBeLessThanOrEqual(3);
+    expect(sim.bot.placedBlocks.length).toBeLessThanOrEqual(2);
   });
   it('lays the next cell of the way to step up onto it when no cell upstream is left (one deep, a floor under it)', async () => {
     // Feet in a flow of level 2 with the stream running on toward z=1 (level 3): nothing upstream of the feet, the way goes downstream.

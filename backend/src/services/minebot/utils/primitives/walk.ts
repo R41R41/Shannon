@@ -475,7 +475,7 @@ async function walkTo(ctx: StepContext, target: Cell, range: number, notes: WayN
     if (gone.stuck && dams < 2 && flowingAt(bot, here)) {
       dams++;
       const dam = await stanchStream(ctx, { toward: target });
-      if (dam.words) damWords = dam.words;
+      damWords = dam.stopped && !dam.onRoute ? '' : dam.words;
       if (dam.attempted) continue;
     }
     const blocked = await shortFacts(bot, here, target, gone.search);

@@ -13,15 +13,18 @@ import { bodyCells, place } from './place.js';
 /** Cells of water the search for the cell upstream goes through (nearest first). */
 const RADIUS = 4;
 /** How many cells are laid at most in one stanch, and how many are tried (a refusal costs a cell). */
-const MAX_DAMS = 3;
+const MAX_DAMS = 2;
 const MAX_TRIES = 6;
 /** How long the feet's water is watched after a dam (flowing water without a source is gone in 2-4 s). */
 const DRY_WAIT_MS = 3000;
 const DRY_EVERY_MS = 250;
+/** The least time left (a place and a short watch) for a dam to be started. */
+const MIN_LEFT_MS = 1500;
 
-/** Cheap blocks that stay where they are put, the first held is the dam (never an ore, planks, a crafting block, sand or gravel). */
-const DAM_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'dirt', 'coarse_dirt', 'netherrack', 'stone', 'andesite', 'diorite', 'granite', 'tuff', 'deepslate', 'blackstone',
-  'basalt', 'smooth_basalt', 'end_stone', 'calcite', 'sandstone', 'red_sandstone', 'terracotta', 'nether_bricks', 'stone_bricks'];
+/** Cheap blocks that stay where they are put, the first held is the dam (never an ore, planks, a crafting block, sand or gravel). Plentiful junk first; cobblestone
+ *  (the stuff of tools and a furnace) only when nothing else is held. */
+const DAM_BLOCKS = ['dirt', 'coarse_dirt', 'netherrack', 'andesite', 'diorite', 'granite', 'tuff', 'cobbled_deepslate', 'blackstone', 'basalt', 'smooth_basalt', 'calcite',
+  'end_stone', 'terracotta', 'sandstone', 'red_sandstone', 'deepslate', 'stone', 'stone_bricks', 'nether_bricks', 'cobblestone'];
 
 /** A water cell's level: 0 a source, 1-7 a flow (the larger, the further from its source), 8 and up water falling; null when the cell holds no water (or is not loaded). */
 export function waterLevel(bot: any, cell: Cell | null): number | null {
@@ -84,6 +87,10 @@ export interface StanchResult {
   attempted: boolean;
   /** The water at the feet was gone after it. */
   stopped: boolean;
+  /** The cell the last block was laid in. */
+  at?: Cell;
+  /** That cell lies on the way to the target: the body has closed its own way (the planner is told to go round or dig). */
+  onRoute?: boolean;
   /** One short line for the act: what was laid and what came of it, or why nothing was (never above ~70 characters). */
   words: string;
 }
@@ -102,40 +109,49 @@ function occupied(bot: any, cell: Cell): boolean {
  * cell upstream the hand reaches, up to MAX_DAMS, until the water at the feet is gone. With none to lay at, the next cell toward `toward` is laid when it is flowing
  * water over a solid floor with room above, to be stepped up onto. `attempted` is false (and the words say why) when nothing was laid.
  */
-export async function stanchStream(ctx: StepContext, options: { toward?: Cell } = {}): Promise<StanchResult> {
+export async function stanchStream(ctx: StepContext, options: { toward?: Cell; deadline?: number } = {}): Promise<StanchResult> {
   const bot = ctx.bot;
   const none = (words: string): StanchResult => ({ attempted: false, stopped: false, words });
   const feet = feetCell(bot);
   if (!feet || !flowingAt(bot, feet)) return none('');
   const block = damBlockHeld(bot);
-  if (!block) return none('流れは cobblestone か dirt を 1 個持てば止められる（上流のマスに置く）');
+  if (!block) return none('流れは dirt か cobblestone を 1 個持てば止められる（上流のマスに置く）');
+  // The caller's own limit (a go's `seconds`) counts as well as the act's: a dam never runs a go past what the head asked for.
+  const limit = Math.min(ctx.deadline, options.deadline ?? Infinity);
+  const toward = options.toward;
+  const reaching = (cell: Cell) => (toward ? Math.hypot(cell.x - toward.x, cell.y - toward.y, cell.z - toward.z) : 0);
   const laid: Cell[] = [];
   const refused: string[] = [];
-  let tries = 0;
-  while (laid.length < MAX_DAMS && tries < MAX_TRIES && ctx.deadline - Date.now() > DRY_WAIT_MS + 500) {
+  let tries = 0, noTime = false, onRoute = false;
+  while (laid.length < MAX_DAMS && tries < MAX_TRIES) {
+    if (limit - Date.now() <= MIN_LEFT_MS) { noTime = true; break; }
     const own = bodyCells(bot.entity.position);
     const here = feetCell(bot) ?? feet;
-    const candidate = upstreamCells(bot, here).find(cell => !own.some(c => key(c) === key(cell)) && !occupied(bot, cell) && eyeDistance(bot, cell) <= USE_REACH
-      && !refused.includes(key(cell)));
+    const open = upstreamCells(bot, here).filter(cell => !own.some(c => key(c) === key(cell)) && !occupied(bot, cell) && eyeDistance(bot, cell) <= USE_REACH && !refused.includes(key(cell)));
+    // A cell off the way first: a block on the way would close it (a tunnel whose way on is upstream); only when every cell is on it is one of those laid.
+    const ahead = (cell: Cell) => !!toward && reaching(cell) < reaching(here) - 0.5;
+    const candidate = open.find(cell => !ahead(cell)) ?? open[0];
     if (!candidate) break;
     tries++;
     const out = await place(ctx, { block, at: [candidate] });
     if (!out.ok) { refused.push(key(candidate)); continue; }
     laid.push(candidate);
+    onRoute = ahead(candidate);
     const from = Date.now();
     let dry = false;
-    const until = from + DRY_WAIT_MS;
+    const until = Math.min(from + DRY_WAIT_MS, limit - 200);
     while (Date.now() < until) {
       if (!flowingAt(bot, feetCell(bot))) { dry = true; break; }
       await wait(ctx, DRY_EVERY_MS);
     }
     if (dry || !flowingAt(bot, feetCell(bot))) {
-      return { attempted: true, stopped: true, words: `流れを止めた: ${cellText(candidate)} に ${block}（上流）。足元の水は ${((Date.now() - from) / 1000).toFixed(1)} 秒で消えた` };
+      const words = onRoute ? `流れを止めた: ${cellText(candidate)} に ${block}（上流・道の上）。そこは塞がった: 別の道か掘って`
+        : `流れを止めた: ${cellText(candidate)} に ${block}（上流）。足元の水は ${((Date.now() - from) / 1000).toFixed(1)} 秒で消えた`;
+      return { attempted: true, stopped: true, at: candidate, onRoute, words };
     }
   }
-  if (laid.length) return { attempted: true, stopped: false, words: `上流に ${block} を ${laid.length} 個置いたが足元の水は止まらない（${cellText(laid[laid.length - 1]!)}）` };
+  if (laid.length) return { attempted: true, stopped: false, at: laid[laid.length - 1], onRoute, words: `上流に ${block} を ${laid.length} 個置いたが足元の水は止まらない（${cellText(laid[laid.length - 1]!)}）` };
   // No cell upstream to lay at: the cell the way goes on to is laid and stepped up onto (one deep, a floor under it).
-  const toward = options.toward;
   if (toward) {
     const dx = Math.sign(toward.x - feet.x), dz = Math.sign(toward.z - feet.z);
     const next = Math.abs(toward.x - feet.x) >= Math.abs(toward.z - feet.z) ? { x: feet.x + dx, y: feet.y, z: feet.z } : { x: feet.x, y: feet.y, z: feet.z + dz };
@@ -146,5 +162,6 @@ export async function stanchStream(ctx: StepContext, options: { toward?: Cell } 
       refused.push(key(next));
     }
   }
+  if (noTime) return none('流れを止める時間が足りない（seconds を長く）');
   return none(`流れを止める置き場が無い${refused.length ? `（${refused.length} マス試したが置けない）` : '（上流に届く固い面が無い）'}`);
 }

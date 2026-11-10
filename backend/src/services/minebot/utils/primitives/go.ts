@@ -1195,7 +1195,7 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   /** What a stop for want of blocks to lay says to do: name the cheap blocks the pack holds (dug netherrack, stone ...), else gather some. */
   const noBlocksHint = (fallback = '置ける物を集めるか、canPlace を足す'): string => { const held = bridgeBlocksHeld(bot, args.canPlace); return held ? `荷の ${held} を canPlace に足すか、集める` : fallback; };
   /** Run 5: the stream stopped by a block upstream (how many tries, and the last words: what was laid, or why nothing could be). */
-  let streamDams = 0, streamWords = '';
+  let streamDams = 0, streamWords = '', streamWhy = '';
   const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${doused ? `。火を ${doused} 個消した` : ''}${streamWords.startsWith('流れを止めた') ? `。${streamWords}` : ''}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}${(() => { const frames = framesInSight(bot); return frames ? `。${frames}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
@@ -1203,7 +1203,7 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const limitTime = (left: string): StepOutcome => {
     const wet = flowingWaterAt(bot, feetCell(bot));
     const held = wet ? `。流れる水の中（${cellText(feetCell(bot)!)} は ${wet}）で押し戻された` : '';
-    return fail('limit_time', `${args.seconds ?? GO_DEFAULTS.seconds} 秒の上限に着いた（行き先まで あと ${left}m）${held}`, wet ? (streamWords || '上流の水源を汲むかブロックで塞ぐか、別の道を') : 'seconds を増やすか、行き先を近くに');
+    return fail('limit_time', `${args.seconds ?? GO_DEFAULTS.seconds} 秒の上限に着いた（行き先まで あと ${left}m）${held}`, wet ? (streamWhy || '上流の水源を汲むかブロックで塞ぐか、別の道を') : 'seconds を増やすか、行き先を近くに');
   };
 
   // ---- fire in or beside a place is put out where the body can reach it (S2, S4's c1 camp: a blaze's fireballs light the cells round its camp again and again, each refusal was a dig of the planner's own) ----
@@ -1947,10 +1947,14 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (moved >= 1.5 && !out.stuck) { mends = 0; noway = 0; attempt = 0; state.redraws++; continue; }
       // Run 5 (308 s held in shallow flowing water; the route search reads water as still and found the same way each time): held in a stream, the stream is stopped
       // with a cheap block laid upstream (the owner's request), then the way is drawn again from the dry cells. Three tries a go.
-      if (streamDams < 3 && flowingWaterAt(bot, feetCell(bot))) {
+      // Only when the current is what held it: flagged stuck, or a route drawn and the body did not move off its cell (not a "no way" that has other causes).
+      if (streamDams < 2 && flowingWaterAt(bot, feetCell(bot)) && (out.stuck || (drawn.path.length > 0 && moved < 0.5))) {
         streamDams++;
-        const dam = await timed('mendMs', () => stanchStream(ctx, { toward: aim }));
-        if (dam.words) streamWords = dam.words;
+        const dam = await timed('mendMs', () => stanchStream(ctx, { toward: aim, deadline }));
+        streamWhy = dam.stopped || !dam.words ? '' : dam.words;
+        if (dam.words && (dam.stopped || dam.attempted)) streamWords = dam.words;
+        // A block laid on the way closes it: the next drawings go round before they dig it out again.
+        if (dam.onRoute && dam.at) state.avoid.add(keyOf(dam.at));
         if (dam.attempted) { state.redraws++; noway = 0; if (dam.stopped) { mends = 0; attempt = 0; } continue; }
       }
       // A search that ran out of its time (run 41: 8 of 13 "no way" stops) says nothing about the way: turning the leg, drawing again at once
@@ -1968,7 +1972,7 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         // Run 47 (hold 7): held in flowing water (swimming upstream, against a wall and under a ceiling) is not mended by drawing again: after two tries it is said, with the way out.
         const wet = flowingWaterAt(bot, feetCell(bot));
         if (wet && mends >= 2) {
-          return fail('stuck', `流れる水の中（${cellText(feetCell(bot)!)} は ${wet}）で ${GO_STUCK_MS / 1000}秒ずつ進めない（上流へ泳いでも押し戻される）`, streamWords || '上流の水源を汲む（use の bucket）かブロックで塞ぐか、別の道を');
+          return fail('stuck', `流れる水の中（${cellText(feetCell(bot)!)} は ${wet}）で ${GO_STUCK_MS / 1000}秒ずつ進めない（上流へ泳いでも押し戻される）`, streamWhy || '上流の水源を汲む（use の bucket）かブロックで塞ぐか、別の道を');
         }
         mends++;
         if (mends > GO_REPAIRS) {
