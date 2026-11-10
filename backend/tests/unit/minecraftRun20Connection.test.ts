@@ -21,7 +21,13 @@ describe('run 20: the body goes back in by itself after a connection that ended 
     expect(reconnectKindOfKick('multiplayer.disconnect.duplicate_login')).toBeNull();
     expect(reconnectKindOfKick('multiplayer.disconnect.banned')).toBeNull();
     expect(reconnectKindOfKick('multiplayer.disconnect.not_whitelisted')).toBeNull();
-    expect(reconnectKindOfKick('disconnect.spam')).toBeNull();
+    expect(reconnectKindOfKick('multiplayer.disconnect.kicked')).toBeNull();
+    // A kick for how the body stood or spoke (a block the server never had under it, too many lines, idle): back in, like a silence kick.
+    expect(reconnectKindOfKick('multiplayer.disconnect.flying')).toBe('play_rule');
+    expect(reconnectKindOfKick('disconnect.spam')).toBe('play_rule');
+    expect(reconnectKindOfKick('multiplayer.disconnect.idling')).toBe('play_rule');
+    // The reason as the client hands it over when it is not plain text (the whole component, as JSON).
+    expect(reconnectKindOfKick(JSON.stringify({ type: 'compound', value: { translate: { type: 'string', value: 'multiplayer.disconnect.flying' } } }))).toBe('play_rule');
     expect(reconnectKindOfKick('')).toBeNull();
     expect(reconnectKindOfEnd('socketClosed')).toBe('connection_lost');
     expect(reconnectKindOfEnd('read ECONNRESET')).toBe('connection_lost');
@@ -40,6 +46,9 @@ describe('run 20: the body goes back in by itself after a connection that ended 
     // Joined and stable for two minutes: a fresh start.
     budget.noteSpawned(now); now += 130_000;
     expect(budget.next(now, 'connection_lost')).toMatchObject({ allowed: true, delayMs: 8000, attempt: 1 });
+    // A play-rule kick starts at the same first pause and grows the same way, inside the same five tries.
+    const rule = new ReconnectBudget();
+    expect(rule.next(0, 'play_rule').delayMs).toBe(8000); expect(rule.next(1, 'play_rule').delayMs).toBe(15000);
     // The chat-signature kick keeps its short pause.
     const chat = new ReconnectBudget();
     chat.next(0, 'chat_validation'); expect(chat.next(1, 'chat_validation').delayMs).toBe(8000);

@@ -8,15 +8,19 @@
  * elsewhere), is answered with a new login after a pause that grows, a few times, until the body has stayed up a while.
  */
 
-export type ReconnectKind = 'chat_validation' | 'timeout' | 'connection_lost';
+export type ReconnectKind = 'chat_validation' | 'timeout' | 'connection_lost' | 'play_rule';
 
-const SERVER_SAYS_NO = /(duplicate_login|banned|not_whitelisted|whitelist|ip_banned|kicked_for|name_taken|invalid_player_data|incompatible|outdated|unverified|authentication|session|disconnect\.kicked|disconnect\.spam|disconnect\.flying|disconnect\.packets|idling)/i;
+const SERVER_SAYS_NO = /(duplicate_login|banned|not_whitelisted|whitelist|ip_banned|kicked_for|name_taken|invalid_player_data|incompatible|outdated|unverified|authentication|session|disconnect\.kicked|disconnect\.packets)/i;
 
 /** What a kick (the server's word) calls for, or null when the body should stay out. */
 export function reconnectKindOfKick(reason: string): ReconnectKind | null {
   if (!reason) return null;
   if (reason.includes('chat_validation_failed')) return 'chat_validation';
   if (SERVER_SAYS_NO.test(reason)) return null;
+  // A kick for how the body stood or spoke in its last seconds (over a block the server never had, too many lines, idle) does not say
+  // the body is unwanted: a new login puts it back on the server's own world, and the head's task goes on. Staying out left the run
+  // waiting for an operator's login. An operator's kick (disconnect.kicked) still keeps it out.
+  if (/disconnect\.(flying|spam|idling)/i.test(reason)) return 'play_rule';
   if (/disconnect\.timeout|timed out|timeout|keepAliveError/i.test(reason)) return 'timeout';
   return null;
 }
