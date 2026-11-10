@@ -25,6 +25,8 @@ const MAX_NODES = 40_000;
 const MAX_CANDIDATES = 16;
 /** A table this near (metres) is walked to when none is within reach (end1109o05). */
 const TABLE_WALK_M = 16;
+/** With a table carried, one this near (metres) is still walked to first: it is not put down again beside one (run 5: a table put down 10 m from one standing). */
+const CARRIED_REUSE_WALK_M = 8;
 const nameOf = (bot: any, id: number): string => String(bot.registry?.items?.[id]?.name ?? id);
 
 /** What a recipe takes: its ingredients by item name and count (the negative entries of the recipe's delta). */
@@ -142,7 +144,10 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
   if (state.steps.some(step => step.recipe.requiresTable === true)) {
     table = tableInReach(bot);
     if (!table) {
-      if (inventoryCount(bot, 'crafting_table') > 0) {
+      if (inventoryCount(bot, 'crafting_table') > 0) table = await walkToTable(ctx, CARRIED_REUSE_WALK_M, 8);
+      if (table) {
+        // a known table close by is the one used; the carried one stays in the pack
+      } else if (inventoryCount(bot, 'crafting_table') > 0) {
         const put = await placeNearby(ctx, 'crafting_table');
         if ('fail' in put) return fail(bot, 'no_table', `作業台が要る。持っている crafting_table を置けなかった: ${put.fail.text}`);
         placedAt = put.cell;
@@ -150,15 +155,9 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
         if (!table || table.name !== 'crafting_table') table = tableInReach(bot);
         if (!table) return fail(bot, 'no_table', `作業台を ${cellText(put.cell)} に置いたが、使える作業台として見えない`);
       } else {
-        const near = nearestTable(bot);
-        const feet = feetCell(bot);
         // end1109o05: a table 6.8 m off, out of the 4.5 m reach: four makes and walks stopped over 10 minutes. A table within TABLE_WALK_M
         // is walked to (the way only, nothing dug or placed) and then used.
-        if (near && feet && Math.hypot(near.x - feet.x, near.y - feet.y, near.z - feet.z) <= TABLE_WALK_M) {
-          const beside = [[1, 0], [-1, 0], [0, 1], [0, -1]].flatMap(([dx, dz]) => [0, -1, 1].map(dy => ({ x: near.x + dx, y: near.y + dy, z: near.z + dz })));
-          await go(ctx, { goals: beside, range: 1, maxDrop: 3, seconds: 20 });
-          table = tableInReach(bot);
-        }
+        table = await walkToTable(ctx, TABLE_WALK_M);
       }
       if (!table) {
         const near = nearestTable(bot);
@@ -179,6 +178,17 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
   made.delete(name);
   const parts = stacksOut(made);
   return { ok: true, text: `make 済 ${name}×${final}${parts.length ? `（${parts.join('・')} も作った）` : ''}${placedAt ? `。作業台を ${cellText(placedAt)} に置いた` : ''}（今 ${inventoryCount(bot, name)} 個）` };
+}
+
+/** The nearest known table within `limit` metres, walked to (the way only) and returned when it is in reach then; else null. */
+async function walkToTable(ctx: StepContext, limit: number, seconds = 20): Promise<any> {
+  const bot = ctx.bot;
+  const near = nearestTable(bot);
+  const feet = feetCell(bot);
+  if (!near || !feet || Math.hypot(near.x - feet.x, near.y - feet.y, near.z - feet.z) > limit) return null;
+  const beside = [[1, 0], [-1, 0], [0, 1], [0, -1]].flatMap(([dx, dz]) => [0, -1, 1].map(dy => ({ x: near.x + dx, y: near.y + dy, z: near.z + dz })));
+  await go(ctx, { goals: beside, range: 1, maxDrop: 3, seconds });
+  return tableInReach(bot);
 }
 
 function fail(bot: any, reason: string, text: string): StepOutcome {

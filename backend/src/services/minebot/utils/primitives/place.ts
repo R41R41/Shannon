@@ -7,6 +7,8 @@ import { noteOwned } from '../ownedBlocks.js';
 import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, findItem, guard, inventoryCount, isAirLike, placeText, stopped,
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { withProgress } from './progressUnits.js';
+import { noteStation } from './stationLedger.js';
+import { tableInReach } from './craft.js';
 
 /**
  * place: a block into each cell in order (design mb-llm-centric 2.3). The cell is the planner's: no place is chosen for it, the body
@@ -158,6 +160,16 @@ async function placeCells(ctx: StepContext, args: PlaceArgs, tally: { laid: numb
     const there = blockAt(bot, cell);
     // The cell holds the block already (the hand's aim held before it began; nothing is laid, so none is needed in the pack).
     if (there?.name === args.block) { done.push(`${cellText(cell)} は既に ${args.block}（置かずに次へ）`); tally.same++; continue; }
+    // Run 5 (2026-11-11): four tables put down within a few minutes, each new one with another standing in reach. A table in reach is the one to use: nothing is
+    // laid (the one carried stays in the pack), the aim (a table to craft at) holds, and the next craft works.
+    if (args.block === 'crafting_table') {
+      const reach = tableInReach(bot);
+      if (reach) {
+        done.push(`近くに作業台 ${cellText({ x: reach.position.x, y: reach.position.y, z: reach.position.z })} があるので置かずにそれを使う`);
+        tally.same++;
+        continue;
+      }
+    }
     if (!findItem(bot, args.block)) return result(stopped(bot, 'missing_item', `${args.block} を持っていない（残り0）`, cell));
     if (!there) return result(stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell));
     // What the line may run to: the act's line is clipped, and the cells done before this one are in front of it.
@@ -231,6 +243,7 @@ async function placeCells(ctx: StepContext, args: PlaceArgs, tally: { laid: numb
       if (blockAt(bot, cell)?.name !== args.block) return result(stopped(bot, 'not_placed', `${placeText(bot, cell)} は置いた後も ${cellNow(bot, cell)}（サーバーが受け付けない）`, cell));
     }
     try { noteOwned(bot, cell, args.block); } catch { /* the ledger is a help */ }
+    try { noteStation(bot, args.block, cell); } catch { /* the list of stations to carry is a help */ }
     // r8 (runs 28 and 32): a bed is two blocks and the server sends the foot first and the head a moment later; the hand is over when both are
     // in the body's world, and says where each lies (the head lies where the body faced, which the planner did not choose).
     let bedWords = '';

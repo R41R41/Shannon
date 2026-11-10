@@ -17,6 +17,7 @@ import { blockAt, cellNow, cellText, freeSlots, inventoryCount, resolvePosition,
 import { dimensionOf, dimensionWords, portalWalks, walk } from '../utils/primitives/walk.js';
 import { dig } from '../utils/primitives/dig.js';
 import { place } from '../utils/primitives/place.js';
+import { carryAway } from '../utils/primitives/stations.js';
 import { findEntity, use } from '../utils/primitives/use.js';
 import { craft } from '../utils/primitives/craft.js';
 import { furnace } from '../utils/primitives/furnace.js';
@@ -236,6 +237,23 @@ function cellsOf(ctx: StepContext, hand: ActHand, specs: unknown[] | undefined):
   return cells;
 }
 const bad = (text: string): StepOutcome => ({ ok: false, reason: 'invalid_input', text });
+/**
+ * The cells a hand takes the body to, for the stations left behind (utils/primitives/stations: run 5, the tables and furnaces left standing). A hand that
+ * stays where it is (dig, craft, furnace, eat, wait) has none: a station is taken up only by a hand that moves the body.
+ */
+function travelCells(ctx: StepContext, hand: ActHand): Cell[] {
+  try {
+    const cell = (spec: unknown) => (spec ? cellOf(ctx, hand, spec) : null);
+    const some = (cells: Array<Cell | null>) => cells.filter((value): value is Cell => value !== null);
+    switch (hand.do) {
+      case 'go': return some((hand.goals ?? (hand.to ? [hand.to] : [])).map(cell));
+      case 'walk': return some([cell(hand.path?.length ? hand.path[hand.path.length - 1] : hand.to)]);
+      case 'vertical': return typeof hand.toY === 'number' ? [{ x: ctx.base.x, y: hand.toY, z: ctx.base.z }] : [];
+      case 'portal': case 'mine': return cellsOf(ctx, hand, hand.at) ?? [];
+      default: return [];
+    }
+  } catch { return []; }
+}
 /** A creature named as the contract does ("#41" an id, else a name), or a plain id. */
 /** How long a walk or portal hand cut by a reflex waits for the crossing while the body still touches a portal (a nether portal takes four seconds of standing in it). */
 export const PORTAL_CROSS_WAIT_MS = 4500;
@@ -687,7 +705,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       emit(index, 'in_progress');
       try { actContext?.onHandStart?.({ hand: index + 1, pass }); } catch { /* the record never stops a hand */ }
       const began = Date.now();
-      const opsBefore = motorOpsOf(bot);
+      let opsBefore = motorOpsOf(bot);
       let outcome: StepOutcome;
       host.actHandNow = hand.do; handNow = hand;
       fallStops = hand.do === 'go' ? Math.max(4, (hand.maxDrop ?? 3) + 1) : 4;
@@ -708,6 +726,14 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       // Continue contracts (3): what the hand changed in the pack is told, with the reason its kind gives (craft and make say their own).
       const tracker = SELF_COUNTING.has(hand.do) ? null : trackPack(bot);
       const settleTrack = () => tracker?.finish(handReasons(hand) ?? {}, event => made.push(event));
+      // Run 5: a table or furnace this body set down is taken up before a hand that goes far from it (the pack's change is the hand's, in its events). Never fails the hand.
+      let carried = '';
+      const travel = travelCells(ctx, hand);
+      if (travel.length) {
+        const named = hands.slice(index + 1).flatMap(later => { try { return cellsOf(ctx, later, later.at) ?? []; } catch { return []; } });
+        carried = await carryAway(ctx, travel, named);
+        opsBefore = motorOpsOf(bot);
+      }
       try { outcome = await runHand(ctx, hand); }
       catch (error) {
         settleTrack();
@@ -767,6 +793,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       }
       // A reflex's note held back while the hand laid blocks stops the act at the next hand's watch.
       settleTrack();
+      if (carried && outcome.ok) outcome = { ...outcome, text: `${outcome.text}。${carried}` };
       endFight();
       host.actHandNow = undefined;
       dug += dugCountOf(bot, dugBefore);
