@@ -4,6 +4,7 @@ import { cellText, eyeDistance, guard, inventoryCount, stopped, StepStopped, USE
 import { withProgress } from './progressUnits.js';
 import { craftEvents } from './craftEvents.js';
 import { withWoodForms } from './woodRecipes.js';
+import { resolveWoodName, roomFor, syncPack } from './craftSync.js';
 
 /** Between two rounds of a craft in the hand the server's answer is let settle this long (see the loop below). */
 export const ROUND_SETTLE_MS = 250;
@@ -86,8 +87,10 @@ export function shortfallHelp(bot: any, recipe: any, short: Array<{ name: string
  * Continue contracts (1): progress in items (`done` what the pack gained of the item, `left` the count not yet made). `count` is how many MORE to make: a pack that
  * holds that many already is not "already".
  */
-export async function craft(ctx: StepContext, args: CraftArgs): Promise<StepOutcome> {
+export async function craft(ctx: StepContext, input: CraftArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
+  // 12:58Z of task 193a86b0: 「craft item=planks」 was refused twice; a generic wood name is the kind the pack holds.
+  const args: CraftArgs = { ...input, item: resolveWoodName(bot, input.item) };
   const wanted = Math.max(1, Math.min(64 * 9, Math.round(args.count ?? 1)));
   const had = inventoryCount(bot, args.item);
   return withProgress(() => craftItem(ctx, args), () => {
@@ -101,6 +104,9 @@ async function craftItem(ctx: StepContext, args: CraftArgs): Promise<StepOutcome
   const item = bot.registry?.itemsByName?.[args.item];
   if (!item) return stopped(bot, 'invalid_item', `${args.item} は物の名前ではない`);
   const count = Math.max(1, Math.min(64 * 9, Math.round(args.count ?? 1)));
+  // The pack as the server holds it before the recipe is chosen from it (`craftSync.ts`, task 193a86b0).
+  if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
+  await syncPack(bot);
   const table = tableInReach(bot);
   const all: any[] = withWoodForms(bot, args.item, [...(bot.recipesAll?.(item.id, null, null) ?? []), ...(table ? bot.recipesAll?.(item.id, null, table) ?? [] : [])]);
   if (!all.length) {
@@ -119,6 +125,7 @@ async function craftItem(ctx: StepContext, args: CraftArgs): Promise<StepOutcome
       .sort((a, b) => a.short.reduce((s, x) => s + x.need - x.have, 0) - b.short.reduce((s, x) => s + x.need - x.have, 0))[0];
     return stopped(bot, 'missing_material', `${args.item}×${count} の材料が足りない: ${best.short.map(x => `${x.name} ${x.need - x.have}（持っている ${x.have}／要る ${x.need}）`).join('、')}${shortfallHelp(bot, best.recipe, best.short, perCraft(best.recipe), table)}`);
   }
+  if (!roomFor(bot, args.item)) return stopped(bot, 'full', `持ち物が満杯で ${args.item} を入れる所が無い（何も作っていない。要らない物を drop するか箱へ）`);
   const usesTable = ready.requiresTable === true;
   const times = Math.ceil(count / perCraft(ready));
   const before = inventoryCount(bot, args.item);
@@ -142,11 +149,14 @@ async function craftItem(ctx: StepContext, args: CraftArgs): Promise<StepOutcome
       }
     } catch (error) {
       if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
-      return stopped(bot, 'craft_failed', `${args.item} を作れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}`);
+      await syncPack(bot);
+      return stopped(bot, roomFor(bot, args.item) ? 'craft_failed' : 'full', `${args.item} を作れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}`);
     }
     await wait(ctx, 150);
-    const after = inventoryCount(bot, args.item);
-    if (after <= before) return stopped(bot, 'craft_failed', `${args.item} が増えていない（前 ${before} 個、今 ${after} 個）`);
+    let after = inventoryCount(bot, args.item);
+    // The copy may say "not more" of what the server gave, or more than it gave: the server's pack decides.
+    if (after <= before && await syncPack(bot)) after = inventoryCount(bot, args.item);
+    if (after <= before) return stopped(bot, roomFor(bot, args.item) ? 'craft_failed' : 'full', `${args.item} が増えていない（前 ${before} 個、今 ${after} 個。持ち物はサーバーと照合した）`);
     return { ok: true, text: `${args.item} を ${after - before} 個作った（今 ${after} 個${usesTable ? '、作業台で' : ''}）` };
   } finally { record(); }
 }

@@ -7,6 +7,7 @@ import { go } from './go.js';
 import { withProgress } from './progressUnits.js';
 import { craftEvents } from './craftEvents.js';
 import { withWoodForms } from './woodRecipes.js';
+import { resolveWoodName, syncPack } from './craftSync.js';
 
 /**
  * make: one item, and the parts it is made of, in a chain of crafts (hands-contract.md 4). The planner says what and how many; the body
@@ -100,8 +101,10 @@ const stacksOut = (made: Map<string, number>) => [...made.entries()].map(([name,
  * Continue contracts (1): progress in items (`done` what the pack gained of the item, `left` the count not yet made). `count` is how many MORE to make (the target is the
  * number held now plus count): a pack that holds that many already is not "already".
  */
-export async function make(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> {
+export async function make(ctx: StepContext, input: MakeArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
+  // A generic wood name (「planks」) is the kind the pack holds (`craftSync.ts`, task 193a86b0).
+  const args: MakeArgs = { ...input, item: resolveWoodName(bot, String(input.item ?? '')) };
   const wanted = Math.max(1, Math.min(64, Math.round(args.count ?? 1)));
   const had = inventoryCount(bot, String(args.item ?? ''));
   return withProgress(() => makeItem(ctx, args), () => {
@@ -117,6 +120,9 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
   if (!item) return fail(bot, 'no_recipe', `${name} は物の名前ではない`);
   const count = Math.max(1, Math.min(64, Math.round(args.count ?? 1)));
   if (!recipesFor(bot, name).length) return fail(bot, 'no_recipe', `${name} の作り方が無い（かまどで焼く物・掘る物・取引で得る物かもしれない）`);
+  // The plan is made from the pack as the server holds it (task 193a86b0: the copy said stripped_oak_log×3 where the server held oak_log×10).
+  if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
+  await syncPack(bot);
   const stock = new Map<string, number>();
   for (const entry of (bot.inventory?.items?.() ?? []) as Array<{ name: string; count: number }>) stock.set(entry.name, (stock.get(entry.name) ?? 0) + entry.count);
   const before = stock.get(name) ?? 0;
@@ -204,10 +210,13 @@ async function craftStep(ctx: StepContext, step: Step, table: any, target: strin
       }
     } catch (error) {
       if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
+      await syncPack(bot);
       return { n: 0, fail: fail(bot, freeSlots(bot) === 0 ? 'full' : 'craft_failed', `${step.item} を作れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}`) };
     }
     await wait(ctx, 150);
-    const gained = inventoryCount(bot, step.item) - before;
+    let gained = inventoryCount(bot, step.item) - before;
+    // The server's pack decides whether the result came (the copy and the server came apart in task 193a86b0).
+    if (gained <= 0 && await syncPack(bot)) gained = inventoryCount(bot, step.item) - before;
     if (gained <= 0) return { n: 0, fail: fail(bot, freeSlots(bot) === 0 ? 'full' : 'craft_failed', `${step.item} が増えていない（前 ${before} 個、今 ${inventoryCount(bot, step.item)} 個）`) };
     return { n: gained };
   } finally { record(); if (intermediate && inventoryCount(bot, step.item) > before) madeNames.add(step.item); }
