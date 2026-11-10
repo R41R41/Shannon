@@ -268,7 +268,8 @@ describe('a bed dug up after sleeping is picked up from the floor (run 25: left 
 
   function sleeper() {
     const inventory: Array<{ name: string; count: number; type: number }> = [{ name: 'red_bed', count: 1, type: 900 }];
-    const bedAt = new Vec3(1, 64, 0);
+    // The bed lies where the place put it (the cell on the reference block's top face), as on a server.
+    let bedAt = new Vec3(1, 64, 0);
     let bedPlaced = false;
     const bot: any = {
       entity: { position: new Vec3(0.5, 64, 0.5), yaw: 0 }, entities: {}, time: { timeOfDay: 14000 }, game: { dimension: 'minecraft:overworld' },
@@ -278,7 +279,7 @@ describe('a bed dug up after sleeping is picked up from the floor (run 25: left 
         return { ...(p.y < 64 ? solid : air), position: p }; },
       findBlock: vi.fn(() => (bedPlaced ? { name: 'red_bed', position: bedAt } : null)),
       equip: vi.fn(async () => {}), lookAt: vi.fn(async () => {}), pathfinder: { stop: () => {} },
-      placeBlock: vi.fn(async () => { bedPlaced = true; inventory.length = 0; }),
+      placeBlock: vi.fn(async (reference: any, face: Vec3) => { bedAt = reference.position.plus(face); bedPlaced = true; inventory.length = 0; }),
       sleep: vi.fn(async () => {}),
       once: (event: string, listener: () => void) => { if (event === 'wake') setImmediate(listener); },
       removeListener: () => {},

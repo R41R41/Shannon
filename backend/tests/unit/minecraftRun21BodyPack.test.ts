@@ -322,12 +322,14 @@ describe('a bed spot is made where there is none (run 21: a rock passage one blo
     expect(skill.findPlaceForBed()).toBeNull();
     const spot = skill.findWiderPlaceForBed();
     expect(spot).not.toBeNull();
-    expect(spot.x).toBeGreaterThanOrEqual(5);
-    expect(spot.y).toBe(6);
+    // A stand a step or two down the stair, from where a bed lies along the passage, is nearer than the room (run 6: a spot is used from a
+    // stand): the body walks to it (`plannedStand`), nothing is dug.
+    expect(skill.plannedStand).not.toBeNull();
     expect(calls).toEqual([]);
-    // Behind rock (the stair cut off) the same room is not "a short walk": nothing is found without digging.
+    // Behind rock (the stair cut off) the same room is not "a short walk": the spot is never in the room (x 6 and over).
     w.cells.set('3,8,0', 'stone'); w.cells.set('3,9,0', 'stone'); w.cells.set('3,10,0', 'stone');
-    expect(skill.findWiderPlaceForBed()).toBeNull();
+    const cut = skill.findWiderPlaceForBed();
+    expect(cut === null || cut.x < 5).toBe(true);
   });
 
   it('says why, with its own failure type, when no spot can be made (no pickaxe), and when a dig is refused', async () => {
