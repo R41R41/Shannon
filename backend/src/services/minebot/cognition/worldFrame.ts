@@ -17,7 +17,7 @@ import { backgroundJobs } from '../execution/backgroundJobs.js';
 import { bedWool, cookRawNotice, descentKitNotice, type GateBody } from '../utils/nightGate.js';
 import { toolKitNotice } from '../utils/toolWear.js';
 import { nearbyNeeds } from '../utils/nearbyNeeds.js';
-import { localMapFor, recentStopLines } from '../utils/localMap.js';
+import { feetCell, localMapFor, recentStopLines, relativeWords } from '../utils/localMap.js';
 import { insideStructure, mapMarkLines, watchedEntityFacts } from '../utils/mapMarks.js';
 import { deepWaterWords } from '../utils/primitives/waterExit.js';
 import { foodPointsOf } from '../utils/foodPoints.js';
@@ -197,16 +197,20 @@ function biomeAt(bot: WorldFrameBotLike | undefined): string | null {
 }
 
 /**
- * Furnaces still working, as said in the observation (the long instruction is the API's own wording). Under 600 characters, with the
+ * Furnaces still working, as said in the observation (the long instruction is the API's own wording). Under 900 characters, with the
  * number of furnaces left out said beside them (`jobsOmitted`): a mind that sees two of five must not think there are two.
  */
-const JOBS_MAX_CHARS = 600;
+const JOBS_MAX_CHARS = 900;
 function jobsFrame(bot: unknown): { jobs: NonNullable<WorldObservation['jobs']>; omitted: number } | undefined {
   const furnaces = (bot as { activeFurnaces?: unknown[] } | undefined)?.activeFurnaces;
   if (!Array.isArray(furnaces) || !furnaces.length) return undefined;
+  const feet = feetCell(bot as Parameters<typeof feetCell>[0]);
   const jobs = backgroundJobs(bot as Parameters<typeof backgroundJobs>[0]).map(job => ({
     status: job.status, remainingEstimateMs: job.remainingEstimateMs, input: job.input, count: job.count,
     position: { x: job.position.x, y: job.position.y, z: job.position.z },
+    // When and where, so the head can plan other work for the seconds the batch takes (it does not stand at the furnace).
+    estimatedReadyAt: job.estimatedReadyAt, ...(job.expects ? { expects: job.expects } : {}),
+    ...(feet && job.status !== 'different_dimension' ? { from: relativeWords(feet, { x: job.position.x, y: job.position.y, z: job.position.z }) } : {}),
     ...(job.unfueledInputCount ? { unfueledInputCount: job.unfueledInputCount } : {}), completionVerified: false as const,
   }));
   const total = jobs.length;

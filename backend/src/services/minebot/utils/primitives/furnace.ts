@@ -1,6 +1,9 @@
 import { captureFurnaceProperties } from './furnaceProperties.js';
 import { type Cell } from '../localMap.js';
 import { itemsPerFuel } from '../fuelValues.js';
+import pathfinder from 'mineflayer-pathfinder';
+import { getNear } from './getNear.js';
+import { goWith, walkMovements, type WayNotes } from './walk.js';
 import { blockAt, cellText, eyeDistance, findItem, guard, inventoryCount, placeText, stopped, StepStopped, USE_REACH, wait,
   type StepContext, type StepOutcome } from './common.js';
 
@@ -36,6 +39,17 @@ export interface FurnaceWork {
 }
 
 const KINDS = new Set(['furnace', 'blast_furnace', 'smoker']);
+const { goals } = pathfinder;
+
+/**
+ * A furnace that holds a batch the body put in and has not taken out (due or not): breaking it would drop the slots and lose the batch
+ * (the pick-up of placed furnaces, run 5 issue 2, skips these). Its cell is in `bot.activeFurnaces` from the put until the take.
+ */
+export function furnaceBusy(bot: unknown, cell: Cell): boolean {
+  const here = String((bot as { game?: { dimension?: unknown } })?.game?.dimension ?? '');
+  const batches = (bot as { activeFurnaces?: Array<{ pos: Cell; dimension?: string }> })?.activeFurnaces;
+  return Array.isArray(batches) && batches.some(f => f?.pos && f.pos.x === cell.x && f.pos.y === cell.y && f.pos.z === cell.z && (!f.dimension || !here || f.dimension === here));
+}
 const slotText = (item: any) => item ? `${item.name}×${item.count}` : '空';
 const stackOf = (item: any) => item ? { name: String(item.name), count: Number(item.count) } : null;
 
@@ -49,6 +63,14 @@ function fuelCoverage(window: any, state: { burning: boolean | null; seconds: nu
   return (fuel ? fuel.count * itemsPerFuel(String(fuel.name)) : 0) + (state.seconds !== null ? state.seconds / secondsEach + (state.progress ?? 0) : state.burning ? 1 : 0);
 }
 
+/** Drops the batch written for a furnace cell (this dimension): the furnace is gone or its slots are empty. */
+function forgetBatch(bot: any, cell: Cell): void {
+  const host = bot as { activeFurnaces?: any[] };
+  if (Array.isArray(host.activeFurnaces)) host.activeFurnaces = host.activeFurnaces.filter(f => !sameBatch(f, cell, bot));
+}
+const sameBatch = (f: any, cell: Cell, bot: any) => f?.pos?.x === cell.x && f.pos.y === cell.y && f.pos.z === cell.z
+  && (!f.dimension || !bot.game?.dimension || f.dimension === String(bot.game.dimension));
+
 export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<FurnaceWork> {
   const bot = ctx.bot;
   const cell = args.at;
@@ -56,7 +78,11 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
   const fail = (outcome: StepOutcome): FurnaceWork => ({ outcome, moved: none });
   const block = blockAt(bot, cell);
   if (!block) return fail(stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell));
-  if (!KINDS.has(block.name)) return fail(stopped(bot, 'not_furnace', `${placeText(bot, cell)} は ${block.name}（かまどではない）`, cell));
+  if (!KINDS.has(block.name)) {
+    // The cell is read (loaded) and is no furnace any more (broken by something else): its batch is gone with it, and is no longer told as due.
+    forgetBatch(bot, cell);
+    return fail(stopped(bot, 'not_furnace', `${placeText(bot, cell)} は ${block.name}（かまどではない）`, cell));
+  }
   const distance = eyeDistance(bot, cell);
   if (distance > USE_REACH) return fail(stopped(bot, 'out_of_reach', `${placeText(bot, cell)} の ${block.name} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell));
   if (args.put && !findItem(bot, args.put.item)) return fail(stopped(bot, 'missing_item', `${args.put.item} を持っていない`, cell));
@@ -143,11 +169,15 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     const unfueled = input ? input.count - fueled : 0;
     const remaining = input && burning !== null && state.progress !== null ? Math.max(0, fueled * secondsEach - progress * secondsEach) : null;
     const host = bot as { activeFurnaces?: any[] };
-    host.activeFurnaces = (host.activeFurnaces ?? []).filter(f => !(f.pos.x === cell.x && f.pos.y === cell.y && f.pos.z === cell.z));
+    // The batch written before is kept when this reading cannot rewrite it: the window gave no burn or progress packet (an early take is a short look and
+    // often has none) or there is output not taken yet. Dropping it would hide the furnace from the ledger and let the pick-up of placed furnaces break one that
+    // still holds a batch.
+    const before = (host.activeFurnaces ?? []).find(f => sameBatch(f, cell, bot));
+    host.activeFurnaces = (host.activeFurnaces ?? []).filter(f => f !== before && !(f.pos.x === cell.x && f.pos.y === cell.y && f.pos.z === cell.z));
     if (input && (fuel || burning) && remaining !== null) {
       host.activeFurnaces.push({ pos: { ...cell }, item: input.name, count: fueled, startedAt: Date.now(), readyAt: Date.now() + Math.round(remaining * 1000),
         dimension: String(bot.game?.dimension ?? ''), ...(unfueled > 0 ? { unfueledCount: unfueled } : {}) });
-    }
+    } else if (before && (output || (input && remaining === null))) host.activeFurnaces.push(before);
     const timing = !input ? '' : burning === null || remaining === null ? '。燃焼・進みの通知が未確認（燃料切れとは判断できない）' : !(fuel || burning) ? '。燃料が無く、燃えてもいない（このままでは焼けない）'
       : unfueled > 0 ? `。燃料で焼けるのは約 ${fueled} 個まで（材料 ${input.count}）。あと ${unfueled} 個分の燃料が要る（${fuelNeedWords(unfueled)}）。約${Math.round(remaining)}秒で止まる`
         : `。焼き上がり 約${Math.round(remaining)}秒後`;
@@ -155,11 +185,46 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     const look: FurnaceLook = { kind: block.name, input: stackOf(input), fuel: stackOf(fuel), output: stackOf(output), burning, remainingSec: input ? remaining : null };
     return { moved, look, ...(occupiedBy ? { occupiedBy } : {}), outcome: { ok: true, at: cell, data: { container: { at: cell, kind: block.name, items } },
       // Run 43: the time and what the fuel will not smelt first (the hand's line is 160 characters), then what was moved and the slots.
-      text: `${timing ? `${timing.replace(/^。/u, '')}。` : ''}${notes.length ? `${notes.join('、')}。` : ''}${cellText(cell)} の ${block.name}: 材料 ${slotText(input)}・燃料 ${slotText(fuel)}・出来上がり ${slotText(output)}${burning ? '（燃えている）' : ''}` } };
+      text: `${args.take && moved.took === 0 && input && remaining !== null && remaining > 0 ? `まだ出来ていない（あと約${Math.round(remaining)}秒。待たずに別の作業を進め、時間が来たらもう一度 take）。` : ''}${timing ? `${timing.replace(/^。/u, '')}。` : ''}${notes.length ? `${notes.join('、')}。` : ''}${cellText(cell)} の ${block.name}: 材料 ${slotText(input)}・燃料 ${slotText(fuel)}・出来上がり ${slotText(output)}${burning ? '（燃えている）' : ''}` } };
   } finally { properties.close(); try { window.close(); } catch { /* closed */ } }
 }
 
+/**
+ * Walks toward a furnace whose chunk is not loaded (the body went off to work elsewhere while it burnt) until the chunk is read, the way a far `go` does
+ * (GoalNearXZ: the route search plans only through loaded chunks, so the goal is a column and the walk is taken in legs while there is time).
+ * Returns the block read at the cell afterwards (null: still not loaded).
+ */
+async function walkToLoad(ctx: StepContext, cell: Cell, notes: WayNotes): Promise<any> {
+  const bot = ctx.bot;
+  const navigator = bot.pathfinder as { movements?: unknown; setMovements(movements: unknown): void } | undefined;
+  if (!navigator) return null;
+  const previous = navigator.movements;
+  try {
+    navigator.setMovements(walkMovements(bot, true));
+    for (let leg = 0; leg < 6 && !blockAt(bot, cell) && ctx.deadline - Date.now() > 1500; leg++) {
+      const gone = await goWith(ctx, new goals.GoalNearXZ(cell.x + 0.5, cell.z + 0.5, 5), Math.max(1000, ctx.deadline - Date.now()), notes);
+      if (gone.timedOut || gone.stuck || gone.error) break;
+    }
+  } finally { try { if (previous) navigator.setMovements(previous); } catch { /* kept */ } }
+  return blockAt(bot, cell);
+}
+
 export async function furnace(ctx: StepContext, args: FurnaceArgs): Promise<StepOutcome> {
+  // Run 5 (11/11): taking is a collect. The head sends a take for a furnace it has walked away from; the body walks there itself, to the chunk when it is
+  // not loaded and then to where the furnace is in reach and seen (put and the smelt hand keep their rules: they are for a furnace the planner stands at).
+  if (args.take) {
+    const notes: WayNotes = { opened: [], leaves: 0 };
+    let block = blockAt(ctx.bot, args.at);
+    if (!block) block = await walkToLoad(ctx, args.at, notes);
+    if (KINDS.has(String(block?.name))) {
+      // getNear answers at once when the furnace is in reach and seen, so it is asked every time (no bound of its own that could differ from the hand's).
+      const near = await getNear(ctx, args.at, notes, 4.2, Math.max(1000, ctx.deadline - Date.now()));
+      if (!near.near) {
+        return stopped(ctx.bot, near.timedOut ? 'limit_time' : 'unreachable',
+          `${placeText(ctx.bot, args.at)} のかまどに近づけない（${near.timedOut ? '時間切れ' : near.stuck ? '4 秒進めず' : '道が無いか、見える所に立てない'}）`, args.at);
+      }
+    }
+  }
   const worked = await furnaceWork(ctx, args);
   // Continue contracts (1): progress in items (what was put into the slots and what was taken out of them).
   const moved = worked.moved.input + worked.moved.fuel + (worked.moved.took ?? 0);
