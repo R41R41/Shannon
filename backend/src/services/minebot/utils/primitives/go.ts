@@ -1,4 +1,5 @@
 import pathfinder from 'mineflayer-pathfinder';
+import { laidLate } from './laidLate.js';
 import { Vec3 } from 'vec3';
 import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
@@ -1022,20 +1023,6 @@ async function laidAt(host: any, reference: any, face: any): Promise<boolean> {
   }
   return false;
 }
-/** How long a place whose answer is overdue (promptPlace gives up at 1.5 s) is waited for before it is called refused (S2 lab: a server 2.2 s late with the block). */
-const LATE_ANSWER_MS = 3500;
-/** The block the hand held shows in the cell a place was made for within LATE_ANSWER_MS: the server was only slow. False when the cell is still not it, or the act is stopped. */
-async function laidLate(host: any, cell: Cell | null, blockName: string, stopped: () => boolean): Promise<boolean> {
-  if (!cell || !blockName) return false;
-  const at = new Vec3(cell.x, cell.y, cell.z);
-  const until = Date.now() + LATE_ANSWER_MS;
-  while (Date.now() < until && !stopped()) {
-    if (String(host.blockAt?.(at, false)?.name ?? '') === blockName) return true;
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  return String(host.blockAt?.(at, false)?.name ?? '') === blockName;
-}
-
 /**
  * Continue contracts (1, 12 decision on go): the cells round a place that shut the way, for the stop's `lastSearch.blockedAround`. The cells the body would stand in or pass
  * (the place's feet cell and the one over it, and the eight round each: 18), those that are solid and not on the list of what may be dug (`canDig`), nearest the place first, 8 at most.

@@ -480,6 +480,27 @@ describe('make on the practice ground', () => {
     expect(g.craftLog).toHaveLength(0);
   }, 30_000);
 
+  it('4a. no table near, none carried, none to walk to: make builds one from the planks the plan leaves (or from logs), lays it, and says so; short of four planks it says how many', async () => {
+    const g = open();
+    g.give('oak_planks', 12);
+    const planks = await make(stepContext(g.bot), { item: 'wooden_pickaxe' });
+    expect(planks.ok, planks.text).toBe(true);
+    expect(planks.text).toContain('板から作った');
+    expect(g.placeLog.filter(entry => entry.name === 'crafting_table')).toHaveLength(1);
+    expect(g.countOf('wooden_pickaxe')).toBe(1);
+    const logs = open();
+    logs.give('oak_log', 3);
+    const fromLogs = await make(stepContext(logs.bot), { item: 'wooden_pickaxe' });
+    expect(fromLogs.ok, fromLogs.text).toBe(true);
+    expect(logs.countOf('wooden_pickaxe')).toBe(1);
+    const short = open();
+    short.give('oak_planks', 8);
+    const refused = await make(stepContext(short.bot), { item: 'wooden_pickaxe' });
+    expect(refused.reason).toBe('no_table');
+    expect(refused.text).toContain('板 4 枚が足りない');
+    expect(refused.text).toContain('oak_planks×8');
+  }, 30_000);
+
   it('4. a 3x3 recipe with no table near and none carried: no_table; and no_recipe for what is not crafted', async () => {
     const g = open();
     g.give('oak_planks', 8);

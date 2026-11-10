@@ -16,16 +16,16 @@ const open = () => { ground?.stop(); ground = createGround({ pathfinder: true })
 const cell = (x: number, y: number, z: number) => ({ x, y, z });
 const parse = (result: { result: string }) => JSON.parse(result.result);
 
-const facts = (over: Partial<StationFacts> = {}, block = 'crafting_table'): StationFacts => ({
+const facts = (over: Partial<StationFacts> = {}, block = 'furnace'): StationFacts => ({
   station: { block, x: 10, y: 64, z: 8, dim: 'overworld', life: null, told: false },
   targets: [cell(10 + LEAVE_M + 5, 64, 8)], named: [], fromBody: 3, sameDimension: true, busyFurnace: false, hostileNear: false, lowHealth: false,
   inLiquidOrAir: false, hasPickaxe: true, packFull: false, ...over,
 });
 
 describe('judgeStation: what stays and what is taken', () => {
-  it('a table left behind (target past the leave distance) is taken; a furnace too, with a pickaxe', () => {
+  it('a furnace left behind (target past the leave distance) is taken with a pickaxe; a crafting table is never taken back (make builds one) and is forgotten', () => {
     expect(judgeStation(facts())).toEqual({ do: 'take' });
-    expect(judgeStation(facts({}, 'furnace'))).toEqual({ do: 'take' });
+    expect(judgeStation(facts({}, 'crafting_table'))).toEqual({ do: 'keep', why: 'recraft', forget: true });
   });
 
   it('the leave distance is 10 m: a target at 10 stays, one past it goes', () => {
@@ -51,8 +51,7 @@ describe('judgeStation: what stays and what is taken', () => {
     expect(judgeStation(facts({ hostileNear: true }))).toMatchObject({ do: 'keep', why: 'hostile', forget: false, say: expect.stringContaining('敵が近い') });
     expect(judgeStation(facts({ lowHealth: true }))).toMatchObject({ do: 'keep', why: 'unsafe' });
     expect(judgeStation(facts({ inLiquidOrAir: true }))).toMatchObject({ do: 'keep', why: 'unsafe' });
-    expect(judgeStation(facts({ hasPickaxe: false }, 'furnace'))).toMatchObject({ do: 'keep', why: 'no_pickaxe' });
-    expect(judgeStation(facts({ hasPickaxe: false }))).toEqual({ do: 'take' });
+    expect(judgeStation(facts({ hasPickaxe: false }))).toMatchObject({ do: 'keep', why: 'no_pickaxe' });
     expect(judgeStation(facts({ packFull: true }))).toMatchObject({ do: 'keep', why: 'pack_full' });
     expect(judgeStation(facts({ fromBody: 8.5 }))).toMatchObject({ do: 'keep', why: 'far', forget: true });
     expect(judgeStation(facts({ sameDimension: false }))).toMatchObject({ do: 'keep', why: 'dimension', forget: true });
@@ -61,47 +60,59 @@ describe('judgeStation: what stays and what is taken', () => {
 });
 
 describe('the stations a body set down, through the act', () => {
-  it('place notes a table; a go far from it takes it up into the pack first, and the line says so', async () => {
+  it('place notes a furnace; a go far from it takes it up into the pack first, and the line says so', async () => {
     const g = open();
-    g.give('crafting_table', 1);
-    const put = await place(stepContext(g.bot), { block: 'crafting_table', at: [cell(10, 64, 8)] });
+    g.give('furnace', 1); g.give('stone_pickaxe', 1);
+    const put = await place(stepContext(g.bot), { block: 'furnace', at: [cell(10, 64, 8)] });
     expect(put.ok, put.text).toBe(true);
-    expect(g.nameAt(10, 64, 8)).toBe('crafting_table');
-    expect(stationsOf(g.bot).map(s => s.block)).toEqual(['crafting_table']);
+    expect(g.nameAt(10, 64, 8)).toBe('furnace');
+    expect(stationsOf(g.bot).map(s => s.block)).toEqual(['furnace']);
     const act = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'go', to: { x: 30, y: 64, z: 8 } }])));
     expect(act.lines[0].line).toContain('拾って持った');
     expect(g.nameAt(10, 64, 8)).toBe('air');
-    expect(g.countOf('crafting_table')).toBe(1);
+    expect(g.countOf('furnace')).toBe(1);
     expect(stationsOf(g.bot)).toHaveLength(0);
   }, 60_000);
 
-  it('a hunt whose first animal is far from the table takes the table up first (hunt has no cell: the animal is its target); one within 10 m leaves it', async () => {
+  it('a hunt whose first animal is far from the table takes the furnace up first (hunt has no cell: the animal is its target); one within 10 m leaves it', async () => {
     const g = open();
-    g.give('crafting_table', 1);
-    await place(stepContext(g.bot), { block: 'crafting_table', at: [cell(10, 64, 8)] });
+    g.give('furnace', 1); g.give('stone_pickaxe', 1);
+    await place(stepContext(g.bot), { block: 'furnace', at: [cell(10, 64, 8)] });
     const here = g.bot.entity.position;
     const cow = (x: number) => { const id = 9000 + x; g.bot.entities[id] = { id, name: 'cow', type: 'animal', position: new Vec3(x + 0.5, here.y, here.z), height: 1.4, width: 0.9, metadata: [] }; return id; };
     const near = cow(16);
     const stay = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'hunt', target: 'cow', count: 1, seconds: 5 }])));
     expect(stay.lines[0].line).not.toContain('拾って持った');
-    expect(g.nameAt(10, 64, 8)).toBe('crafting_table');
+    expect(g.nameAt(10, 64, 8)).toBe('furnace');
     delete g.bot.entities[near];
     cow(30);
     const taken = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'hunt', target: 'cow', count: 1, seconds: 5 }])));
     expect(taken.lines[0].line).toContain('拾って持った');
     expect(g.nameAt(10, 64, 8)).toBe('air');
-    expect(g.countOf('crafting_table')).toBe(1);
+    expect(g.countOf('furnace')).toBe(1);
   }, 90_000);
 
   it('a go that stays within 10 m of it leaves it standing (and keeps it for a later hand)', async () => {
     const g = open();
-    g.give('crafting_table', 1);
-    await place(stepContext(g.bot), { block: 'crafting_table', at: [cell(10, 64, 8)] });
+    g.give('furnace', 1); g.give('stone_pickaxe', 1);
+    await place(stepContext(g.bot), { block: 'furnace', at: [cell(10, 64, 8)] });
     const act = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'go', to: { x: 16, y: 64, z: 8 } }])));
     expect(act.ok).toBe(true);
     expect(act.lines[0].line).not.toContain('拾って持った');
-    expect(g.nameAt(10, 64, 8)).toBe('crafting_table');
+    expect(g.nameAt(10, 64, 8)).toBe('furnace');
     expect(stationsOf(g.bot)).toHaveLength(1);
+  }, 60_000);
+
+  it('a crafting table is left standing by a far go and forgotten (make builds a new one from planks)', async () => {
+    const g = open();
+    g.give('crafting_table', 1);
+    const put = await place(stepContext(g.bot), { block: 'crafting_table', at: [cell(10, 64, 8)] });
+    expect(put.ok, put.text).toBe(true);
+    expect(stationsOf(g.bot)).toHaveLength(1);
+    const act = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'go', to: { x: 30, y: 64, z: 8 } }])));
+    expect(act.lines[0].line).not.toContain('拾って持った');
+    expect(g.nameAt(10, 64, 8)).toBe('crafting_table');
+    expect(stationsOf(g.bot)).toHaveLength(0);
   }, 60_000);
 
   it('a furnace smelting stays through a far go; once it has no batch it is taken (with the pickaxe)', async () => {

@@ -65,6 +65,8 @@ export interface StepOutcome {
     kills?: number;
     /** A walk that entered a portal and ended in the other dimension (the act ends there). */
     crossedDimension?: true;
+    /** What carryAway did or left of each station this body set down before the hand, `block(x,y,z):why` (the black box's, never the planner's words). */
+    stations?: string[];
     /** A go: what it dug and laid and how far it walked (the hands that use go for the way, `mine`, count on it). */
     work?: { dug: number; placed: number; steps: number; redraws: number };
     /** A pickup that dug its way to a drop (issue 3, run 5): the cells it dug and what they were; `mine` counts them against its road. */

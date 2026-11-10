@@ -8,6 +8,7 @@ import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, find
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { withProgress } from './progressUnits.js';
 import { noteStation } from './stationLedger.js';
+import { laidLate, LATE_ANSWER_MS } from './laidLate.js';
 import { tableInReach } from './craft.js';
 
 /**
@@ -214,6 +215,7 @@ async function placeCells(ctx: StepContext, args: PlaceArgs, tally: { laid: numb
     const face = new Vec3(-dx, -dy, -dz);
     const countBefore = inventoryCount(bot, args.block);
     let changed: StepOutcome | null = null;
+    let lateNote = '';
     const beforeSend = () => {
       if (ctx.stop.aborted || Date.now() >= ctx.deadline) throw new StepStopped('placement_interrupted');
       // Equip and native look yield to moving entities. The initial cell check is no longer sufficient.
@@ -233,14 +235,19 @@ async function placeCells(ctx: StepContext, args: PlaceArgs, tally: { laid: numb
       if (changed) return result(changed);
       if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
       // The library waits for the server's block update; it may come late or the library may miss it: look at the cell itself.
-      await wait(ctx, 300);
+      // An answer that is only late (the server saving, a lag) is waited for as go waits for it (LATE_ANSWER_MS); any other error is read after a moment.
+      const message = String((error as Error)?.message ?? '');
+      const late = /did not answer within|did not fire within|^timeout$/u.test(message);
+      if (late) {
+        if (await laidLate(bot, cell, args.block, () => ctx.stop.aborted || Date.now() >= ctx.deadline)) lateNote = 'サーバーの返事が遅れたが置けた';
+      } else await wait(ctx, 300);
       if (blockAt(bot, cell)?.name !== args.block) {
-        return result(stopped(bot, 'not_placed', `${placeText(bot, cell)} に ${args.block} を置けなかった（${DIRECTION_JA[side]}の ${reference.name} に当てた。今 ${cellNow(bot, cell)}。${String((error as Error)?.message ?? '').slice(0, 60)}）`, cell));
+        return result(stopped(bot, 'not_placed', `${placeText(bot, cell)} に ${args.block} を置けなかった（${DIRECTION_JA[side]}の ${reference.name} に当てた。今 ${cellNow(bot, cell)}。${late ? `${(LATE_ANSWER_MS / 1000).toFixed(1)} 秒待っても ${args.block} が見えない。` : ''}${message.slice(0, 60)}）`, cell));
       }
     }
     if (blockAt(bot, cell)?.name !== args.block) {
-      await wait(ctx, 300);
-      if (blockAt(bot, cell)?.name !== args.block) return result(stopped(bot, 'not_placed', `${placeText(bot, cell)} は置いた後も ${cellNow(bot, cell)}（サーバーが受け付けない）`, cell));
+      if (await laidLate(bot, cell, args.block, () => ctx.stop.aborted || Date.now() >= ctx.deadline)) lateNote = 'サーバーの返事が遅れたが置けた';
+      if (blockAt(bot, cell)?.name !== args.block) return result(stopped(bot, 'not_placed', `${placeText(bot, cell)} は置いた後も ${cellNow(bot, cell)}（${(LATE_ANSWER_MS / 1000).toFixed(1)} 秒待っても ${args.block} が見えない。サーバーが受け付けない）`, cell));
     }
     try { noteOwned(bot, cell, args.block); } catch { /* the ledger is a help */ }
     try { noteStation(bot, args.block, cell); } catch { /* the list of stations to carry is a help */ }
@@ -253,7 +260,7 @@ async function placeCells(ctx: StepContext, args: PlaceArgs, tally: { laid: numb
       bedWords = halves.words;
     }
     tally.laid++;
-    done.push(`${cellText(cell)} に ${args.block} を置いた（${DIRECTION_JA[side]}の ${reference.name} に当てて。残り${Math.max(0, countBefore - 1)}）${bedWords}`);
+    done.push(`${cellText(cell)} に ${args.block} を置いた（${DIRECTION_JA[side]}の ${reference.name} に当てて。残り${Math.max(0, countBefore - 1)}）${lateNote ? `（${lateNote}）` : ''}${bedWords}`);
     ctx.progress?.(`${done.length}/${cells.length}`);
   }
   const allSame = tally.laid === 0 && tally.same === cells.length;

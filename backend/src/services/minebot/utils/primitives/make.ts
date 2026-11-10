@@ -143,7 +143,10 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
     const room = ((bot.inventory?.items?.() ?? []) as any[]).some(entry => entry.name === name && entry.count < Number(item.stackSize ?? 64));
     if (!room) return fail(bot, 'full', `持ち物が満杯で ${name} を入れる所が無い（何も作っていない）`);
   }
-  let table: any = null, placedAt: Cell | null = null;
+  let table: any = null, placedAt: Cell | null = null, tableMade = false;
+  const made = new Map<string, number>();
+  /** The pieces made on the way (planks for the sticks): the events of what is made of them say so (intermediate). */
+  const madeNames = new Set<string>();
   if (state.steps.some(step => step.recipe.requiresTable === true)) {
     table = tableInReach(bot);
     if (!table) {
@@ -162,16 +165,35 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
         // is walked to (the way only, nothing dug or placed) and then used.
         table = await walkToTable(ctx, TABLE_WALK_M);
       }
+      // None in reach, none carried, none to walk to: the body makes one from planks (four planks, or a log), from what the plan leaves in the pack. A table is worth four planks; losing one is cheaper than going back for it.
+      let planksNote = '';
+      if (!table && inventoryCount(bot, 'crafting_table') === 0) {
+        const tableState = clone(state);
+        tableState.steps = [];
+        if (obtain(bot, 'crafting_table', 1, tableState, [])) {
+          for (const step of tableState.steps) {
+            const gained = await craftStep(ctx, step, null, 'crafting_table', madeNames);
+            if (gained.fail) return gained.fail;
+          }
+          const put = await placeNearby(ctx, 'crafting_table');
+          if ('fail' in put) return fail(bot, 'no_table', `板から作った作業台を置けなかった: ${put.fail.text}`);
+          placedAt = put.cell;
+          tableMade = true;
+          table = bot.blockAt?.(new Vec3(put.cell.x, put.cell.y, put.cell.z), false) ?? null;
+          if (!table || table.name !== 'crafting_table') table = tableInReach(bot);
+          if (!table) return fail(bot, 'no_table', `作業台を ${cellText(put.cell)} に置いたが、使える作業台として見えない`);
+        } else {
+          const held = [...stock.entries()].filter(([entry, n]) => n > 0 && /(_planks|_log|_stem|_hyphae)$/u.test(entry)).map(([entry, n]) => `${entry}×${n}`);
+          planksNote = `。作業台を作る分の板 4 枚が足りない（持っている: ${held.join('・') || '板も原木も無い'}）`;
+        }
+      }
       if (!table) {
         const near = nearestTable(bot);
         const feet = feetCell(bot);
-        return fail(bot, 'no_table', `${name} の途中に作業台（3x3）が要る。手の届く所に作業台が無く、持ってもいない${near && feet ? `（いちばん近い作業台 ${cellText(near)} 自分から${relativeWords(feet, near)}）` : near ? `（いちばん近い作業台 ${cellText(near)}）` : ''}`);
+        return fail(bot, 'no_table', `${name} の途中に作業台（3x3）が要る。手の届く所に作業台が無く、持ってもいない${near && feet ? `（いちばん近い作業台 ${cellText(near)} 自分から${relativeWords(feet, near)}）` : near ? `（いちばん近い作業台 ${cellText(near)}）` : ''}${planksNote}`);
       }
     }
   }
-  const made = new Map<string, number>();
-  /** The pieces made on the way (planks for the sticks): the events of what is made of them say so (intermediate). */
-  const madeNames = new Set<string>();
   for (const step of state.steps) {
     const gained = await craftStep(ctx, step, table, name, madeNames);
     if (gained.fail) return { ...gained.fail, text: `${gained.fail.text}${made.size ? `（ここまでに作った: ${stacksOut(made).join('・')}）` : ''}` };
@@ -180,7 +202,7 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
   const final = made.get(name) ?? 0;
   made.delete(name);
   const parts = stacksOut(made);
-  return { ok: true, text: `make 済 ${name}×${final}${parts.length ? `（${parts.join('・')} も作った）` : ''}${placedAt ? `。作業台を ${cellText(placedAt)} に置いた` : ''}（今 ${inventoryCount(bot, name)} 個）` };
+  return { ok: true, text: `make 済 ${name}×${final}${parts.length ? `（${parts.join('・')} も作った）` : ''}${placedAt ? `。作業台を ${cellText(placedAt)} に置いた${tableMade ? '（板から作った）' : ''}` : ''}（今 ${inventoryCount(bot, name)} 個）` };
 }
 
 /** The nearest known table within `limit` metres, walked to (the way only) and returned when it is in reach then; else null. */

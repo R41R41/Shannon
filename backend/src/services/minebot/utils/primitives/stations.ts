@@ -57,6 +57,8 @@ const nameOf = (station: Station) => `${station.block}(${station.x},${station.y}
 export function judgeStation(facts: StationFacts): StationVerdict {
   const { station } = facts;
   if (!facts.sameDimension) return { do: 'keep', why: 'dimension', forget: true };
+  // A crafting table is not taken back: make builds one from four planks when it has none near (a dig by hand takes 3.75 s, a new table about 2 s), so it is left and forgotten.
+  if (station.block === 'crafting_table') return { do: 'keep', why: 'recraft', forget: true };
   if (!facts.targets.length) return { do: 'keep', why: 'no_target', forget: false };
   if (facts.named.some(cell => sameCell(cell, station)) || facts.targets.some(cell => sameCell(cell, station))) return { do: 'keep', why: 'named', forget: false };
   const from = centre(station);
@@ -115,19 +117,27 @@ export function stationMs(bot: any, station: Station): number {
 /** What came of one attempt: in the pack, the block gone (dropped, not taken), or still standing. */
 type TakeState = 'carried' | 'gone' | 'standing';
 
+/** What carryAway tells: the words for the hand's line, and (for the black box, never the planner) one short verdict per station: `block(x,y,z):why`, with the dig's reason when a take failed. */
+export interface CarryReport { words: string; trace: string[] }
+
 /** Digs the station up and takes it into the pack; says what came of it. Walks beside it first when it is out of the hand's reach. */
-async function takeUp(ctx: StepContext, station: Station, ms: number): Promise<{ text: string; state: TakeState }> {
+async function takeUp(ctx: StepContext, station: Station, ms: number): Promise<{ text: string; state: TakeState; why?: string }> {
   const bot = ctx.bot;
   const cell = { x: station.x, y: station.y, z: station.z };
   const had = inventoryCount(bot, station.block);
+  let why = '';
   const run = limited(ctx, ms);
   try {
     if (eyeDistance(bot, cell) > DIG_REACH - 1) {
       const beside = [[1, 0], [-1, 0], [0, 1], [0, -1]].flatMap(([dx, dz]) => [0, -1, 1].map(dy => ({ x: cell.x + dx, y: cell.y + dy, z: cell.z + dz })));
       await go(run.ctx, { goals: beside, range: 1, maxDrop: 3, seconds: Math.max(1, Math.min(3, Math.floor(ms / 1000) - 3)) });
     }
-    await dig(run.ctx, { at: [cell], take: true, collect: true });
-    if (inventoryCount(bot, station.block) <= had) await pickup(run.ctx, { item: station.block, radius: 4, canDig: [] });
+    const dug = await dig(run.ctx, { at: [cell], take: true, collect: true });
+    if (!dug.ok) why = `dig ${String(dug.reason ?? 'failed')} ${String(dug.text ?? '').slice(0, 40)}`.trim();
+    if (inventoryCount(bot, station.block) <= had) {
+      const picked = await pickup(run.ctx, { item: station.block, radius: 4, canDig: [] });
+      if (!picked.ok && !why) why = `pickup ${String(picked.reason ?? 'failed')}`;
+    }
   } catch { /* the time or the act's stop: said from the pack below */ }
   finally { run.done(); }
   // The time ran out between the break and the pickup: the block is gone and its drop lies near; a short pickup (its own 2 s, the act's stop only) takes it.
@@ -139,19 +149,20 @@ async function takeUp(ctx: StepContext, station: Station, ms: number): Promise<{
   const name = nameOf(station);
   if (inventoryCount(bot, station.block) > had) return { text: `出る前に ${name} を拾って持った`, state: 'carried' };
   const standing = blockAt(bot, cell)?.name === station.block;
-  return standing ? { text: `${name} は拾えず置いたまま`, state: 'standing' }
-    : { text: `${name} は掘ったが拾えていない（近くに落ちていれば pickup で）`, state: 'gone' };
+  return standing ? { text: `${name} は拾えず置いたまま${why ? `（${why.split(' ').slice(0, 2).join(' ')}）` : ''}`, state: 'standing', why }
+    : { text: `${name} は掘ったが拾えていない（近くに落ちていれば pickup で）`, state: 'gone', why };
 }
 
 /**
  * Before a hand whose body goes to `targets`: the stations set down that are left behind are taken up (see the head of this file). Returns the words
  * for the hand's line ('' when nothing was done or said). Never throws and never fails the hand.
  */
-export async function carryAway(ctx: StepContext, targets: Cell[], named: Cell[] = []): Promise<string> {
+export async function carryAway(ctx: StepContext, targets: Cell[], named: Cell[] = []): Promise<CarryReport> {
   const bot = ctx.bot;
   const words: string[] = [];
+  const trace: string[] = [];
   try {
-    if (!targets.length || ctx.stop.aborted) return '';
+    if (!targets.length || ctx.stop.aborted) return { words: '', trace };
     const started = Date.now();
     for (const station of stationsOf(bot)) {
       if (station.dim !== currentDimension(bot)) { forgetStation(bot, station); continue; }
@@ -159,19 +170,21 @@ export async function carryAway(ctx: StepContext, targets: Cell[], named: Cell[]
       if (here && here.name !== station.block) { forgetStation(bot, station); continue; }
       const verdict = judgeStation(readFacts(ctx, station, targets, named));
       if (verdict.do === 'keep') {
+        trace.push(`${nameOf(station)}:${verdict.why}${verdict.forget ? '(forgotten)' : ''}`);
         if (verdict.forget) forgetStation(bot, station);
         if (verdict.say && !station.told) { station.told = true; words.push(verdict.say); }
         continue;
       }
-      if (station.lastTry && Date.now() - station.lastTry < RETRY_GAP_MS) continue;
+      if (station.lastTry && Date.now() - station.lastTry < RETRY_GAP_MS) { trace.push(`${nameOf(station)}:retry_gap`); continue; }
       const left = HAND_MS - (Date.now() - started);
-      if (left < 800 || ctx.stop.aborted) break;
+      if (left < 800 || ctx.stop.aborted) { trace.push(`${nameOf(station)}:hand_time`); break; }
       station.lastTry = Date.now();
       const taken = await takeUp(ctx, station, Math.min(stationMs(bot, station) + (eyeDistance(bot, station) > DIG_REACH - 1 ? WALK_EXTRA_MS : 0), left));
       words.push(taken.text);
+      trace.push(`${nameOf(station)}:take→${taken.state}${taken.why ? ` ${taken.why}` : ''}`);
       if (taken.state === 'standing') { station.tries = (station.tries ?? 0) + 1; if (station.tries >= MAX_TRIES) forgetStation(bot, station); }
       else forgetStation(bot, station);
     }
   } catch { /* a help: the hand runs as it was sent */ }
-  return words.join('。');
+  return { words: words.join('。'), trace };
 }

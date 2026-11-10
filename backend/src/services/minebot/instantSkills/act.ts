@@ -755,10 +755,13 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       const settleTrack = () => tracker?.finish(handReasons(hand) ?? {}, event => made.push(event));
       // Run 5: a table or furnace this body set down is taken up before a hand that goes far from it (the pack's change is the hand's, in its events). Never fails the hand.
       let carried = sleptLine;
+      let stationTrace: string[] = [];
       const travel = travelCells(ctx, hand);
       if (travel.length) {
         const named = hands.slice(index + 1).flatMap(later => { try { return cellsOf(ctx, later, later.at) ?? []; } catch { return []; } });
-        carried = [sleptLine, await carryAway(ctx, travel, named)].filter(Boolean).join('。');
+        const carry = await carryAway(ctx, travel, named);
+        stationTrace = carry.trace;
+        carried = [sleptLine, carry.words].filter(Boolean).join('。');
         opsBefore = motorOpsOf(bot);
       }
       try { outcome = await runHandSteady(ctx, hand); }
@@ -822,6 +825,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       settleTrack();
       // First in the line (the line is clipped, and a failed hand must still say that the station left the world).
       if (carried) outcome = { ...outcome, text: `${carried}。${outcome.text}` };
+      // What was done or left of each station set down, for the black box (never the planner's words): `block(x,y,z):why`.
+      if (stationTrace.length) outcome = { ...outcome, data: { ...(outcome.data ?? {}), stations: stationTrace } };
       endFight();
       host.actHandNow = undefined;
       dug += dugCountOf(bot, dugBefore);
