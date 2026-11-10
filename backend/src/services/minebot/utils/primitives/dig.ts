@@ -310,7 +310,7 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     const near = Object.values(bot.entities ?? {}).filter((entity: any) => entity?.name === 'item' && !before.has(entity.id)
       && dugCells.some(cell => entity.position && Math.hypot(entity.position.x - cell.x - 0.5, entity.position.y - cell.y, entity.position.z - cell.z - 0.5) <= 2.5)) as any[];
     if (near.length) {
-      const picked = await pickup(ctx, { ids: near.map(entity => entity.id) });
+      const picked = await pickup(ctx, { ids: near.map(entity => entity.id), canDig: [] });
       done.push(picked.text);
     }
   }

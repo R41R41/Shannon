@@ -175,7 +175,7 @@ export async function barterWithPiglin(ctx: StepContext, piglin: any): Promise<S
   const names = drops.map(stackName);
   let got = '';
   if (drops.length) {
-    const taken = await pickup(ctx, { ids: drops.map(entity => entity.id) });
+    const taken = await pickup(ctx, { ids: drops.map(entity => entity.id), canDig: [] });
     got = taken.text;
   }
   const gained: string[] = [];
@@ -263,7 +263,7 @@ export async function barterMany(ctx: StepContext, first: any, count: number): P
     await waitUntil(ctx, () => taking.every(p => !bot.entities?.[p.id] || !holdsIngot(bot.entities[p.id])) && Date.now() - began >= 1_000, BARTER_ANSWER_MS, 100);
     await wait(ctx, RETURN_WAIT_MS);
     const drops = itemsSince(bot, baseline, bot.entity.position, 10);
-    if (drops.length) await pickup(ctx, { ids: drops.map(entity => entity.id) });
+    if (drops.length) await pickup(ctx, { ids: drops.map(entity => entity.id), canDig: [] });
     for (const entity of drops) if (bot.entities?.[entity.id]) left.push(stackName(entity));
   }
   const packAfter = new Map<string, number>();
