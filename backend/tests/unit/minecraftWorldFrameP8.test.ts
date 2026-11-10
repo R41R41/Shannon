@@ -51,16 +51,24 @@ describe('jobs: furnaces still working (B-6)', () => {
     expect(jobs[0].remainingEstimateMs).toBeGreaterThan(70_000);
     expect(JSON.stringify(jobs)).not.toContain('instruction');
   });
+  it('says when, what comes out and where it is from the body (run 5: the head stood at the furnace with only seconds left)', () => {
+    const ready = Date.now() + 45_000;
+    const jobs = captureWorldObservation(common({ activeFurnaces: [furnace(13, { readyAt: ready, count: 8 }), furnace(14, { item: 'beef', count: 3, readyAt: ready })] })).jobs!;
+    expect(jobs[0]).toMatchObject({ estimatedReadyAt: ready, expects: 'iron_ingot×8', from: '東3・南17' });
+    expect(jobs[1]).toMatchObject({ expects: 'cooked_beef×3', from: '東4・南18' });
+    expect(captureWorldObservation(common({ activeFurnaces: [furnace(1, { item: 'sand' })] })).jobs![0]).toMatchObject({ expects: 'glass×8' });
+    expect(captureWorldObservation(common({ activeFurnaces: [furnace(1, { item: 'mystery_thing' })] })).jobs![0]).not.toHaveProperty('expects');
+  });
   it('marks a furnace whose time is up as due for verification, one in another dimension as such, and an unfuelled one', () => {
     const jobs = captureWorldObservation(common({ activeFurnaces: [furnace(1, { readyAt: Date.now() - 1 }), furnace(2, { dimension: 'minecraft:the_nether' }), furnace(3, { unfueledCount: 4 })] })).jobs!;
     expect(jobs.map(job => job.status)).toEqual(['verification_due', 'different_dimension', 'waiting_external']);
     expect(jobs[0].remainingEstimateMs).toBe(0); expect(jobs[2].unfueledInputCount).toBe(4);
   });
-  it('stays within 600 characters however many furnaces', () => {
+  it('stays within 900 characters however many furnaces', () => {
     const two = captureWorldObservation(common({ activeFurnaces: [furnace(1), furnace(2, { unfueledCount: 4 })] })).jobs!;
-    expect(two).toHaveLength(2); expect(JSON.stringify(two).length).toBeLessThanOrEqual(600);
+    expect(two).toHaveLength(2); expect(JSON.stringify(two).length).toBeLessThanOrEqual(900);
     const many = captureWorldObservation(common({ activeFurnaces: Array.from({ length: 12 }, (_, i) => furnace(i + 100, { unfueledCount: 7 })) })).jobs!;
-    expect(JSON.stringify(many).length).toBeLessThanOrEqual(600); expect(many.length).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(many).length).toBeLessThanOrEqual(900); expect(many.length).toBeGreaterThanOrEqual(2);
   });
   it('says how many furnaces it left out (P8 second review, L4), and nothing when none', () => {
     const none = captureWorldObservation(common({ activeFurnaces: [furnace(1), furnace(2)] }));

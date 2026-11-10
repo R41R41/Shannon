@@ -1,6 +1,8 @@
 import { captureFurnaceProperties } from './furnaceProperties.js';
 import { type Cell } from '../localMap.js';
 import { itemsPerFuel } from '../fuelValues.js';
+import { canWorkOn, getNear } from './getNear.js';
+import type { WayNotes } from './walk.js';
 import { blockAt, cellText, eyeDistance, findItem, guard, inventoryCount, placeText, stopped, StepStopped, USE_REACH, wait,
   type StepContext, type StepOutcome } from './common.js';
 
@@ -36,6 +38,16 @@ export interface FurnaceWork {
 }
 
 const KINDS = new Set(['furnace', 'blast_furnace', 'smoker']);
+
+/**
+ * A furnace that holds a batch the body put in and has not taken out (due or not): breaking it would drop the slots and lose the batch
+ * (the pick-up of placed furnaces, run 5 issue 2, skips these). Its cell is in `bot.activeFurnaces` from the put until the take.
+ */
+export function furnaceBusy(bot: unknown, cell: Cell): boolean {
+  const here = String((bot as { game?: { dimension?: unknown } })?.game?.dimension ?? '');
+  const batches = (bot as { activeFurnaces?: Array<{ pos: Cell; dimension?: string }> })?.activeFurnaces;
+  return Array.isArray(batches) && batches.some(f => f?.pos && f.pos.x === cell.x && f.pos.y === cell.y && f.pos.z === cell.z && (!f.dimension || !here || f.dimension === here));
+}
 const slotText = (item: any) => item ? `${item.name}×${item.count}` : '空';
 const stackOf = (item: any) => item ? { name: String(item.name), count: Number(item.count) } : null;
 
@@ -155,11 +167,21 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     const look: FurnaceLook = { kind: block.name, input: stackOf(input), fuel: stackOf(fuel), output: stackOf(output), burning, remainingSec: input ? remaining : null };
     return { moved, look, ...(occupiedBy ? { occupiedBy } : {}), outcome: { ok: true, at: cell, data: { container: { at: cell, kind: block.name, items } },
       // Run 43: the time and what the fuel will not smelt first (the hand's line is 160 characters), then what was moved and the slots.
-      text: `${timing ? `${timing.replace(/^。/u, '')}。` : ''}${notes.length ? `${notes.join('、')}。` : ''}${cellText(cell)} の ${block.name}: 材料 ${slotText(input)}・燃料 ${slotText(fuel)}・出来上がり ${slotText(output)}${burning ? '（燃えている）' : ''}` } };
+      text: `${args.take && moved.took === 0 && input && remaining !== null && remaining > 0 ? `まだ出来ていない（あと約${Math.round(remaining)}秒。待たずに別の作業を進め、時間が来たらもう一度 take）。` : ''}${timing ? `${timing.replace(/^。/u, '')}。` : ''}${notes.length ? `${notes.join('、')}。` : ''}${cellText(cell)} の ${block.name}: 材料 ${slotText(input)}・燃料 ${slotText(fuel)}・出来上がり ${slotText(output)}${burning ? '（燃えている）' : ''}` } };
   } finally { properties.close(); try { window.close(); } catch { /* closed */ } }
 }
 
 export async function furnace(ctx: StepContext, args: FurnaceArgs): Promise<StepOutcome> {
+  // Run 5 (11/11): taking is a collect. The head sends a take for a furnace it has walked away from; the body walks there itself (put and the
+  // smelt hand keep their rules: they are for a furnace the planner stands at).
+  if (args.take && KINDS.has(String(blockAt(ctx.bot, args.at)?.name)) && !canWorkOn(ctx.bot, args.at, 4.6)) {
+    const notes: WayNotes = { opened: [], leaves: 0 };
+    const near = await getNear(ctx, args.at, notes, 4.2, Math.max(1000, ctx.deadline - Date.now()));
+    if (!near.near) {
+      return stopped(ctx.bot, near.timedOut ? 'limit_time' : 'unreachable',
+        `${placeText(ctx.bot, args.at)} のかまどに近づけない（${near.timedOut ? '時間切れ' : near.stuck ? '4 秒進めず' : '道が無いか、見える所に立てない'}）`, args.at);
+    }
+  }
   const worked = await furnaceWork(ctx, args);
   // Continue contracts (1): progress in items (what was put into the slots and what was taken out of them).
   const moved = worked.moved.input + worked.moved.fuel + (worked.moved.took ?? 0);
