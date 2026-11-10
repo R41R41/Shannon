@@ -4,6 +4,8 @@ import { pickup } from './pickup.js';
 import { isDying } from './use.js';
 import { withProgress } from './progressUnits.js';
 import { deathLedgerOf } from '../deathLedger.js';
+import { bodyReader } from '../localMap.js';
+import { solidBetween } from '../probeTools.js';
 
 /**
  * hunt: the food animals around the body, until none is left in the radius or `count` have fallen, and what they dropped (2026-11-11, owner request after run 5:
@@ -34,6 +36,11 @@ const DROP_NEAR_M = 4;
 const UNREACHABLE_IN_A_ROW = 3;
 /** The last pick-up may run this long past the hunt's own seconds (what was already killed is not left lying), never past the act's own end. */
 const SWEEP_EXTRA_MS = 8000;
+/** The animals looked at for a wall in the way (the line is walked every 5 cm): the nearest few by cost. */
+const SIGHT_CANDIDATES = 8;
+/** Added to an animal's distance, in metres, for ordering only: per block of height above 2 m between it and the body, and per solid cell on the line to it (3 at most). */
+const HEIGHT_COST_M = 3;
+const WALL_COST_M = 6;
 
 const clamp = (value: number, least: number, most: number) => Math.max(least, Math.min(most, value));
 const isItem = (entity: any) => entity && (entity.name === 'item' || entity.displayName === 'Item');
@@ -121,10 +128,15 @@ async function huntAround(ctx0: StepContext, args: HuntArgs, state: { kills: num
   bot.on('entityDead', onDead);
 
   const killedBy = new Map<string, number>();
+  /** Animals attack could not reach (a pen, a ledge): passed by for the whole hunt. */
   const passed: number[] = [];
+  /** Animals that went out of sight or were not found: passed by until the next kill (they may be back in view then), told apart from the unreachable. */
+  const lost = new Set<number>();
   const done = new Set<number>();
-  /** Drops taken for this hunt's that are still lying (a pick-up that did not take them): the last pick-up tries them once more. */
+  /** Drops of this hunt's that are still lying: the ones not tried yet (the clock ran out first) and `gaveUp`. */
   const lying = new Set<number>();
+  /** Drops a pick-up tried and did not take (in water, behind a wall, in a hole): the last pick-up does not walk to them again. */
+  const gaveUp = new Set<number>();
   let unreachableRow = 0, fullStop = false, timeUp = false, babies = 0;
   let lastStop: StepOutcome | null = null;
 
@@ -137,13 +149,44 @@ async function huntAround(ctx0: StepContext, args: HuntArgs, state: { kills: num
       return true;
     });
   };
+  /**
+   * The next animal: the one that costs least to get to. The distance is the straight line; an animal high above or below the body, or with solid cells on the line to it
+   * (a pen's fence, a cliff, a cave roof) is dearer, so the herd in the open is not passed over for a pen next to the body.
+   */
   const nearestOf = (animals: any[]): any | null => {
     const at = bot.entity.position;
-    return animals.filter(animal => !passed.includes(animal.id)).sort((a, b) => a.position.distanceTo(at) - b.position.distanceTo(at))[0] ?? null;
+    const open = animals.filter(animal => !passed.includes(animal.id) && !lost.has(animal.id))
+      .map(animal => ({ animal, cost: animal.position.distanceTo(at) + Math.max(0, Math.abs(animal.position.y - at.y) - 2) * HEIGHT_COST_M }));
+    open.sort((a, b) => a.cost - b.cost);
+    for (const entry of open.slice(0, SIGHT_CANDIDATES)) {
+      const to = entry.animal.position;
+      try { entry.cost += Math.min(3, solidBetween(bodyReader(bot), [at.x, at.y + 0.9, at.z], [to.x, to.y + 0.5, to.z]).length) * WALL_COST_M; } catch { /* no read: by distance */ }
+    }
+    open.sort((a, b) => a.cost - b.cost);
+    return open[0]?.animal ?? null;
   };
   /** Drops of the animal that fell at `at`, not taken up yet. */
   const dropsNear = (at: any): any[] => (Object.values(bot.entities ?? {}) as any[]).filter(entity => isItem(entity) && entity.position && !known.has(entity.id) && entity.position.distanceTo(at) <= DROP_NEAR_M);
 
+  /**
+   * Takes up `ids` one at a time, the nearest to the body first, as long as the clock of `withCtx` runs (a drop not tried when it ends stays for the last pick-up).
+   * A drop that was tried and still lies goes to `gaveUp`. 'full' when the pack had no room for one.
+   */
+  const takeUp = async (ids: number[], withCtx: StepContext): Promise<'ok' | 'full'> => {
+    const pending = new Set(ids);
+    let sawFull = false;
+    while (pending.size && withCtx.deadline - Date.now() > 300) {
+      for (const id of [...pending]) if (!bot.entities?.[id]) { pending.delete(id); lying.delete(id); }
+      const from = bot.entity.position;
+      const next = [...pending].map(id => bot.entities[id]).filter(entity => entity?.position).sort((a, b) => a.position.distanceTo(from) - b.position.distanceTo(from))[0];
+      if (!next) break;
+      pending.delete(next.id);
+      const picked = await pickup(withCtx, { ids: [next.id] });
+      if (bot.entities?.[next.id]) gaveUp.add(next.id); else lying.delete(next.id);
+      if (!picked.ok && picked.reason === 'inventory_full') sawFull = true;
+    }
+    return sawFull ? 'full' : 'ok';
+  };
   /** Picks up what the animal dropped where it fell: waits (at most DROP_WAIT_MS) only while none has shown. 'full' when the pack has no room. */
   const collect = async (at: any, waitForDrops: boolean, withCtx: StepContext): Promise<'ok' | 'full'> => {
     let drops = dropsNear(at);
@@ -151,12 +194,8 @@ async function huntAround(ctx0: StepContext, args: HuntArgs, state: { kills: num
       for (const until = Date.now() + DROP_WAIT_MS; !drops.length && Date.now() < until;) { await wait(withCtx, 100); drops = dropsNear(at); }
     }
     if (!drops.length) return 'ok';
-    const from = bot.entity.position;
-    drops.sort((a, b) => a.position.distanceTo(from) - b.position.distanceTo(from));
     for (const drop of drops) { known.add(drop.id); lying.add(drop.id); }
-    const picked = await pickup(withCtx, { ids: drops.map(drop => drop.id) });
-    for (const id of [...lying]) if (!bot.entities?.[id]) lying.delete(id);
-    return !picked.ok && picked.reason === 'inventory_full' ? 'full' : 'ok';
+    return takeUp(drops.map(drop => drop.id), withCtx);
   };
 
   try {
@@ -169,7 +208,7 @@ async function huntAround(ctx0: StepContext, args: HuntArgs, state: { kills: num
       const outcome = await attack(ctx, { target: target.id, until: 'dead', maxSeconds: Math.min(PER_ANIMAL_S, remainingS) });
       done.add(target.id);
       if (outcome.ok && outcome.goal !== 'already') {
-        state.kills++; unreachableRow = 0;
+        state.kills++; unreachableRow = 0; lost.clear();
         const name = kindOf(target);
         killedBy.set(name, (killedBy.get(name) ?? 0) + 1);
         const at = fellAt.get(target.id) ?? target.position?.clone?.() ?? bot.entity.position;
@@ -184,7 +223,7 @@ async function huntAround(ctx0: StepContext, args: HuntArgs, state: { kills: num
         done.delete(target.id);   // it may come within reach later; it is not picked again by this hunt (passed), and is told at the end
         continue;
       }
-      if (outcome.reason === 'target_lost' || outcome.reason === 'target_not_found') { done.delete(target.id); passed.push(target.id); continue; }
+      if (outcome.reason === 'target_lost' || outcome.reason === 'target_not_found') { done.delete(target.id); lost.add(target.id); continue; }
       lastStop = outcome;
       break;
     }
@@ -192,18 +231,14 @@ async function huntAround(ctx0: StepContext, args: HuntArgs, state: { kills: num
     bot.removeListener('entityDead', onDead);
   }
 
-  // The last pick-up: what lies from the kills of this hunt (and drops that rolled away), nearest first. It may run a little past the hunt's seconds, never past the act's own end.
+  // The last pick-up: what lies from the kills of this hunt that no pick-up tried yet (and drops that showed late), nearest first, one at a time. It may run a little past the hunt's seconds, never past the act's own end.
   const sweepCtx: StepContext = { ...ctx0, deadline: Math.min(ctx0.deadline, Math.max(ctx.deadline, Date.now() + SWEEP_EXTRA_MS)) };
   if (!fullStop) {
     const area = (Object.values(bot.entities ?? {}) as any[]).filter(entity => isItem(entity) && entity.position && !known.has(entity.id) && entity.position.distanceTo(centre) <= range + DROP_NEAR_M && [...fellAt.values()].some(at => entity.position.distanceTo(at) <= DROP_NEAR_M * 2));
     for (const drop of area) { known.add(drop.id); lying.add(drop.id); }
     for (const id of [...lying]) if (!bot.entities?.[id]) lying.delete(id);
-    if (lying.size) {
-      const from = bot.entity.position;
-      const ids = [...lying].map(id => bot.entities[id]).sort((a, b) => a.position.distanceTo(from) - b.position.distanceTo(from)).map(entity => entity.id);
-      const picked = await pickup(sweepCtx, { ids });
-      if (!picked.ok && picked.reason === 'inventory_full') fullStop = true;
-    }
+    const untried = [...lying].filter(id => !gaveUp.has(id));
+    if (untried.length && await takeUp(untried, sweepCtx) === 'full') fullStop = true;
   }
 
   const spent = ((Date.now() - startedAt) / 1000).toFixed(1);
@@ -211,10 +246,11 @@ async function huntAround(ctx0: StepContext, args: HuntArgs, state: { kills: num
   const left = live();
   const leftText = left.length ? `、範囲内に残り ${left.length} 体（${[...new Set(left.map(kindOf))].join('・')}）` : '';
   const passedText = passed.length ? `、届かず飛ばした ${passed.length} 体（${passed.slice(0, 4).map(id => `#${id}`).join(' ')}）` : '';
+  const lostText = lost.size ? `、見失った ${lost.size} 体（${[...lost].slice(0, 4).map(id => `#${id}`).join(' ')}）` : '';
   const babyText = babies ? `、子 ${babies} 体は倒さない` : '';
   const got = `拾った: ${gainedText(bot, packBefore)}`;
-  const lyingText = lying.size ? `。拾えず落ちたまま ${lying.size} 個` : '';
-  const facts = `${killedText} 体倒した${state.count !== null ? `（count=${state.count}）` : ''}${passedText}${leftText}${babyText}、${got}${lyingText}、${spent}秒`;
+  const lyingText = lying.size ? `。拾えず落ちたまま ${lying.size} 個${gaveUp.size ? '（拾いに行ったが入らなかった物を含む）' : ''}` : '';
+  const facts = `${killedText} 体倒した${state.count !== null ? `（count=${state.count}）` : ''}${passedText}${lostText}${leftText}${babyText}、${got}${lyingText}、${spent}秒`;
   const progress = { unit: 'item' as const, done: state.kills, left: state.count === null ? null : Math.max(0, state.count - state.kills) };
 
   if (fullStop) return { ...stopped(bot, 'full', `hunt 止まった full: 持ち物が満杯（${facts}）`), progress };
@@ -223,9 +259,13 @@ async function huntAround(ctx0: StepContext, args: HuntArgs, state: { kills: num
   if (lastStop) return { ...stopped(bot, lastStop.reason ?? 'not_done', `hunt 止まった ${lastStop.reason ?? 'not_done'}: ${lastStop.text}（${facts}）`, lastStop.at), progress };
   if (!state.kills) {
     if (passed.length) return { ...stopped(bot, 'unreachable', `hunt 止まった unreachable: ${kindsText} は居るが全部届かない（${facts}）`), progress };
+    if (lost.size) return { ...stopped(bot, 'target_lost', `hunt 止まった target_lost: ${kindsText} を見失った（${facts}）。近づいて出し直す`), progress };
     const seen = animalsSeen(bot, 48);
     return { ...stopped(bot, 'no_target', `hunt 止まった no_target: ${range}m 内に ${kindsText} の成体が居ない${babies ? `（子 ${babies} 体は倒さない）` : ''}。${seen ? `見えている動物: ${seen}（そちらへ短い go で寄って出し直す）` : '動物は見えていない（歩いて探す）'}`), progress };
   }
-  const ending = state.count !== null && state.kills >= state.count ? `count に達した` : `範囲 ${range}m にもういない`;
+  // The loop ends with none left that it may still take: what is still in the radius is the unreachable, the lost and the babies, and it is said so.
+  const ending = state.count !== null && state.kills >= state.count ? 'count に達した'
+    : left.length ? `届く成体は倒した（残り ${left.length} 体は届かない・見失った）`
+      : babies ? '成体はもういない（子だけ残る）' : `範囲 ${range}m にもういない`;
   return { ok: true, text: `hunt 済: ${ending}。${facts}`, progress };
 }

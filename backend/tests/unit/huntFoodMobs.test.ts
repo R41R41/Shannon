@@ -18,8 +18,8 @@ const { stepLabel } = await import('../../src/services/minebot/utils/actLabel.js
 const { ACT_HANDS, HAND_KINDS } = await import('../../src/services/minebot/instantSkills/act.js');
 
 let nextId = 100;
-function setup() {
-  const sim = makeSim((_x, y) => y < 64 ? 'stone' : 'air');
+function setup(ground: (x: number, y: number, z: number) => string = (_x, y) => y < 64 ? 'stone' : 'air') {
+  const sim = makeSim(ground);
   const bot = sim.bot;
   const here = bot.entity.position;
   const animal = (name: string, dx: number, options: { baby?: boolean; dz?: number } = {}) => {
@@ -95,8 +95,8 @@ describe('the hunt', () => {
     expect(attackMock.mock.calls[0][1]).toMatchObject({ until: 'dead', maxSeconds: 12 });
     expect(bot.entities[baby.id]).toBeDefined();
     expect(bot.entities[pig.id]).toBeDefined();
-    // each kill's drops were taken by id (beef and leather together), not by a radius
-    expect(pickupMock.mock.calls.map(call => call[1].ids.length)).toEqual([2, 2]);
+    // each kill's drops were taken by id (beef and leather, one at a time, the nearer first), not by a radius
+    expect(pickupMock.mock.calls.map(call => call[1].ids.length)).toEqual([1, 1, 1, 1]);
     expect(pickupMock.mock.calls.every(call => call[1].radius === undefined)).toBe(true);
     expect(outcome.text).toContain('cow 2 体倒した');
     expect(outcome.text).toContain('beef+2');
@@ -190,8 +190,8 @@ describe('the hunt', () => {
     const startedAt = Date.now();
     const outcome = await hunt(ctx(), { kinds: 'cow' });
     expect(Date.now() - startedAt).toBeLessThan(1500);
-    expect(pickupMock).toHaveBeenCalledTimes(1);
-    expect(pickupMock.mock.calls[0][1].ids).toHaveLength(2);
+    expect(pickupMock).toHaveBeenCalledTimes(2);
+    expect(pickupMock.mock.calls.map(call => call[1].ids.length)).toEqual([1, 1]);
     expect(outcome.text).toContain('beef+1');
     expect(Object.values(bot.entities).some((entity: any) => entity.name === 'item')).toBe(false);
 
@@ -244,6 +244,68 @@ describe('the hunt', () => {
     const outcome = await hunt(ctx(), { kinds: 'cow' });
     expect(outcome.reason).toBe('invalid_input');
     expect(outcome.text).toContain('attack には target が要る');
+  });
+});
+
+describe('the hunt: review fixes', () => {
+  it('takes the herd in the open before an animal behind a wall that is nearer in a straight line', async () => {
+    const { animal, ctx, kills } = setup((x, y) => y < 64 ? 'stone' : (x === 3 && y <= 65 ? 'stone' : 'air'));
+    kills();
+    const behind = animal('cow', 5), open = animal('cow', -8);
+    await hunt(ctx(), { kinds: 'cow' });
+    expect(attackMock.mock.calls.map(call => call[1].target)).toEqual([open.id, behind.id]);
+  });
+
+  it('says that the reachable ones are done when only an unreachable animal is left, not that none is in the radius', async () => {
+    const { animal, ctx, kills } = setup();
+    const stuck = animal('cow', 3);
+    animal('cow', 9);
+    kills(new Set([stuck.id]));
+    const outcome = await hunt(ctx(), { kinds: 'cow' });
+    expect(outcome.ok).toBe(true);
+    expect(outcome.text).toContain('届く成体は倒した（残り 1 体は届かない・見失った）');
+    expect(outcome.text).not.toContain('にもういない');
+  });
+
+  it('says only babies are left when they are', async () => {
+    const { animal, ctx, kills } = setup();
+    kills();
+    animal('cow', 4); animal('cow', 3, { baby: true });
+    const outcome = await hunt(ctx(), { kinds: 'cow' });
+    expect(outcome.text).toContain('成体はもういない（子だけ残る）');
+  });
+
+  it('tells an animal that went out of sight from one that cannot be reached', async () => {
+    const { animal, ctx } = setup();
+    animal('cow', 4);
+    attackMock.mockResolvedValue({ ok: false, reason: 'target_lost', text: 'cow を見失った' });
+    const outcome = await hunt(ctx(), { kinds: 'cow' });
+    expect(outcome.reason).toBe('target_lost');
+    expect(outcome.text).toContain('見失った 1 体');
+    expect(outcome.text).not.toContain('全部届かない');
+    expect(attackMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('tries a drop it could not take once, and leaves it out of the last pick-up', async () => {
+    const { animal, ctx, kills } = setup();
+    kills();
+    animal('cow', 4);
+    pickupMock.mockResolvedValue({ ok: false, reason: 'not_picked', text: '拾えなかった: beef（そこまで着けない）' });
+    const outcome = await hunt(ctx(), { kinds: 'cow' });
+    expect(pickupMock).toHaveBeenCalledTimes(2);   // beef and leather, once each: the sweep does not walk to them again
+    expect(outcome.text).toContain('拾えず落ちたまま 2 個');
+  });
+
+  it('picks up one drop at a time', async () => {
+    const { animal, ctx, kills, bot } = setup();
+    kills();
+    animal('cow', 4);
+    const order: number[] = [];
+    pickupMock.mockImplementation(async (_ctx: unknown, args: { ids: number[] }) => { order.push(...args.ids); delete bot.entities[args.ids[0]]; return { ok: true, text: '拾った' }; });
+    const context = ctx();
+    await hunt(context, { kinds: 'cow' });
+    expect(order).toHaveLength(2);
+    expect(pickupMock.mock.calls.every(call => call[1].ids.length === 1)).toBe(true);
   });
 });
 
