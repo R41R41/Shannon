@@ -26,6 +26,10 @@ export const SLEEP_SECONDS_MAX = 60;
 /** A bed standing this near is used as it is (the skill's own search). */
 const BED_NEAR = 16;
 
+/** The head's booking: sleep as soon as it is dark. One at a time; the body keeps it (cleared on a sleep, a morning, a death, another dimension or a new life). */
+export interface SleepDue { item?: string; seconds?: number; since: number; misses: number; sawNight: boolean; dimension: string; life?: number; deathEpoch?: string; deathSeq?: number }
+export interface SleepDueHost { sleepDue?: SleepDue | null }
+
 interface SleepEntity { id?: number; name?: string; type?: string; metadata?: unknown[]; position: { x: number; y: number; z: number } }
 export interface SleepBody extends ThreatBody {
   registry?: { entitiesByName?: Record<string, { type?: string; metadataKeys?: string[] } | undefined> } | null;
@@ -36,6 +40,11 @@ export interface SleepBody extends ThreatBody {
 
 /** Past this many seconds to the night, the not_night line says the day is the plan's (o09 waited 250 s twice). */
 export const DAY_WAIT_SECONDS = 60;
+/** Dusk this near (seconds): the sleep hand waits for it inside, exactly, and lies down. */
+export const SOON_SECONDS = 10;
+/** A booking is given up after this many failed tries (an enemy near, no spot), and after this long. */
+const DUE_MISSES = 3;
+const DUE_MAX_MS = 25 * 60_000;
 
 export const isNight = (timeOfDay: number) => timeOfDay >= NIGHT_FROM && timeOfDay <= NIGHT_TO;
 
@@ -81,14 +90,26 @@ export async function sleep(ctx: StepContext, args: SleepArgs): Promise<StepOutc
   if (bedExplodesHere(bot)) return none('bed_explodes', `ここ（${String(bot.game?.dimension ?? '')}）ではベッドが爆発するので寝ない（寝られるのはオーバーワールドだけ）`);
   const timeOfDay = Number(bot.time?.timeOfDay ?? -1);
   const storm = !!bot.isRaining && Number(bot.thunderState ?? 0) > 0;
+  const beds0 = ((bot.inventory?.items?.() ?? []) as Array<{ name: string; count: number }>).filter(item => isBedName(item.name));
   if (!isNight(timeOfDay) && !storm) {
     const seconds = Math.round(ticksToNight(timeOfDay) / 20);
-    // end1109o09: told the seconds alone, she waited them out twice (about 4 minutes each) with the plan's work in front of her.
-    // end1109s12/s14 S9: even under a minute she waited for the dark (wait 30, 20, 15 s and sleep again, ~130 s; s14 a wait of 25 s twice).
-    const cost = seconds > DAY_WAIT_SECONDS ? `（夜まで wait すると 30 分の目標の約 ${Math.round(seconds / 18)}% が消える）` : '';
-    return none('not_night', `夜ではない（今 ${timeOfDay}、寝られるのは ${NIGHT_FROM}〜${NIGHT_TO}。夜まであと約 ${seconds} 秒）。`
-      + `wait で夜を待たず、計画の手・今の道を進め${cost}、暗くなった所で sleep をもう一度`);
+    // Run 6 (2026-11-11): told "not night" 3 s and 0 s before dusk, she waited 60 s "to be safe" and asked twice more (q29-q31, two wasted turns). The head never has to
+    // time the dusk: within SOON_SECONDS the body waits for it here (exact); farther off the hand is a booking, kept by the body, which lies down at the first break between
+    // hands once it is dark (`fireSleepDue`, before each hand of an act). So `sleep` is "sleep when it can be done", at any hour.
+    let near: { position: Cell } | null = null;
+    try { near = bot.findBlock?.({ matching: bot.isABed, maxDistance: BED_NEAR }) ?? null; } catch { near = null; }
+    if (!beds0.length && !near) return none('no_bed', `ベッドを持っていない（近く ${BED_NEAR}m にもベッドは無い）。夜まであと約 ${seconds} 秒`);
+    if (seconds <= SOON_SECONDS) {
+      const dark = await waitUntil(ctx, () => { const t = Number(bot.time?.timeOfDay ?? -1); return isNight(t) || (!!bot.isRaining && Number(bot.thunderState ?? 0) > 0); }, (seconds + 2) * 1000, 100);
+      if (!dark) return none('not_night', `夜まで約 ${seconds} 秒を待ったが、まだ夜にならない（今 ${Number(bot.time?.timeOfDay ?? -1)}）`);
+    } else {
+      const keeper = lifeOf(nativeActionHost(bot)), view = keeper?.view();
+      (bot as SleepDueHost).sleepDue = { item: args.item, seconds: args.seconds, since: Date.now(), misses: 0, sawNight: false,
+        dimension: String(bot.game?.dimension ?? ''), life: view?.life, deathEpoch: view?.deathEpoch, deathSeq: view?.deathSeq };
+      return { ok: true, text: `夜まであと約 ${seconds} 秒。寝る予約をした（夜になり次第、体が次の手の前で寝る。wait で夜を待たず、作業の手を続ける）` };
+    }
   }
+  (bot as SleepDueHost).sleepDue = null;
   const beds = ((bot.inventory?.items?.() ?? []) as Array<{ name: string; count: number }>).filter(item => isBedName(item.name));
   let standing: { position: Cell } | null = null;
   try { standing = bot.findBlock?.({ matching: bot.isABed, maxDistance: BED_NEAR }) ?? null; } catch { standing = null; }
@@ -158,4 +179,42 @@ export async function sleep(ctx: StepContext, args: SleepArgs): Promise<StepOutc
   // The server's time update comes a moment after the wake: the tick in the line is the morning's, not the night's last.
   await waitUntil(ctx, () => !isNight(Number(bot.time?.timeOfDay ?? 0)), 1500).catch(() => false);
   return { ok: true, text: `${bedName}で寝て朝にした（今 ${Number(bot.time?.timeOfDay ?? 0)}）。${bed}` };
+}
+
+/**
+ * The booking kept (run 6, 2026-11-11): a `sleep` hand sent by day is kept here, and the first break between two hands of an act once it is dark lies down (the same sleep hand,
+ * run inline, so the bed, the enemy box and the wake-up are the hand's). Not fired for a `sleep` hand itself; kept (not dropped) while there is no bed to hand or too little
+ * of the act's time left; given up after DUE_MISSES failed tries (an enemy near, no spot), after the night has passed, after DUE_MAX_MS, on a death, a new life or another dimension.
+ * Returns the line the hand's result carries, or null (nothing to say).
+ */
+export async function fireSleepDue(ctx: StepContext, hand: string, index: number): Promise<string | null> {
+  const bot = ctx.bot as SleepBody & SleepDueHost & { findBlock?: (options: unknown) => unknown; isABed?: unknown; isRaining?: boolean; thunderState?: number; game?: { dimension?: unknown };
+    inventory?: { items?: () => Array<{ name: string }> } };
+  const due = bot.sleepDue;
+  if (!due) return null;
+  const view = lifeOf(nativeActionHost(bot as never))?.view();
+  if (String(bot.game?.dimension ?? '') !== due.dimension || (view && (view.life !== due.life || view.deathEpoch !== due.deathEpoch || view.deathSeq !== due.deathSeq)) || Date.now() - due.since > DUE_MAX_MS) {
+    bot.sleepDue = null;
+    return null;
+  }
+  const t = Number(bot.time?.timeOfDay ?? -1);
+  const dark = isNight(t) || (!!bot.isRaining && Number(bot.thunderState ?? 0) > 0);
+  if (!dark) {
+    // The night went by without a chance (the booking is stale: the morning is not the evening's).
+    if (due.sawNight) bot.sleepDue = null;
+    return null;
+  }
+  due.sawNight = true;
+  if (hand === 'sleep' || ctx.deadline - Date.now() < 12_000) return null;
+  const carried = (bot.inventory?.items?.() ?? []).some(item => isBedName(item.name));
+  let beside: unknown = null;
+  try { beside = bot.findBlock?.({ matching: bot.isABed, maxDistance: 5 }) ?? null; } catch { beside = null; }
+  if (!carried && !beside) return null;
+  const began = Date.now();
+  const out = await sleep(ctx, { item: due.item, seconds: due.seconds });
+  if (out.ok) return `寝る予約: 夜になったので手 ${index + 1} の前で寝た（${Math.max(1, Math.round((Date.now() - began) / 1000))} 秒）。${out.text}`;
+  due.misses++;
+  if (due.misses >= DUE_MISSES) return `寝る予約は取り下げた（${DUE_MISSES} 回寝られなかった: ${out.text.replace(/^sleep 止まった /u, '')}）`;
+  bot.sleepDue = due;
+  return `寝る予約: 夜になったが寝られなかった（${out.text.replace(/^sleep 止まった /u, '')}）。次の手の前でもう一度試す`;
 }

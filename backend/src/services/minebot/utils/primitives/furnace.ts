@@ -20,6 +20,11 @@ import { blockAt, cellText, eyeDistance, findItem, guard, inventoryCount, placeT
 export interface FurnaceArgs {
   at: Cell; put?: { item: string; count?: number }; fuel?: { item: string; count?: number }; take?: 'output' | 'input' | 'fuel' | 'all';
   limitByFuel?: boolean;
+  /**
+   * With `take`: a batch that is due within this many seconds is waited for here, by the exact remainder, and then taken (run 6: the head wrote `wait 30, take`
+   * and a take sent early took 5 of 8; the wait is the body's, exact, and only for the short remainder). A longer remainder is answered 「まだ」 as before.
+   */
+  waitDue?: number;
 }
 
 /** What a furnace's three slots hold after the hand, and whether and for how long it burns. */
@@ -227,7 +232,18 @@ export async function furnace(ctx: StepContext, args: FurnaceArgs): Promise<Step
       }
     }
   }
+  let waitedNote = '';
+  if (args.take && args.waitDue && args.waitDue > 0) {
+    const host = ctx.bot as { activeFurnaces?: Array<{ pos: Cell; dimension?: string; readyAt: number }> };
+    const batch = (host.activeFurnaces ?? []).find(f => sameBatch(f, args.at, ctx.bot));
+    const left = batch ? batch.readyAt - Date.now() : 0;
+    if (left > 0 && left <= args.waitDue * 1000 && left + 700 < ctx.deadline - Date.now()) {
+      await wait(ctx, left + 700);
+      waitedNote = `焼き上がりまで約 ${Math.max(1, Math.round(left / 1000))} 秒を体が待って取りに来た。`;
+    }
+  }
   const worked = await furnaceWork(ctx, args);
+  if (waitedNote) worked.outcome = { ...worked.outcome, text: `${waitedNote}${worked.outcome.text}` };
   // Continue contracts (1): progress in items (what was put into the slots and what was taken out of them).
   const moved = worked.moved.input + worked.moved.fuel + (worked.moved.took ?? 0);
   return worked.outcome.progress ? worked.outcome : { ...worked.outcome, progress: { unit: 'item', done: moved, left: null } };

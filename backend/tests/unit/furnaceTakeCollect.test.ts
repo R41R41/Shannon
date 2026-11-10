@@ -71,3 +71,36 @@ describe('furnace take as a collect', () => {
       .toEqual(['iron_ingot', 'iron_ingot', 'iron_ingot', 'cooked_beef', 'charcoal', null, null, 'gold_ingot']);
   });
 });
+
+// Run 6 (11/11): the head wrote `wait 30, take` and a take sent early took 5 of 8. A take with a short remainder waits it out in the body (exact), a long one answers "not yet".
+describe('furnace take with waitDue', () => {
+  const open = (g: Ground, client: EventEmitter, output: { name: string; count: number } | null) => {
+    (g.bot as any).openFurnace = async () => { packets(client); return { id: 7, totalFuel: null, fuel: 0, progress: 0,
+      inputItem: () => output ? null : ({ name: 'raw_iron', count: 3 }), fuelItem: () => null, outputItem: () => output, takeOutput: async () => {}, close() {} }; };
+  };
+  it('waits the exact remainder (<= 15 s) and then takes', async () => {
+    const g = ground = createGround({ pathfinder: false }); g.start(); g.set(10, 64, 8, 'furnace');
+    const cell = { x: 10, y: 64, z: 8 };
+    g.bot.activeFurnaces = [{ pos: cell, item: 'raw_iron', count: 3, startedAt: 1, readyAt: Date.now() + 1500, dimension: String((g.bot as any).game?.dimension ?? '') }];
+    const client = (g.bot as any)._client = new EventEmitter();
+    open(g, client, { name: 'iron_ingot', count: 3 });
+    const t0 = Date.now();
+    const outcome = await furnace(stepContext(g.bot), { at: cell, take: 'output', waitDue: 15 });
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(2000);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.text).toContain('体が待って取りに来た');
+    expect(outcome.text).toContain('iron_ingot×3 を取った');
+  });
+  it('a remainder past waitDue is answered "not yet" at once', async () => {
+    const g = ground = createGround({ pathfinder: false }); g.start(); g.set(10, 64, 8, 'furnace');
+    const cell = { x: 10, y: 64, z: 8 };
+    g.bot.activeFurnaces = [{ pos: cell, item: 'raw_iron', count: 3, startedAt: 1, readyAt: Date.now() + 40_000, dimension: String((g.bot as any).game?.dimension ?? '') }];
+    const client = (g.bot as any)._client = new EventEmitter();
+    open(g, client, null);
+    const t0 = Date.now();
+    const outcome = await furnace(stepContext(g.bot), { at: cell, take: 'output', waitDue: 15 });
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(outcome.text).toContain('まだ出来ていない');
+    expect(outcome.text).not.toContain('体が待って');
+  });
+});

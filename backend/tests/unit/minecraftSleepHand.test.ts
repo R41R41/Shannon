@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Vec3 } from 'vec3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGround, type Ground } from '../helpers/practiceGround.js';
-import { enemiesInSleepBox, enemyWords, sleep } from '../../src/services/minebot/utils/primitives/sleep.js';
+import { enemiesInSleepBox, enemyWords, fireSleepDue, sleep } from '../../src/services/minebot/utils/primitives/sleep.js';
 import { StepStopped } from '../../src/services/minebot/utils/primitives/common.js';
 import { handProblem } from '../../src/services/minebot/utils/actHandRules.js';
 import { closedWord } from '../../src/services/minebot/utils/actReport.js';
@@ -63,22 +63,87 @@ describe('sleep: the facts before it lies down', () => {
     expect(enemiesInSleepBox(bot).map(enemy => enemy.name)).toEqual(['zombie', 'skeleton', 'zombie']);
     expect(enemyWords([{ name: 'creeper', distance: 3 }])).toContain('creeper 1体');
   });
-  it('by day: not_night with the seconds until night; in a thunderstorm it may sleep by day', async () => {
-    const day = await sleep(ctxOf(body({ time: { timeOfDay: 6000 } })), {});
-    expect(day).toMatchObject({ ok: false, reason: 'not_night' });
+  it('by day, far from the night: a booking (no refusal, nothing waited), and in a thunderstorm it may sleep by day', async () => {
+    const bot = body({ time: { timeOfDay: 6000 } });
+    const skill = skilled(bot, async () => ({ success: true, nightPassed: true }));
+    const t0 = Date.now();
+    const day = await sleep(ctxOf(bot), {});
+    expect(day.ok).toBe(true);
     expect(day.text).toContain('夜まであと約 327 秒');
-    expect(closedWord(day.reason)).toBe('夜ではない');
-    // end1109o09 / s12・s14: the day is the plan's at any distance from the night; far from it the line also says the cost of waiting.
-    expect(day.text).toContain('wait で夜を待たず、計画の手・今の道を進め');
-    expect(day.text).toContain('30 分の目標の約 18%');
-    const near = await sleep(ctxOf(body({ time: { timeOfDay: 12_000 } })), {});
-    expect(near.text).toContain('夜まであと約 27 秒');
-    expect(near.text).toContain('wait で夜を待たず');
-    expect(near.text).not.toContain('30 分の目標');
+    expect(day.text).toContain('寝る予約');
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(skill.runImpl).not.toHaveBeenCalled();
+    expect(bot.sleepDue).toMatchObject({ misses: 0, sawNight: false });
+    // No bed to keep the booking for: said at once, and nothing is booked.
+    const bare = body({ time: { timeOfDay: 6000 }, inventory: { items: () => [] as any[] } });
+    expect(await sleep(ctxOf(bare), {})).toMatchObject({ ok: false, reason: 'no_bed' });
+    expect(bare.sleepDue).toBeUndefined();
     const storm = body({ time: { timeOfDay: 6000 }, isRaining: true, thunderState: 1 });
     skilled(storm, async () => ({ success: true, nightPassed: true, bedLeft: false }));
     expect((await sleep(ctxOf(storm), {})).ok).toBe(true);
   });
+  it('3 s before dusk the hand waits for the dusk inside (exact, not the head wait) and sleeps; a dusk that does not come is not_night', async () => {
+    const bot = body({ time: { timeOfDay: 12_542 - 60 } });
+    const skill = skilled(bot, async () => ({ success: true, nightPassed: true, bedLeft: false }));
+    setTimeout(() => { bot.time.timeOfDay = 12_600; }, 300);
+    const out = await sleep(ctxOf(bot), {});
+    expect(out.ok).toBe(true);
+    expect(skill.runImpl).toHaveBeenCalledTimes(1);
+    expect(bot.sleepDue).toBeNull();
+    const late = body({ time: { timeOfDay: 12_542 - 4 } });
+    const lateOut = await sleep({ ...ctxOf(late), deadline: Date.now() + 60_000 }, {});
+    expect(lateOut).toMatchObject({ ok: false, reason: 'not_night' });
+  }, 15_000);
+});
+
+describe('sleep: the booking the body keeps and fires at a break between hands', () => {
+  const booked = async (patch: Record<string, unknown> = {}) => {
+    const bot = body({ time: { timeOfDay: 10_542 }, ...patch });
+    const skill = skilled(bot, async () => ({ success: true, nightPassed: true, bedLeft: false }));
+    expect((await sleep(ctxOf(bot), {})).ok).toBe(true);
+    expect(bot.sleepDue).toBeTruthy();
+    return { bot, skill };
+  };
+  it('does nothing by day, sleeps before the next hand once it is dark, and the booking is gone', async () => {
+    const { bot, skill } = await booked();
+    expect(await fireSleepDue(ctxOf(bot), 'mine', 0)).toBeNull();
+    expect(skill.runImpl).not.toHaveBeenCalled();
+    bot.time.timeOfDay = NIGHT;
+    const line = await fireSleepDue(ctxOf(bot), 'mine', 1);
+    expect(line).toContain('寝る予約: 夜になったので手 2 の前で寝た');
+    expect(skill.runImpl).toHaveBeenCalledTimes(1);
+    expect(bot.sleepDue).toBeNull();
+    expect(await fireSleepDue(ctxOf(bot), 'mine', 2)).toBeNull();
+  });
+  it('an enemy in the box keeps it for 3 tries and then gives it up, saying so; a sleep hand itself is left to itself', async () => {
+    const { bot, skill } = await booked();
+    bot.time.timeOfDay = NIGHT;
+    bot.entities = { 2: zombie(2, 3.5) };
+    expect(await fireSleepDue(ctxOf(bot), 'sleep', 0)).toBeNull();
+    expect(await fireSleepDue(ctxOf(bot), 'mine', 0)).toContain('次の手の前でもう一度');
+    expect(await fireSleepDue(ctxOf(bot), 'mine', 1)).toContain('次の手の前でもう一度');
+    expect(await fireSleepDue(ctxOf(bot), 'mine', 2)).toContain('寝る予約は取り下げた');
+    expect(bot.sleepDue).toBeNull();
+    expect(skill.runImpl).not.toHaveBeenCalled();
+  });
+  it('is dropped in another dimension and after the night went by; kept with no bed to hand', async () => {
+    const a = await booked();
+    a.bot.game = { dimension: 'minecraft:the_nether' };
+    a.bot.time.timeOfDay = NIGHT;
+    expect(await fireSleepDue(ctxOf(a.bot), 'mine', 0)).toBeNull();
+    expect(a.bot.sleepDue).toBeNull();
+    const b = await booked();
+    b.bot.time.timeOfDay = NIGHT;
+    b.bot.inventory = { items: () => [] as any[] };
+    expect(await fireSleepDue(ctxOf(b.bot), 'mine', 0)).toBeNull();
+    expect(b.bot.sleepDue).toBeTruthy();
+    b.bot.time.timeOfDay = 1000;
+    expect(await fireSleepDue(ctxOf(b.bot), 'mine', 0)).toBeNull();
+    expect(b.bot.sleepDue).toBeNull();
+  });
+});
+
+describe('sleep: the facts for the Nether, no bed', () => {
   it('the Nether and the End: bed_explodes; no bed carried and none standing near: no_bed', async () => {
     for (const dimension of ['minecraft:the_nether', 'minecraft:the_end']) {
       expect(await sleep(ctxOf(body({ game: { dimension } })), {})).toMatchObject({ ok: false, reason: 'bed_explodes' });
@@ -226,6 +291,20 @@ describe('the act\'s sleep hand', () => {
     expect(slept.ok).toBe(true);
     expect(slept.lines[0].line).toContain('white_bedで寝て朝にした');
     expect(skill.runImpl).toHaveBeenCalledWith(false, false, { leaveIfNight: true, noDig: true });
+  }, 30_000);
+  it('run 6: [sleep by day, wait, wait] books the sleep, and once it is dark the body lies down before the next hand (the line says so), without the head timing the dusk', async () => {
+    ground = createGround({}); ground.start();
+    const bot: any = ground.bot;
+    bot.time = { timeOfDay: 9000, day: 3 }; bot.isABed = (block: any) => block?.name?.endsWith('_bed'); bot.wake = vi.fn(async () => { bot.isSleeping = false; });
+    ground.give('white_bed', 1);
+    const skill = skilled(bot, async () => ({ success: true, nightPassed: true, bedLeft: false, result: '' }));
+    setTimeout(() => { bot.time.timeOfDay = NIGHT; }, 600);
+    const result = JSON.parse((await runAct(bot, ACT_HANDS.parse([{ do: 'sleep' }, { do: 'wait', seconds: 1 }, { do: 'wait', seconds: 1 }]))).result);
+    expect(result.ok).toBe(true);
+    expect(result.lines[0].line).toContain('寝る予約をした');
+    expect(skill.runImpl).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result.lines)).toContain('寝る予約: 夜になったので手');
+    expect(bot.sleepDue).toBeNull();
   }, 30_000);
 });
 

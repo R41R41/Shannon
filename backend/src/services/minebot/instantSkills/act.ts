@@ -41,7 +41,7 @@ import { waterDigWords } from '../utils/waterDigWords.js';
 import { mine } from '../utils/primitives/mine.js';
 import { make } from '../utils/primitives/make.js';
 import { smelt } from '../utils/primitives/smelt.js';
-import { sleep } from '../utils/primitives/sleep.js';
+import { fireSleepDue, sleep } from '../utils/primitives/sleep.js';
 import { bedBurst } from '../utils/primitives/bedBurst.js';
 import { furnacesDueByNow } from '../utils/furnaceDone.js';
 import { handProblem } from '../utils/actHandRules.js';
@@ -279,6 +279,8 @@ const PILLAR_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack',
 const FIGHT_FIELDS = new Set(['do', 'target', 'den', 'stance', 'item', 'retreatHp', 'range', 'seconds', 'rel', 'note', 'onFail', 'dependsOn']);
 const SLOTS: Record<string, string> = { hand: 'hand', offhand: 'off-hand', 'off-hand': 'off-hand', head: 'head', chest: 'torso', torso: 'torso', legs: 'legs', feet: 'feet' };
 
+/** A `furnace take` sent before the batch is due waits for it when no more than this many seconds are left. */
+export const TAKE_WAIT_DUE_SECONDS = 15;
 async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
   const bot = ctx.bot;
   if (hand.den !== undefined && hand.do !== 'fight') return { ok: false, reason: 'invalid_input', text: 'den は fight enderman だけで使う' };
@@ -345,7 +347,8 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
     case 'craft': return craft(ctx, { item: hand.item ?? '', count: hand.count });
     case 'furnace': {
       if (!one) return bad('furnace には at（かまどのマス）が要る');
-      if (hand.op === 'take') return furnace(ctx, { at: one, take: 'output' });
+      // Run 6: a take sent early waits its short remainder in the body (the head's `wait N` before a take is not needed).
+      if (hand.op === 'take') return furnace(ctx, { at: one, take: 'output', waitDue: TAKE_WAIT_DUE_SECONDS });
       return furnace(ctx, { at: one, put: hand.item ? { item: hand.item, count: hand.count } : undefined,
         fuel: hand.fuel ? { item: hand.fuel, count: hand.fuelCount } : undefined });
     }
@@ -703,6 +706,18 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         const unmet = hand.dependsOn.find(target => { const result = handResults.get(target); return !result || !isReliable({ goal: result.goal, end: result.end as never }); });
         if (unmet !== undefined) { skipOne(index, `頼る手 ${unmet} が済んでいない`, `depends_failed:${unmet}`); continue; }
       }
+      // Run 6: a sleep booked by day is kept by the body and fired at the first break between hands once it is dark (the head never times the dusk).
+      let sleptLine = '';
+      if ((bot as { sleepDue?: unknown }).sleepDue) {
+        const at = feetCell(bot);
+        if (at) {
+          try { sleptLine = await fireSleepDue({ bot, stop: control.signal, deadline, facing, base: at }, hand.do, index) ?? ''; }
+          catch (error) {
+            if (control.signal.aborted || error instanceof StepStopped) { skip(index, doneMet ? '済む条件を満たした' : ''); return false; }
+            sleptLine = '';
+          }
+        }
+      }
       const base = feetCell(bot);
       if (!base) { stopWith('体が無い（接続が切れた）', 'disconnected'); skip(index); return false; }
       const made: Array<Omit<InventoryEvent, 'id' | 'obsSeq' | 'deliverySeq'>> = [];
@@ -732,11 +747,11 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       const tracker = SELF_COUNTING.has(hand.do) ? null : trackPack(bot);
       const settleTrack = () => tracker?.finish(handReasons(hand) ?? {}, event => made.push(event));
       // Run 5: a table or furnace this body set down is taken up before a hand that goes far from it (the pack's change is the hand's, in its events). Never fails the hand.
-      let carried = '';
+      let carried = sleptLine;
       const travel = travelCells(ctx, hand);
       if (travel.length) {
         const named = hands.slice(index + 1).flatMap(later => { try { return cellsOf(ctx, later, later.at) ?? []; } catch { return []; } });
-        carried = await carryAway(ctx, travel, named);
+        carried = [sleptLine, await carryAway(ctx, travel, named)].filter(Boolean).join('。');
         opsBefore = motorOpsOf(bot);
       }
       try { outcome = await runHand(ctx, hand); }
