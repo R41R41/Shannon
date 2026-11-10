@@ -20,6 +20,7 @@ import { meterProgress, round1 } from './progressUnits.js';
 import { ThreatExposedError } from '../exposureGuard.js';
 import { surfaceSwimControls, swimControls, swimPulse } from './swim.js';
 import { waterExitWords } from './waterExit.js';
+import { stanchStream } from './stanch.js';
 import { cloudReaches, cloudZoneAtCell, lyingCloudZones } from '../dragonDanger.js';
 import { perchClearance } from '../dragonApproach.js';
 import { dragonPhaseOf, endDragonOf, isEnd } from '../dragonState.js';
@@ -1193,14 +1194,16 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   };
   /** What a stop for want of blocks to lay says to do: name the cheap blocks the pack holds (dug netherrack, stone ...), else gather some. */
   const noBlocksHint = (fallback = '置ける物を集めるか、canPlace を足す'): string => { const held = bridgeBlocksHeld(bot, args.canPlace); return held ? `荷の ${held} を canPlace に足すか、集める` : fallback; };
-  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${doused ? `。火を ${doused} 個消した` : ''}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}${(() => { const frames = framesInSight(bot); return frames ? `。${frames}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
+  /** Run 5: the stream stopped by a block upstream (how many tries, and the last words: what was laid, or why nothing could be). */
+  let streamDams = 0, streamWords = '';
+  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${doused ? `。火を ${doused} 個消した` : ''}${streamWords.startsWith('流れを止めた') ? `。${streamWords}` : ''}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}${(() => { const frames = framesInSight(bot); return frames ? `。${frames}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
   /** The stop at the time limit: when the body is held in flowing water, that is in the line (whatever the length of `seconds`). */
   const limitTime = (left: string): StepOutcome => {
     const wet = flowingWaterAt(bot, feetCell(bot));
     const held = wet ? `。流れる水の中（${cellText(feetCell(bot)!)} は ${wet}）で押し戻された` : '';
-    return fail('limit_time', `${args.seconds ?? GO_DEFAULTS.seconds} 秒の上限に着いた（行き先まで あと ${left}m）${held}`, wet ? '上流の水源を汲むかブロックで塞ぐか、別の道を' : 'seconds を増やすか、行き先を近くに');
+    return fail('limit_time', `${args.seconds ?? GO_DEFAULTS.seconds} 秒の上限に着いた（行き先まで あと ${left}m）${held}`, wet ? (streamWords || '上流の水源を汲むかブロックで塞ぐか、別の道を') : 'seconds を増やすか、行き先を近くに');
   };
 
   // ---- fire in or beside a place is put out where the body can reach it (S2, S4's c1 camp: a blaze's fireballs light the cells round its camp again and again, each refusal was a dig of the planner's own) ----
@@ -1942,6 +1945,14 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       const left = distanceTo(bot, near());
       if (left < nearest - 1.5) { nearest = left; mends = 0; noway = 0; attempt = 0; }
       if (moved >= 1.5 && !out.stuck) { mends = 0; noway = 0; attempt = 0; state.redraws++; continue; }
+      // Run 5 (308 s held in shallow flowing water; the route search reads water as still and found the same way each time): held in a stream, the stream is stopped
+      // with a cheap block laid upstream (the owner's request), then the way is drawn again from the dry cells. Three tries a go.
+      if (streamDams < 3 && flowingWaterAt(bot, feetCell(bot))) {
+        streamDams++;
+        const dam = await timed('mendMs', () => stanchStream(ctx, { toward: aim }));
+        if (dam.words) streamWords = dam.words;
+        if (dam.attempted) { state.redraws++; noway = 0; if (dam.stopped) { mends = 0; attempt = 0; } continue; }
+      }
       // A search that ran out of its time (run 41: 8 of 13 "no way" stops) says nothing about the way: turning the leg, drawing again at once
       // and the explaining searches would each run out the same (5 + 5 + 4 x 2.5 s). What it found is walked when it comes nearer; else it is said.
       const searchedOut = drawn.status === 'timeout';
@@ -1957,7 +1968,7 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         // Run 47 (hold 7): held in flowing water (swimming upstream, against a wall and under a ceiling) is not mended by drawing again: after two tries it is said, with the way out.
         const wet = flowingWaterAt(bot, feetCell(bot));
         if (wet && mends >= 2) {
-          return fail('stuck', `流れる水の中（${cellText(feetCell(bot)!)} は ${wet}）で ${GO_STUCK_MS / 1000}秒ずつ進めない（上流へ泳いでも押し戻される）`, '上流の水源を汲む（use の bucket）かブロックで塞ぐか、別の道を');
+          return fail('stuck', `流れる水の中（${cellText(feetCell(bot)!)} は ${wet}）で ${GO_STUCK_MS / 1000}秒ずつ進めない（上流へ泳いでも押し戻される）`, streamWords || '上流の水源を汲む（use の bucket）かブロックで塞ぐか、別の道を');
         }
         mends++;
         if (mends > GO_REPAIRS) {

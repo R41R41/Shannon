@@ -118,7 +118,7 @@ export function makeSim(ground: Ground, options: { start?: [number, number, numb
       await new Promise(resolve => setTimeout(resolve, 80));
       const held = bot.heldItem;
       if (!held || held.count <= 0) throw new Error('No item in hand');
-      const existing = world.nameAt(dest.x, dest.y, dest.z);
+      const existing = world.nameAt(dest.x, dest.y, dest.z)?.replace(/\[.*$/u, '');
       if (existing && !['air', 'cave_air', 'water', 'lava', 'short_grass'].includes(existing)) throw new Error(`No block has been placed : the block is still ${existing}`);
       // The server puts no block where the body (as it last saw it) stands.
       const s = bot.serverAt;
