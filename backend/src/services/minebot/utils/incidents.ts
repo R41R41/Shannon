@@ -35,7 +35,9 @@ const ASKED_FOR_MS = 10 * 60_000;
 /** A fall of health this big within SHARP_MS writes the box (and at NEAR_DEATH or a death, the scene). */
 const SHARP_HP = 6, SHARP_MS = 5_000;
 
-export interface Incident { id: string; kind: 'act' | 'health' | 'death' | 'head'; heavy: boolean; why: string; box: string | null; scene: string | null; held: boolean; frozen: boolean | null; freeze?: string;
+export interface Incident { id: string; kind: 'act' | 'health' | 'death' | 'head'; heavy: boolean; why: string; box: string | null; scene: string | null;
+  /** Loop 11/10: the scene is being saved after the receipt (an act's failure that holds nothing); `scene` is null until then. */
+  scenePending?: boolean; held: boolean; frozen: boolean | null; freeze?: string;
   /** A hold that was asked for and not made: the world could not be stopped (the freeze's words). */
   notHeld?: string;
   /**
@@ -182,6 +184,8 @@ export class Incidents {
 
   /** Hold mutations include their physical freeze/unfreeze and persistence, in arrival order. */
   private mutation: Promise<unknown> = Promise.resolve();
+  /** Loop 11/10: the scenes saved after their receipts, one at a time (a scene saved at once waits for them too: two save-alls never overlap). */
+  private sceneChain: Promise<void> = Promise.resolve();
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
     const result = this.mutation.then(work);
     this.mutation = result.catch(() => undefined);
@@ -282,7 +286,10 @@ export class Incidents {
     const holding = holdsFor(reason) && command.context?.incident?.hold === true && !repeated;
     const existing = this.hold;
     const freeze = holding && !existing ? (this.options.scene ? await this.options.scene.freeze() : { frozen: false, why: 'no_scene_port' }) : null;
-    const incident = await this.write('act', heavy, why, act);
+    // Loop 11/10 (task 193a86b0): 16 failed acts each waited 0.8–1.2 s for the scene's save-all before the receipt went and the next item of
+    // the queue could start (17 s of a standing body in 24 minutes). A failure that holds nothing (no hold asked, none standing) has its scene
+    // saved after the receipt: the box is written now, the scene follows, one at a time.
+    const incident = await this.write('act', heavy, why, act, undefined, !holding && !existing);
     if (incident && existing) return { ...incident, id: existing.id, why: existing.why, held: true, frozen: existing.frozen, freeze: existing.freeze };
     if (incident && repeated && command.context?.incident?.hold === true) {
       log.warn(`⏵ 保留しなかった ${incident.id}（${why}）: 保留 ${again!.id} から出し直した act が同じ理由で失敗。判断に任せる`);
@@ -443,18 +450,27 @@ export class Incidents {
   }
 
   /** The box, and for a heavy one the scene under the same id. */
-  private async write(kind: Incident['kind'], heavy: boolean, why: string, act?: unknown, given?: { id: string; head?: unknown }): Promise<Incident | null> {
+  private async write(kind: Incident['kind'], heavy: boolean, why: string, act?: unknown, given?: { id: string; head?: unknown }, later = false): Promise<Incident | null> {
     const box = this.box();
     const id = given?.id ?? `${new Date(this.now()).toISOString().replace(/[-:.]/gu, '').slice(0, 15)}-${kind}-${Math.random().toString(36).slice(2, 7)}`;
     let scene: SceneResult | null = null;
     const p = this.bot.entity?.position;
-    if (heavy && this.options.scene && p) {
+    let pending = false;
+    if (heavy && later && this.options.scene && p) {
+      const saver = this.options.scene, center: [number, number, number] = [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)];
+      const dimension = String(this.bot.game?.dimension ?? 'overworld'), meta = { box: id, why, task: box?.task ?? null };
+      pending = true;
+      this.sceneChain = this.sceneChain.then(() => saver.save(id, center, dimension, meta).then(() => undefined))
+        .catch(error => { log.warn(`現場を保存できなかった ${id}: ${String((error as Error)?.message ?? error).slice(0, 100)}`); });
+    } else if (heavy && this.options.scene && p) {
+      await this.sceneChain;
       try { scene = await this.options.scene.save(id, [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)], String(this.bot.game?.dimension ?? 'overworld'), { box: id, why, task: box?.task ?? null }); }
       catch (error) { log.warn(`現場を保存できなかった ${id}: ${String((error as Error)?.message ?? error).slice(0, 100)}`); }
     }
-    const written = box ? await box.dump(kind, why, { id, ...(act !== undefined ? { act } : {}), ...(given?.head !== undefined ? { head: given.head } : {}), scene: scene?.ok ? scene.id : null }) : null;
+    const written = box ? await box.dump(kind, why, { id, ...(act !== undefined ? { act } : {}), ...(given?.head !== undefined ? { head: given.head } : {}), scene: scene?.ok ? scene.id : pending ? id : null }) : null;
     const end: [number, number, number] | null = p ? [Math.round(p.x * 100) / 100, Math.round(p.y * 100) / 100, Math.round(p.z * 100) / 100] : null;
-    return { id, kind, heavy, why, box: written?.file ?? null, scene: scene?.ok ? scene.dir : null, held: false, frozen: null, start: kind === 'act' ? this.startFeet : null, end };
+    return { id, kind, heavy, why, box: written?.file ?? null, scene: scene?.ok ? scene.dir : null, ...(pending ? { scenePending: true } : {}), held: false, frozen: null,
+      start: kind === 'act' ? this.startFeet : null, end };
   }
 }
 
@@ -465,7 +481,7 @@ export function withIncidentText(text: string, incident: Incident | null): strin
     return JSON.stringify({ ...JSON.parse(text), incident: { id: incident.id, heavy: incident.heavy, why: incident.why, held: incident.held,
       frozen: incident.frozen, ...(incident.freeze ? { freeze: incident.freeze } : {}), ...(incident.notHeld ? { notHeld: incident.notHeld } : {}),
       ...(incident.repeated ? { repeated: incident.repeated } : {}),
-      box: incident.box !== null, scene: incident.scene !== null,
+      box: incident.box !== null, scene: incident.scene !== null || incident.scenePending === true,
       ...(incident.start ? { start: incident.start } : {}), ...(incident.end ? { end: incident.end } : {}) } });
   } catch { return text; }
 }

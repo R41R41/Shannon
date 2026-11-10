@@ -349,7 +349,8 @@ describe('run 45, holds 3 to 5: the act a resume sent again fails for the same r
     const freezes = said.filter(text => text === 'tick freeze').length;
     const again = (await second.afterAct({ id: 'resume:cmd-1', context }, stopped('go 止まった search_timeout: 7936 マス調べた') as never, 9000))!;
     expect(again).toMatchObject({ heavy: true, held: false, why: 'go_search_timeout', repeated: held.id });
-    expect(again.scene).not.toBeNull();
+    // Loop 11/10: no hold, so the scene is saved after the receipt (pending here, the box names it).
+    expect(again.scene !== null || again.scenePending === true).toBe(true);
     expect(said.filter(text => text === 'tick freeze').length).toBe(freezes);
     expect(second.held()).toBeNull();
     expect(fs.existsSync(holdFile)).toBe(false);
@@ -477,5 +478,32 @@ describe('heavy or light: a long act with the work moving (run 48, hold 3)', () 
     expect(reason === null || !holdsFor(reason)).toBe(true);
     const idle = { ok: false, lines: [{ i: 1, do: 'obsidian', status: 'stopped' as const, line: 'obsidian 止まった unreachable: 黒曜石 0 個・水の注ぎ 0 回・立ち直し 0 回。届かない' }] };
     expect(heavyReason(idle as never, 61_000, 18, false, seen, 't')).toBe('long:61s');
+  });
+});
+
+// Loop 11/10 (task 193a86b0): 16 failed acts each waited 0.8–1.2 s for the scene's save-all before the receipt, and the next item waited with it.
+describe('loop 11/10: the scene of a failure that holds nothing is saved after the receipt', () => {
+  const stopped = (line: string) => ({ ok: false, startedAt: 0, done: 0, of: 1, lines: [{ i: 1, do: 'go' as const, status: 'stopped' as const, line }] });
+  it('answers before the save-all ends, says a scene is coming, and saves one at a time', async () => {
+    const clock = { t: Date.parse('2026-11-10T13:00:00Z') };
+    const releases: Array<() => void> = [];
+    const saves: string[] = [];
+    const saver = { save: (id: string) => { saves.push(id); return new Promise(resolve => { releases.push(() => resolve({ ok: true, id, dir: `/scenes/${id}`, files: [], bytes: 0, saveMs: 0, copyMs: 0 })); }); },
+      freeze: async () => ({ frozen: false, why: 'test' }), unfreeze: async () => 'ok' };
+    const incidents = new Incidents(fakeBot(clock), { holdFile: path.join(temp(), 'hold.json'), scene: saver as never, now: () => clock.t });
+    const context = { taskId: 'task-loop' };
+    await incidents.beforeAct(context);
+    const first = await incidents.afterAct({ id: 'cmd-1', context }, stopped('go 止まった search_timeout: 7936 マス調べた') as never, 9000);
+    expect(first).toMatchObject({ heavy: true, held: false, scene: null, scenePending: true });
+    expect(JSON.parse(withIncidentText('{"ok":false}', first)).incident).toMatchObject({ scene: true });
+    await incidents.beforeAct(context);
+    const second = await incidents.afterAct({ id: 'cmd-2', context }, stopped('go 止まった search_timeout: 7936 マス調べた') as never, 9000);
+    expect(second).toMatchObject({ scenePending: true });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(saves).toHaveLength(1);
+    releases[0]!();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(saves).toHaveLength(2);
+    releases[1]!();
   });
 });
