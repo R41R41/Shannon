@@ -247,7 +247,7 @@ describe('fight an enderman from a roofed hole', () => {
     expect(json.ok).toBe(false);
     expect(lineOf(json)).toMatch(/enderman_not_visible|not_visible/u);
     // end1109p08b (body 0f988d0a): a roof site in view leads the line (its cell first), and the 160-character clip may cut what stands on the line after it.
-    expect(lineOf(json)).toMatch(/stone|屋根の場所 \(-?\d+,-?\d+,-?\d+\) へ go/u);
+    expect(lineOf(json)).toMatch(/stone|屋根の場所 \(-?\d+,-?\d+,-?\d+\)(?:（[^）]*）)? へ go/u);
     expect(field.stats.stareTicks).toBe(0);
   }, 60_000);
 
