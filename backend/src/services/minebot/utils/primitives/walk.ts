@@ -9,6 +9,7 @@ import { cellWay, climbRise, doorOpen, installWalkRules, isDoorlike, isLeaves, i
 import { cellText, guard, letGo, placeText, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { meterProgress, withProgress } from './progressUnits.js';
 import { holeUnderCentreWords, magmaAtFootprint } from '../magmaFootprint.js';
+import { flowingAt, stanchStream } from './stanch.js';
 
 const { goals } = pathfinder;
 
@@ -25,6 +26,8 @@ export interface WalkArgs { to?: Cell; path?: Cell[]; range?: number; sprint?: b
 /** No headway for this long (moved less than NO_PROGRESS_M): the walk is stuck. */
 const STUCK_MS = 4000;
 const NO_PROGRESS_M = 0.5;
+/** Run 5 (2026-11-11): feet in flowing water and no headway for this long is stuck, whatever the walk's own limit (a current does not let go in 4 s, and a short `seconds` ended the act before the stuck branch). */
+const WET_STUCK_MS = 1500;
 const MAX_DROP = MAX_FALL;
 /** How far along the straight line a stopped walk is read for what stopped it. */
 const SCAN_CELLS = 24;
@@ -284,7 +287,8 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
       ? Math.hypot(now.x - last.x, now.z - last.z) >= NO_PROGRESS_M || (bot.entity?.onGround !== false && Math.abs(now.y - last.y) >= NO_PROGRESS_M)
       : now.distanceTo(last) >= NO_PROGRESS_M;
     if (headway || options.busy?.()) { last = now.clone(); lastMoveAt = Date.now(); return; }
-    if (Date.now() - lastMoveAt >= (options.stuckMs ?? STUCK_MS)) { stuck = true; try { bot.pathfinder.stop(); bot.pathfinder.setGoal(null); } catch { /* stopped below */ } }
+    const stuckAfter = options.stuckMs ?? STUCK_MS;
+    if (Date.now() - lastMoveAt >= (flowingAt(bot, feetCell(bot)) ? Math.min(stuckAfter, WET_STUCK_MS) : stuckAfter)) { stuck = true; try { bot.pathfinder.stop(); bot.pathfinder.setGoal(null); } catch { /* stopped below */ } }
   }, 150);
   let error: unknown = null, timedOut = false;
   try {
@@ -447,7 +451,7 @@ async function shortFacts(bot: any, here: Cell, target: Cell, search?: SearchSai
 async function walkTo(ctx: StepContext, target: Cell, range: number, notes: WayNotes): Promise<StepOutcome | null> {
   const bot = ctx.bot;
   const goal = range > 0 ? new goals.GoalNear(target.x + 0.5, target.y, target.z + 0.5, range) : new goals.GoalBlock(target.x, target.y, target.z);
-  let attempt = 0;
+  let attempt = 0, dams = 0, damWords = '';
   for (;;) {
     const leg = nextLeg(bot, goal as never, attempt, FAR_LEG_M);
     const started = feetCell(bot)!;
@@ -467,6 +471,13 @@ async function walkTo(ctx: StepContext, target: Cell, range: number, notes: WayN
     // An intermediate leg not reached after some headway: the next leg from here.
     if (!leg.final && !gone.error && !gone.stuck && bot.entity.position.distanceTo(startedAt) >= 1) { attempt = 0; continue; }
     if (!leg.final && /no path/iu.test(message) && attempt < 2) { attempt++; continue; }
+    // Run 5: held in a stream (the route search reads water as still): the stream is stopped with a block upstream, then the walk goes on from here.
+    if (gone.stuck && dams < 2 && flowingAt(bot, here)) {
+      dams++;
+      const dam = await stanchStream(ctx, { toward: target });
+      damWords = dam.stopped && !dam.onRoute ? '' : dam.words;
+      if (dam.attempted) continue;
+    }
     const blocked = await shortFacts(bot, here, target, gone.search);
     const reach = reachFacts(bot, here, target);
     const left = Math.hypot(target.x - here.x, target.y - here.y, target.z - here.z);
@@ -474,7 +485,7 @@ async function walkTo(ctx: StepContext, target: Cell, range: number, notes: WayN
     if (gone.stuck) {
       // The facts of the cells the body is in and goes to, whatever stopped it (notArrivedFacts has them already when probe path walked it).
       const own = (blocked?.reason === 'not_arrived' ? '' : `。${notArrivedFacts(bot, here, [target], gone.search)}`) + (gone.opens.length ? `。扉の試し: ${gone.opens.join('、')}` : '');
-      const cause = stuckCause(bot, here, target, gone.search, gone.opens);
+      const cause = [damWords, stuckCause(bot, here, target, gone.search, gone.opens)].filter(Boolean).join('・');
       return stopped(bot, blocked?.reason ?? 'stuck', `${STUCK_MS / 1000}秒進めず止まった（今 ${placeText(bot, here)}、${remains}）。${blocked ? blocked.text : reach || '前に見える障害は無い（体が何かに引っかかっている）'}${own}`, blocked?.at ?? here, here, cause);
     }
     if (/no path|took to long|too long/iu.test(message)) {
