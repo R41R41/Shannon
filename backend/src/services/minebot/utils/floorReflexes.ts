@@ -8,7 +8,7 @@ import { edgeRisk, fallIsDangerous } from './edgeGuard.js';
 import { escapeHeading } from './escapeHeading.js';
 import { floorConfig, type FloorConfig } from './floorConfig.js';
 import { eatIsCritical, FloorBudget, type BudgetKind } from './floorBudget.js';
-import { isThreatEntity, type ThreatBody } from './hostileMobHints.js';
+import { isAngry, isThreatEntity, type ThreatBody } from './hostileMobHints.js';
 import { ensureReflexLedger, type ReflexKind, type ReflexOutcome } from './reflexLedger.js';
 import { openSightLines, seesBodyAt, threatExposure } from './threatExposure.js';
 import { holdsWater } from './waterBlocks.js';
@@ -251,6 +251,11 @@ export interface FloorState {
   bridge?: ReflexBridge;
   meleeNextAt?: number;
   meleeNotedAt?: number;
+  /** Owner decision 11/10, the engagement rule: who struck the body lately (the server's `damage_event` cause, newest last), the next look, the last decision told. */
+  hitBy?: Array<{ id: number; name: string; at: number }>;
+  engageNextAt?: number;
+  engageNotedAt?: number;
+  engageNoted?: string;
   /** The End: the dragon reflex's next look, and when it last said it found no way out. */
   dragonNextAt?: number;
   dragonNotedAt?: number;
@@ -2100,7 +2105,7 @@ const MELEE_STEP_GAIN = 0.6;
 const MELEE_DETAIL_MAX = 160;
 /** How many of the nearest enemies have their exposure read at a look. */
 const MELEE_LOOKED_AT = 3;
-const MELEE_TIMEOUT_MS: Record<MeleeHand['kind'], number> = { step: 3000, block: 3000, shield: 3000, hit: 3500, pillar: 5000 };
+const MELEE_TIMEOUT_MS: Record<MeleeHand['kind'], number> = { step: 3000, block: 3000, shield: 3000, hit: 3500, pillar: 5000, engage: 4500 };
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
 
 /**
@@ -2153,7 +2158,13 @@ export type MeleeHand =
       /** film 11/10: a blow at an ordinary group (two or more walkers): only a heavy enemy stops it, not the count. */
       crowd?: boolean }
   /** r9, on a floor: `n` blocks up under the feet, out of a melee enemy's reach. */
-  | { kind: 'pillar'; block: string; n: number; detail: string };
+  | { kind: 'pillar'; block: string; n: number; detail: string }
+  /**
+   * Owner decision 11/10 (the engagement rule): enemies that are after the body, few enough (`engageRead`), are fought before they strike: blows at
+   * the nearest in reach, a short step toward one just out of reach, until it falls, goes, or the rule no longer holds. `creeper`: how the target
+   * creeper is fought (the shield up for its blast, or a blow and away); `recheck` reads the rule again from the running hand.
+   */
+  | { kind: 'engage'; target: FloorEntity; weapon: Item; detail: string; creeper?: 'shield' | 'away'; recheck?: () => EngageRead };
 
 /** run62 #5: a group or a heavy melee enemy is not answered by the floor's counterattack, at any health. */
 function counterRefused(threats: MeleeThreat[]): string | null {
@@ -2416,6 +2427,7 @@ function bodyCellsOf(position: { x: number; y: number; z: number }): Array<{ x: 
 /** Runs one melee hand as the work of a safety-lease action (`port` is the body's motor port): a step is walked, a block is placed. */
 export function runMelee(bot: FloorBody, port: FloorBody, hand: MeleeHand): Promise<{ success: boolean; result: string }> {
   if (hand.kind === 'hit') return runHit(bot, port, hand);
+  if (hand.kind === 'engage') return runEngage(bot, port, hand);
   if (hand.kind === 'pillar') return runPillarHand(bot, port, hand);
   if (hand.kind === 'shield') return runShieldBack(bot, port, hand);
   if (hand.kind === 'block' && (hand.upper || hand.cells?.length)) return runMeleeBarrier(bot, port, hand);
@@ -2607,6 +2619,217 @@ async function runPillarHand(bot: FloorBody, port: FloorBody, hand: Extract<Mele
   return { success: outcome.ok, result: outcome.text };
 }
 
+// ===== Owner decision 11/10: the engagement rule =====
+
+/**
+ * The owner's rule (11/10, after run 4's death among zombies the planner "accepted"): when at most two enemies that are after the body stand
+ * within ENGAGE_NEAR_M and at most four within ENGAGE_WIDE_M, the body strikes first, before it is struck, at any health, whatever the
+ * planner's accept list says. Creepers are fought too, but by their own technique (a blow and away, or the shield up for the blast). A neutral
+ * kind (enderman, piglin, zombified piglin, wolf, bee, iron golem, llama ...) is not an enemy until it is after the body (it struck in the last
+ * HIT_BY_MS, or an enderman shows its anger flag); killing one for its drops is the planner's choice. Outside the rule everything stays as it
+ * was: the low-health flee, the melee reflex's guarded hands, the last stand.
+ */
+export const ENGAGE_NEAR_M = 4;
+export const ENGAGE_WIDE_M = 8;
+export const ENGAGE_MAX_NEAR = 2;
+export const ENGAGE_MAX_WIDE = 4;
+/** A kind that struck the body is hostile to it for this long. */
+const HIT_BY_MS = 5000;
+const ENGAGE_GAP_MS = 150;
+const ENGAGE_HAND_MS = 4000;
+/** The longest a hand walks toward an enemy just out of reach (it never chases further). */
+const ENGAGE_APPROACH_MS = 1500;
+const ENGAGE_RECHECK_MS = 200;
+/** After a hand that struck nothing, the next look is this late (a hand that cannot strike must not cut the act again every tick). */
+const ENGAGE_IDLE_BACKOFF_MS = 1000;
+const ENGAGE_NOTE_GAP_MS = 4000;
+const ENGAGE_DETAIL_MAX = 200;
+/** Neutral until they are after the body (their own anger, or a blow taken from them). */
+const NEUTRAL_KINDS = new Set(['enderman', 'piglin', 'zombified_piglin', 'wolf', 'bee', 'iron_golem', 'llama', 'trader_llama', 'polar_bear', 'panda', 'goat', 'dolphin', 'fox', 'snow_golem']);
+/** Not fought by the body's rule: bosses and what the floor cannot win against. One of these near means the rule does not hold. */
+const NO_ENGAGE = new Set(['ender_dragon', 'wither', 'warden', 'elder_guardian', 'end_crystal']);
+const NOT_A_MOB = new Set(['player', 'projectile', 'object', 'orb', 'other', 'global']);
+
+export interface EngageRead {
+  /** Enemies after the body within ENGAGE_NEAR_M that can get at it (not sealed off), nearest first. */
+  near: MeleeThreat[];
+  n4: number;
+  n8: number;
+  /** The rule holds: at least one enemy near, at most ENGAGE_MAX_NEAR near, at most ENGAGE_MAX_WIDE within ENGAGE_WIDE_M, no boss. */
+  inRule: boolean;
+  /** Why it does not hold (empty when it does). */
+  why: string;
+}
+
+/** Whether this entity is hostile to the body now (after it): by kind, or for a neutral kind by a blow it struck or the anger it shows. */
+export function engageHostile(bot: FloorBody, state: { hitBy?: Array<{ id: number; name: string; at: number }> } | undefined, entity: FloorEntity, t = Date.now()): boolean {
+  const name = String(entity.name ?? '').toLowerCase();
+  if (!name || NOT_A_MOB.has(String(entity.type ?? ''))) return false;
+  if ((entity as { isValid?: boolean }).isValid === false || (typeof entity.health === 'number' && entity.health <= 0)) return false;
+  if (entity.id !== undefined && (state?.hitBy ?? []).some(hit => hit.id === entity.id && t - hit.at <= HIT_BY_MS)) return true;
+  if (NEUTRAL_KINDS.has(name)) return name === 'enderman' && isAngry(entity, bot.registry);
+  // A spider is neutral in daylight in the overworld (until it strikes).
+  const world = bot as unknown as { time?: { isDay?: boolean }; game?: { dimension?: string } };
+  if (name === 'spider' && world.time?.isDay === true && String(world.game?.dimension ?? 'overworld').includes('overworld')) return false;
+  return isThreat(bot, entity);
+}
+
+/** The rule's counts and verdict. Cheap: one pass over the entities, exposure read (cached) for the nearest few only. */
+export function engageRead(bot: FloorBody, state: FloorState | undefined, t = Date.now()): EngageRead {
+  const at = bot.entity?.position;
+  if (!at) return { near: [], n4: 0, n8: 0, inRule: false, why: '体の位置が不明' };
+  const within: MeleeThreat[] = [];
+  let boss = '';
+  for (const entity of others(bot)) {
+    const distance = entity.position.distanceTo(at);
+    if (distance > ENGAGE_WIDE_M || !engageHostile(bot, state, entity, t)) continue;
+    const name = String(entity.name ?? '').toLowerCase();
+    if (NO_ENGAGE.has(name)) { boss ||= name; continue; }
+    within.push({ entity, distance });
+  }
+  within.sort((a, b) => a.distance - b.distance);
+  const open: MeleeThreat[] = [];
+  within.forEach((threat, index) => {
+    // A walled-off enemy cannot get at the body; a bow's kind out of sight cannot shoot it: neither is counted.
+    if (index < 6) {
+      try {
+        const exposure = threatExposure(bot as any, threat.entity as any, t);
+        if (exposure === 'sealed' || outOfSightOfAShooter(String(threat.entity.name ?? '').toLowerCase(), exposure, threat.distance)) return;
+      } catch { /* unknown: counts */ }
+    }
+    open.push(threat);
+  });
+  const near = open.filter(threat => threat.distance <= ENGAGE_NEAR_M);
+  const n4 = near.length, n8 = open.length;
+  const why = boss ? `${boss} が近い` : n4 === 0 ? '4m内に敵が居ない' : n4 > ENGAGE_MAX_NEAR ? `4m内の敵が${n4}体（${ENGAGE_MAX_NEAR}体まで）` : n8 > ENGAGE_MAX_WIDE ? `8m内の敵が${n8}体（${ENGAGE_MAX_WIDE}体まで）` : '';
+  return { near, n4, n8, inRule: why === '', why };
+}
+
+/** How a creeper is fought: with the shield up for its blast, by a blow and away (the retreat takes the body when it swells), or not at all (low health, no shield). */
+function creeperStance(bot: FloorBody, entity: FloorEntity): 'shield' | 'away' | 'no' {
+  if (hasMeleeShield(bot)) return 'shield';
+  return (bot.health ?? 20) > FLEE_HEALTH && !creeperLit(entity) ? 'away' : 'no';
+}
+
+/** The hand the rule asks for: a blow at the nearest enemy in reach (a creeper last), or a short safe step toward one just out of reach; null with why when none. */
+export function engageChoice(bot: FloorBody, read: EngageRead, recheck?: () => EngageRead): { hand: Extract<MeleeHand, { kind: 'engage' }> | null; why: string } {
+  const weapon = bestMeleeWeapon(bot.inventory?.items() ?? []);
+  if (!weapon) return { hand: null, why: '打つ武器（剣・斧・道具）を持っていない' };
+  const isCreeper = (entity: FloorEntity) => String(entity.name ?? '').toLowerCase() === 'creeper';
+  const eligible = read.near.filter(({ entity }) => !isCreeper(entity) || creeperStance(bot, entity) !== 'no')
+    .sort((a, b) => Number(isCreeper(a.entity)) - Number(isCreeper(b.entity)) || a.distance - b.distance);
+  if (!eligible.length) return { hand: null, why: 'クリーパーだけで、盾が無く体力も低い（打たない）' };
+  let pick = eligible.find(({ entity }) => { try { return inReachOfBlow(bot, entity); } catch { return false; } });
+  const reached = !!pick;
+  if (!pick) {
+    pick = eligible[0];
+    const at = bot.entity?.position;
+    if (!at || !fleeHeadingSafe(bot, at, Math.atan2(at.x - pick.entity.position.x, at.z - pick.entity.position.z))) return { hand: null, why: '届かず、近づく道も安全でない' };
+  }
+  const creeper = isCreeper(pick.entity) ? creeperStance(bot, pick.entity) : undefined;
+  return { hand: { kind: 'engage', target: pick.entity, weapon, ...(creeper && creeper !== 'no' ? { creeper } : {}), ...(recheck ? { recheck } : {}),
+    detail: `${weapon.name} で${reached ? '先に打つ' : '近づいて打つ'}${creeper === 'shield' ? '（盾を構えて起爆に備える）' : creeper === 'away' ? '（一打ちして離れる）' : ''}` }, why: '' };
+}
+
+/**
+ * The rule's hand, run as a safety lease's work: blows at the nearest enemy in reach (the weapon's own wait between), a step toward one just out
+ * of reach (never over an unsafe heading, at most ENGAGE_APPROACH_MS), the shield up first when one is carried. It ends when its enemy is gone, no
+ * one is within reach, the rule no longer holds (the body's other reflexes decide then), or ENGAGE_HAND_MS is over; the next tick starts the next.
+ * A creeper: with a shield, the shield stays up through its fuse (the floor's step back from a lit creeper is held off while it is); without,
+ * one blow and the hand ends as soon as it swells, so that the floor's retreat runs it to a safe distance and the rule re-engages when it returns.
+ */
+async function runEngage(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, { kind: 'engage' }>): Promise<{ success: boolean; result: string }> {
+  const motor = port as any, raw = bot as any, weapon = hand.weapon;
+  if (bot.heldItem?.name !== weapon.name) {
+    try { await motor.equip(weapon, 'hand'); } catch (error) { rethrowIfTaken(error); }
+  }
+  let target = hand.target;
+  const liveOf = (entity: FloorEntity) => Object.values(bot.entities ?? {}).find(other => other === entity || (other?.id !== undefined && other.id === entity.id));
+  const nameOf = (entity: FloorEntity) => String(entity.name ?? '').toLowerCase();
+  let swung = 0, landed = 0, kills = 0, stopped = '', shielded = false, approachMs = 0;
+  const struck = new Set<number>();
+  const onHurt = (entity: any) => { if (entity?.id !== undefined && entity.id === target.id) landed++; };
+  const onDead = (entity: any) => { if (entity?.id !== undefined && struck.has(entity.id)) kills++; };
+  raw.on?.('entityHurt', onHurt); raw.on?.('entityDead', onDead);
+  const endGuard = beginEngagement(bot, [String(target.name ?? '')]);
+  delegateShield(bot, true);
+  let creeperHeld = false;
+  const until = Date.now() + ENGAGE_HAND_MS;
+  let lastRead = Date.now();
+  try {
+    // A creeper met by a blow and away has no shield up (it would only stand in the blast); anything else is met behind the shield when one is carried.
+    if (!(hand.creeper === 'away') && hasMeleeShield(bot)) {
+      shielded = await raiseMeleeShield(bot, port, target);
+      if (hand.creeper === 'shield') {
+        if (shielded) { creeperHeld = true; raw.creeperDuel = true; }
+        else if ((bot.health ?? 20) <= FLEE_HEALTH) stopped = '盾を構えられず、体力が低いのでクリーパーは打たない';
+      }
+    }
+    while (!stopped && Date.now() < until && !actionSignal(motor)?.aborted && (bot.health ?? 0) > 0) {
+      let live = liveOf(target);
+      const read = hand.recheck && Date.now() - lastRead >= ENGAGE_RECHECK_MS ? (lastRead = Date.now(), hand.recheck()) : null;
+      if (read && !read.inRule) { stopped = `規則の外になった（${read.why}）`; break; }
+      if (!live) {
+        // The enemy fell or left: another one in reach continues the hand, else it ends (the next tick looks again).
+        const next = read ?? hand.recheck?.() ?? null;
+        const again = next ? engageChoice(bot, next) : null;
+        if (again?.hand && again.hand.target !== target) { target = again.hand.target; live = liveOf(target); }
+        if (!live) { if (!swung) stopped = '相手が見えなくなった'; break; }
+      }
+      const creeper = nameOf(live) === 'creeper';
+      if (creeper && !creeperHeld && creeperLit(live)) { stopped = '点火したので離れる（床の反射に渡す）'; break; }
+      let reachable = false;
+      try { reachable = inReachOfBlow(bot, live); } catch { reachable = false; }
+      if (!reachable) {
+        const next = read ?? hand.recheck?.() ?? null;
+        const again = next ? engageChoice(bot, next) : null;
+        if (again?.hand && again.hand.target !== target) {
+          let inReach = false;
+          try { inReach = inReachOfBlow(bot, again.hand.target); } catch { inReach = false; }
+          if (inReach) { target = again.hand.target; continue; }
+        }
+        const at = bot.entity?.position;
+        if (!at || approachMs >= ENGAGE_APPROACH_MS || live.position.distanceTo(at) > ENGAGE_NEAR_M + 0.5) { stopped = '届かない'; break; }
+        if (!fleeHeadingSafe(bot, at, Math.atan2(at.x - live.position.x, at.z - live.position.z))) { stopped = '近づく道が安全でない'; break; }
+        try {
+          await motor.lookAt?.(live.position.offset(0, (live.height ?? 1.8) * 0.6, 0), true);
+          motor.setControlState('forward', true); motor.setControlState('sprint', false);
+        } catch (error) { rethrowIfTaken(error); }
+        const before = Date.now();
+        await abortableDelay(motor, 100);
+        approachMs += Date.now() - before;
+        continue;
+      }
+      try { releaseKeys(motor); } catch { /* a stronger owner holds the keys */ }
+      const readyUntil = Math.min(Date.now() + 1_000, (raw.meleeBlowAt ?? 0) + bladeWaitMs(weapon.name));
+      while (Date.now() < readyUntil && !actionSignal(motor)?.aborted) await abortableDelay(motor, Math.min(50, readyUntil - Date.now()));
+      if (actionSignal(motor)?.aborted) { stopped = '止められた'; break; }
+      live = liveOf(target);
+      if (!live || !bot.entity) continue;
+      try { reachable = inReachOfBlow(bot, live); } catch { reachable = false; }
+      if (!reachable) continue;
+      try { await motor.lookAt?.(live.position.offset(0, (live.height ?? 1.8) * 0.6, 0), true); } catch (error) { rethrowIfTaken(error); }
+      motor.attack(live); swung++; raw.meleeBlowAt = Date.now();
+      if (live.id !== undefined) struck.add(live.id);
+      await abortableDelay(motor, 120);
+      if (actionSignal(motor)?.aborted) { stopped = '止められた'; break; }
+      // Hit and away: a creeper that swells after the blow is left to the floor's retreat (no shield means no standing in the blast).
+      const after = liveOf(target);
+      if (after && nameOf(after) === 'creeper' && !creeperHeld && creeperLit(after)) { stopped = '打ったら点火した。離れる（床の反射に渡す）'; break; }
+    }
+  } finally {
+    try { releaseKeys(motor); } catch { /* a stronger owner holds the keys */ }
+    if (creeperHeld) raw.creeperDuel = false;
+    delegateShield(bot, false); endGuard();
+    raw.removeListener?.('entityHurt', onHurt); raw.removeListener?.('entityDead', onDead);
+  }
+  if (!swung) return { success: false, result: `打てなかった: ${stopped || '届かない'}` };
+  const left = liveOf(target);
+  let health: number | null = null;
+  try { health = left ? entityHealth(bot as never, left as never) : null; } catch { health = null; }
+  return { success: true, result: `先に打った ${swung} 回（${weapon.name}${shielded ? '・盾' : ''}）・当たった ${Math.min(landed, swung)}${health !== null ? `・${target.name} の残り体力 ${health}` : ''}${kills ? `（${kills} 体倒した）` : ''}${stopped ? `（${stopped}）` : ''}` };
+}
+
 export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floorConfig(), options: { fleeTickMs?: number; now?: () => number } = {}): void {
   if (bot.floorReflexes) return;
   const now = options.now ?? Date.now;
@@ -2620,6 +2843,12 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       if (!bot.entity || packet?.entityId !== bot.entity.id) return;
       const at = now(), keepFor = 2 * SHOT_WINDOW_MS;
       state.damageAt = [...(state.damageAt ?? []).filter(when => at - when <= keepFor), at];
+      // Who it was, by the cause entity (the ids the server names are the game's plus one): a neutral kind that struck is hostile for HIT_BY_MS.
+      const cause = Number(packet?.sourceCauseId ?? 0);
+      if (cause > 0) {
+        const id = cause - 1, struck = bot.entities?.[id];
+        state.hitBy = [...(state.hitBy ?? []).filter(hit => at - hit.at <= HIT_BY_MS), { id, name: String(struck?.name ?? '').toLowerCase(), at }];
+      }
       const shooter = projectileShooter(packet);
       if (shooter !== null) state.shots = [...(state.shots ?? []).filter(shot => at - shot.at <= keepFor), { at, shooter }];
     });
@@ -2652,13 +2881,13 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
   // it lasts): a one-second step cut that off and handed the body back standing (run 17: interrupted, then caught at 3 m). The route
   // search after the run is still cut: stuck there, the step back is the last thing between the body and the blast.
   // An arrow's step aside does not cut a fight of the planner's choosing against archers either (engagement with a kind that shoots,
-  // or with whatever is hostile: attack-*, combat, shoot-bow, accept-threat): the fight moves the body itself, and a step that ends
+  // or with whatever is hostile: attack-*, combat, shoot-bow; not an act's mere `accept`, 11/10): the fight moves the body itself, and a step that ends
   // the command hands the body back standing in the archer's line while the next decision is made. A fight with a zombie is still
   // stepped out of for a skeleton's arrow (a kind not taken on is an emergency as before). The low-health flee and a lit creeper
   // still come first.
   const baseAllow = config.wideThreats || budget
     ? (kind: 'creeper' | 'arrow') => kind === 'creeper' ? !(config.wideThreats && (bot as { fleeStraightRun?: boolean }).fleeStraightRun === true)
-      : ((!config.wideThreats || (!escapeRunning(bot) && !engagedWithAny(bot, ARCHERS))) && (!budget || budget.allow('arrow', bot.health ?? 20)))
+      : ((!config.wideThreats || (!escapeRunning(bot) && !engagedWithAny(bot, ARCHERS, { exceptAccepted: true }))) && (!budget || budget.allow('arrow', bot.health ?? 20)))
     : undefined;
   // A creeper fought on purpose (attack-continuously creeper, in iron with a sword: utils/creeperDuel) steps back from its own fuse; the
   // floor's step back would end the fight a second after it began (run 24: the planner's order was cut three times by a creeper 13 m off).
@@ -2691,7 +2920,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
   /**
    * r7, the cover (`coverChoice`): while the body burns (or, in an episode, keeps losing health) and a shooter in reach sees it, one hand that
    * cuts the line, told in the ledger with whether it is cut. Never over another safety lease, an escape, or the planner's blocks going in;
-   * a kind the planner fights by choice (accept, attack) is left out while health is above the flee's. True when a hand was started.
+   * a kind the planner fights by choice (attack, fight; an act's mere `accept` does not leave one out) is left out while health is above the flee's. True when a hand was started.
    */
   const coverTick = (): boolean => {
     if (!config.flee) return false;
@@ -2710,7 +2939,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     if (LAYING_HANDS.has(String((bot as { actHandNow?: string }).actHandNow ?? ''))) return false;
     const body = bot.entity; if (!body) return false;
     // run62 #9: 頭の戦いの間も cover は動く。外すのは、頭が戦うと選んだ種類の射手だけ（体力が逃走の境より上か、戦いの印がある間：ブレイズ狩りの退きは fight の手が持つ）。
-    const fought = health > FLEE_HEALTH || isHeadCombatActive(bot) ? (name: string) => engagedWithAny(bot, [name]) : undefined;
+    const fought = health > FLEE_HEALTH || isHeadCombatActive(bot) ? (name: string) => engagedWithAny(bot, [name], { exceptAccepted: true }) : undefined;
     let shot: { hits: number; shooters: CoverShooter[]; biggest: number } | null = null;
     if (mayBeShot) {
       try {
@@ -2802,7 +3031,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     state.meleeNextAt = t + MELEE_GAP_MS;
     const body = bot.entity; if (!body) return false;
     // The cheap looks first: an enemy within reach of a blow, then a rim or a hurt just now on a floor (the enemies' exposure is read after).
-    const fought = health > FLEE_HEALTH ? (name: string) => engagedWithAny(bot, [name]) : undefined;
+    const fought = health > FLEE_HEALTH ? (name: string) => engagedWithAny(bot, [name], { exceptAccepted: true }) : undefined;
     let candidates: MeleeThreat[] = [];
     try { candidates = meleeCandidatesInRange(bot, MELEE_BARRIER_PREP_RANGE, fought); } catch { return false; }
     if (!candidates.length) return false;
@@ -2889,6 +3118,81 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         state.busy = null;
         run.lastEnd = now();
         state.meleeNextAt = now();
+      });
+    return true;
+  };
+  /**
+   * Owner decision 11/10, the engagement rule (`engageRead`): at most two enemies that are after the body within 4 m and at most four within 8 m:
+   * the body strikes first (`runEngage`), before it is struck, at any health, whatever an act accepts. Over the planner's act (it is cut as a reflex)
+   * and any lower lease; never over lava, breath, another safety lease, the API's own escape commands, the planner's blocks going in, or a fight
+   * hand of the planner that is running. Outside the rule nothing is started here and the flee, the guarded melee hands and the last stand go on
+   * as before. The decision is told in the ledger with the counts (n4, n8) so that the next run can check it. True when a hand was started.
+   */
+  const engageTick = (): boolean => {
+    if (!config.flee) return false;
+    const t = now(), health = bot.health ?? 20;
+    if (health <= 0 || t < (state.engageNextAt ?? 0)) return false;
+    if (hasActiveSafetyLease(bot) || escapeRunning(bot) || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) return false;
+    if (LAYING_HANDS.has(String((bot as { actHandNow?: string }).actHandNow ?? ''))) return false;
+    if (isHeadCombatRunning(bot)) return false;
+    const body = bot.entity; if (!body) return false;
+    state.engageNextAt = t + ENGAGE_GAP_MS;
+    let read: EngageRead;
+    try { read = engageRead(bot, state, t); } catch { return false; }
+    // Nothing within 4 m that is after the body: nothing to say, nothing to do (every physics tick comes here).
+    if (!read.near.length) return false;
+    const counts = `n4=${read.n4} n8=${read.n8}`;
+    const who = meleeWho(body.position, read.near);
+    // The ledger hears of a decision only when it matters to the planner: the fights (the hand's own entry), the flee (its entry carries the counts) and a
+    // rule that did not hold for its counts above the flee's health. Other skips (a rim, no weapon, nothing reachable) are in the log.
+    const told = (decision: 'flee' | 'skip', why: string, ledgered: boolean) => {
+      if (t - (state.engageNotedAt ?? -Infinity) < ENGAGE_NOTE_GAP_MS) return;
+      state.engageNotedAt = t;
+      const text = `${who}: ${counts} decision=${decision}（${why}）`.slice(0, ENGAGE_DETAIL_MAX);
+      log.info(`⚔️ 交戦則 ${text}`);
+      if (ledgered) { try { ledger.end(Object.assign(ledger.begin('melee_none', '', ENGAGE_DETAIL_MAX), { detail: text }), 'failed'); } catch { /* a report */ } }
+    };
+    // Outside the rule the old logic decides: at the flee's health it runs (the flee's own entry carries the counts), above it the guarded hands (or nothing) as before.
+    const outside = (why: string, byCounts = false) => told(health <= FLEE_HEALTH ? 'flee' : 'skip', why, byCounts && health > FLEE_HEALTH);
+    if (!read.inRule) { outside(read.why, true); return false; }
+    // At the rim of a drop a blow's knock (or a blow taken) puts the body over it: the rim hands (a step off it, a block between) come first, as before.
+    try { const feetNow = feetCell(bot as never); if (feetNow && footingAt(bodyReader(bot as never), feetNow).count > 0) { outside('空所の縁に立っている（縁の手が先）'); return false; } } catch { /* unknown footing: the rule goes on */ }
+    // A kind the planner is fighting by choice (a fight skill's engagement, not an act's accept) is left to that fight above the flee's health, as the melee hand does.
+    const planned = health > FLEE_HEALTH ? (name: string) => engagedWithAny(bot, [name], { exceptAccepted: true }) : () => false;
+    const mine = (view: EngageRead): EngageRead => ({ ...view, near: view.near.filter(({ entity }) => !planned(String(entity.name ?? '').toLowerCase())) });
+    const recheck = () => mine(engageRead(bot, state, now()));
+    const open = mine(read);
+    if (!open.near.length) return false;
+    let choice: ReturnType<typeof engageChoice>;
+    try { choice = engageChoice(bot, open, recheck); } catch { return false; }
+    if (!choice.hand) { outside(choice.why); return false; }
+    const hand = choice.hand;
+    // A flee under way (its segments follow one another) ends here: the rule says fight.
+    const fleeing = state.fleeEpisode;
+    if (fleeing) { state.fleeEpisode = undefined; try { fleeing.end?.('cut'); } catch { /* a report must not change what the reflex did */ } }
+    const episode = state.melee && t - state.melee.lastEnd <= MELEE_EPISODE_MS ? state.melee : undefined;
+    const run = state.melee = episode ?? { since: t, hands: 0, lastEnd: t };
+    if (typeof hand.target.id === 'number') { run.target = hand.target.id; state.handTarget = { capability: 'floor-melee', target: hand.target.id, at: t }; }
+    run.lastKind = 'engage';
+    state.busy = 'flee';
+    log.warn(`⚔️ 交戦則 ${counts} decision=fight: ${who} ${hand.detail}`);
+    const handle = ledger.begin('melee', `${who}: ${counts} decision=fight ${hand.detail}`, ENGAGE_DETAIL_MAX);
+    void take('floor-melee', FLOOR_FLEE_PRIORITY, MELEE_TIMEOUT_MS.engage + 500, () => runEngage(bot, createMotorPort(bot), hand))
+      .then(result => {
+        const res = result as { success?: boolean; failureType?: string; result?: string } | undefined;
+        const done = !!res?.success;
+        let after = '';
+        try { const again = engageRead(bot, state, now()); after = ` 今 n4=${again.n4} n8=${again.n8}`; } catch { /* the line stands without it */ }
+        handle.detail = `${who}: ${counts} decision=fight ${done ? String(res?.result ?? hand.detail) : `（できなかった: ${String(res?.result ?? '').slice(0, 60)}）`}${after} 体力${Math.round((bot.health ?? 0) * 10) / 10}`.slice(0, ENGAGE_DETAIL_MAX);
+        ledger.end(handle, done ? 'done' : res?.failureType === 'interrupted' ? 'cut' : 'failed');
+        // A hand that struck nothing waits a moment before the next, so that it does not cut the planner's act again every tick.
+        if (!done && res?.failureType !== 'interrupted') state.engageNextAt = now() + ENGAGE_IDLE_BACKOFF_MS;
+      }, () => { ledger.end(handle, 'failed'); state.engageNextAt = now() + ENGAGE_IDLE_BACKOFF_MS; })
+      .catch(() => undefined)
+      .finally(() => {
+        state.busy = null;
+        run.lastEnd = now();
+        state.engageNextAt = Math.max(state.engageNextAt ?? 0, now());
       });
     return true;
   };
@@ -3084,6 +3388,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     // end1108h21: a blaze at contact strikes by hand; the cover's seals do nothing against it. The melee hand (a blow back) goes first then.
     if (!isHeadCombatRunning(bot) && contactShooterNear(bot) && meleeTick()) return;
     if (coverTick()) return;
+    // Owner decision 11/10: inside the engagement rule the body strikes first, at any health, before the flee and the guarded hands below.
+    if (engageTick()) return;
     // r8: a melee enemy near, at the rim of a drop (or hurting the body on a floor): one minimal hand, before the flee and the last stand.
     // Run 43: the melee hand waits only for a fight that runs (`isHeadCombatRunning`), not for the grace after one ended.
     // film 11/10 (15:40, 16:24): at low health the melee hand went first and spent its three hands (a pillar that would not go up, a wall
@@ -3098,7 +3404,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         // A new episode is one ledger entry and one of the two in 20 s; its later segments (`continuing`) are part of it.
         if (!threat.continuing) {
           state.engagements.flee = (state.engagements.flee ?? 0) + 1; (state.fleeStarts ??= []).push(now());
-          const handle = ledger.begin('flee', '低体力のため敵から離れた');
+          let counts = ''; try { const read = engageRead(bot, state, now()); counts = `（n4=${read.n4} n8=${read.n8} decision=flee: ${read.why || '交戦則の手が無い'}）`; } catch { /* a report */ }
+          const handle = ledger.begin('flee', `低体力のため敵から離れた${counts}`, 120);
           state.fleeEpisode = { startedAt: now(), origin: bot.entity!.position.clone(), segments: 0, stalls: 0, outcome: 'done', end: outcome => { ledger.end(handle, outcome); } };
           log.warn(`🏃 低体力（${bot.health}）で敵が近い（${threat.threats.length}体、最寄り${threat.nearest.toFixed(1)}m）: 離れる`);
         }

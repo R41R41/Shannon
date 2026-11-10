@@ -76,13 +76,14 @@ describe('run62 #5: groups and heavy melee enemies are defended against at full 
     expect(placed.map((cell: Vec3) => cell.y)).toEqual([65, 65, 65, 64, 64, 64]);
   });
 
-  it('does not start an ordinary single enemy counterattack just because it is in the same 4 m range', () => {
+  it('11/10: one ordinary enemy in the 4 m range is no longer left alone: the engagement rule strikes it first (its own hand, no barrier, no hand of the old episode)', async () => {
     const { bot } = fixture([mob(7, 'zombie', 3.8)], { corridor: true });
     installFloorReflexes(bot, floorConfig({}), { fleeTickMs: 1 });
     bot.emit('physicsTick');
-    expect(bot.floorReflexes.melee).toBeUndefined();
+    // 3.3 m from the eye: out of reach (3), so the hand steps toward it first; it never lays a block for one enemy.
+    await vi.waitFor(() => expect(bot.floorReflexes.melee?.lastKind).toBe('engage'));
+    expect(bot.floorReflexes.melee.hands).toBe(0);
     expect(bot.placeBlock).not.toHaveBeenCalled();
-    expect(bot.attack).not.toHaveBeenCalled();
   });
 
   it.each([

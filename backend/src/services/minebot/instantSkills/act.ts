@@ -537,8 +537,10 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   };
   const shotAt = () => { const line = lineFacts(); return `${line}${hideoutFact(line)}`; };
   let crossedByWalk = false;
-  // Hurt: health lost from the highest it was in this act (loss while a kind she accepted is within 6 m is not counted, except on a wait:
-  // end1108h20 waited 15 s accepting blazes and went 20 → 14.8 from their fireballs with nothing said); fall: the drop of one airborne spell.
+  // Hurt: health lost from the highest it was in this act (loss while a kind she accepted is within 6 m is not counted only in a fight or an attack
+  // hand, whose aim is to trade blows; in any other hand (go, dig, wait ...) `accept` means "do not stop because it is near", not "do not count the blows":
+  // run 4 (11/9) walked and dug 2.5 s accepting a zombie that hit 10 HP, and end1108h20 waited 15 s accepting blazes: 20 → 14.8 with nothing said);
+  // fall: the drop of one airborne spell.
   let highWater = Number(bot.health ?? 20);
   let peakY: number | null = null, hurtAt: number | null = null;
   /** The fall that stops the act (4 cells); a go hand that may drop further (`maxDrop`) is let fall what it may. */
@@ -550,7 +552,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const hurtOrFall = () => {
     const health = Number(bot.health ?? 20);
     // fill owns its HP floor and return budget, including during its go; a damage notice must not cut that return short.
-    highWater = handNow?.do === 'fill' || (handNow?.do !== 'wait' && acceptedNear()) ? health : Math.max(highWater, health);
+    highWater = handNow?.do === 'fill' || ((handNow?.do === 'fight' || handNow?.do === 'attack') && acceptedNear()) ? health : Math.max(highWater, health);
     if (highWater - health >= 4) {
       hurtAt ??= Date.now();
       if (Date.now() - hurtAt >= HURT_GRACE_MS && !reflexHeld(bot)) return stopWith(`被弾: 体力 ${Math.round(highWater)} → ${Math.round(health)}${shotAt()}`, 'damage_taken');
@@ -596,7 +598,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const timer = setInterval(watch, options.tickMs ?? 100);
   // The kinds accepted are a fight the planner chose for this act: the dig guard lets them see the body, the arrow's step aside leaves
   // archers among them alone (engagement), and stopIf does not count them.
-  const endAccepted = accepted.size ? beginEngagement(nativeActionHost(bot), [...accepted]) : () => undefined;
+  const endAccepted = accepted.size ? beginEngagement(nativeActionHost(bot), [...accepted], { accept: true }) : () => undefined;
   const signal = actionSignal(bot);
   // A reflex's lease aborts the action with its own name (preemptLowerPriorityActions); anything else is the command's end.
   const onCut = () => {

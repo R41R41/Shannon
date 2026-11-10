@@ -150,7 +150,9 @@ export class BodyQueue {
       // R3-2: after a danger nothing waiting starts, whatever it says it depends on. One exception (end1109f09: four blaze attacks in a row were
       // dropped while the blaze stood 4m away, and the head could never strike): when the danger is the fight's own target still alive, an item
       // whose hands fight or attack is the answer to that danger, so it stays.
-      if (danger && !(danger.startsWith('fight_target:') && fightsBack(command))) {
+      // 11/10 (run 4, D4): the same for an item's own stopIf (`stop_if_hostile` ...) and a hit (`damage_taken`): the head queues the attack because
+      // an enemy is on the body, and the stop that told so must not throw the answer away. A reflex, a fall and the rest still drop everything.
+      if (danger && !(fightsBack(command) && (danger.startsWith('fight_target:') || danger.startsWith(DANGER_STOP_PREFIX) || danger === 'damage_taken'))) {
         dropped.push({ command, code: 'depends_failed', item: failedItem, danger });
         gone.set(item, { queue, item });
         continue;

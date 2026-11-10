@@ -221,13 +221,13 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
     await rounds(fight.bot, clock, 1);
     expect(fight.bot.__swings).toEqual([]);
     for (const name of ['blaze', 'skeleton', 'creeper']) {
-      // A blaze within 2.5 m is struck since end1108h21 (CONTACT_SHOOTERS); 2.7 m off it is still only a shooter.
+      // 11/10 (the owner's engagement rule): an enemy that is after the body within 4 m is struck first, a shooter and a creeper (shield up) included;
+      // before, only a blaze within 2.5 m was (CONTACT_SHOOTERS) and a creeper never.
       const mob = { id: 3, name, type: 'hostile', height: 1.8, width: 0.6, position: new Vec3(name === 'blaze' ? 3.2 : 2.6, 64, 0.5) };
-      const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, SHIELD], mobs: { 3: mob }, now: () => clock.at });
+      const { bot } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, SHIELD], mobs: { 3: mob }, now: () => clock.at });
       await hurtTo(bot, clock, 11);
       await rounds(bot, clock, 1);
-      expect(bot.__swings, name).toEqual([]);
-      expect(meleeLines(ledger), name).toHaveLength(0);
+      expect(bot.__swings.length, name).toBeGreaterThan(0);
     }
   }, 20_000);
 

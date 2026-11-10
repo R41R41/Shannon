@@ -18,6 +18,8 @@ const log = createLogger('Minebot:ReflexLedger');
 /**
  * melee (r8): a hand toward a melee enemy near (a step off a drop's rim, a block between, a step away: floorReflexes `meleeChoice`);
  * melee_none: such an enemy near with no hand to make, or the episode's hands used up (a fact only: it does not stop an act).
+ * 11/10 (the owner's engagement rule): a fight begun before the body was struck reads "近接の zombie #7 2.1m: n4=1 n8=2 decision=fight ..." (n4: enemies after the body within 4 m, n8: within 8 m);
+ * a rule that did not hold above the flee's health is a `melee_none` with decision=skip, and the low-health flee's own entry carries n4, n8 and decision=flee.
  * r9: on a floor the same kind also says a blow back ("打ち返した 2 回（iron_sword）・当たった 2・相手の残り体力 4"). run62 #5 adds the guarded step and two-high barrier; its pillar says "3段積んで上がった".
  */
 export type ReflexKind = 'retreat' | 'eat' | 'armor' | 'flee' | 'pickup' | 'budget' | 'shield' | 'fireball' | 'knock' | 'lava' | 'magma' | 'breath' | 'cover' | 'cover_none' | 'melee' | 'melee_none' | 'wall';

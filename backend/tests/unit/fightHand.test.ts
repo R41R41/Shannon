@@ -360,11 +360,13 @@ describe('fight on the practice field: who holds the body', () => {
     expect(json.stoppedBy).toBe('reflex');
     expect(lineOf(json)).toMatch(/fight 止まった reflex: zombie #100.*与えた打撃 \d+（振り \d+）.*体: 反射 /u);
     expect(json.lines[1].status).toBe('skipped');
-    expect(field.stats.swings).toBe(after.swings);
-    expect(field.mobs[0].health).toBe(after.health);
+    // 11/10 (the owner's engagement rule): one zombie in reach is fought out by the reflex even at this health, not run from. The act's hand does
+    // not strike meanwhile (it ended as `reflex`); the blows after its receipt are the reflex's own hand (`engage`).
+    expect(field.stats.swings).toBeGreaterThanOrEqual(after.swings);
+    expect(field.mobs[0].health).toBeLessThanOrEqual(after.health);
     expect(field.stats.keyWrites.length).toBeGreaterThanOrEqual(writesAtEnd);
-    expect(isEngaged(field.bot)).toBe(false);
-    expect(field.bot.floorReflexes.fleeEpisode !== undefined || field.stats.keyWrites.some(write => write.control === 'sprint' && write.on)).toBe(true);
+    expect(field.bot.floorReflexes.melee?.lastKind).toBe('engage');
+    expect(field.bot.floorReflexes.fleeEpisode).toBeUndefined();
   }, 60_000);
 
   it('does not begin while a reflex holds the body: says `reflex` at once, writes no key, strikes nothing', async () => {

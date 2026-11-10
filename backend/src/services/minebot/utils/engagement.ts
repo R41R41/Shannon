@@ -31,7 +31,7 @@ export function engagementOf(skillName: string, args: unknown[]): string[] | nul
   return named.split(',').map(name => name.trim()).filter(Boolean);
 }
 
-interface Engaging { engagements?: Array<{ kinds: string[]; until?: number }> }
+interface Engaging { engagements?: Array<{ kinds: string[]; until?: number; accept?: boolean }> }
 
 /**
  * A fight (or a stay among them) the planner chooses for a time, without a skill of its own running the whole
@@ -53,18 +53,22 @@ export function timedEngagement(bot: object | null | undefined, now = Date.now()
   return entry ? { kinds: entry.kinds.map(kind => kind === ANY ? '敵対Mobすべて' : kind), secondsLeft: Math.max(0, Math.round((entry.until! - now) / 1000)) } : null;
 }
 
-function live(bot: object | null | undefined, now = Date.now()): Array<{ kinds: string[]; until?: number }> {
+function live(bot: object | null | undefined, now = Date.now()): Array<{ kinds: string[]; until?: number; accept?: boolean }> {
   const list = (bot as Engaging | null | undefined)?.engagements;
   if (!list?.length) return [];
   for (let index = list.length - 1; index >= 0; index--) if (list[index].until !== undefined && list[index].until! <= now) list.splice(index, 1);
   return list;
 }
 
-/** A fight begins. The returned call ends it, once. */
-export function beginEngagement(bot: object, kinds: string[] | null): () => void {
+/**
+ * A fight begins. The returned call ends it, once. `accept` marks the kinds an act accepts (its `accept` list): "do not stop the act because
+ * this kind is near", not a fight the planner chose. The dig guard still lets such a kind see the body, but the body's own defence (the melee
+ * reflex, the cover, the arrow's step aside) is not silenced for it (owner decision 11/10: accept must not silence self-defence).
+ */
+export function beginEngagement(bot: object, kinds: string[] | null, options: { accept?: boolean } = {}): () => void {
   if (!kinds?.length) return () => {};
   const list = ((bot as Engaging).engagements ??= []);
-  const entry = { kinds };
+  const entry = { kinds, ...(options.accept ? { accept: true } : {}) };
   list.push(entry);
   return () => { const index = list.indexOf(entry); if (index >= 0) list.splice(index, 1); };
 }
@@ -74,10 +78,14 @@ export function isEngaged(bot: object | null | undefined): boolean {
   return live(bot).length > 0;
 }
 
-/** Whether one of these kinds (or whatever is hostile) is being fought by choice now. */
-export function engagedWithAny(bot: object | null | undefined, kinds: Iterable<string>): boolean {
+/**
+ * Whether one of these kinds (or whatever is hostile) is being fought by choice now. `exceptAccepted`: leave out what an act merely accepts
+ * (`beginEngagement`'s `accept`), as the body's own defence does.
+ */
+export function engagedWithAny(bot: object | null | undefined, kinds: Iterable<string>, options: { exceptAccepted?: boolean } = {}): boolean {
   const names = [...kinds].map(kind => kind.toLowerCase());
-  return live(bot).some(entry => entry.kinds.includes(ANY) || entry.kinds.some(fought => names.some(name => name.includes(fought))));
+  return live(bot).some(entry => !(options.exceptAccepted && entry.accept)
+    && (entry.kinds.includes(ANY) || entry.kinds.some(fought => names.some(name => name.includes(fought)))));
 }
 
 /** Whether this kind is one being fought by choice now. */
