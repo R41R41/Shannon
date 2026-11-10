@@ -4,6 +4,7 @@ import { itemsPerFuel } from '../fuelValues.js';
 import pathfinder from 'mineflayer-pathfinder';
 import { getNear } from './getNear.js';
 import { goWith, walkMovements, type WayNotes } from './walk.js';
+import { noteStationContents } from './stationLedger.js';
 import { blockAt, cellText, eyeDistance, findItem, guard, inventoryCount, placeText, stopped, StepStopped, USE_REACH, wait,
   type StepContext, type StepOutcome } from './common.js';
 
@@ -168,6 +169,7 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     const fueled = input ? Math.min(input.count, Math.max(burning ? 1 : 0, Math.floor(coverage + 1e-9))) : 0;
     const unfueled = input ? input.count - fueled : 0;
     const remaining = input && burning !== null && state.progress !== null ? Math.max(0, fueled * secondsEach - progress * secondsEach) : null;
+    noteStationContents(bot, cell, !!(input || output));
     const host = bot as { activeFurnaces?: any[] };
     // The batch written before is kept when this reading cannot rewrite it: the window gave no burn or progress packet (an early take is a short look and
     // often has none) or there is output not taken yet. Dropping it would hide the furnace from the ledger and let the pick-up of placed furnaces break one that
