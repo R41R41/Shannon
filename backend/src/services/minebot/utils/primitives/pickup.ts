@@ -24,8 +24,9 @@ export interface PickupArgs {
   radius?: number; ids?: number[]; item?: string;
   /**
    * Issue 3 (run 5: a raw_iron behind 1-2 blocks of rock cost 3 minutes and 14 queue items): what the hand may dig to reach a drop it cannot walk to.
-   * Left out: stone and dirt (and the ordinary ore that stands on the straight line), DIG_PER_DROP a drop and DIG_PER_HAND in all. Given, it is the whole
-   * rule (an empty list digs nothing) and `maxDig` the most cells for the hand.
+   * Left out: stone and dirt (and the ordinary ore that stands on the straight line), DIG_PER_DROP a drop and DIG_PER_HAND in all, but only for a drop the
+   * hand was asked for by id or by name; a hand that takes whatever lies within a radius, and the hands that pick up after their own work (mine, dig, barter),
+   * dig nothing unless they are given canDig. Given, it is the whole rule (an empty list digs nothing) and `maxDig` the most cells for the hand.
    */
   canDig?: readonly string[]; maxDig?: number;
 }
@@ -44,6 +45,10 @@ const TAKE_ABOVE = 1.8 + 0.5;
 const DIG_PER_DROP = 3;
 const DIG_PER_HAND = 6;
 const DIG_SECONDS = 12;
+/** The most seconds one hand spends in all on digging to drops (review 1111: a hand of clustered drops must not stand in `go` 12 s a drop). */
+const DIG_HAND_SECONDS = 20;
+/** A drop this close to one the dig already failed on (and dug nothing) is not tried again by this hand (m). */
+const DIG_FAILED_NEAR = 4;
 const DIG_WORDS = ['stone', 'dirt'];
 /** An ore that stands on the line to the drop is dug as rock is; the rare ones (diamond, emerald, ancient debris) are not. */
 const ORDINARY_ORE = /^(?:deepslate_)?(?:iron|coal|copper|gold|redstone|lapis)_ore$/u;
@@ -138,11 +143,11 @@ async function nudgeToward(ctx: StepContext, where: () => { x: number; y: number
 }
 
 /** The solid cells in the box round the way from the body to the drop (read before and after a go: what is no longer solid was dug). */
-function solidCellsAround(bot: any, from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }): Array<{ at: Cell; name: string }> {
+function solidCellsAround(bot: any, from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }): Array<{ at: Cell; name: string }> | null {
   const lo = { x: Math.floor(Math.min(from.x, to.x)) - 1, y: Math.floor(Math.min(from.y, to.y)) - 1, z: Math.floor(Math.min(from.z, to.z)) - 1 };
   const hi = { x: Math.floor(Math.max(from.x, to.x)) + 1, y: Math.floor(Math.max(from.y, to.y)) + 3, z: Math.floor(Math.max(from.z, to.z)) + 1 };
   const out: Array<{ at: Cell; name: string }> = [];
-  if ((hi.x - lo.x + 1) * (hi.y - lo.y + 1) * (hi.z - lo.z + 1) > 600) return out;
+  if ((hi.x - lo.x + 1) * (hi.y - lo.y + 1) * (hi.z - lo.z + 1) > 600) return null; // too wide to read twice: the cells are then counted from go's own work
   for (let x = lo.x; x <= hi.x; x++) for (let y = lo.y; y <= hi.y; y++) for (let z = lo.z; z <= hi.z; z++) {
     let block: any = null;
     try { block = bot.blockAt?.(new Vec3(x, y, z), false); } catch { block = null; }
@@ -151,26 +156,34 @@ function solidCellsAround(bot: any, from: { x: number; y: number; z: number }, t
   return out;
 }
 
-/** What one hand has dug to reach drops: the cells, and how many more it may dig. */
-interface DigLedger { dug: Array<{ at: Cell; name: string }>; left: number }
+/**
+ * What one hand has dug to reach drops: the cells (and `unlisted`: cells go dug where the box was too wide to name them), how many more it may dig, the
+ * seconds it may still spend, and where a dig dug nothing and failed. `enabled`: the hand may dig at all.
+ */
+interface DigLedger { dug: Array<{ at: Cell; name: string }>; unlisted: number; left: number; seconds: number; failedAt: Array<{ x: number; y: number; z: number }>; enabled: boolean }
+/** A dig's result: `refused` when the body did not try (nothing to report as a failure to dig), else the words of why it stopped ('' when it reached). */
+interface DigResult { why: string; refused: boolean }
 
 /**
  * Issue 3: digs through a little rock to a drop the walk cannot reach, by the hand `go` (its guards: no lava or water behind the cell, no gravel above
  * it, nothing exposed that is not let in, no ore that is not named, no protected block). Tried once a drop. '' when it dug or had nothing to say; else
  * the words of why it did not (or stopped).
  */
-async function digToDrop(ctx: StepContext, args: PickupArgs, item: { x: number; y: number; z: number }, ledger: DigLedger): Promise<string> {
+async function digToDrop(ctx: StepContext, args: PickupArgs, item: { x: number; y: number; z: number }, ledger: DigLedger): Promise<DigResult> {
   const bot = ctx.bot;
+  const none: DigResult = { why: '', refused: true };
   const body = bot.entity?.position;
-  if (!body) return '';
+  if (!body) return none;
   const cell = { x: Math.floor(item.x), y: Math.floor(item.y + 1e-3), z: Math.floor(item.z) };
   const here = (() => { try { return bot.blockAt?.(new Vec3(cell.x, cell.y, cell.z), false) ?? null; } catch { return null; } })();
-  if (!here) return '';
-  if (here.boundingBox === 'block') return '';
-  if (here.name === 'water' || here.name === 'lava') return `落とし物の所が ${here.name} なので掘って近づかない`;
-  if (args.canDig && !args.canDig.length) return '';
-  if (ledger.left <= 0) return `この手で掘る上限に着いている（${ledger.dug.length} マス）`;
-  if (ctx.deadline - Date.now() < 3000) return '';
+  if (!here) return none;
+  if (here.boundingBox === 'block') return none;
+  if (here.name === 'water' || here.name === 'lava') return { why: `落とし物の所が ${here.name} なので掘らない`, refused: true };
+  // In flowing water the body is carried: a dig would stand in go for nothing (review 1111).
+  if (bot.entity?.isInWater) return none;
+  if (ledger.left <= 0) return { why: `この手で掘る上限に着いている（${ledger.dug.length + ledger.unlisted} マス）`, refused: true };
+  if (ledger.seconds < 3 || ctx.deadline - Date.now() < 3000) return none;
+  if (ledger.failedAt.some(at => Math.hypot(at.x - item.x, at.y - item.y, at.z - item.z) <= DIG_FAILED_NEAR)) return none;
   const words = args.canDig ? [...args.canDig] : [...DIG_WORDS];
   if (!args.canDig) {
     let between: Cell[] = [];
@@ -180,19 +193,25 @@ async function digToDrop(ctx: StepContext, args: PickupArgs, item: { x: number; 
   }
   const before = solidCellsAround(bot, body, item);
   const maxDig = Math.min(DIG_PER_DROP, ledger.left);
+  const seconds = Math.min(DIG_SECONDS, ledger.seconds, Math.max(3, Math.floor((ctx.deadline - Date.now()) / 1000)));
+  const started = Date.now();
   let out: StepOutcome;
-  try { out = await go(ctx, { goals: [cell], range: 0.5, canDig: words, maxDig, seconds: Math.min(DIG_SECONDS, Math.max(5, Math.floor((ctx.deadline - Date.now()) / 1000))) }); }
+  try { out = await go(ctx, { goals: [cell], range: 0.5, canDig: words, maxDig, seconds }); }
   catch (error) {
     if (ctx.stop.aborted || error instanceof StepStopped || /interrupted/iu.test(String((error as Error)?.message))) throw error;
     out = stopped(bot, 'go_failed', `go が例外で止まった: ${String((error as Error)?.message ?? error).slice(0, 60)}`, cell);
   }
-  const dug = before.filter(cellBefore => {
+  ledger.seconds -= Math.ceil((Date.now() - started) / 1000);
+  const dug = (before ?? []).filter(cellBefore => {
     try { return bot.blockAt?.(new Vec3(cellBefore.at.x, cellBefore.at.y, cellBefore.at.z), false)?.boundingBox !== 'block'; } catch { return false; }
   });
+  const worked = Number(out.data?.work?.dug ?? 0);
   ledger.dug.push(...dug);
-  ledger.left -= Math.max(dug.length, Number(out.data?.work?.dug ?? 0));
-  if (out.ok) return '';
-  return `${out.reason ?? 'go'}: ${out.text.length > 90 ? `${out.text.slice(0, 90)}…` : out.text}`;
+  if (!before) ledger.unlisted += worked;
+  ledger.left -= Math.max(dug.length, worked);
+  if (out.ok) return { why: '', refused: false };
+  if (!dug.length && !worked) ledger.failedAt.push({ x: item.x, y: item.y, z: item.z });
+  return { why: `${out.reason ?? 'go'}: ${out.text.length > 90 ? `${out.text.slice(0, 90)}…` : out.text}`, refused: false };
 }
 
 export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOutcome> {
@@ -219,7 +238,10 @@ export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOu
   const previous = navigator?.movements;
   navigator?.setMovements(walkMovements(bot, true));
   const missed: string[] = [];
-  const ledger: DigLedger = { dug: [], left: args.canDig && !args.canDig.length ? 0 : Math.max(0, Math.min(DIG_PER_HAND, Math.floor(args.maxDig ?? DIG_PER_HAND))) };
+  // Dug for a drop asked for by id or by name, or when canDig was given; a radius alone digs nothing (it takes every junk drop in reach, and shelters have walls).
+  const mayDig = args.canDig ? args.canDig.length > 0 : Boolean(args.ids?.length || named);
+  const ledger: DigLedger = { dug: [], unlisted: 0, left: mayDig ? Math.max(0, Math.min(DIG_PER_HAND, Math.floor(args.maxDig ?? DIG_PER_HAND))) : 0, seconds: DIG_HAND_SECONDS, failedAt: [], enabled: mayDig };
+  ledger.enabled = ledger.enabled && ledger.left > 0;
   const digTried = new Set<number>();
   const missFull = (name: string) => { const full = `${name}（持ち物が満杯）`; if (!missed.includes(full)) missed.push(full); };
   const notes: WayNotes = { opened: [], leaves: 0 };
@@ -262,16 +284,19 @@ export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOu
             const why = gone.timedOut ? '時間切れ' : gone.stuck ? '4秒進めず' : /no path/iu.test(String((gone.error as Error)?.message)) ? '掘らない道が無い' : 'そこまで着けない';
             if (!withinTake(bot.entity.position, item)) {
               // Issue 3 (run 5: three minutes lost to a raw_iron behind one stone): the body digs 1-3 blocks of rock itself, once for each drop, with the guards of go and dig.
-              let digWhy = '';
-              if (!digTried.has(entity.id) && !inBlock && !onMagma) {
+              let dig: DigResult = { why: '', refused: true };
+              if (ledger.enabled && !digTried.has(entity.id) && !inBlock && !onMagma) {
                 digTried.add(entity.id);
-                digWhy = await digToDrop(ctx, args, item, ledger);
+                dig = await digToDrop(ctx, args, item, ledger);
                 try { navigator?.setMovements(walkMovements(bot, true)); } catch { /* the walk's movements come back with the next hand */ }
                 if (!bot.entities?.[entity.id]) break; // taken on arrival
               }
               const now = where();
-              if (withinTake(bot.entity.position, now)) continue; // the dig brought it into the box: it is waited for below
-              missed.push(`${name}（${why}。${itemFacts(bot, now)}${blocked ? `。${blocked.text}` : ''}${digWhy ? `。掘って近づこうとして止まった ${digWhy}` : ''}）`); unreachable = true; break;
+              // The dig brought it into the box: it falls through to the wait below (as a drop the walk reached does), not to a miss.
+              if (!withinTake(bot.entity.position, now)) {
+                const digWords = dig.why ? (dig.refused ? `。${dig.why}` : `。掘って近づこうとして止まった ${dig.why}`) : '';
+                missed.push(`${name}（${why}。${itemFacts(bot, now)}${blocked ? `。${blocked.text}` : ''}${digWords}）`); unreachable = true; break;
+              }
             }
           }
         }
@@ -291,10 +316,11 @@ export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOu
   const after = new Map<string, number>();
   for (const item of bot.inventory?.items?.() ?? []) after.set(item.name, (after.get(item.name) ?? 0) + item.count);
   for (const [name, count] of after) { const diff = count - (before.get(name) ?? 0); if (diff > 0) { gained.push(`${name}+${diff}`); gotCount += diff; } }
-  const dugWords = ledger.dug.length ? `${ledger.dug.slice(0, 4).map(one => `${cellText(one.at)} ${one.name}`).join('・')}${ledger.dug.length > 4 ? ` ほか${ledger.dug.length - 4}` : ''} を ${ledger.dug.length} マス掘った` : '';
+  const dugAll = ledger.dug.length + ledger.unlisted;
+  const dugWords = dugAll ? `${ledger.dug.slice(0, 4).map(one => `${cellText(one.at)} ${one.name}`).join('・')}${ledger.dug.length > 4 ? ` ほか${ledger.dug.length - 4}` : ''}${ledger.unlisted ? `${ledger.dug.length ? ' ほか' : ''}場所を挙げられない ${ledger.unlisted} マス` : ''} を ${dugAll} マス掘った` : '';
   const way = [wayWords(notes), dugWords].filter(Boolean).join('、');
   const text = `拾った: ${gained.join(' ') || 'なし'}${missed.length ? `。拾えなかった: ${missed.join('、')}` : ''}${way ? `（途中で${way}）` : ''}`;
-  const data = ledger.dug.length ? { dug: ledger.dug } : undefined;
+  const data = dugAll ? { dug: ledger.dug, dugCount: dugAll } : undefined;
   // Continue contracts (1): progress in items (the items the pack gained, counted from the pack; what was left lying is in the text).
   const progress = { unit: 'item' as const, done: gotCount, left: null };
   if (!gained.length && missed.length) return { ...stopped(bot, freeSlots(bot) === 0 ? 'inventory_full' : 'not_picked', `${text}（持ち物 ${packLine(bot).length > 200 ? `空き${freeSlots(bot)}枠` : packLine(bot)}）`, feetCell(bot)!), progress, ...(data ? { data } : {}) };

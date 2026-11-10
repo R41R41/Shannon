@@ -123,10 +123,10 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       && dugCells.some(cell => Math.hypot(entity.position.x - cell.x - 0.5, entity.position.y - cell.y, entity.position.z - cell.z - 0.5) <= 3.5)) as any[];
     if (!drops.length) return 'ok';
     if (at) drops.sort((a, b) => a.position.distanceTo(at) - b.position.distanceTo(at));
-    // Issue 3: a drop behind rock is dug to like any road cell: the road the hand was given is the rule and its budget what is left of it (none given: pickup's own few cells).
+    // Issue 3: a drop behind rock is dug to like any road cell: the road the hand was given is the rule and its budget what is left of it (none given: no dig, as mine's own contract says).
     const roadLeft = roadWords.length ? Math.max(0, roadBudget - result.road) : undefined;
-    const picked = await pickup(ctx, { ids: drops.map(entity => entity.id), ...(roadWords.length ? { canDig: roadLeft ? roadWords : [], maxDig: roadLeft } : {}) });
-    result.road += picked.data?.dug?.length ?? 0;
+    const picked = await pickup(ctx, { ids: drops.map(entity => entity.id), ...(roadWords.length ? { canDig: roadLeft ? roadWords : [], maxDig: roadLeft } : { canDig: [] }) });
+    result.road += picked.data?.dugCount ?? 0;
     if (!picked.ok && picked.reason === 'inventory_full') return 'full';
     const missed = /拾えなかった: (.*)$/u.exec(picked.text);
     if (missed) missedNote = `拾えなかった: ${missed[1]}`;

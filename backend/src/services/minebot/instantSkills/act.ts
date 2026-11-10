@@ -102,7 +102,7 @@ const Hand = z.object({
   onCrossfire: z.enum(['retreat', 'continue']).optional(),
   pickup: z.enum(['target_drops', 'none']).optional(),
   goals: z.array(Pos).min(2).max(8).optional().describe('go: 行き先の候補（どれか1つに着けば済み）'),
-  canDig: z.array(z.string().max(40)).min(1).max(12).optional().describe('go・mine・pickup: 掘ってよい物（stone・dirt・sand・wood か ブロック id）。pickup は書かなければ石・土を数マスだけ掘る'),
+  canDig: z.array(z.string().max(40)).min(1).max(12).optional().describe('go・mine・pickup: 掘ってよい物（stone・dirt・sand・wood か ブロック id）。pickup は書かなければ、target で指した落とし物だけ石・土を数マス掘って近づく（range だけの拾いは掘らない）'),
   canPlace: z.array(z.string().max(40)).min(1).max(6).optional().describe('go・obsidian・portal: 置いてよい物（持っている物だけ使う）'),
   maxDrop: z.number().int().min(0).max(10).optional().describe('go: 一度に落ちてよい段'),
   waterOk: z.boolean().optional().describe('go: 水に入ってよい'),
