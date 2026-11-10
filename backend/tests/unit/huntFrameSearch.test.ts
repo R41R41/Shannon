@@ -89,9 +89,11 @@ describe('find-structure stronghold: the portal room\'s frames', () => {
 
   it('a centre of its own: the frames are measured from it, not from the body', async () => {
     hits = [frameAt(110, 24, 96, body)];
+    // Review 11/10 G20: the frame is beyond the radius of that centre, and it is in the loaded chunks: it is said (it was cut, and the answer was "none").
     const near = await new FindStructure(makeBot()).runImpl('stronghold', 16, 400, 400);
-    expect(near.result).toContain('エンドポータルの枠はありません');
-    expect(near.result).toContain('中心 (400, 400)');
+    expect(near.result).toContain('エンドポータルの枠を発見（中心 (400, 400) の半径16mの外');
+    expect(near.result).toContain('(110, 24, 96)目なし、自分から 11m 東・高さ -46');
+    expect(near.result).not.toContain('枠はありません');
     const far = await new FindStructure(makeBot()).runImpl('stronghold', 30, 105, 98);
     expect(far.result).toContain('エンドポータルの枠を発見');
   });
@@ -119,6 +121,19 @@ describe('find-structure stronghold: the portal room\'s frames', () => {
     const result = await new FindStructure(makeBot()).runImpl('stronghold', 64);
     expect(result.result).toContain('見終わった');
     expect(result.result).toContain('交点を引き直す');
+  });
+
+  it('the whole radius read at 128: it does not say to widen the radius (128 is the most), it says to move the centre (review 11/10 G20)', async () => {
+    hits = [{ name: 'infested_stone_bricks', position: new Vec3(140, 30, 100), distance: 60 }];
+    reach = 400;
+    const most = await new FindStructure(makeBot()).runImpl('stronghold', FRAME_SEARCH_MAX);
+    expect(most.result).toContain('見終わった');
+    expect(most.result).not.toContain('半径を広げる');
+    expect(most.result).toContain('中心を 100m ほどずらして探し直す（radius は 128 が上限');
+    expect(most.result).toContain('石レンガのある側へ');
+    hits = [];
+    const less = await new FindStructure(makeBot()).runImpl('stronghold', 64);
+    expect(less.result).toContain('半径を広げる（128 まで）');
   });
 
   it('the radius is held between 16 and 128', async () => {

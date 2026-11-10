@@ -20,7 +20,11 @@ const FRAMES_LISTED = 12;
 const POINTS_GIVEN = 6;
 
 export interface FrameHit { x: number; y: number; z: number; /** Blocks from the centre, level. */ horizontal: number; eye: boolean | null }
-export interface FrameScan { frames: FrameHit[]; /** The furthest loaded column's centre from the body, level. */ reach: number; columns: number }
+export interface FrameScan {
+  frames: FrameHit[]; /** The furthest loaded column's centre from the body, level. */ reach: number; columns: number;
+  /** With no frame in the radius: the loaded frame beyond it nearest the body (review 11/10 G20: it was read and then cut without a word). */
+  outside?: FrameHit;
+}
 export interface SurveyPoint { x: number; z: number; ring: number }
 
 interface ScanBody {
@@ -36,15 +40,18 @@ export function framesAround(bot: ScanBody, center: { x: number; z: number }, ra
   // The scan measures in three dimensions from the body; the portal room is far below a body on the surface, so ask wide and cut level.
   const scan = scanLoadedBlocks(bot as any, ['end_portal_frame'], { maxHits: 64, maxDistance: radius + Math.abs(body.x - center.x) + Math.abs(body.z - center.z) + 320 });
   const frames: FrameHit[] = [];
+  let outside: FrameHit | undefined;
   for (const hit of scan.hits) {
     const horizontal = Math.hypot(hit.position.x - center.x, hit.position.z - center.z);
-    if (horizontal > radius) continue;
+    // The hits come nearest the body first: of those beyond the radius, the first is kept.
+    if (horizontal > radius && outside) continue;
     let eye: boolean | null = null;
     try { const properties = bot.blockAt?.(hit.position, false)?.getProperties?.(); if (properties) eye = properties.eye === true || properties.eye === 'true'; } catch { eye = null; }
-    frames.push({ x: hit.position.x, y: hit.position.y, z: hit.position.z, horizontal: Math.round(horizontal * 10) / 10, eye });
+    const frame = { x: hit.position.x, y: hit.position.y, z: hit.position.z, horizontal: Math.round(horizontal * 10) / 10, eye };
+    if (horizontal > radius) outside = frame; else frames.push(frame);
   }
   frames.sort((a, b) => a.horizontal - b.horizontal);
-  return { frames: frames.slice(0, FRAMES_LISTED), reach: scan.reachMetres, columns: scan.columns };
+  return { frames: frames.slice(0, FRAMES_LISTED), reach: scan.reachMetres, columns: scan.columns, ...(outside && !frames.length ? { outside } : {}) };
 }
 
 /**

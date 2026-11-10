@@ -21,7 +21,7 @@ export interface FramesReport {
   radius: number;
   /** How far round the body the loaded chunks reach, in metres. */
   reach: number;
-  /** The frames in the radius, nearest first (at most 12). */
+  /** The frames in the radius, nearest first (at most 12); with none in the radius, the one loaded frame beyond it that the text says. */
   found: Array<{ x: number; y: number; z: number; eye: boolean | null }>;
   /** With no frame: the next points of the rings (16 blocks apart) to walk to, those no scan has covered. */
   next: Array<{ x: number; z: number; ring: number }>;
@@ -56,6 +56,16 @@ export function strongholdFramesReport(bot: any, args: { radius?: number | null;
       center, radius: limit, reach: scan.reach, found: shown.map(frame => ({ x: frame.x, y: frame.y, z: frame.z, eye: frame.eye ?? null })), next: [],
     };
   }
+  // Review 11/10 G20: a frame in the loaded chunks beyond the radius is said, not cut (the radius stops at 128 and the head cannot widen it; the centre, a crossing of
+  // two eye lines, may be 128 m and more off the portal room). The frame is the portal room, so it is the answer and not the rings.
+  if (scan.outside) {
+    const at = scan.outside, rise = at.y - Math.floor(body.y);
+    try { bot.placeMemory?.remember('stronghold', { x: at.x, y: at.y, z: at.z }, { note: 'end_portal_frame' }); } catch { /* memory is optional */ }
+    return {
+      text: `エンドポータルの枠を発見（中心 (${center.x}, ${center.z}) の半径${limit}mの外、読み込み済みの範囲）: (${at.x}, ${at.y}, ${at.z})${at.eye === true ? '目あり' : at.eye === false ? '目なし' : ''}、自分から ${way(at)}・高さ ${rise >= 0 ? '+' : ''}${rise}。ポータルの部屋はそこ（中心から ${Math.round(at.horizontal)}m。x z をこの枠にして探し直すと全部の枠が出る）`,
+      center, radius: limit, reach: scan.reach, found: [{ x: at.x, y: at.y, z: at.z, eye: at.eye ?? null }], next: [],
+    };
+  }
   // No frame in the loaded chunks: what shows a stronghold is near (the infested bricks), and what has not been looked at yet.
   const evidence = scanLoadedBlocks(bot, [...STRONGHOLD_EVIDENCE_BLOCKS], { maxHits: 1, maxDistance: limit + 320 }).hits[0];
   const seen = evidence ? `要塞の石レンガ（${evidence.name}）は (${evidence.position.x}, ${evidence.position.y}, ${evidence.position.z}) にある（自分から ${way(evidence.position)}）が、枠はまだ見えない。` : '要塞の痕跡（枠・感染した石レンガ）も見えない。';
@@ -63,7 +73,10 @@ export function strongholdFramesReport(bot: any, args: { radius?: number | null;
   const done = ringPoints(center, limit).length;
   const hint = next.length
     ? `輪（${FRAME_RING_STEP}ブロック刻み）の次の点（読み込みが届いていない所。歩いて着いたら、もう一度 stronghold で探す）: ${next.map(point => `(${point.x}, ${point.z}) 輪${point.ring}`).join(' ')}`
-    : `半径${limit}まで読み込み済みの範囲で見終わった（${done}点の輪のどれにも届いている）。枠は無い: 中心 (${center.x}, ${center.z}) が要塞から外れている（交点を引き直す）か、半径を広げる`;
+    : `半径${limit}まで読み込み済みの範囲で見終わった（${done}点の輪のどれにも届いている）。枠は無い: 中心 (${center.x}, ${center.z}) が要塞から外れている（交点を引き直す）か、${limit < FRAME_SEARCH_MAX
+      ? `半径を広げる（${FRAME_SEARCH_MAX} まで）`
+      // At 128 the radius cannot be widened (the head holds it to 128 too), and a loaded frame beyond the radius is said above: the frames are beyond what is loaded.
+      : `中心を 100m ほどずらして探し直す（radius は ${FRAME_SEARCH_MAX} が上限。読み込み済みの範囲の枠は半径の外でも言うので、枠はまだ読み込みの外＝歩けば読み込みが広がる${evidence ? '。石レンガのある側へ' : ''}）`}`;
   return {
     text: `中心 (${center.x}, ${center.z}) の半径${limit}mの読み込み済みの範囲（自分から約${scan.reach}m、${scan.columns}列）に、エンドポータルの枠はありません。${seen}${hint}。要塞の位置が分からない間は、離れた 2 地点で目玉を投げて（use item=ender_eye）方位の線の交点を探します`,
     center, radius: limit, reach: scan.reach, found: [], next: next.map(point => ({ x: point.x, z: point.z, ring: point.ring })),
