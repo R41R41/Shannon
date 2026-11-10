@@ -259,6 +259,8 @@ export interface WorldObservation {
    * head's contract, minecraftActContract.ts).
    */
   localMap?: string;
+  /** A live body only (utils/primitives/footing feetWaterWords): one fact line about the feet in water (flowing or still, the push the water gave, head and feet), said only in water or just after a push. */
+  feetWater?: string;
   /** A live body only (utils/mapMarks): what lies near beyond the map, one line each (記号 名前 (x,y,z) 方角距離・上下 注記, at most 12). */
   mapLandmarks?: string[];
   /** A live body only: the steps that stopped lately, newest first ((x,y,z)→(x,y,z) 理由 ×回数 N秒前, at most 5). Counted, never acted on. */

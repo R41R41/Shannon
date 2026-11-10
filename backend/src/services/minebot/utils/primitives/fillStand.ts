@@ -2,11 +2,13 @@ import { Vec3 } from 'vec3';
 import { activateItemFacing } from '../activateItemFacing.js';
 import { equipToHandVerified } from '../equipVerified.js';
 import { feetCell, type Cell } from '../localMap.js';
+import { holdsWater } from '../waterBlocks.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
 import { blockAt, cellText, DIG_REACH, findItem, guard, inventoryCount, isAirLike, placeText, stopped, USE_REACH, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { dig } from './dig.js';
 import { place } from './place.js';
 import { damBlockHeld, waterLevel } from './stanch.js';
+import { steadyInWater } from './footing.js';
 
 /**
  * fillStand: filling a bucket from a source the body does not stand beside (run 6, 2026-11-11: 49 hands and 400 s to a water bucket, every `use` refused "not in reach / something in the way"
@@ -32,7 +34,11 @@ function standable(bot: any, at: Cell): boolean {
 
 /** The solid blocks on the line from `eye` to the middle of `cell` (the cell itself excluded), nearest first. */
 export function blockersFrom(bot: any, eye: { x: number; y: number; z: number }, cell: Cell): Array<{ cell: Cell; name: string }> {
-  const to = { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 };
+  return blockersTo(bot, eye, cell, { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 });
+}
+
+/** The solid blocks on the line from `eye` to the point `to` of `cell` (the cell itself excluded), nearest first. */
+function blockersTo(bot: any, eye: { x: number; y: number; z: number }, cell: Cell, to: { x: number; y: number; z: number }): Array<{ cell: Cell; name: string }> {
   const length = Math.hypot(to.x - eye.x, to.y - eye.y, to.z - eye.z), steps = Math.max(1, Math.ceil(length / 0.1));
   const found: Array<{ cell: Cell; name: string }> = [];
   for (let i = 1; i < steps; i++) {
@@ -46,18 +52,47 @@ export function blockersFrom(bot: any, eye: { x: number; y: number; z: number },
   return found;
 }
 
-export interface FillPlan { stand: Cell; /** The one block between the stand and the source, to open and close again. */ wall?: Cell; wallName?: string; steps: number }
+/**
+ * The five points a right click may aim at on a source cell: its middle and four points on the face turned to the eye (a click lands on any visible face: a line to the middle alone
+ * is cut by a corner that hides nothing of the face).
+ */
+function aimPoints(eye: { x: number; y: number; z: number }, cell: Cell): Array<{ x: number; y: number; z: number }> {
+  const c = { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 };
+  const d = { x: eye.x - c.x, y: eye.y - c.y, z: eye.z - c.z };
+  const axis = (['x', 'y', 'z'] as const).reduce((best, key) => (Math.abs(d[key]) > Math.abs(d[best]) ? key : best), 'x' as 'x' | 'y' | 'z');
+  const face = { ...c, [axis]: c[axis] + Math.sign(d[axis] || 1) * 0.49 };
+  const others = (['x', 'y', 'z'] as const).filter(key => key !== axis);
+  const points = [c];
+  for (const a of [-0.3, 0.3]) for (const b of [-0.3, 0.3]) points.push({ ...face, [others[0]!]: c[others[0]!] + a, [others[1]!]: c[others[1]!] + b });
+  return points;
+}
+
+export interface FillPlan { stand: Cell; /** Where the right click aims (a point on the source cell with the clearest line). */ aim?: { x: number; y: number; z: number }; /** The one block between the stand and the source, to open and close again. */ wall?: Cell; wallName?: string; steps: number }
+
+/**
+ * Where the stand search starts: the cell the feet are in when a body can stand there; else (in water, in a flooded shaft, half buried) the nearest cell within three that a body stands in.
+ */
+function originOf(bot: any): Cell | null {
+  const feet = feetCell(bot);
+  if (!feet) return null;
+  if (standable(bot, feet)) return feet;
+  let best: { at: Cell; d: number } | null = null;
+  for (let dx = -3; dx <= 3; dx++) for (let dy = -3; dy <= 3; dy++) for (let dz = -3; dz <= 3; dz++) {
+    const at = { x: feet.x + dx, y: feet.y + dy, z: feet.z + dz };
+    const d = Math.hypot(dx, dy, dz);
+    if ((!best || d < best.d) && standable(bot, at)) best = { at, d };
+  }
+  return best?.at ?? null;
+}
 
 /** Dry stands reachable on foot from the body (breadth first, one step up or down, no water entered), up to MAX_NODES. */
-function standsNear(bot: any, source: Cell): Array<{ at: Cell; steps: number }> {
-  const start = feetCell(bot);
+export function standsNear(bot: any, source: Cell): Array<{ at: Cell; steps: number }> {
+  const start = originOf(bot);
   if (!start) return [];
   const key = (c: Cell) => `${c.x},${c.y},${c.z}`;
   const seen = new Set([key(start)]);
   const out: Array<{ at: Cell; steps: number }> = [];
   let layer: Array<{ at: Cell; steps: number }> = [{ at: start, steps: 0 }];
-  const origin = standable(bot, start) ? [start] : [];
-  if (!origin.length) return [];
   while (layer.length && seen.size < MAX_NODES) {
     const next: Array<{ at: Cell; steps: number }> = [];
     for (const node of layer) {
@@ -80,35 +115,50 @@ function standsNear(bot: any, source: Cell): Array<{ at: Cell; steps: number }> 
 }
 
 /** The stand to fill `source` from: a clear line first (nearest by steps), else the one with a single wall block (and a cheap block held to close it). */
-export function planFill(bot: any, source: Cell, assumeDam = false): FillPlan | null {
-  const stands = standsNear(bot, source);
+export function planFill(bot: any, source: Cell, assumeDam = false, stands = standsNear(bot, source)): FillPlan | null {
   let wallPlan: FillPlan | null = null;
   const hasDam = assumeDam || damBlockHeld(bot) !== null;
-  for (const { at, steps } of stands.sort((a, b) => a.steps - b.steps)) {
+  for (const { at, steps } of [...stands].sort((x, y) => x.steps - y.steps)) {
     const eye = { x: at.x + 0.5, y: at.y + 1.62, z: at.z + 0.5 };
     if (Math.hypot(eye.x - (source.x + 0.5), eye.y - (source.y + 0.5), eye.z - (source.z + 0.5)) > USE_REACH) continue;
-    const blockers = blockersFrom(bot, eye, source);
-    if (!blockers.length) return { stand: at, steps };
-    if (wallPlan || !hasDam || blockers.length !== 1) continue;
-    const wall = blockers[0]!;
+    // The clearest of five aims: none in the way is a clear line; else the one with exactly one block on it is the wall.
+    let clear: { x: number; y: number; z: number } | null = null, single: { aim: { x: number; y: number; z: number }; wall: { cell: Cell; name: string } } | null = null;
+    for (const aim of aimPoints(eye, source)) {
+      const blockers = blockersTo(bot, eye, source, aim);
+      if (!blockers.length) { clear = aim; break; }
+      if (!single && blockers.length === 1) single = { aim, wall: blockers[0]! };
+    }
+    if (clear) return { stand: at, steps, aim: clear };
+    if (wallPlan || !hasDam || !single) continue;
+    const wall = single.wall;
     const block = blockAt(bot, wall.cell);
     if (!block || WALL_NO.has(wall.name) || PROTECTED_UTILITY_BLOCKS.has(wall.name) || block.diggable === false || !(block.hardness >= 0)) continue;
     if (Math.hypot(eye.x - (wall.cell.x + 0.5), eye.y - (wall.cell.y + 0.5), eye.z - (wall.cell.z + 0.5)) > Math.min(DIG_REACH, USE_REACH)) continue;
-    wallPlan = { stand: at, wall: wall.cell, wallName: wall.name, steps };
+    wallPlan = { stand: at, wall: wall.cell, wallName: wall.name, steps, aim: single.aim };
   }
   return wallPlan;
 }
 
-/** The source to fill: the cell asked when it is one, else a source the flow in it comes from (the cells upstream, a few away). */
-export function sourceFor(bot: any, asked: Cell): Cell | null {
-  if (waterLevel(bot, asked) === 0) return asked;
-  for (let radius = 1; radius <= 3; radius++) {
-    for (let dx = -radius; dx <= radius; dx++) for (let dy = -radius; dy <= radius; dy++) for (let dz = -radius; dz <= radius; dz++) {
-      const at = { x: asked.x + dx, y: asked.y + dy, z: asked.z + dz };
-      if (Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz)) === radius && waterLevel(bot, at) === 0) return at;
-    }
+/** Up to eight water sources within six cells of `asked`, nearest first: a pool has more than one, and one of them is seen when another is behind rock. */
+function sourcesNear(bot: any, asked: Cell): Cell[] {
+  const found: Array<{ at: Cell; d: number }> = [];
+  for (let dx = -RADIUS; dx <= RADIUS; dx++) for (let dy = -RADIUS; dy <= RADIUS; dy++) for (let dz = -RADIUS; dz <= RADIUS; dz++) {
+    const at = { x: asked.x + dx, y: asked.y + dy, z: asked.z + dz };
+    if (waterLevel(bot, at) === 0) found.push({ at, d: Math.hypot(dx, dy, dz) });
   }
-  return null;
+  return found.sort((x, y) => x.d - y.d).slice(0, 8).map(entry => entry.at);
+}
+
+/** The best plan over the sources of a pool: a clear line (fewest steps) before one wall block (fewest steps). The stands are read once. */
+export function bestPlan(bot: any, asked: Cell, assumeDam = false): { source: Cell; plan: FillPlan } | null {
+  const stands = standsNear(bot, asked);
+  let best: { source: Cell; plan: FillPlan } | null = null;
+  const rank = (plan: FillPlan) => (plan.wall ? 1000 : 0) + plan.steps;
+  for (const source of sourcesNear(bot, asked)) {
+    const plan = planFill(bot, source, assumeDam, stands);
+    if (plan && (!best || rank(plan) < rank(best.plan))) best = { source, plan };
+  }
+  return best;
 }
 
 /**
@@ -118,14 +168,17 @@ export function sourceFor(bot: any, asked: Cell): Cell | null {
 export async function fillFromStand(ctx: StepContext, asked: Cell, liquid = 'water'): Promise<StepOutcome | null> {
   const bot = ctx.bot;
   if (liquid !== 'water') return null;
-  const source = sourceFor(bot, asked);
-  if (!source) return null;
-  const plan = planFill(bot, source);
-  if (!plan) {
+  // A body in water (or in a flooded shaft) is put on its feet first: the stands are looked for from where it stands, not from the water.
+  const feetNow = feetCell(bot);
+  if (feetNow && holdsWater(blockAt(bot, feetNow))) await steadyInWater(ctx);
+  // Every source of the pool within six cells is looked at (one is behind rock and another is not).
+  const found = bestPlan(bot, asked);
+  if (!found) {
     // One wall block is all that is between the body and the water, and nothing to close it with: the words name the block to carry.
-    const wall = damBlockHeld(bot) === null ? planFill(bot, source, true) : null;
-    return wall ? stopped(bot, 'no_wall_block', `${placeText(bot, source)} の水は壁 1 枚（${cellText(wall.wall!)} の ${wall.wallName}）の向こう。開けて汲むには塞ぐ dirt か cobblestone を 1 個持つ（持てば use bucket だけでよい）`, source) : null;
+    const wallOnly = damBlockHeld(bot) === null ? bestPlan(bot, asked, true) : null;
+    return wallOnly ? stopped(bot, 'no_wall_block', `${placeText(bot, wallOnly.source)} の水は壁 1 枚（${cellText(wallOnly.plan.wall!)} の ${wallOnly.plan.wallName}）の向こう。開けて汲むには塞ぐ dirt か cobblestone を 1 個持つ（持てば use bucket だけでよい）`, wallOnly.source) : null;
   }
+  const { source, plan } = found;
   const here = feetCell(bot);
   const there = !here || here.x !== plan.stand.x || here.y !== plan.stand.y || here.z !== plan.stand.z;
   let words = '';
@@ -153,7 +206,7 @@ export async function fillFromStand(ctx: StepContext, asked: Cell, liquid = 'wat
       }
     }
   }
-  await activateItemFacing(bot, new Vec3(source.x + 0.5, source.y + 0.5, source.z + 0.5));
+  await activateItemFacing(bot, plan.aim ? new Vec3(plan.aim.x, plan.aim.y, plan.aim.z) : new Vec3(source.x + 0.5, source.y + 0.5, source.z + 0.5));
   const filled = await waitUntil(ctx, () => inventoryCount(bot, 'bucket') < before || bot.heldItem?.name === 'water_bucket', 1500);
   // The wall is closed whether or not the bucket filled (what came in with the opening must not run on).
   let closed = '';

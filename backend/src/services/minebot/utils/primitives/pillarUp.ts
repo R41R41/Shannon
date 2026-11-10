@@ -36,7 +36,7 @@ const TRY_TICKS = 28;
 export const PILLAR_FEET_OVER_FLOOR = 1.05;
 /** The feet must still be this far over the cell's top two ticks on (at the speed they fall at now) when the place is sent. */
 export const PILLAR_FALL_MARGIN = 0.03;
-const EMPTY = (block: any) => !block || isAirLike(block) || block.name === 'water' || block.name === 'lava';
+export const pillarEmpty = (block: any) => !block || isAirLike(block) || block.name === 'water' || block.name === 'lava';
 /** What a placed block takes the place of (the game's replaceable blocks a pillar meets): anything else in the feet cell refuses the block. */
 const REPLACEABLE = /^(?:air|cave_air|void_air|water|lava|short_grass|grass|tall_grass|fern|large_fern|dead_bush|bush|vine|glow_lichen|seagrass|tall_seagrass|fire|soul_fire|snow|structure_void|light)$/u;
 /**
@@ -47,7 +47,7 @@ const REPLACEABLE = /^(?:air|cave_air|void_air|water|lava|short_grass|grass|tall
  */
 export function climbBlocker(bot: any, feet: Cell): { cell: Cell; name: string; words: string } | null {
   const here = blockAt(bot, feet);
-  if (here && here.boundingBox === 'empty' && !EMPTY(here) && !REPLACEABLE.test(String(here.name))) {
+  if (here && here.boundingBox === 'empty' && !pillarEmpty(here) && !REPLACEABLE.test(String(here.name))) {
     return { cell: feet, name: String(here.name), words: `足のマス ${cellText(feet)} に ${here.name} があり、そこへはブロックを積めない` };
   }
   return null;
@@ -83,7 +83,7 @@ export function wholeFloorBeside(bot: any, feet: Cell, unsafe: (cell: Cell) => b
     const cell = { x: feet.x + dx, y: feet.y, z: feet.z + dz };
     const floor = blockAt(bot, { x: cell.x, y: cell.y - 1, z: cell.z });
     if (!floor || floor.boundingBox !== 'block' || shapeTop(floor) < 0.99 || isDoorlike(String(floor.name))) continue;
-    if (![0, 1, 2].every(up => EMPTY(blockAt(bot, { x: cell.x, y: cell.y + up, z: cell.z })) && blockAt(bot, { x: cell.x, y: cell.y + up, z: cell.z }))) continue;
+    if (![0, 1, 2].every(up => pillarEmpty(blockAt(bot, { x: cell.x, y: cell.y + up, z: cell.z })) && blockAt(bot, { x: cell.x, y: cell.y + up, z: cell.z }))) continue;
     if (unsafe(cell)) continue;
     return cell;
   }
@@ -112,7 +112,7 @@ async function pillarLevels(ctx: StepContext, args: PillarArgs, tally: { climbed
       const feet = feetCell(bot)!;
       if (!findItem(bot, args.block)) return stopped(bot, 'missing_item', `${args.block} が尽きた（${done}段登った、今 ${cellText(feet)}）`, feet);
       const over = { x: feet.x, y: feet.y + 2, z: feet.z };
-      if (!EMPTY(blockAt(bot, over))) return stopped(bot, 'ceiling', `頭の上 ${placeText(bot, over)} が ${cellNow(bot, over)} で登れない（${done}段登った）`, over);
+      if (!pillarEmpty(blockAt(bot, over))) return stopped(bot, 'ceiling', `頭の上 ${placeText(bot, over)} が ${cellNow(bot, over)} で登れない（${done}段登った）`, over);
       const blocked = climbBlocker(bot, feet);
       if (blocked) return stopped(bot, 'not_placed', `${blocked.words}（${done}段登った）。先に掘るか、別の所から`, blocked.cell);
       const floor = blockAt(bot, { x: feet.x, y: feet.y - 1, z: feet.z });
@@ -147,7 +147,7 @@ async function pillarLevels(ctx: StepContext, args: PillarArgs, tally: { climbed
           if (y < feet.y + feetOver || vy > 0.14 || vy < -0.45) continue;
           // Run 48 (hold 4): a block sent while the body is falling is met by the body: by the time the server handles the place (two ticks) the feet are lower, in the cell (the lab: 5 of 6 'placed' and nothing there).
           if (y + 2 * Math.min(vy, 0) < feet.y + 1 + PILLAR_FALL_MARGIN) continue;
-          if (!EMPTY(blockAt(bot, feet))) { filledBy = cellNow(bot, feet); break; }
+          if (!pillarEmpty(blockAt(bot, feet))) { filledBy = cellNow(bot, feet); break; }
           attempts++;
           placedFrom = bot.entity.position.clone?.() ?? { ...bot.entity.position };
           try {

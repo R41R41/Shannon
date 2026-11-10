@@ -15,8 +15,9 @@ import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, is
 import { pickup } from './pickup.js';
 import { withProgress } from './progressUnits.js';
 import { assessBreathingDig, assessBreathingWork, breathingWorkWords } from '../breathingWork.js';
-import { installVanillaDigTime } from '../digTimeIn.js';
+import { digSlowed, installVanillaDigTime } from '../digTimeIn.js';
 import { steadyInWater } from './footing.js';
+import { noteDugCell } from './dugCells.js';
 
 /**
  * dig: the cells in order (design mb-llm-centric 2.3). The tool is the one asked for, else the quickest carried that makes the block
@@ -278,7 +279,7 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       return result(stopped(bot, 'threat_exposed', `${placeText(bot, cell)} を開けると、今は届かない ${who} から見える・届くようになる。開けるなら exposeOk:true か exposeOk:["${letIn[0].name}"]（受け入れる種類）`, cell));
     }
     const exposing = threats.length > 0;
-    const tool = await holdTool(ctx, block, args.tool, bot.entity?.isInWater === true || bot.entity?.onGround === false);
+    const tool = await holdTool(ctx, block, args.tool, digSlowed(bot));
     if (tool.fail) return result({ ...tool.fail, at: cell });
     let workMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : NaN;
     // Other hands use this dig too: changing mine to dig cannot spend the return breath.
@@ -289,7 +290,7 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       const steady = await steadyInWater(ctx, { toward: cell });
       if (steady.acted) {
         if (steady.words) done.push(steady.words);
-        const again = await holdTool(ctx, block, args.tool, bot.entity?.isInWater === true || bot.entity?.onGround === false);
+        const again = await holdTool(ctx, block, args.tool, digSlowed(bot));
         if (again.fail) return result({ ...again.fail, at: cell });
         workMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : NaN;
         breath = assessBreathingWork(bot, Number.isFinite(workMs) ? workMs / 1000 : Infinity, cell);
@@ -349,6 +350,7 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       return result(stopped(bot, 'dig_failed', `${placeText(bot, cell)} の ${block.name} を掘れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}（今 ${cellNow(bot, cell)}）`, cell));
     } finally { stopWatching(); if (guardState && guardState.allowAt === cellKey(cell)) guardState.allowAt = undefined; }
     dugCells.push(cell);
+    noteDugCell(bot, cell, String(block.name));
     if (!seeing) tally.dug++;
     tally.current = null;
     await wait(ctx, 150);

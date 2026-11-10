@@ -121,11 +121,51 @@ describe('mine on the practice ground', () => {
     expect(packed.dugLog).toHaveLength(0);
   }, 30_000);
 
+  it('3a. nothing of the kind within two cells: the same kind within eight starts the hand; a cell an earlier hand dug is already mined; an untouched air cell stays no_block', async () => {
+    const g = open();
+    veinScene(g);
+    g.give('stone_pickaxe', 1);
+    const wide = await mine(stepContext(g.bot), { block: 'iron_ore', at: [cell(13, 68, 6)], count: 1 });
+    expect(wide.ok, wide.text).toBe(true);
+    expect(wide.text).toContain('近くの');
+    const dugAt = g.dugLog[0] as any;
+    // A second hand names the cell the first one took (now air) with no iron left within eight of it.
+    const lone = open();
+    lone.give('stone_pickaxe', 1);
+    lone.set(20, 64, 20, 'iron_ore');
+    const first = await mine(stepContext(lone.bot), { block: 'iron_ore', at: [cell(20, 64, 20)], count: 1 });
+    expect(first.ok, first.text).toBe(true);
+    const again = await mine(stepContext(lone.bot), { block: 'iron_ore', at: [cell(20, 64, 20)], count: 1 });
+    expect(again).toMatchObject({ ok: true, goal: 'already', code: 'already_mined' });
+    expect(again.text).toContain('前の手が掘り終えた');
+    const air = await mine(stepContext(lone.bot), { block: 'iron_ore', at: [cell(25, 64, 25)], count: 1 });
+    expect(air.reason).toBe('no_block');
+    expect(dugAt).toBeDefined();
+  }, 60_000);
+
+  it('3d. water beside the cell is let in and the vein goes on; lava beside it still leaves the cell', async () => {
+    const g = open();
+    veinScene(g);
+    g.give('stone_pickaxe', 1);
+    g.set(10, 64, 8, 'water');
+    const outcome = await mine(stepContext(g.bot), { block: 'iron_ore', at: [cell(11, 64, 8)], count: 1 });
+    expect(outcome.ok, outcome.text).toBe(true);
+    expect(g.dugLog.length).toBeGreaterThanOrEqual(1);
+    const lava = open();
+    veinScene(lava);
+    lava.give('stone_pickaxe', 1);
+    for (const c of [cell(11, 64, 8), cell(11, 65, 8), cell(11, 65, 9), cell(11, 66, 9), cell(11, 64, 9), cell(12, 65, 10)]) lava.set(c.x - 1, c.y, c.z, 'lava');
+    const refused = await mine(stepContext(lava.bot), { block: 'iron_ore', at: [cell(11, 64, 8)], count: 1 });
+    expect(refused.ok).toBe(false);
+    expect(refused.reason).toBe('danger');
+  }, 30_000);
+
   it('3b. an at cell that is another kind of block: no_block, with what each cell holds; the block name is checked too', async () => {
     const g = open();
     veinScene(g);
     g.give('stone_pickaxe', 1);
-    const outcome = await mine(stepContext(g.bot), { block: 'iron_ore', at: [cell(13, 68, 6), cell(13, 68, 5)], count: 2 });
+    g.set(30, 68, 30, 'coal_ore'); g.set(30, 68, 31, 'stone');   // more than eight cells from any iron
+    const outcome = await mine(stepContext(g.bot), { block: 'iron_ore', at: [cell(30, 68, 30), cell(30, 68, 31)], count: 2 });
     expect(outcome.reason).toBe('no_block');
     expect(outcome.text).toContain('mine 止まった no_block');
     expect(outcome.text).toContain('coal_ore');
@@ -329,7 +369,7 @@ describe('mine on the practice ground', () => {
     expect(wrongField.lines[0].line).toContain('mine 止まった invalid_input: item は使えない');
     const wrongRange = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'mine', block: 'iron_ore', at: [cell(11, 64, 8)], seconds: 2 }])));
     expect(wrongRange.lines[0].line).toContain('seconds は 5〜120');
-    const none = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'mine', block: 'iron_ore', at: [cell(13, 68, 12)] }])));
+    const none = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'mine', block: 'iron_ore', at: [cell(30, 68, 30)] }])));
     expect(none.ok).toBe(false);
     expect(none.lines[0].line).toMatch(/^無い: mine 止まった no_block/u);
     expect(g.dugLog).toHaveLength(2);

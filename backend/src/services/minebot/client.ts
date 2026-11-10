@@ -30,7 +30,7 @@ import { installAirSupplyDefault } from './utils/airSupplyDefault.js';
 import { installUseItemRotation } from './utils/useItemRotation.js';
 import { edgeGuardPlugin } from './utils/edgeGuard.js';
 import { breathingReflexPlugin } from './utils/breathingReflex.js';
-import { streamHoldPlugin } from './utils/primitives/footing.js';
+import { streamHoldPlugin, waterPushPlugin } from './utils/primitives/footing.js';
 import { installVanillaDigTime } from './utils/digTimeIn.js';
 import { exertionMeterPlugin } from './utils/exertionMeter.js';
 import { threatTrackerPlugin } from './utils/threatTracker.js';
@@ -193,6 +193,8 @@ export class MinebotClient extends BaseClient {
     this.bot.loadPlugin(breathingReflexPlugin);
     // Run 6: a body held in a stream between hands stops the stream (the owner: the reflex against being carried away never fired).
     this.bot.loadPlugin(streamHoldPlugin);
+    // What the water did to a body that was not walking (the live's 足元 line and the stream check read it).
+    this.bot.loadPlugin(waterPushPlugin);
     // The game's own dig times in water for every estimate (go, mine, the breathing gates), not only after the first dig hand.
     installVanillaDigTime(this.bot);
     this.bot.loadPlugin(exertionMeterPlugin);

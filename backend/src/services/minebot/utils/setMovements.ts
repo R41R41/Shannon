@@ -142,6 +142,16 @@ export function travelMovements(bot: CustomBot): any {
 }
 
 /** A movement profile for the route planner, not yet applied (see setMovements). */
+/** True when lava lies over the block or beside it (the cells a dug block lets a liquid in from). */
+function lavaAround(bot: any, block: any): boolean {
+  const at = block?.position;
+  if (!at) return false;
+  for (const [dx, dy, dz] of [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]] as const) {
+    try { if (bot.blockAt(at.offset(dx, dy, dz))?.name === 'lava') return true; } catch { /* unloaded */ }
+  }
+  return false;
+}
+
 export function buildMovements(
   bot: CustomBot,
   allow1by1towers = false,
@@ -177,6 +187,13 @@ export function buildMovements(
   defaultMove.canOpenDoors = canOpenDoors;
   defaultMove.canDig = canDig;
   defaultMove.dontMineUnderFallingBlock = dontMineUnderFallingBlock;
+  // A block beside water may be dug (the planner's own default shuts every route through one: a rock a lake touches was never a way, and a mine or a go ended "dead end"); the body
+  // puts its footing right where the water comes in (steadyInWater, the dam). Lava is still not let out: a block with lava over it or beside it is not dug.
+  defaultMove.dontCreateFlow = false;
+  {
+    const base = defaultMove.safeToBreak.bind(defaultMove);
+    defaultMove.safeToBreak = (block: any) => !lavaAround(bot, block) && base(block);
+  }
   defaultMove.digCost = digCost;
   defaultMove.placeCost = placeCost;
   defaultMove.allowFreeMotion = allowFreeMotion;

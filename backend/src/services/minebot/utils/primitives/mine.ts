@@ -1,11 +1,13 @@
 import { canHarvest } from '../toolChoice.js';
 import { feetCell, type Cell } from '../localMap.js';
-import { blockAt, cellNow, cellText, eyeDistance, findItem, freeSlots, placeText, stopped, wait,
+import { blockAt, cellNow, cellText, eyeDistance, findItem, freeSlots, inventoryCount, placeText, stopped, wait,
   type StepContext, type StepOutcome } from './common.js';
 import { cheaperThanAsked, dig } from './dig.js';
 import { pickup } from './pickup.js';
 import { canWorkOn } from './getNear.js';
 import { go } from './go.js';
+import { dugCellName, noteDugCell } from './dugCells.js';
+import { steadyInWater } from './footing.js';
 import { withProgress } from './progressUnits.js';
 
 /**
@@ -16,7 +18,7 @@ import { withProgress } from './progressUnits.js';
  * what falls. It looks for no other ore and no other block: the vein is what the planner's cells are joined to. A cell it cannot stand
  * near is gone to by the hand `go` (a way that digs only what `canDig` names, at most `maxDig` blocks; without them it digs no way at all), at most
  * `APPROACH_SECONDS` a cell, and the hand gives up when `UNREACHABLE_CELLS` cells have not been reached (run 40: 8 stops of 5 to 51 s, 194 s in all). It makes
- * no tunnel and no stair (those are repeat and go), and never digs a cell with water or lava beside it.
+ * no tunnel and no stair (those are repeat and go), and never digs a cell with lava beside it (water beside it is let in: the body steadies its feet and goes on).
  */
 export interface MineArgs {
   block: string; at: Cell[]; count?: number; tool?: string; collect?: boolean; seconds?: number; canDig?: readonly string[]; maxDig?: number;
@@ -31,6 +33,8 @@ const DEFAULT_MAX_DIG = 16;
 const ROCK_ROAD = 'stone,dirt,gravel,andesite,diorite,granite,tuff,deepslate';
 /** A start cell that is no longer the block (dug already, or one off): the same kind within this many cells of it starts the hand (run 5 q45: no_block at once). */
 const START_TOLERANCE = 2;
+/** Nothing within START_TOLERANCE: the same kind within this many cells of the first cell given starts the hand (a cube of 4,913 cells, read only on a miss), the nearest four. */
+const START_WIDE = 8;
 /** A drop the pick-up could not reach (it fell into a pocket the dig opened): walked to through natural rock, this long in all, this many drops, this long a drop, this much rock a drop at least. */
 const POCKET_SECONDS_ALL = 20;
 const POCKET_SECONDS_EACH = 8;
@@ -49,6 +53,7 @@ const FACES: Array<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0]
 const keyOf = (cell: Cell) => `${cell.x},${cell.y},${cell.z}`;
 const clamp = (value: number, least: number, most: number) => Math.max(least, Math.min(most, value));
 const isLiquid = (name: string | undefined) => name === 'water' || name === 'lava';
+const isLava = (name: string | undefined) => name === 'lava';
 /** `deepslate_iron_ore` and `iron_ore` are one kind of ore (the same drop, the same tool): a vein at y=0 runs through both. */
 const kindOf = (name: string | undefined): string | undefined => name === undefined ? undefined : /^deepslate_.+_ore$/u.test(name) ? name.slice('deepslate_'.length) : name;
 
@@ -117,7 +122,20 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       if (!was || d < was.d) near.set(keyOf(cell), { cell, d });
     }
     starts = [...near.values()].sort((a, b) => a.d - b.d).slice(0, 4).map(entry => entry.cell);
+    // Still none (a vein or a tree the hand before took whole): the same kind within START_WIDE of the first cell, nearest first.
+    if (!starts.length) {
+      const first = cells[0], wide: Array<{ cell: Cell; d: number }> = [];
+      for (let dx = -START_WIDE; dx <= START_WIDE; dx++) for (let dy = -START_WIDE; dy <= START_WIDE; dy++) for (let dz = -START_WIDE; dz <= START_WIDE; dz++) {
+        const cell = { x: first.x + dx, y: first.y + dy, z: first.z + dz };
+        if (isKind(blockAt(bot, cell)?.name)) wide.push({ cell, d: Math.hypot(dx, dy, dz) });
+      }
+      starts = wide.sort((a, b) => a.d - b.d).slice(0, 4).map(entry => entry.cell);
+    }
     if (starts.length) startNote = `。at の ${placeText(bot, cells[0])} は ${cellNow(bot, cells[0])} だったので、近くの ${placeText(bot, starts[0])} から始めた`;
+  }
+  if (!starts.length && cells.every(cell => { const name = dugCellName(bot, cell); return name !== null && isKind(name); })) {
+    // Every cell given was dug out by an earlier hand of this body: the work is done, and the hands after it go on.
+    return { ok: true, goal: 'already', code: 'already_mined', at: cells[0], text: `mine 済（at のマスは前の手が掘り終えた ${block}。今 ${inventoryCount(bot, block)} 個）` };
   }
   if (!starts.length) {
     return stopped(bot, 'no_block', `mine 止まった no_block: at のマスは ${block} ではない: ${cells.map(cell => `${placeText(bot, cell)} は ${cellNow(bot, cell)}`).join('、')}`, cells[0]);
@@ -139,7 +157,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   const seen = new Set<string>(starts.map(keyOf));
   const open = new Map<string, Cell>(starts.map(cell => [keyOf(cell), cell]));
   const attempts = new Map<string, number>();
-  let sincePick = 0, failsInARow = 0, missedNote = '', capped = false;
+  let sincePick = 0, failsInARow = 0, missedNote = '', capped = false, footNote = '';
   let pocketDug = 0, pocketMs = 0, pocketDrops = 0;
   const pocketTried = new Set<number>();
 
@@ -212,8 +230,8 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       if (seen.has(nextKey)) continue;
       if (isKind(blockAt(bot, next)?.name)) { seen.add(nextKey); open.set(nextKey, next); }
     }
-    // Water or lava beside the cell would run into the hole (and onto the body): the cell is left.
-    const wet = FACES.map(([dx, dy, dz]) => ({ at: { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz } })).find(face => isLiquid(blockAt(bot, face.at)?.name));
+    // Lava beside the cell would run into the hole (and onto the body): the cell is left. Water beside it is let in (the body's footing and dam hold it).
+    const wet = FACES.map(([dx, dy, dz]) => ({ at: { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz } })).find(face => isLava(blockAt(bot, face.at)?.name));
     if (wet) {
       skipped.push({ cell, kind: 'liquid', why: `${cellText(cell)} は隣の ${cellText(wet.at)} が ${blockAt(bot, wet.at)?.name}` });
       continue;
@@ -238,8 +256,11 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       failsInARow = 0;
       result.dug++; sincePick++;
       dugCells.push(cell);
+      noteDugCell(bot, cell, block);
       const now = blockAt(bot, cell)?.name;
-      if (isLiquid(now)) return problem('danger', `${cellText(cell)} を掘ると ${now} が流れ込んだ`, cell);
+      if (isLava(now)) return problem('danger', `${cellText(cell)} を掘ると ${now} が流れ込んだ`, cell);
+      // Water came in with the hole: the body is put on its feet (a block under them, the stream stopped) and the vein goes on.
+      if (isLiquid(now)) { const steady = await steadyInWater(ctx, { toward: cell }); if (steady.words) footNote = steady.words; }
       if (collect && sincePick >= PICK_EVERY && await collectDrops() === 'full') return problem('full', '拾った物で持ち物が満杯になった', cell);
       ctx.progress?.(`${result.dug}/${count}`);
       continue;
@@ -268,7 +289,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   if (await collectDrops() === 'full') return problem('full', '拾った物で持ち物が満杯になった', feetCell(bot) ?? undefined);
 
   const got = gainedText(bot, packBefore);
-  const road = `${result.road ? `・道を ${result.road} マス掘った` : ''}${pocketDug ? `・落とし物へ岩を ${pocketDug} マス掘って近づいた` : ''}${startNote}`;
+  const road = `${result.road ? `・道を ${result.road} マス掘った` : ''}${pocketDug ? `・落とし物へ岩を ${pocketDug} マス掘って近づいた` : ''}${footNote ? `・${footNote}` : ''}${startNote}`;
   const avoided = skipped.filter(entry => entry.kind === 'liquid' || entry.kind === 'footing' || entry.kind === 'other');
   const lost = missedNote ? `。${missedNote.length > 140 ? `${missedNote.slice(0, 139)}…` : missedNote}` : '';
   const aside = avoided.length ? `。掘らなかった: ${avoided.slice(0, 3).map(entry => entry.why).join('／')}${avoided.length > 3 ? ` ほか${avoided.length - 3}` : ''}` : '';
@@ -305,7 +326,13 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     await wait(ctx, 100);
     if (reachable(cell)) return null;
     const why = gone.ok ? `${placeText(bot, cell)} の隣まで行ったが、手が届かない・見えない` : gone.text.replace(/^go 止まった [a-z_]+: /u, '');
-    if (!gone.ok && gone.reason === 'limit_dig') return { fatal: true, reason: 'limit_dig', text: `道を掘る上限 ${roadBudget} マスに着いた（${placeText(bot, cell)} にまだ届かない）` };
+    if (!gone.ok && gone.reason === 'limit_dig') {
+      // go says how many it would dig ("掘る所が N"): that number, with the maxDig that covers it, is what the next mine is sent with.
+      const need = Number(/掘る所が (d+)/u.exec(gone.text)?.[1]);
+      const hint = Number.isFinite(need) && need > 0
+        ? `。届くには約 ${need} マス掘る（上限 ${roadBudget}）。maxDig=${need + 4} を付けて同じ mine をもう一度。もっと遠く深い鉱石は go maxDig=… で先に近づく` : '';
+      return { fatal: true, reason: 'limit_dig', text: `道を掘る上限 ${roadBudget} マスに着いた（${placeText(bot, cell)} にまだ届かない）${hint}` };
+    }
     // The hand's own seconds are the hand's limit; the approach's cap is only that this cell was not reached in that time.
     if (!gone.ok && gone.reason === 'limit_time' && Date.now() >= ctx.deadline) return { fatal: true, reason: 'limit_time', text: `${seconds} 秒の上限に着いた` };
     if (!gone.ok && gone.reason === 'limit_time') return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ ${APPROACH_SECONDS} 秒近づいても届かない` };
@@ -313,7 +340,9 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     const allowed = roadLeft > 0 ? `許された物（${roadWords.join('・')}）だけを掘っても` : spent ? `道の掘り ${result.road} マス（maxDig ${roadBudget} を使い切った）で` : '掘らずに（maxDig が 0）';
     // end1109o04: iron ore 14 blocks down "had no way without digging"; the hand was not sent again with a dig list, and she called the
     // iron far and waited for the night. Without one, the stop says the same hand with the rock to dig.
-    const retry = spent ? `。まだ遠いなら maxDig を ${roadBudget} より大きくする（ただし近くの別の鉱脈のほうが早くないか先に見る）` : roadLeft > 0 ? '' : `。maxDig を 1 以上にすれば（既定 ${DEFAULT_MAX_DIG}）、岩（${ROCK_ROAD}）を掘って近づく（鉱石は岩の中にあるので、掘る道なら普通は届く）`;
+    const needed = Number(/掘る所が (d+)/u.exec(gone.text)?.[1]);
+    const retry = spent ? (Number.isFinite(needed) && needed > 0 ? `。届くには約 ${needed} マス掘る（上限 ${roadBudget}）。maxDig=${needed + 4} を付けて同じ mine をもう一度。もっと遠く深い鉱石は go maxDig=… で先に近づく`
+        : `。まだ遠いなら maxDig を ${roadBudget} より大きくする（ただし近くの別の鉱脈のほうが早くないか先に見る）`) : roadLeft > 0 ? '' : `。maxDig を 1 以上にすれば（既定 ${DEFAULT_MAX_DIG}）、岩（${ROCK_ROAD}）を掘って近づく（鉱石は岩の中にあるので、掘る道なら普通は届く）`;
     return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ${allowed}届く道が無い（${why.slice(0, 70)}）${retry}` };
   }
 }

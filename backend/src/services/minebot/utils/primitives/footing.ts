@@ -5,9 +5,9 @@ import { eyeInWater } from '../digTimeIn.js';
 import { feetCell, type Cell } from '../localMap.js';
 import { holdsWater } from '../waterBlocks.js';
 import { blockAt, cellText, isAirLike, StepStopped, wait, type StepContext } from './common.js';
-import { pillarUp } from './pillarUp.js';
+import { pillarEmpty, pillarUp } from './pillarUp.js';
 import { place } from './place.js';
-import { damBlockHeld, flowingAt, stanchStream } from './stanch.js';
+import { damBlockHeld, flowingAt, stanchStream, waterLevel } from './stanch.js';
 
 /**
  * steadyInWater: a body whose feet are in water it does not stand in (a stream that carries it, a pool with no floor under the feet, a head under the surface) is put
@@ -31,15 +31,29 @@ export interface FootingResult {
 export const FOOTING_MAX_MS = 3000;
 export const FOOTING_MAX_STREAM_MS = 4500;
 
+/** What the water has pushed the body by when it was not walking: set by installWaterPush, read by waterTrouble and feetWaterWords. */
+export interface WaterPush { at: number; dx: number; dz: number; meters: number }
+export const PUSH_FLOW_WINDOW_MS = 3000;
+export const PUSH_KEEP_MS = 10000;
+const PUSH_MIN_M = 0.3;
+
+/** The push the water gave the body in the last `windowMs` (at least 0.3 m), or null. */
+export function pushedRecently(bot: any, windowMs: number): WaterPush | null {
+  const push = bot?.waterPush as WaterPush | undefined;
+  return push && Date.now() - push.at <= windowMs && push.meters >= PUSH_MIN_M ? push : null;
+}
+
 /** What is wrong with the body's footing in water, or null when it stands well (dry, or standing on a floor in still water with the head in the air). */
 export function waterTrouble(bot: any): 'flow' | 'no_floor' | 'head_wet' | null {
   const feet = feetCell(bot);
   if (!feet) return null;
   const here = blockAt(bot, feet);
   if (!here || !holdsWater(here)) return null;
-  if (flowingAt(bot, feet)) return 'flow';
   const below = blockAt(bot, { x: feet.x, y: feet.y - 1, z: feet.z });
-  if (below && below.boundingBox !== 'block') return 'no_floor';
+  const floorless = !!below && below.boundingBox !== 'block';
+  // A stream that carries the body: no floor, a head under the surface, or a push measured in the last seconds. A shallow stream that does not move a body on its floor needs nothing.
+  if (flowingAt(bot, feet) && (floorless || eyeInWater(bot) || pushedRecently(bot, PUSH_FLOW_WINDOW_MS))) return 'flow';
+  if (floorless) return 'no_floor';
   if (eyeInWater(bot)) return 'head_wet';
   return null;
 }
@@ -75,7 +89,16 @@ async function wadeTo(ctx: StepContext, stand: Vec3, ms: number): Promise<boolea
   return dry(bot);
 }
 
+/** A steadyInWater already running for a body (the dig it calls steadies again before a breathing refusal: not twice over). */
+const active = new WeakSet<object>();
+
 export async function steadyInWater(ctx: StepContext, options: { toward?: Cell; deadline?: number } = {}): Promise<FootingResult> {
+  if (active.has(ctx.bot as object)) return { acted: false, steady: true, words: '' };
+  active.add(ctx.bot as object);
+  try { return await steadyInWaterOnce(ctx, options); } finally { active.delete(ctx.bot as object); }
+}
+
+async function steadyInWaterOnce(ctx: StepContext, options: { toward?: Cell; deadline?: number }): Promise<FootingResult> {
   const bot = ctx.bot;
   const nothing: FootingResult = { acted: false, steady: true, words: '' };
   let trouble = waterTrouble(bot);
@@ -108,17 +131,37 @@ export async function steadyInWater(ctx: StepContext, options: { toward?: Cell; 
       else {
         const under = { x: here().x, y: here().y - 1, z: here().z };
         const below = blockAt(bot, under);
-        // A floor under the feet and the head still under the surface (two deep): one level is built upward when the air is the cell over the head that level gives.
-        const raise = below && below.boundingBox === 'block' && trouble === 'head_wet' && isAirLike(blockAt(bot, { x: here().x, y: here().y + 2, z: here().z }));
-        let out = below && below.boundingBox !== 'block' ? await place(ctx, { block, at: [under] }) : raise ? await pillarUp(ctx, { n: 1, block }) : null;
-        // The body sank into the cell under it: a block cannot go where the body stands; one level is built upward (jump and lay).
-        if (out && !out.ok && out.reason === 'body_in_cell') out = await pillarUp(ctx, { n: 1, block });
-        if (out?.ok) {
-          acted = true;
-          const from = Date.now();
-          while (Date.now() - from < Math.min(700, Math.max(0, left())) && waterTrouble(bot) === 'no_floor') await wait(ctx, 50);
-          lines.push(raise ? `足場: ${block} を積んで頭を出した` : `足場: 足元 ${cellText(under)} に ${block} を置いて頭を出した`);
-        } else if (out) lines.push(`足場を置けない（${cellText(under)}: ${String(out.reason ?? 'refused')}）`);
+        if (below && below.boundingBox !== 'block') {
+          const out = await place(ctx, { block, at: [under] });
+          // The body sank into the cell under it: a block cannot go where the body stands; one level is built upward (jump and lay).
+          const final = !out.ok && out.reason === 'body_in_cell' ? await pillarUp(ctx, { n: 1, block }) : out;
+          if (final.ok) {
+            acted = true;
+            const from = Date.now();
+            while (Date.now() - from < Math.min(700, Math.max(0, left())) && waterTrouble(bot) === 'no_floor') await wait(ctx, 50);
+            lines.push(out.ok ? `足場: 足元 ${cellText(under)} に ${block} を置いて頭を出した` : `足場: ${block} を積んで頭を出した`);
+          } else lines.push(`足場を置けない（${cellText(under)}: ${String(final.reason ?? 'refused')}）`);
+        } else if (below && trouble === 'head_wet') {
+          // A floor under the feet and the head still under the surface: up to two levels are built upward (a pool three deep still puts the head out). The cell two over the feet must be
+          // open or water (as pillarUp reads it); a rock there is dug first (a narrow shaft has no room to jump), and what the dig refuses is said and the hand goes on.
+          let levels = 0;
+          while (waterTrouble(bot) === 'head_wet' && levels < 2 && left() > 600) {
+            const feetNow = here();
+            const over = { x: feetNow.x, y: feetNow.y + 2, z: feetNow.z };
+            const block2 = blockAt(bot, over);
+            if (block2 && block2.boundingBox === 'block' && !holdsWater(block2)) {
+              const { dig } = await import('./dig.js');
+              const opened = await dig(ctx, { at: [over], collect: false });
+              if (!opened.ok) { lines.push(`上 ${cellText(over)} の ${block2.name} を開けられない（${String(opened.reason ?? 'refused')}）`); break; }
+              acted = true;
+              lines.push(`足場: 上 ${cellText(over)} の ${block2.name} を掘って`);
+            } else if (!pillarEmpty(block2) || block2?.name === 'lava') break;
+            const up = await pillarUp(ctx, { n: 1, block });
+            if (!up.ok) { lines.push(`足場を積めない（${String(up.reason ?? 'refused')}）`); break; }
+            acted = true; levels++;
+          }
+          if (levels) lines.push(`足場: ${block} を ${levels} 段積んで頭を出した`);
+        }
         trouble = waterTrouble(bot);
       }
     }
@@ -194,3 +237,71 @@ export function installStreamHold(bot: any): void {
 
 /** As a mineflayer plugin. */
 export function streamHoldPlugin(bot: unknown): void { installStreamHold(bot); }
+
+// ---- the push history: what the water did to a body that was not walking ------------------------------------------------------------
+
+const WALK_KEYS = ['forward', 'back', 'left', 'right'] as const;
+/** A window of drift longer than this starts over (a body creeping on its own is not carried). */
+const PUSH_WINDOW_MS = 3000;
+
+/**
+ * Samples the body's position every five ticks while the feet are in water and no walking key is held; the same-direction drift of 0.3 m or more is kept as bot.waterPush.
+ * It reads and writes nothing else (it runs in a hand too: the stream hold does not). Idempotent.
+ */
+export function installWaterPush(bot: any): void {
+  if (!bot || bot.waterPushInstalled === true) return;
+  bot.waterPushInstalled = true;
+  const sample = { x: 0, z: 0, at: 0, accX: 0, accZ: 0, start: 0, has: false };
+  let tick = 0;
+  bot.on('physicsTick', () => {
+    if (++tick % 5 !== 0) return;
+    try {
+      const position = bot.entity?.position;
+      const walking = WALK_KEYS.some(key => bot.controlState?.[key] === true);
+      if (!position || bot.entity?.isInWater !== true || walking) { sample.has = false; return; }
+      const now = Date.now();
+      if (!sample.has) { Object.assign(sample, { x: position.x, z: position.z, at: now, accX: 0, accZ: 0, start: now, has: true }); return; }
+      const dx = position.x - sample.x, dz = position.z - sample.z;
+      sample.x = position.x; sample.z = position.z; sample.at = now;
+      // The other way round: a new drift.
+      if (sample.accX * dx + sample.accZ * dz < 0) { sample.accX = 0; sample.accZ = 0; sample.start = now; }
+      sample.accX += dx; sample.accZ += dz;
+      const meters = Math.hypot(sample.accX, sample.accZ);
+      if (meters >= PUSH_MIN_M) bot.waterPush = { at: now, dx: sample.accX, dz: sample.accZ, meters } satisfies WaterPush;
+      if (now - sample.start > PUSH_WINDOW_MS) { sample.accX = 0; sample.accZ = 0; sample.start = now; }
+    } catch { sample.has = false; }
+  });
+}
+
+/** As a mineflayer plugin. */
+export function waterPushPlugin(bot: unknown): void { installWaterPush(bot); }
+
+const compass = (dx: number, dz: number) => (Math.abs(dx) >= Math.abs(dz) ? (dx > 0 ? '東' : '西') : (dz > 0 ? '南' : '北'));
+
+/**
+ * One fact line for the planner's live state, only while the feet are in water or the body was pushed in the last 10 s (dry and unpushed: null). Facts only:
+ * the water (flowing with its level / still with its depth), the push, the head, the feet.
+ */
+export function feetWaterWords(bot: any): string | null {
+  const feet = feetCell(bot);
+  if (!feet) return null;
+  const inWater = holdsWater(blockAt(bot, feet));
+  const push = pushedRecently(bot, PUSH_KEEP_MS);
+  if (!inWater && !push) return null;
+  const parts: string[] = [];
+  if (inWater) {
+    const level = waterLevel(bot, feet);
+    if (level !== null && level > 0) parts.push(`流れる水（流れ ${level}）`);
+    else {
+      let depth = 1;
+      while (depth < 8 && holdsWater(blockAt(bot, { x: feet.x, y: feet.y - depth, z: feet.z }))) depth++;
+      parts.push(`止まった水（深さ ${depth}）`);
+    }
+  } else parts.push('水の外');
+  if (push) parts.push(`直近 ${Math.max(1, Math.round((Date.now() - push.at) / 1000))} 秒で ${compass(push.dx, push.dz)}へ ${push.meters.toFixed(1)}m 押された`);
+  if (inWater) {
+    parts.push(eyeInWater(bot) ? '頭は水の中' : '頭は水の外');
+    parts.push(bot.entity?.onGround === true ? '足は地面' : '足は浮いている');
+  }
+  return `足元: ${parts.join('・')}`;
+}

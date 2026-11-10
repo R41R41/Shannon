@@ -3,11 +3,11 @@ import { makeHandsSim, type Ground, type HandsSim } from '../helpers/handsSim.js
 import { makeBlock, makeSim, mcData } from '../helpers/physicsBody.js';
 import type { Ground as SimGround } from '../helpers/physicsBody.js';
 import { flowingAt } from '../../src/services/minebot/utils/primitives/stanch.js';
-import { steadyBeforeHand, steadyInWater, waterTrouble } from '../../src/services/minebot/utils/primitives/footing.js';
+import { feetWaterWords, steadyBeforeHand, steadyInWater, waterTrouble } from '../../src/services/minebot/utils/primitives/footing.js';
 import { dig, waterBeside } from '../../src/services/minebot/utils/primitives/dig.js';
 import { use } from '../../src/services/minebot/utils/primitives/use.js';
-import { planFill, blockersFrom } from '../../src/services/minebot/utils/primitives/fillStand.js';
-import { eyeInWater, installVanillaDigTime, vanillaDigMs } from '../../src/services/minebot/utils/digTimeIn.js';
+import { bestPlan, planFill, blockersFrom, standsNear } from '../../src/services/minebot/utils/primitives/fillStand.js';
+import { digSlowed, eyeInWater, installVanillaDigTime, vanillaDigMs } from '../../src/services/minebot/utils/digTimeIn.js';
 import { chooseTool } from '../../src/services/minebot/utils/toolChoice.js';
 import type { StepContext } from '../../src/services/minebot/utils/primitives/common.js';
 
@@ -60,6 +60,26 @@ describe('steadyInWater: a body in water without a floor', () => {
     expect(sim.bot.placedBlocks).toEqual(['dirt@0,22,0']);
     expect(eyeInWater(sim.bot)).toBe(false);
   });
+  it('builds up when the cell two over the feet is water (three deep), and digs a stone there first (a narrow shaft), saying what the dig refused (bedrock) and going on', async () => {
+    const column = (over: string): Ground => (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y <= 21 ? 'stone' : y > 27 ? 'stone' : x === 0 && z === 0 ? (y <= 23 ? 'water~0' : y === 24 ? over : 'air') : 'stone');
+    const deep = makeHandsSim(column('water~0'), { start: [0.5, 22, 0.5], items: [{ name: 'dirt', count: 4 }] });
+    deep.tick();
+    expect(waterTrouble(deep.bot)).toBe('head_wet');
+    const built = await drive(deep, steadyInWater(ctxOf(deep, { x: 0, y: 22, z: 0 })));
+    expect(built.acted, built.words).toBe(true);
+    expect(built.words).toContain('積んで頭を出した');
+    expect(eyeInWater(deep.bot)).toBe(false);
+    const rock = makeHandsSim(column('stone'), { start: [0.5, 22, 0.5], items: [{ name: 'dirt', count: 4 }, { name: 'iron_pickaxe', count: 1 }] });
+    rock.tick(); rock.bot.oxygenLevel = 300;
+    const dug = await drive(rock, steadyInWater(ctxOf(rock, { x: 0, y: 22, z: 0 })));
+    expect(dug.words, dug.words).toContain('を掘って');
+    expect(rock.bot.placedBlocks.length).toBeGreaterThan(0);
+    const chest = makeHandsSim(column('bedrock'), { start: [0.5, 22, 0.5], items: [{ name: 'dirt', count: 4 }] });
+    chest.tick();
+    const kept = await drive(chest, steadyInWater(ctxOf(chest, { x: 0, y: 22, z: 0 })));
+    expect(kept.words).toContain('を開けられない');
+    expect(chest.bot.placedBlocks).toEqual([]);
+  });
   it('says what to carry when no cheap block is held, lays nothing, and does not fail', async () => {
     const sim = makeHandsSim(shaft, { start: [0.5, 23, 0.5], items: [{ name: 'oak_planks', count: 9 }] });
     const out = await drive(sim, steadyInWater(ctxOf(sim)));
@@ -101,11 +121,37 @@ describe('steadyInWater: a stream', () => {
   it('stops the stream with a block upstream (the stanch), and the body is on its feet', async () => {
     const sim = makeSim(tunnel, { start: [0.5, FLOOR, 0.5], items: [{ name: 'cobblestone', count: 5 }] });
     sim.bot.on('blockPlaced', () => { setTimeout(() => { for (const z of [0, -1, -2]) if (sim.nameAt(0, FLOOR, z)?.startsWith('water')) sim.world.set(0, FLOOR, z, 'air'); }, 1200); });
+    // The stream pushed the body 0.8 m south a moment ago (installWaterPush's reading): that is what makes a shallow stream trouble.
+    (sim.bot as any).waterPush = { at: Date.now(), dx: 0, dz: 0.8, meters: 0.8 };
     expect(waterTrouble(sim.bot)).toBe('flow');
     const out = await driveSim(sim, steadyInWater(ctxOf(sim as never, { x: 0, y: FLOOR, z: 0 })));
     expect(out).toMatchObject({ acted: true, steady: true });
     expect(out.words).toContain('流れを止めた');
     expect(flowingAt(sim.bot, { x: 0, y: FLOOR, z: 0 })).toBe(false);
+  });
+  it('does nothing (and waits for nothing) in a shallow stream that has not moved a body standing on its floor with the head in the air', async () => {
+    const sim = makeSim(tunnel, { start: [0.5, FLOOR, 0.5], items: [{ name: 'cobblestone', count: 5 }] });
+    expect(flowingAt(sim.bot, { x: 0, y: FLOOR, z: 0 })).toBe(true);
+    expect(waterTrouble(sim.bot)).toBeNull();
+    const before = Date.now();
+    const out = await driveSim(sim, steadyInWater(ctxOf(sim as never, { x: 0, y: FLOOR, z: 0 })));
+    expect(out).toEqual({ acted: false, steady: true, words: '' });
+    expect(Date.now() - before).toBeLessThan(100);
+    // A push older than three seconds is not a push.
+    (sim.bot as any).waterPush = { at: Date.now() - 4000, dx: 0, dz: 0.8, meters: 0.8 };
+    expect(waterTrouble(sim.bot)).toBeNull();
+    (sim.bot as any).waterPush = { at: Date.now() - 1000, dx: 0, dz: 0.2, meters: 0.2 };
+    expect(waterTrouble(sim.bot)).toBeNull();
+  });
+  it('says the feet in a line: flowing water, the push, the head, the feet; nothing when dry and unpushed', () => {
+    const sim = makeSim(tunnel, { start: [0.5, FLOOR, 0.5] });
+    (sim.bot as any).waterPush = { at: Date.now() - 2000, dx: 0, dz: 1.1, meters: 1.1 };
+    const words = feetWaterWords(sim.bot) ?? '';
+    expect(words).toContain('足元: 流れる水（流れ 3）');
+    expect(words).toContain('2 秒で 南へ 1.1m 押された');
+    expect(words).toContain('頭は水の外');
+    const dryBot = makeSim(tunnel, { start: [0.5, FLOOR, 2.5] });
+    expect(feetWaterWords(dryBot.bot)).toBeNull();
   });
 });
 
@@ -132,6 +178,15 @@ describe('dig under water', () => {
     const fixed = sim.bot.digTime(stone);
     expect(fixed).toBeLessThan(old / 4);
     expect(fixed).toBeGreaterThan(old / 5);   // a tick over the game's own count: a finish is never sent before the server's
+  });
+  it('is slowed (the quickest tool is worth it) only with the eyes in water or the feet off the ground, not when the feet only wade', () => {
+    const sim = makeHandsSim(shaft, { start: [0.5, 22.9, 0.5] });
+    sim.bot.entity.isInWater = true; sim.bot.entity.onGround = true;
+    expect(digSlowed(sim.bot)).toBe(false);
+    sim.bot.entity.onGround = false;
+    expect(digSlowed(sim.bot)).toBe(true);
+    sim.bot.entity.onGround = true; sim.bot.entity.position.y = 22.1;
+    expect(digSlowed(sim.bot)).toBe(true);
   });
   it('picks the quickest tool when every second is breath (the wooden pickaxe was 26 s, the iron one 9.4), the cheapest in wear otherwise', () => {
     const stone = makeBlock('stone');
@@ -219,6 +274,43 @@ describe('a bucket filled from a dry floor the body finds', () => {
     expect(out.ok, out.text).toBe(true);
     expect(sim.bot.inventory.items().some((item: any) => item.name === 'water_bucket')).toBe(true);
     expect(sim.world.nameAt(0, FLOOR, -2)).toBe('cobblestone');
+  });
+  it('looks from the shore when the body itself is in the water (a pool two deep): the stands are found, not none', () => {
+    const pool: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y <= 21 ? 'stone' : Math.abs(x) <= 1 && Math.abs(z) <= 1 && y <= 23 ? 'water~0' : 'air');
+    const sim = makeHandsSim(pool, { start: [0.5, 22, 0.5], items: [{ name: 'bucket', count: 1 }] });
+    const stands = standsNear(sim.bot, { x: 0, y: 22, z: 0 });
+    expect(stands.length).toBeGreaterThan(0);
+    expect(planFill(sim.bot, { x: 0, y: 22, z: 0 })).not.toBeNull();
+  });
+  it('takes the source of the pool that is seen when the one asked is walled in rock (no wall opened)', () => {
+    const walled: Ground = (x, y, z) => {
+      if (Math.abs(x) > 30 || Math.abs(z) > 30) return null;
+      if (y < FLOOR) return 'stone';
+      if (x === 0 && y === FLOOR && z === -3) return 'water~0';
+      if (x === 4 && y === FLOOR && z === -3) return 'water~0';
+      // A box of stone two thick round the first source (the cell itself left).
+      if (Math.abs(x) <= 2 && z >= -5 && z <= -1 && y <= FLOOR + 1) return 'stone';
+      return 'air';
+    };
+    const sim = makeHandsSim(walled, { start: [0.5, FLOOR, 0.5], items: [{ name: 'bucket', count: 1 }] });
+    const found = bestPlan(sim.bot, { x: 0, y: FLOOR, z: -3 });
+    expect(found?.source).toEqual({ x: 4, y: FLOOR, z: -3 });
+    expect(found?.plan.wall).toBeUndefined();
+    expect(found?.plan.aim).toBeDefined();
+  });
+  it('sees a source whose middle is hidden behind a corner but whose face is not (five aims, not one line)', () => {
+    // A stone at the corner cuts the line to the middle of the source from the stand but not the line to the face's corner.
+    const corner: Ground = (x, y, z) => {
+      if (Math.abs(x) > 30 || Math.abs(z) > 30) return null;
+      if (y < FLOOR) return 'stone';
+      if (x === 3 && y === FLOOR && z === -3) return 'water~0';
+      if (x === 1 && y === FLOOR + 1 && z === -1) return 'stone';
+      return 'air';
+    };
+    const sim = makeHandsSim(corner, { start: [0.5, FLOOR, 0.5], items: [{ name: 'bucket', count: 1 }] });
+    const plan = planFill(sim.bot, { x: 3, y: FLOOR, z: -3 }, false);
+    expect(plan).not.toBeNull();
+    expect(plan?.wall).toBeUndefined();
   });
   it('fills straight when a stand with a clear line exists (no wall opened)', async () => {
     const open: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y < FLOOR ? 'stone' : x === 0 && y === FLOOR && z === -9 ? 'water~0' : 'air');

@@ -905,9 +905,9 @@ export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>
     if (dy === 1 && bottoms.length && Math.min(...bottoms) >= 0.8) continue;
     const name = String(block.name).replace(/^minecraft:/u, '');
     if (rule.names.has(name)) {
-      // Run 47 (hold 10-11): a block the walk may dig but the search does not break: water or lava beside it (the flow would come in), or a block that falls over it that may not be dug.
+      // Run 47 (hold 10-11): a block the walk may dig but the search does not break: lava beside it (the flow would come in; water beside it is let in: the body's footing and dam hold it), or a block that falls over it that may not be dug.
       const wet = ([[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]] as const).map(d => ({ x: at.x + d[0], y: at.y + d[1], z: at.z + d[2] }))
-        .find(next => /^(water|lava)$/u.test(String(blockAt(bot, next)?.name ?? '')));
+        .find(next => /^lava$/u.test(String(blockAt(bot, next)?.name ?? '')));
       const over = blockAt(bot, { x: at.x, y: at.y + 1, z: at.z });
       const falls = over && FALLING.test(String(over.name).replace(/^minecraft:/u, '')) && !rule.names.has(String(over.name).replace(/^minecraft:/u, ''));
       if (!wet && !falls) continue;
@@ -916,7 +916,7 @@ export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>
       if (suggestNearby) for (const d of NEAR_OFFSETS) { const around = { x: cell.x + d[0], y: cell.y + d[1], z: cell.z + d[2] }; if (standable(read2, around.x, around.y, around.z)) { near2 = around; break; } }
       const because = wet ? `隣の ${cellText(wet)} が ${String(blockAt(bot, wet)?.name)} で掘ると流れ込む` : `上の ${cellText({ x: at.x, y: at.y + 1, z: at.z })} が ${String(over.name)} で掘ると落ちてくる`;
       return `行き先 ${cellText(cell)}${dy ? `の頭 ${cellText(at)}` : ''} の ${name} は${because}`
-        + `|${wet ? '水を塞ぐか' : `canDig に ${String(over.name)} を足すか`}、${near2 ? `隣の立てる所 ${cellText(near2)} へ` : '別の行き先を'}`;
+        + `|${wet ? '溶岩を塞ぐか' : `canDig に ${String(over.name)} を足すか`}、${near2 ? `隣の立てる所 ${cellText(near2)} へ` : '別の行き先を'}`;
     }
     const read: BlockReader = (x, y, z) => { const found = blockAt(bot, { x, y, z }); return found ? mapBlockOf(found) : null; };
     let near: Cell | null = null;

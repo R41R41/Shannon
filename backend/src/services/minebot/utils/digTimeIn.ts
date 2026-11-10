@@ -20,6 +20,14 @@ export function eyeInWater(bot: any): boolean {
   } catch { return false; }
 }
 
+/**
+ * True when a dig would be slowed by the game's water rules: the eyes in water, or the feet off the ground. A body that only wades with its head in the air is not
+ * slowed, so it keeps the tool that wears least.
+ */
+export function digSlowed(bot: any): boolean {
+  return eyeInWater(bot) || bot?.entity?.onGround === false;
+}
+
 /** The enchantments of the tool in hand and of the helmet (aqua affinity is the helmet's), as mineflayer collects them. */
 function enchantsOf(bot: any): unknown[] {
   let enchants: unknown[] = [];
