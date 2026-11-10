@@ -74,6 +74,13 @@ export function itemFacts(bot: any, position: { x: number; y: number; z: number 
   return facts.join('、');
 }
 
+/** Whether the pack takes a drop of this name: a free slot, or a stack of it that is not full (as mine's roomForDrops). */
+function roomFor(bot: any, name: string): boolean {
+  if (freeSlots(bot) > 0) return true;
+  return ((bot.inventory?.items?.() ?? []) as any[]).some(held => held.name === name
+    && held.count < Number(held.stackSize ?? bot.registry?.itemsByName?.[name]?.stackSize ?? 64));
+}
+
 export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const readFloor = (x: number, y: number, z: number): string | null => {
@@ -98,12 +105,14 @@ export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOu
   const previous = navigator?.movements;
   navigator?.setMovements(walkMovements(bot, true));
   const missed: string[] = [];
+  const missFull = (name: string) => { const full = `${name}（持ち物が満杯）`; if (!missed.includes(full)) missed.push(full); };
   const notes: WayNotes = { opened: [], leaves: 0 };
   try {
     for (const entity of targets.slice(0, 16)) {
       if (!bot.entities?.[entity.id]) continue;
-      if (freeSlots(bot) === 0) { missed.push(`${droppedName(bot, entity)}（持ち物が満杯）`); break; }
       const name = droppedName(bot, entity);
+      // A full pack still takes what stacks onto a stack it holds (pearls 5/16, rods 3/64); a drop it has no room for is passed by, and the ones behind it are still looked at.
+      if (!roomFor(bot, name)) { missFull(name); continue; }
       const where = () => ({ x: entity.position.x, y: entity.position.y, z: entity.position.z });
       // A drop just thrown out is still in the air (the last drop of a mine: it showed beside the body and bounced 1.3-2 m off while the hand
       // waited for it where it first showed, 1 run in 4 of the hands check): it is let come to rest before the hand decides to walk or wait.
@@ -116,7 +125,7 @@ export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOu
       if (!bot.entities?.[entity.id]) continue; // taken while it fell
       let unreachable = false;
       // Walked to where it lies and waited for it; once more where it lies then, if it rolled on meanwhile.
-      for (let attempt = 0; attempt < 2 && bot.entities?.[entity.id] && !unreachable; attempt++) {
+      for (let attempt = 0; attempt < 2 && bot.entities?.[entity.id] && !unreachable && (attempt === 0 || roomFor(bot, name)); attempt++) {
         if (!withinTake(bot.entity.position, where())) {
           // Run 47 (hold 1): a drop whose coordinates lie inside a block (a wall's, the top of a fence: it clips into the shape) cannot be stood in; the body goes where its box takes it from.
           const itemCell = { x: Math.floor(entity.position.x), y: Math.floor(entity.position.y + 1e-3), z: Math.floor(entity.position.z) };
@@ -142,7 +151,9 @@ export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOu
       if (unreachable) continue;
       if (bot.entities?.[entity.id]) {
         const item = where();
-        missed.push(`${name}（${withinTake(bot.entity.position, item) ? `拾える所にあるのに ${ITEM_WAIT_MS / 1000} 秒で入らなかった。` : ''}${itemFacts(bot, item)}）`);
+        // The stack filled on the way and the rest of the drop lies there: that is the reason, not the place.
+        if (!roomFor(bot, name)) missFull(name);
+        else missed.push(`${name}（${withinTake(bot.entity.position, item) ? `拾える所にあるのに ${ITEM_WAIT_MS / 1000} 秒で入らなかった。` : ''}${itemFacts(bot, item)}）`);
       }
     }
   } finally { try { if (previous) navigator.setMovements(previous); } catch { /* kept */ } }

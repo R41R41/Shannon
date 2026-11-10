@@ -48,3 +48,36 @@ describe('pickup by name', () => {
     expect(value.text).toMatch(/24m 内に落ちている arrow は無い.*射った矢は落とし物ではない/u);
   });
 });
+
+// Review 1110 (G19): a pack with no free slot was "full" for every drop, pearls 5/16 or rods 3/64 in it or not, and the hand ended at the first drop without a step.
+describe('pickup with no free slot', () => {
+  const groundOpen: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y < FLOOR ? 'stone' : 'air');
+  const drop = (sim: HandsSim, id: number, name: string, x: number, z: number) => {
+    sim.bot.entities[id] = { id, name: 'item', displayName: 'Item', type: 'other', position: new Vec3(x, FLOOR, z), velocity: new Vec3(0, 0, 0), getDroppedItem: () => ({ name, count: 1 }), metadata: [] };
+  };
+  const fill = (sim: HandsSim) => { for (let slot = 9; slot <= 44; slot++) sim.bot.inventory.slots[slot] = { name: 'cobblestone', count: 64 }; };
+  it('takes a drop that stacks onto a stack it holds, past a nearer drop it has no room for', async () => {
+    const sim = makeHandsSim(groundOpen, { start: [0.5, FLOOR, 0.5], items: [{ name: 'blaze_rod', count: 3 }] });
+    fill(sim);
+    drop(sim, 911, 'nether_bricks', 3.5, -3.5);
+    drop(sim, 912, 'blaze_rod', 6.5, 0.5);
+    const { value } = await drive(sim, pickup(ctxOf(sim), { radius: 8 }));
+    expect(sim.bot.entities[912]).toBeUndefined();
+    expect(sim.bot.entities[911]).toBeDefined();
+    expect(value.ok).toBe(true);
+    expect(value.text).toContain('blaze_rod+1');
+    expect(value.text).toContain('nether_bricks（持ち物が満杯）');
+  });
+  it('does not walk to a drop whose stack is full: inventory_full, said once', async () => {
+    const sim = makeHandsSim(groundOpen, { start: [0.5, FLOOR, 0.5], items: [{ name: 'ender_pearl', count: 16 }] });
+    fill(sim);
+    drop(sim, 913, 'ender_pearl', 6.5, 0.5);
+    drop(sim, 914, 'ender_pearl', 7.5, 0.5);
+    const { value, elapsed } = await drive(sim, pickup(ctxOf(sim), { item: 'ender_pearl' }));
+    expect(value.ok).toBe(false);
+    expect(value.reason).toBe('inventory_full');
+    expect(value.text.match(/ender_pearl（持ち物が満杯）/gu)).toHaveLength(1);
+    expect(elapsed).toBeLessThan(500);
+    expect(sim.bot.entity.position.x).toBeCloseTo(0.5, 1);
+  });
+});
