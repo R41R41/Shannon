@@ -1,5 +1,5 @@
 import { Vec3 } from 'vec3';
-import { executeAction } from '../../execution/ActionExecution.js';
+import { actionSignal, createMotorPort, executeAction } from '../../execution/ActionExecution.js';
 import { climbableBank, nearestDryStand, swimOntoBank } from '../exitWater.js';
 import { eyeInWater } from '../digTimeIn.js';
 import { feetCell, type Cell } from '../localMap.js';
@@ -162,7 +162,7 @@ export const STREAM_HOLD_COOLDOWN_MS = 8000;
 
 /**
  * Between hands nobody holds the body (run 6: 1.1 m south in a stream between two hands, the head thinking). A body that has stayed in flowing water for STREAM_HOLD_MS
- * with no skill running stops the stream (steadyInWater, on its own motor action; it ends when a hand takes the body).
+ * with no skill running stops the stream (steadyInWater, on its own motor action; idle work at priority -1: a command cancels it at once).
  */
 export function installStreamHold(bot: any): void {
   if (!bot || bot.streamHold) return;
@@ -181,12 +181,13 @@ export function installStreamHold(bot: any): void {
       if (now - state.since < STREAM_HOLD_MS || now - state.last < STREAM_HOLD_COOLDOWN_MS) return;
       state.running = true; state.last = now; state.since = 0;
       void executeAction(bot, 'hold-footing', FOOTING_MAX_STREAM_MS + 1500, async () => {
-        const controller = new AbortController();
         const base = feetCell(bot);
         if (!base) return { success: false, result: 'no body' };
-        const out = await steadyInWater({ bot, stop: controller.signal, deadline: Date.now() + FOOTING_MAX_STREAM_MS, facing: 'south', base });
+        // The action's own signal and motor port: a command (cancelIdleActions) or a reflex that takes the body ends this at once, and a stopped action sends nothing.
+        const stop = actionSignal(bot) ?? new AbortController().signal;
+        const out = await steadyInWater({ bot: createMotorPort(bot), stop, deadline: Date.now() + FOOTING_MAX_STREAM_MS, facing: 'south', base });
         return { success: out.steady, result: out.words || '流れの中の足場' };
-      }, { priority: 0, waitForQuiescence: false } as never).catch(() => undefined).finally(() => { state.running = false; });
+      }, { priority: -1, waitForQuiescence: false } as never).catch(() => undefined).finally(() => { state.running = false; });
     } catch { state.running = false; }
   });
 }

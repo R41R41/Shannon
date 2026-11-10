@@ -153,7 +153,9 @@ describe('dig under water', () => {
   });
   it('does not dig the wall between a dry tunnel and a lake (water_behind), but does where use has opened it for a bucket', async () => {
     const FLOOR = 64;
-    const world: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y < FLOOR ? 'stone' : x === 0 && y === FLOOR && z === -2 ? 'stone' : x === 0 && y === FLOOR && z === -3 ? 'water~0' : 'air');
+    const shore: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y < FLOOR ? 'stone' : x === 0 && y === FLOOR && z === -2 ? 'stone' : x === 0 && y === FLOOR && z === -3 ? 'water~0' : 'air');
+    // A tunnel along z (side walls and a roof): the body is enclosed, so water let in has only its own cell to run to.
+    const world: Ground = (x, y, z) => (shore(x, y, z) === 'air' && (Math.abs(x) >= 1 || y >= FLOOR + 2) ? 'stone' : shore(x, y, z));
     const sim = makeHandsSim(world, { start: [0.5, FLOOR, 0.5], items: [{ name: 'iron_pickaxe', count: 1 }] });
     expect(waterBeside(sim.bot, { x: 0, y: FLOOR, z: -2 })).toEqual({ x: 0, y: FLOOR, z: -3 });
     const refused = await drive(sim, dig(ctxOf(sim, { x: 0, y: FLOOR, z: 0 }), { at: [{ x: 0, y: FLOOR, z: -2 }], openSight: true }));
@@ -163,6 +165,14 @@ describe('dig under water', () => {
     // Other callers of dig (go, mine, the reflexes) have their own guards and are not touched.
     const plain = await drive(sim, dig(ctxOf(sim, { x: 0, y: FLOOR, z: 0 }), { at: [{ x: 0, y: FLOOR, z: -2 }], collect: false }));
     expect(plain.ok, plain.text).toBe(true);
+  });
+  it('does not refuse a dig beside water on an open shore (air round the body: the flow harms nothing)', async () => {
+    const FLOOR = 64;
+    const open: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y < FLOOR ? 'stone' : x === 0 && y === FLOOR && z === -2 ? 'stone' : x === 0 && y === FLOOR && z === -3 ? 'water~0' : 'air');
+    const sim = makeHandsSim(open, { start: [0.5, FLOOR, 0.5], items: [{ name: 'iron_pickaxe', count: 1 }] });
+    const out = await drive(sim, dig(ctxOf(sim, { x: 0, y: FLOOR, z: 0 }), { at: [{ x: 0, y: FLOOR, z: -2 }], openSight: true }));
+    expect(out.reason).not.toBe('water_behind');
+    expect(out.ok, out.text).toBe(true);
   });
 });
 
@@ -194,6 +204,21 @@ describe('a bucket filled from a dry floor the body finds', () => {
     expect(sim.bot.inventory.items().some((item: any) => item.name === 'water_bucket')).toBe(true);
     expect(sim.world.nameAt(0, FLOOR, -2)).toBe('dirt');            // the wall is back
     expect(sim.bot.dugBlocks.length).toBe(1);
+  });
+  it('says which block to carry when one wall block is all that is in the way and nothing is held to close it', async () => {
+    const sim = makeHandsSim(corridor, { start: [0.5, FLOOR, 0.5], items: [{ name: 'bucket', count: 1 }, { name: 'iron_pickaxe', count: 1 }] });
+    const out = await drive(sim, use(ctxOf(sim, { x: 0, y: FLOOR, z: 0 }), { item: 'bucket', at: { x: 0, y: FLOOR, z: -3 } }));
+    expect(out).toMatchObject({ ok: false, reason: 'no_wall_block' });
+    expect(out.text).toContain('dirt か cobblestone');
+    expect(sim.world.nameAt(0, FLOOR, -2)).toBe('dirt');
+  });
+  it('a stone wall is dug with the pickaxe and the bucket is taken back into the hand before the fill', async () => {
+    const stoneWall: Ground = (x, y, z) => (x === 0 && z === -2 && y === FLOOR ? 'stone' : corridor(x, y, z));
+    const sim = makeHandsSim(stoneWall, { start: [0.5, FLOOR, 0.5], items: [{ name: 'bucket', count: 1 }, { name: 'cobblestone', count: 2 }, { name: 'iron_pickaxe', count: 1 }] });
+    const out = await drive(sim, use(ctxOf(sim, { x: 0, y: FLOOR, z: 0 }), { item: 'bucket', at: { x: 0, y: FLOOR, z: -3 } }));
+    expect(out.ok, out.text).toBe(true);
+    expect(sim.bot.inventory.items().some((item: any) => item.name === 'water_bucket')).toBe(true);
+    expect(sim.world.nameAt(0, FLOOR, -2)).toBe('cobblestone');
   });
   it('fills straight when a stand with a clear line exists (no wall opened)', async () => {
     const open: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y < FLOOR ? 'stone' : x === 0 && y === FLOOR && z === -9 ? 'water~0' : 'air');

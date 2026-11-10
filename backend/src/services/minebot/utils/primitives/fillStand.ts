@@ -1,8 +1,9 @@
 import { Vec3 } from 'vec3';
 import { activateItemFacing } from '../activateItemFacing.js';
+import { equipToHandVerified } from '../equipVerified.js';
 import { feetCell, type Cell } from '../localMap.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
-import { blockAt, cellText, DIG_REACH, inventoryCount, isAirLike, placeText, stopped, USE_REACH, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { blockAt, cellText, DIG_REACH, findItem, guard, inventoryCount, isAirLike, placeText, stopped, USE_REACH, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { dig } from './dig.js';
 import { place } from './place.js';
 import { damBlockHeld, waterLevel } from './stanch.js';
@@ -79,10 +80,10 @@ function standsNear(bot: any, source: Cell): Array<{ at: Cell; steps: number }> 
 }
 
 /** The stand to fill `source` from: a clear line first (nearest by steps), else the one with a single wall block (and a cheap block held to close it). */
-export function planFill(bot: any, source: Cell): FillPlan | null {
+export function planFill(bot: any, source: Cell, assumeDam = false): FillPlan | null {
   const stands = standsNear(bot, source);
   let wallPlan: FillPlan | null = null;
-  const hasDam = damBlockHeld(bot) !== null;
+  const hasDam = assumeDam || damBlockHeld(bot) !== null;
   for (const { at, steps } of stands.sort((a, b) => a.steps - b.steps)) {
     const eye = { x: at.x + 0.5, y: at.y + 1.62, z: at.z + 0.5 };
     if (Math.hypot(eye.x - (source.x + 0.5), eye.y - (source.y + 0.5), eye.z - (source.z + 0.5)) > USE_REACH) continue;
@@ -120,7 +121,11 @@ export async function fillFromStand(ctx: StepContext, asked: Cell, liquid = 'wat
   const source = sourceFor(bot, asked);
   if (!source) return null;
   const plan = planFill(bot, source);
-  if (!plan) return null;
+  if (!plan) {
+    // One wall block is all that is between the body and the water, and nothing to close it with: the words name the block to carry.
+    const wall = damBlockHeld(bot) === null ? planFill(bot, source, true) : null;
+    return wall ? stopped(bot, 'no_wall_block', `${placeText(bot, source)} の水は壁 1 枚（${cellText(wall.wall!)} の ${wall.wallName}）の向こう。開けて汲むには塞ぐ dirt か cobblestone を 1 個持つ（持てば use bucket だけでよい）`, source) : null;
+  }
   const here = feetCell(bot);
   const there = !here || here.x !== plan.stand.x || here.y !== plan.stand.y || here.z !== plan.stand.z;
   let words = '';
@@ -136,6 +141,17 @@ export async function fillFromStand(ctx: StepContext, asked: Cell, liquid = 'wat
     const dug = await dig(ctx, { at: [plan.wall], collect: false, wallOpen: true });
     if (!dug.ok) return stopped(bot, 'not_filled', `${words}壁 ${cellText(plan.wall)} の ${plan.wallName} を開けられなかった（${dug.text.slice(0, 80)}）`, source);
     opened = `壁 ${cellText(plan.wall)} の ${plan.wallName} を開けて`;
+    // The dig held its own tool (a pickaxe for stone): the bucket goes back to the hand before the right click.
+    const bucket = findItem(bot, 'bucket');
+    if (bot.heldItem?.name !== 'bucket' && bucket) {
+      const held = await guard(ctx, equipToHandVerified(bot, bucket), 5000);
+      if (!held?.value.held) {
+        // Close the wall at once: what came in with the opening must not run on.
+        const block = damBlockHeld(bot);
+        if (block) await place(ctx, { block, at: [plan.wall] });
+        return stopped(bot, 'not_filled', `${words}${opened}、バケツを手に持てなかった（${held?.value.detail ?? '時間切れ'}）${block ? `。壁は ${block} で塞いだ` : ''}`, source);
+      }
+    }
   }
   await activateItemFacing(bot, new Vec3(source.x + 0.5, source.y + 0.5, source.z + 0.5));
   const filled = await waitUntil(ctx, () => inventoryCount(bot, 'bucket') < before || bot.heldItem?.name === 'water_bucket', 1500);

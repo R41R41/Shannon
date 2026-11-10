@@ -81,6 +81,17 @@ export function waterBeside(bot: any, cell: Cell): Cell | null {
   }
   return null;
 }
+/**
+ * The body stands in a tunnel or a shaft (4 or more of the 8 cells round its feet and head are solid): water let in has nowhere to go but the body's own cell. On an open shore (a log, sand
+ * or a pillar block beside a pond) the flow harms nothing and the dig goes on.
+ */
+export function bodyEnclosed(bot: any, feet: Cell): boolean {
+  let solid = 0;
+  for (const dy of [0, 1]) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+    if (blockAt(bot, { x: feet.x + dx, y: feet.y + dy, z: feet.z + dz })?.boundingBox === 'block') solid++;
+  }
+  return solid >= 4;
+}
 const UNBREAKABLE = new Set(['bedrock', 'barrier', 'end_portal_frame', 'end_portal', 'end_gateway', 'command_block', 'structure_block', 'reinforced_deepslate']);
 
 /**
@@ -251,10 +262,10 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     }
     const lava = lavaReleasedBy(bot, vecOf(cell));
     if (lava) return result(stopped(bot, 'lava_behind', `${placeText(bot, cell)} を掘ると、隣の溶岩 ${cellText({ x: lava.x, y: lava.y, z: lava.z })} が体の所へ流れ込む`, cell));
-    // A planner's dig of a block water touches near the body (a lake's wall) floods what the body stands in. A bucket is filled through such a wall by use (the body opens, fills and closes it).
+    // A planner's dig of a block water touches near a body in a tunnel (a lake's wall) floods what the body stands in (on an open shore it does not: the dig goes on). A bucket is filled through such a wall by use (the body opens, fills and closes it).
     const waterNext = args.openSight && !args.wallOpen ? waterBeside(bot, cell) : null;
     const feetNow = feetCell(bot);
-    if (waterNext && feetNow && Math.hypot(cell.x - feetNow.x, cell.z - feetNow.z) <= 3 && blockAt(bot, feetNow)?.name !== 'water') {
+    if (waterNext && feetNow && Math.hypot(cell.x - feetNow.x, cell.z - feetNow.z) <= 3 && blockAt(bot, feetNow)?.name !== 'water' && bodyEnclosed(bot, feetNow)) {
       return result(stopped(bot, 'water_behind', `${placeText(bot, cell)} の ${block.name} は隣の ${cellText(waterNext)} が水で、掘ると流れ込む（坑道が水没して出られなくなる）。`
         + '水を汲みたいなら use bucket（体が壁を開けて汲んで塞ぐ）。水を避けて掘るなら別の列から', cell));
     }
