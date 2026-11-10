@@ -19,7 +19,7 @@ import { endDragonOf } from '../dragonState.js';
  *   - a bucket on a source of water or lava fills it (only a source: a flowing cell is said, with its level);
  *   - a water or lava bucket empties into the cell given (set against its first solid neighbour, or `against`);
  *   - flint and steel lights the cell given (a portal frame's inside, a block's top);
- *   - a bed sleeps (what stops it is the game's: not night, monsters near);
+ *   - a bed sleeps (what stops it is the game's: not night, monsters near; the click still puts the respawn point, by day too, and the line says so from the server's answer);
  *   - a door, gate, trapdoor, lever or button is worked;
  *   - an eye of ender in the air is thrown, and where it flew is measured (the exact line: the body's position, the horizontal unit vector, the bearing, how far;
  *     and how the eye ended); on an end portal frame it is set in, and
@@ -32,6 +32,13 @@ export interface UseArgs { item?: string; at?: Cell; against?: string; entity?: 
 
 const BEDS = /_bed$/u;
 const WORKED = /(_door|_trapdoor|_fence_gate|^lever|_button)$/u;
+/** The server's words (block.minecraft.bed.*) for a click on a bed that put no respawn point, and what mends each. */
+const BED_REFUSED: Array<[RegExp, string]> = [
+  [/too_far_away$/u, 'ベッドが遠い（ベッドの隣に立ってもう一度 use）'],
+  [/obstructed$/u, 'ベッドの真上がふさがっている（頭か足の上のブロックをどけてもう一度 use）'],
+  [/occupied$/u, 'ベッドは使用中'],
+  [/not_possible_here$/u, 'ここでは寝られない'],
+];
 
 async function hold(ctx: StepContext, name: string): Promise<StepOutcome | null> {
   const bot = ctx.bot;
@@ -130,12 +137,47 @@ async function sleepInBed(ctx: StepContext, cell: Cell, asked: any): Promise<Ste
     }
     block = blockAt(bot, halves.head) ?? asked;
   }
+  // Review 11/10 G18: by day the bed was never clicked and the respawn point never set, while the line said "ベッドはリスポーン地点にはなる". mineflayer's sleep refuses the day and
+  // monsters near BEFORE its click (bed.js: the hour is its first check, the click its last line); the server puts the respawn point on the click, before it looks at the hour or
+  // for monsters (instantSkills/activateBlock useBed is the same click). So after those two refusals the hand clicks the bed once itself, and what the line says of the respawn
+  // point is the server's own answer: set_spawn comes only when the point moved, bed.no_sleep and bed.not_safe come after the point is put, too far / obstructed / occupied come
+  // before it. A click that lays the body down after all (rain at dusk, a monster the server does not count) goes on below as a sleep.
+  const heard: string[] = [];
+  const onMessage = (message: any) => { const key = String(message?.translate ?? ''); if (key) heard.push(key); };
+  const bedSaid = (words: RegExp) => heard.some(key => key.startsWith('block.minecraft.bed.') && words.test(key));
+  let said: string | null = null, clicked = false;
+  bot.on?.('message', onMessage);
   try {
     const slept = await guard(ctx, Promise.resolve(bot.sleep(block)), 4000);
     if (!slept) return stopped(bot, 'not_slept', `${placeText(bot, cell)} のベッドで寝られなかった（時間切れ。${where}）`, cell);
   } catch (error) {
     if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
-    return stopped(bot, 'not_slept', `${placeText(bot, cell)} のベッドで寝られなかった: ${String((error as Error)?.message ?? error).slice(0, 80)}（${where}。ベッドはリスポーン地点にはなる）`, cell);
+    said = String((error as Error)?.message ?? error).slice(0, 80);
+    // "bot is not sleeping" is mineflayer's own click that the server did not answer with a sleep: its answer is in `heard` already.
+    clicked = /not sleeping/u.test(said);
+    if (/not night|monsters nearby/u.test(said)) {
+      try {
+        clicked = !!(await guard(ctx, Promise.resolve(bot.activateBlock(block)), 3000));
+        // Not on set_spawn alone: the server's next word (no_sleep, not_safe) or the sleep itself follows it in the same tick.
+        await waitUntil(ctx, () => !!bot.isSleeping || bedSaid(/./u), 1500, 50);
+      } catch (clickError) {
+        if (clickError instanceof StepStopped || /Action interrupted/u.test(String((clickError as Error)?.message))) throw clickError;
+      }
+    }
+  } finally { try { bot.removeListener?.('message', onMessage); } catch { /* gone */ } }
+  if (said !== null && !bot.isSleeping) {
+    if (!clicked) return stopped(bot, 'not_slept', `${placeText(bot, cell)} のベッドで寝られなかった: ${said}（${where}。右クリックの前に止まったので、リスポーン地点は変わっていない）`, cell);
+    const refused = BED_REFUSED.find(([words]) => bedSaid(words))?.[1];
+    const set = heard.includes('block.minecraft.set_spawn');
+    if (refused || !(set || bedSaid(/no_sleep$|not_safe$/u))) {
+      return stopped(bot, 'not_slept', `${placeText(bot, cell)} のベッドを右クリックしたが寝られず、リスポーン地点は`
+        + `${refused ? `変わっていない: ${refused}` : '決まったか分からない（サーバーの返事が無い）'}（${where}）`, cell);
+    }
+    try { noteSpawnBed(bot, halves ? [halves.foot, halves.head] : [cell], String(asked.name)); } catch { /* the ledger is a help */ }
+    const point = `リスポーン地点はこのベッド${set ? '' : '（前からここ）'}`;
+    const enemy = bedSaid(/not_safe$/u) || /monsters nearby/u.test(said);
+    if (!enemy && (bedSaid(/no_sleep$/u) || /not night/u.test(said))) return { ok: true, text: `${cellText(cell)} のベッドを右クリックした（夜ではないので寝てはいない）。${point}`, at: cell };
+    return stopped(bot, 'not_slept', `${placeText(bot, cell)} のベッドで寝られなかった: ${enemy ? '敵が近い' : said}（${where}）。右クリックは届いた: ${point}`, cell);
   }
   try { noteSpawnBed(bot, halves ? [halves.foot, halves.head] : [cell], String(asked.name)); } catch { /* the ledger is a help */ }
   const woke = await waitUntil(ctx, () => !bot.isSleeping, 15_000, 200);

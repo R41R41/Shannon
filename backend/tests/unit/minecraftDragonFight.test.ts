@@ -405,8 +405,50 @@ describe('a bed used in the End', () => {
   it('leaves a bed in the Overworld to sleep, as before', async () => {
     const f = bedFixture({ dimension: 'minecraft:overworld' });
     const outcome = await use(ctxOf(f.bot) as never, { at: { x: 3, y: 64, z: 3 } });
-    expect(f.bot.activateBlock).not.toHaveBeenCalled();
-    expect(outcome.ok).toBe(false);
+    // By day mineflayer's sleep refuses before its click: the hand clicks once itself (the respawn point). This fixture's server answers nothing, so the hand still stops.
+    expect(f.bot.activateBlock).toHaveBeenCalledTimes(1);
+    expect(outcome).toMatchObject({ ok: false, reason: 'not_slept' });
+    expect(outcome.text).toContain('決まったか分からない（サーバーの返事が無い）');
+    expect(f.bot.listenerCount('message')).toBe(0);
+  });
+
+  /** Review 11/10 G18. A bed in the Overworld whose click the server answers with `says` (the translate keys of its system messages). */
+  function dayBed(says: string[], refusal = "it's not night and it's not a thunderstorm") {
+    const f = bedFixture({ dimension: 'minecraft:overworld' });
+    f.bot.sleep = vi.fn(async () => { throw new Error(refusal); });
+    f.bot.activateBlock = vi.fn(async () => { setTimeout(() => { for (const translate of says) f.bot.emit('message', { translate }); }, 5); });
+    return f;
+  }
+  const useBed = (f: ReturnType<typeof bedFixture>) => use(ctxOf(f.bot) as never, { at: { x: 3, y: 64, z: 3 } });
+  it('by day clicks the bed once itself and says the respawn point is this bed, from the server\'s own answer (G18: it was never clicked, and the line said it was set)', async () => {
+    const moved = dayBed(['block.minecraft.set_spawn', 'block.minecraft.bed.no_sleep']);
+    const first = await useBed(moved);
+    expect(moved.bot.activateBlock).toHaveBeenCalledTimes(1);
+    expect(first.ok).toBe(true);
+    expect(first.text).toBe('(3,64,3) のベッドを右クリックした（夜ではないので寝てはいない）。リスポーン地点はこのベッド');
+    // The point already here: the server says only that it is not night (set_spawn comes when the point moved).
+    const again = await useBed(dayBed(['block.minecraft.bed.no_sleep']));
+    expect(again.ok).toBe(true);
+    expect(again.text).toContain('リスポーン地点はこのベッド（前からここ）');
+  });
+  it('with monsters near still clicks: the point is put though the sleep is refused, and the hand stops as not_slept', async () => {
+    const f = dayBed(['block.minecraft.set_spawn', 'block.minecraft.bed.not_safe'], 'there are monsters nearby');
+    const outcome = await useBed(f);
+    expect(f.bot.activateBlock).toHaveBeenCalledTimes(1);
+    expect(outcome).toMatchObject({ ok: false, reason: 'not_slept' });
+    expect(outcome.text).toContain('敵が近い');
+    expect(outcome.text).toContain('右クリックは届いた: リスポーン地点はこのベッド');
+  });
+  it('never says the point is set when the server refused the click, or when nothing was clicked', async () => {
+    const far = await useBed(dayBed(['block.minecraft.bed.too_far_away']));
+    expect(far).toMatchObject({ ok: false, reason: 'not_slept' });
+    expect(far.text).toContain('リスポーン地点は変わっていない: ベッドが遠い');
+    const occupied = dayBed([], 'the bed is occupied');
+    const outcome = await useBed(occupied);
+    expect(occupied.bot.activateBlock).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ok: false, reason: 'not_slept' });
+    expect(outcome.text).toContain('右クリックの前に止まったので、リスポーン地点は変わっていない');
+    expect(outcome.text).not.toContain('リスポーン地点にはなる');
   });
 });
 
