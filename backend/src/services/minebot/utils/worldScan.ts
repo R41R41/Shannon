@@ -159,7 +159,8 @@ export function summarizeScan(bot: ScanBody, scan: SlicedScanResult & { coverage
     const aim = open ?? iron.hits[0];
     const down = Math.floor(centre.y) - aim.y;
     const how = down >= 4 ? `vertical（shaft）で y${aim.y} まで下り mine で掘る` : 'mine で掘る';
-    facts.push(`${open ? '空気に面した鉄鉱石' : '鉄鉱石'}が ${wayWords(centre, aim)}（石のツルハシで ${how}。3 個で鉄のツルハシ）`);
+    // Run 5: one cell is enough (the body follows the rest of the vein), so the hand is written out with the real name and cell (the head listed dig cells or wrote none).
+    facts.push(`${open ? '空気に面した鉄鉱石' : '鉄鉱石'}が ${wayWords(centre, aim)}（石のツルハシで ${how}。3 個で鉄のツルハシ）→ 手: mine ${aim.name} ${aim.x},${aim.y},${aim.z} count=3（1 マスで足りる。残りの鉱脈は体がたどる）`);
   }
   // Water: a source (a bucket fills only there).
   const water = get('water');

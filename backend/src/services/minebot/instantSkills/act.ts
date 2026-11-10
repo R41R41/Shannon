@@ -189,7 +189,7 @@ const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は
   + 'portal: at（枠の内側の左下）と axis（x か z）の枠 10 個を組み、火打ち金で点け、enter なら入る（足場は canPlace の物）。止まる時は「<手> 止まった <code>」の行で理由を返す。'
   + 'fight: 挙げた相手 target を戦い（stance=flee なら range m 離れるまで逃げ）、狙い・間合い・盾・クリティカル・低体力で食べる/退くは体がこなす。反射が優先。'
   + 'enderman は den:{entrance:{x,y,z},direction:north|east|south|west}（入口の絶対整数マス・壁の奥へ進む向き）と target:#id を渡すと、2高×1幅×2奥の横穴を4マスだけ掘り、天井・床・液体・空洞を確認してから入口外で目を合わせ、奥の2マス目へ戻り脚を打つ。待ちは20秒まで、被弾・hp<8で中止。倒せば入口外3mの落とし物だけ短く拾う（他の個体が近ければ拾わない）。denなしは従来の屋根方式。'
-  + 'mine(block: 掘る種類 id, at: その鉱脈のマス1〜4, count, tool, collect, seconds, canDig・maxDig: 鉱脈へ行く道を掘ってよい物) は at のマスにつながった同じ種類だけを近い順に掘って拾う（ほかの鉱石は探さない）。'
+  + 'mine(block: 掘る種類 id, at: その鉱脈のマス1〜4, count, tool, collect, seconds, canDig・maxDig: 鉱脈へ行く道を掘ってよい物) は at のマスにつながった同じ種類（deepslate_ と地上の鉱石は同じ鉱脈）だけを近い順に掘って拾う（ほかの鉱石は探さない。1 マスで足りる。count 省略は鉱脈ぜんぶ・24 まで、canDig 省略は岩だけ掘って近づく）。'
   + 'make(item, count) は途中の物（板・棒など）を持ち物から順に作る（足りなければ何も作らず足りない物の一覧を返す。3x3 は近くの作業台、無ければ持っている物を置く）。'
   + 'smelt(items: [{item,count}], fuel, fuelCount, furnaces: 何基に分けるか, at: かまど, seconds) はかまどに分けて入れて燃料を足すまで（焼き上がりは待たず、取り出しは furnace op=take）。'
   + 'sleep(item: ベッド id, seconds 10〜60) は近くのベッドか持っているベッドを足もとの周りに置いて寝て、朝になれば起きて拾い直す（寝る時と所は頭が決める。寝場所を掘って作らない）。'
