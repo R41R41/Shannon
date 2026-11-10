@@ -1,9 +1,14 @@
 import type { CustomBot } from '../types/CustomBot.js';
 import { SMELTING_RECIPES } from '../knowledge/smeltingRecipes.js';
 
-/** What a batch of `input` comes out as ("iron_ingot", "cooked_beef"), or null when the recipe is not known. Ores smelt like their raw items. */
+/**
+ * What a batch of `input` comes out as ("iron_ingot", "cooked_beef"), or null when the recipe is not known (it is then left out, never guessed: the planner reads it as a fact).
+ * Ores smelt like their raw items (iron, gold, copper); the nether ores are named; only `_log` stands for the logs that make charcoal (stems and `_wood` do not here).
+ */
 export function smeltOutputOf(input: string): string | null {
-  const name = /_ore$/u.test(input) ? `raw_${input.replace(/^(?:deepslate_)?(.*)_ore$/u, '$1')}` : /_log$|_stem$/u.test(input) ? 'oak_log' : input;
+  if (input === 'nether_gold_ore') return 'gold_ingot';
+  if (input === 'nether_quartz_ore') return 'quartz';
+  const name = /_ore$/u.test(input) ? `raw_${input.replace(/^(?:deepslate_)?(.*)_ore$/u, '$1')}` : /_log$/u.test(input) ? 'oak_log' : input;
   return Object.entries(SMELTING_RECIPES).find(([, recipe]) => recipe.input === name)?.[0] ?? null;
 }
 

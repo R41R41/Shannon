@@ -31,6 +31,34 @@ describe('furnace take as a collect', () => {
     // A put still wants the planner to stand there.
     expect((await furnace(stepContext(g.bot), { at: { x: 20, y: 64, z: 8 }, put: { item: 'raw_iron' } })).reason).toBe('out_of_reach');
   });
+  it('walks toward a furnace whose chunk is not loaded until it is read, then to it, and takes', async () => {
+    const g = ground = createGround({ pathfinder: true }); g.bot.activeFurnaces = []; g.start(); g.set(28, 64, 8, 'furnace');
+    const real = g.bot.blockAt;
+    // The cell is not read (null) until the body is within 12 blocks of it: the server's view distance.
+    g.bot.blockAt = (position: any, ...rest: any[]) => Math.hypot(position.x + 0.5 - g.bot.entity.position.x, position.z + 0.5 - g.bot.entity.position.z) > 12 && Math.floor(position.x) === 28 ? null : real(position, ...rest);
+    const client = (g.bot as any)._client = new EventEmitter();
+    (g.bot as any).openFurnace = async () => { packets(client); return { id: 7, totalFuel: null, fuel: 0, progress: 0,
+      inputItem: () => null, fuelItem: () => null, outputItem: () => ({ name: 'iron_ingot', count: 4 }), takeOutput: async () => {}, close() {} }; };
+    expect(g.bot.blockAt({ x: 28, y: 64, z: 8, floored() { return this; } })).toBeNull();
+    const outcome = await furnace(stepContext(g.bot), { at: { x: 28, y: 64, z: 8 }, take: 'output' });
+    expect(outcome.reason).not.toBe('unloaded');
+    expect(outcome.ok).toBe(true);
+    expect(outcome.text).toContain('出来上がりの iron_ingot×4 を取った');
+    expect(g.bot.entity.position.x).toBeGreaterThan(18);
+  }, 40_000);
+  it('keeps the batch when a take reads no burn packet, and forgets it when the cell is no furnace any more', async () => {
+    const g = ground = createGround({ pathfinder: false }); g.start(); g.set(10, 64, 8, 'furnace');
+    const cell = { x: 10, y: 64, z: 8 };
+    g.bot.activeFurnaces = [{ pos: cell, item: 'raw_iron', count: 3, startedAt: 1, readyAt: Date.now() + 30_000, dimension: 'overworld' }];
+    // No craft_progress_bar packets: the burn and the progress are unknown.
+    (g.bot as any)._client = new EventEmitter();
+    (g.bot as any).openFurnace = async () => ({ id: 7, totalFuel: null, fuel: 0, progress: 0, inputItem: () => ({ name: 'raw_iron', count: 3 }), fuelItem: () => null, outputItem: () => null, close() {} });
+    await furnace(stepContext(g.bot), { at: cell, take: 'output' });
+    expect(furnaceBusy(g.bot, cell)).toBe(true);
+    g.set(10, 64, 8, 'air');
+    expect((await furnace(stepContext(g.bot), { at: cell, take: 'output' })).reason).toBe('not_furnace');
+    expect(furnaceBusy(g.bot, cell)).toBe(false);
+  });
   it('furnaceBusy is true for a batch not taken out yet (due or not), false for another cell or dimension', () => {
     const bot = { game: { dimension: 'overworld' }, activeFurnaces: [{ pos: { x: 1, y: 2, z: 3 }, readyAt: 1, dimension: 'overworld' }, { pos: { x: 5, y: 2, z: 3 }, readyAt: 1, dimension: 'the_nether' }] };
     expect(furnaceBusy(bot, { x: 1, y: 2, z: 3 })).toBe(true);
@@ -39,7 +67,7 @@ describe('furnace take as a collect', () => {
     expect(furnaceBusy({}, { x: 1, y: 2, z: 3 })).toBe(false);
   });
   it('smeltOutputOf names what a batch comes out as', () => {
-    expect([smeltOutputOf('raw_iron'), smeltOutputOf('iron_ore'), smeltOutputOf('deepslate_iron_ore'), smeltOutputOf('beef'), smeltOutputOf('birch_log'), smeltOutputOf('stick')])
-      .toEqual(['iron_ingot', 'iron_ingot', 'iron_ingot', 'cooked_beef', 'charcoal', null]);
+    expect([smeltOutputOf('raw_iron'), smeltOutputOf('iron_ore'), smeltOutputOf('deepslate_iron_ore'), smeltOutputOf('beef'), smeltOutputOf('birch_log'), smeltOutputOf('stick'), smeltOutputOf('warped_stem'), smeltOutputOf('nether_gold_ore')])
+      .toEqual(['iron_ingot', 'iron_ingot', 'iron_ingot', 'cooked_beef', 'charcoal', null, null, 'gold_ingot']);
   });
 });
