@@ -22,6 +22,7 @@ export function stepLabel(step: StepLike): string {
     case 'attack': case 'shoot': return `${step.do} ${step.target ?? at}`;
     case 'fight': return `fight ${step.target ?? ''}${(step as { stance?: string }).stance === 'flee' ? ' 逃げ' : ''}`.trim();
     case 'wait': return `wait ${step.seconds ?? 1}秒`;
+    case 'hunt': return `hunt ${step.target ?? ''}${step.count ? `×${step.count}` : ''}`.trim();
     case 'mine': return `mine ${step.block ?? ''}${step.count ? `×${step.count}` : ''} ${at}`.trim();
     case 'make': return `make ${step.item}×${step.count ?? 1}`;
     case 'smelt': return `smelt ${(step.items ?? []).map(entry => `${entry.item}×${entry.count ?? '?'}`).join(' ')}${at ? ` ${at}` : ''}`.trim();

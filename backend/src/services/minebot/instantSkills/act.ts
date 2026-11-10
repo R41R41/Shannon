@@ -23,6 +23,7 @@ import { craft } from '../utils/primitives/craft.js';
 import { furnace } from '../utils/primitives/furnace.js';
 import { chest } from '../utils/primitives/chest.js';
 import { attack } from '../utils/primitives/attack.js';
+import { firstHuntCell, hunt } from '../utils/primitives/hunt.js';
 import { drop, eat, equip, jump, look, sneak } from '../utils/primitives/body.js';
 import { pickup } from '../utils/primitives/pickup.js';
 import { shoot } from '../utils/primitives/shoot.js';
@@ -70,7 +71,7 @@ const Pos = z.object({ x: z.number().optional(), y: z.number().optional(), z: z.
   front: z.number().optional(), right: z.number().optional(), up: z.number().optional() }).strict();
 const ItemCount = z.object({ item: z.string(), count: z.number().optional() }).strict();
 export const HAND_KINDS = ['walk', 'go', 'dig', 'place', 'pillarUp', 'use', 'look', 'jump', 'sneak', 'equip', 'craft', 'furnace', 'chest',
-  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'obsidian', 'portal', 'fight', 'mine', 'make', 'smelt', 'vertical', 'fill', 'bed_burst', 'sleep'] as const;
+  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'obsidian', 'portal', 'fight', 'mine', 'make', 'smelt', 'vertical', 'fill', 'bed_burst', 'sleep', 'hunt'] as const;
 const Face = z.enum(['up', 'down', 'north', 'south', 'east', 'west']);
 /** One hand: every field of the head's ActHand (the body takes whatever the head's schema takes), and a few more it can read. */
 const Hand = z.object({
@@ -166,7 +167,7 @@ export function packStops(hand: Pick<ActHand, 'do' | 'collect'> | null): boolean
   if (hand.do === 'dig') return hand.collect !== false;
   return PACK_TAKING.has(hand.do);
 }
-const PACK_TAKING = new Set<string>(['pickup', 'mine', 'obsidian', 'chest', 'furnace', 'smelt', 'make', 'craft']);
+const PACK_TAKING = new Set<string>(['pickup', 'mine', 'hunt', 'obsidian', 'chest', 'furnace', 'smelt', 'make', 'craft']);
 export function handContinuesOnFail(hand: Pick<ActHand, 'do' | 'onFail'>): boolean {
   return hand.onFail ? hand.onFail === 'continue' : CONTINUES_ON_FAIL.has(hand.do);
 }
@@ -181,7 +182,7 @@ const reflexName = (reason: unknown) => { const text = String(reason ?? ''); ret
 /** The body's own words for the tool (the head shows its own definition: minecraftActContract.ts ACT_DESCRIPTION). */
 const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は順に動かし、手ごとに思ったとおりか確かめ、外れたら（失敗・反射・stopIf・満杯）そこで止めて、'
   + '手ごとの1行（止まりは閉じた語・場所・そのマスの今の中身）と新しい地図を JSON で返す。体は回り道・置き場所・道具作り・片づけ・夜の睡眠・戦うかどうかを決めない。'
-  + '手: walk / go / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait / obsidian / portal / fight / mine / make / smelt / vertical / sleep。'
+  + '手: walk / go / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait / obsidian / portal / fight / mine / make / smelt / vertical / sleep / hunt。'
   + 'bed_burst(at:[foot,head],target:#id,count:1〜5,seconds:1〜20) は頭が施工し選んだ配置で、今のphase2→3進入またはphase3内だけ短く設置起爆する。次の着地は待たず、配置・移動・退避・剣切替は別の手。rel:true・repeat併用不可。爆発確認数を返し、使用だけで討伐としない。'
   + 'vertical: 縦に長く下る・上る。dir(down/up)・shape(stairs=階段 toward 必須 / shaft=真下の縦穴 down だけ / pillar=足の下に置いて真上 up だけ)・toY(足の y)・canDig(必須)・maxDig・canPlace・maxPlace・liquid(stop/seal/seal_water)・range・seconds。体は道探しをせず一段ずつ掘る・置く・歩くだけで、止まる時は「vertical 止まった <code>」の行と進んだ段数を返す。'
   + 'go: 行き先（to か goals）へ体が道を引いて着くまで行く。canDig の物だけ掘り・canPlace の物（持っている物）だけ置き、溶岩・火・マグマ・サボテンは避ける。canDig で石を掘るとツルハシがすり減る（木 59・石 131 回で壊れる）ので、行き先の無い go に canDig stone を付けない。掘った go の行はツルハシの残りを返す。止まる時は「go 止まった <code>」の行で理由を返す。'
@@ -190,6 +191,7 @@ const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は
   + 'fight: 挙げた相手 target を戦い（stance=flee なら range m 離れるまで逃げ）、狙い・間合い・盾・クリティカル・低体力で食べる/退くは体がこなす。反射が優先。'
   + 'enderman は den:{entrance:{x,y,z},direction:north|east|south|west}（入口の絶対整数マス・壁の奥へ進む向き）と target:#id を渡すと、2高×1幅×2奥の横穴を4マスだけ掘り、天井・床・液体・空洞を確認してから入口外で目を合わせ、奥の2マス目へ戻り脚を打つ。待ちは20秒まで、被弾・hp<8で中止。倒せば入口外3mの落とし物だけ短く拾う（他の個体が近ければ拾わない）。denなしは従来の屋根方式。'
   + 'mine(block: 掘る種類 id, at: その鉱脈のマス1〜4, count, tool, collect, seconds, canDig・maxDig: 鉱脈へ行く道を掘ってよい物) は at のマスにつながった同じ種類（deepslate_ と地上の鉱石は同じ鉱脈）だけを近い順に掘って拾う（ほかの鉱石は探さない。1 マスで足りる。count 省略は鉱脈ぜんぶ・24 まで、canDig 省略は岩だけ掘って近づく）。'
+  + 'hunt(target: 食料の動物の種類 cow・pig・sheep・chicken・rabbit（カンマで複数）, count: 倒す数（省略は居なくなるまで）, range: 手を始めた所からの m 4〜48・既定32, seconds 5〜120・既定60) は近い成体から順に倒して落とし物を拾う（子は倒さない・届かない個体は飛ばす・掘らない置かない）。'
   + 'make(item, count) は途中の物（板・棒など）を持ち物から順に作る（足りなければ何も作らず足りない物の一覧を返す。3x3 は近くの作業台、無ければ持っている物を置く）。'
   + 'smelt(items: [{item,count}], fuel, fuelCount, furnaces: 何基に分けるか, at: かまど, seconds) はかまどに分けて入れて燃料を足すまで（焼き上がりは待たず、取り出しは furnace op=take）。'
   + 'sleep(item: ベッド id, seconds 10〜60) は近くのベッドか持っているベッドを足もとの周りに置いて寝て、朝になれば起きて拾い直す（寝る時と所は頭が決める。寝場所を掘って作らない）。'
@@ -250,6 +252,8 @@ function travelCells(ctx: StepContext, hand: ActHand): Cell[] {
       case 'walk': return some([cell(hand.path?.length ? hand.path[hand.path.length - 1] : hand.to)]);
       case 'vertical': return typeof hand.toY === 'number' ? [{ x: ctx.base.x, y: hand.toY, z: ctx.base.z }] : [];
       case 'portal': case 'mine': return cellsOf(ctx, hand, hand.at) ?? [];
+      // A hunt has no cell to go to: the first animal it will go for is its target (the herd lies where it lies; a table within 10 m of that animal is left standing).
+      case 'hunt': { const first = firstHuntCell(ctx.bot, { kinds: typeof hand.target === 'string' ? hand.target : undefined, range: hand.range }); return first ? [first] : []; }
       default: return [];
     }
   } catch { return []; }
@@ -394,6 +398,7 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
     case 'pickup': return pickup(ctx, { radius: hand.range, ids: typeof target === 'number' ? [target] : undefined, canDig: hand.canDig, maxDig: hand.maxDig,
       item: typeof target === 'string' && target.trim() ? target.trim().replace(/^minecraft:/u, '') : undefined });
     case 'mine': return mine(ctx, { block: hand.block ?? '', at: cells, count: hand.count, tool: hand.tool, collect: hand.collect, seconds: hand.seconds, canDig: hand.canDig, maxDig: hand.maxDig });
+    case 'hunt': return hunt(ctx, { kinds: typeof target === 'string' ? target : undefined, count: hand.count, range: hand.range, seconds: hand.seconds });
     case 'make': return make(ctx, { item: hand.item ?? '', count: hand.count });
     case 'smelt': return smelt(ctx, { items: (hand.items ?? []) as Array<{ item: string; count?: number }>, fuel: hand.fuel, fuelCount: hand.fuelCount, furnaces: hand.furnaces, at: hand.at ? cells : undefined, seconds: hand.seconds });
     case 'sleep': return sleep(ctx, { item: hand.item, seconds: hand.seconds });
@@ -715,12 +720,12 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       // h19 (11/8): a plain attack on a wither skeleton was cut in 0.4 s by its target's own blow (damage_taken), and the body stood still 8 s
       // until it died. Trading blows is what a melee hand is for, so any targeted attack accepts its target's kind too (stopIf hpBelow still holds).
       const rushing = hand.do === 'attack' && hand.style === 'shield_rush';
-      const meleeHand = hand.do === 'fight' || hand.do === 'attack';
+      const meleeHand = hand.do === 'fight' || hand.do === 'attack' || hand.do === 'hunt';
       const fightKind = meleeHand && hand.target !== undefined ? String(findEntity(bot, targetOf(hand.target) ?? '', 32)?.name ?? '').toLowerCase() : '';
       const fightAccepted = fightKind !== '' && !accepted.has(fightKind);
       if (fightAccepted) accepted.add(fightKind);
       // Continue contracts (4): a fight or an attack hand hands the shield to the resident shield for as long as it runs (the right stays with the owner, this act).
-      const delegates = !rushing && (hand.do === 'fight' || hand.do === 'attack');
+      const delegates = !rushing && (hand.do === 'fight' || hand.do === 'attack' || hand.do === 'hunt');
       if (delegates) delegateShield(bot, true);
       const endFight = () => { if (delegates) delegateShield(bot, false); if (fightAccepted) accepted.delete(fightKind); if (meleeHand) { highWater = Number(bot.health ?? 20); hurtAt = null; } };
       // Continue contracts (3): what the hand changed in the pack is told, with the reason its kind gives (craft and make say their own).

@@ -39,6 +39,10 @@ export const HAND_RULES: Readonly<Record<string, HandRule>> = {
   mine: { needs: [['block'], ['at']], may: ['count', 'tool', 'collect', 'seconds', 'canDig', 'maxDig'],
     check: hand => seconds(hand, 5, 120) ?? count(hand, 64) ?? (hand.at.length > 4 ? 'at は鉱脈のマス 4 つまで（つながった同じ種類を体がたどる）' : null)
       ?? (BLOCK_NAME.test(hand.block) ? null : 'block はブロックの id（例 iron_ore）') ?? names(hand) },
+  // 2026-11-11: the food animals around the body, until none is left in range or count have fallen (utils/primitives/hunt). target is the kind(s), never an id.
+  hunt: { needs: [['target']], may: ['count', 'range', 'seconds'],
+    check: hand => (typeof hand.target === 'string' && !/^#?\d+$/u.test(hand.target.trim()) ? null : 'target は食料の動物の種類（cow・pig・sheep・chicken・rabbit。カンマで複数）。id は attack')
+      ?? seconds(hand, 5, 120) ?? count(hand, 64) ?? (hand.range !== undefined && (typeof hand.range !== 'number' || hand.range < 4 || hand.range > 48) ? 'range は 4〜48（m）' : null) },
   vertical: { needs: [['dir'], ['shape'], ['toY'], ['canDig'], ['liquid']], may: ['toward', 'maxDig', 'canPlace', 'maxPlace', 'range', 'seconds'], check: verticalCheck },
   make: { needs: [['item']], may: ['count'], check: hand => count(hand, 64) },
   smelt: { needs: [['items']], may: ['fuel', 'fuelCount', 'furnaces', 'at', 'seconds'],

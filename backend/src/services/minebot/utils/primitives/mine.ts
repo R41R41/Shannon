@@ -152,10 +152,9 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       && dugCells.some(cell => Math.hypot(entity.position.x - cell.x - 0.5, entity.position.y - cell.y, entity.position.z - cell.z - 0.5) <= 3.5)) as any[];
     if (!drops.length) return 'ok';
     if (at) drops.sort((a, b) => a.position.distanceTo(at) - b.position.distanceTo(at));
-    // Issue 3: a drop behind rock is dug to like any road cell: the road the hand was given is the rule and its budget what is left of it (none given: no dig, as mine's own contract says).
-    const roadLeft = roadWords.length ? Math.max(0, roadBudget - result.road) : undefined;
-    const picked = await pickup(ctx, { ids: drops.map(entity => entity.id), ...(roadWords.length ? { canDig: roadLeft ? roadWords : [], maxDig: roadLeft } : { canDig: [] }) });
-    result.road += picked.data?.dugCount ?? 0;
+    // This pick-up digs nothing (canDig []): digging to a drop that lies in rock is the walk-in below, one rule with the one shared budget (the pick-up's own 1-3 cell dig,
+    // issue 3, is for the hands that name a drop and have no walk-in of their own; with both here the same drop would be tried twice).
+    const picked = await pickup(ctx, { ids: drops.map(entity => entity.id), canDig: [] });
     if (!picked.ok && picked.reason === 'inventory_full') return 'full';
     const missed = /拾えなかった: (.*)$/u.exec(picked.text);
     if (missed) missedNote = `拾えなかった: ${missed[1]}`;
@@ -179,7 +178,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       const gone = await go(ctx, { goals: [spot], range: 0, canDig: roadWords, maxDig: Math.max(POCKET_MIN_DIG, roadBudget - result.road - pocketDug), canPlace: undefined, seconds });
       pocketDug += Number(gone.data?.work?.dug ?? 0);
       if (bot.entities?.[entity.id]) {
-        const taken = await pickup(ctx, { ids: [entity.id] });
+        const taken = await pickup(ctx, { ids: [entity.id], canDig: [] });
         if (!taken.ok && taken.reason === 'inventory_full') return 'full';
       }
       pocketMs += Date.now() - began;

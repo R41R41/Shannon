@@ -119,6 +119,7 @@ export function handReasons(hand: { do: string; fuel?: string; item?: string; op
     case 'walk': case 'go': case 'attack': case 'fight': case 'wait': return { gain: 'picked', loss: 'placed' };
     case 'vertical': return { gain: 'picked', loss: 'placed' };
     case 'mine': return { gain: 'mined' };
+    case 'hunt': return { gain: 'picked' };
     case 'eat': return { loss: 'food' };
     case 'drop': return { loss: 'thrown' };
     case 'furnace': return { gain: 'smelted', loss: name => (hand.fuel && name === hand.fuel) ? 'fuel' : 'ingredient' };

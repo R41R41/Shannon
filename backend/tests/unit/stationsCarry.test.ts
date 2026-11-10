@@ -75,6 +75,24 @@ describe('the stations a body set down, through the act', () => {
     expect(stationsOf(g.bot)).toHaveLength(0);
   }, 60_000);
 
+  it('a hunt whose first animal is far from the table takes the table up first (hunt has no cell: the animal is its target); one within 10 m leaves it', async () => {
+    const g = open();
+    g.give('crafting_table', 1);
+    await place(stepContext(g.bot), { block: 'crafting_table', at: [cell(10, 64, 8)] });
+    const here = g.bot.entity.position;
+    const cow = (x: number) => { const id = 9000 + x; g.bot.entities[id] = { id, name: 'cow', type: 'animal', position: new Vec3(x + 0.5, here.y, here.z), height: 1.4, width: 0.9, metadata: [] }; return id; };
+    const near = cow(16);
+    const stay = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'hunt', target: 'cow', count: 1, seconds: 5 }])));
+    expect(stay.lines[0].line).not.toContain('拾って持った');
+    expect(g.nameAt(10, 64, 8)).toBe('crafting_table');
+    delete g.bot.entities[near];
+    cow(30);
+    const taken = parse(await runAct(g.bot, ACT_HANDS.parse([{ do: 'hunt', target: 'cow', count: 1, seconds: 5 }])));
+    expect(taken.lines[0].line).toContain('拾って持った');
+    expect(g.nameAt(10, 64, 8)).toBe('air');
+    expect(g.countOf('crafting_table')).toBe(1);
+  }, 90_000);
+
   it('a go that stays within 10 m of it leaves it standing (and keeps it for a later hand)', async () => {
     const g = open();
     g.give('crafting_table', 1);
