@@ -337,7 +337,7 @@ class SleepInBed extends InstantSkill {
       const villagerIn = (block: any) => !isTakeBed && Object.values(this.bot.entities).some((entity: any) => entity?.name === 'villager'
         && entity.position?.distanceTo?.(block.position) < 2 && Number(entity.metadata?.[6]) === 2);
       const near = (this.bot.findBlocks?.({ matching: this.bot.isABed, maxDistance: 16, count: 12 }) ?? [])
-        .map((position: any) => this.bot.blockAt(position)).filter(Boolean);
+        .map((position: any) => this.bot.blockAt(position)).filter((block): block is NonNullable<typeof block> => !!block);
       const free = near.filter((block: any) => !villagerIn(block));
       let bed = near.length ? (free[0] ?? null) : this.bot.findBlock({
         matching: this.bot.isABed,
@@ -463,7 +463,7 @@ class SleepInBed extends InstantSkill {
           } else if (error.message.includes('occupied')) {
             errorDetail = 'ベッドは使用中です';
           } else if (error.message.includes('ふさがって')) {
-            errorDetail = obstructedAdvice(this.bot as never, bed.position) ?? errorDetail;
+            errorDetail = obstructedAdvice(this.bot as never, bed!.position) ?? errorDetail;
           }
           return {
             success: false,
