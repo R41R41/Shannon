@@ -81,3 +81,82 @@ describe('pickup with no free slot', () => {
     expect(sim.bot.entity.position.x).toBeCloseTo(0.5, 1);
   });
 });
+
+// Issue 3 (run 5, task e0672cd9): a raw_iron one stone away cost 3 minutes. The hand takes a drop just outside its box by a step, and digs 1-3 blocks of rock
+// to one it cannot walk to (the guards of go and dig), and says what it dug.
+describe('pickup that digs to reach a drop', () => {
+  const PICK = [{ name: 'stone_pickaxe', count: 1 }];
+  const world = (extra: (x: number, y: number, z: number) => string | null | undefined): Ground => (x, y, z) => {
+    if (Math.abs(x) > 30 || Math.abs(z) > 30) return null;
+    const more = extra(x, y, z);
+    if (more !== undefined) return more;
+    return y < FLOOR ? 'stone' : 'air';
+  };
+  const drop = (sim: HandsSim, id: number, at: [number, number, number], name = 'raw_iron') => {
+    sim.bot.entities[id] = { id, name: 'item', displayName: 'Item', type: 'other', position: new Vec3(...at), velocity: new Vec3(0, 0, 0), getDroppedItem: () => ({ name, count: 1 }), metadata: [] };
+  };
+
+  it('steps inside its own cell to a drop a hair outside the box (a low ceiling over the drop), digging nothing', async () => {
+    const sim = makeHandsSim(world((x, y, z) => (x === 0 && y === FLOOR + 1 && z >= 1 && z <= 3 ? 'stone' : undefined)), { start: [0.5, FLOOR, 0.5], items: PICK });
+    drop(sim, 920, [0.5, FLOOR + 0.1, 1.95]);
+    const { value, elapsed } = await drive(sim, pickup(ctxOf(sim), { ids: [920] }));
+    expect(sim.bot.entities[920]).toBeUndefined();
+    expect(value.ok).toBe(true);
+    expect(sim.bot.dugBlocks).toEqual([]);
+    expect(value.data?.dug).toBeUndefined();
+    expect(elapsed).toBeLessThan(3_000);
+    expect(Math.floor(sim.bot.entity.position.z)).toBe(0);
+  });
+
+  it('digs the one stone over a drop it cannot walk to, takes it, and says which cell it dug', async () => {
+    const sim = makeHandsSim(world((x, y, z) => (x === 0 && y === FLOOR + 1 && z === 3 ? 'stone' : undefined)), { start: [0.5, FLOOR, 0.5], items: PICK });
+    drop(sim, 921, [0.5, FLOOR + 0.1, 3.5]);
+    const { value } = await drive(sim, pickup(ctxOf(sim), { ids: [921] }));
+    expect(sim.bot.entities[921]).toBeUndefined();
+    expect(value.ok).toBe(true);
+    expect(sim.bot.dugBlocks).toEqual([`stone@0,${FLOOR + 1},3`]);
+    expect(value.data?.dug).toEqual([{ at: { x: 0, y: FLOOR + 1, z: 3 }, name: 'stone' }]);
+    expect(value.text).toContain(`途中で(0,${FLOOR + 1},3) stone を 1 マス掘った`);
+  });
+
+  it('digs nothing beside lava: the drop stays, with the reason', async () => {
+    const sim = makeHandsSim(world((x, y, z) => (x === 0 && y === FLOOR + 1 && z === 3 ? 'stone' : x === 0 && y === FLOOR + 2 && z === 3 ? 'lava' : undefined)), { start: [0.5, FLOOR, 0.5], items: PICK });
+    drop(sim, 922, [0.5, FLOOR + 0.1, 3.5]);
+    const { value } = await drive(sim, pickup(ctxOf(sim), { ids: [922] }));
+    expect(sim.bot.dugBlocks).toEqual([]);
+    expect(sim.bot.entities[922]).toBeDefined();
+    expect(value.ok).toBe(false);
+    expect(value.reason).toBe('not_picked');
+    expect(value.text).toContain('掘って近づこうとして止まった');
+  });
+
+  it('digs nothing under gravel (it would fall onto the body)', async () => {
+    const sim = makeHandsSim(world((x, y, z) => (x === 0 && y === FLOOR + 1 && z === 3 ? 'stone' : x === 0 && y === FLOOR + 2 && z === 3 ? 'gravel' : undefined)), { start: [0.5, FLOOR, 0.5], items: PICK });
+    drop(sim, 923, [0.5, FLOOR + 0.1, 3.5]);
+    const { value } = await drive(sim, pickup(ctxOf(sim), { ids: [923] }));
+    expect(sim.bot.dugBlocks).toEqual([]);
+    expect(value.ok).toBe(false);
+    expect(value.reason).toBe('not_picked');
+  });
+
+  it('keeps to 3 blocks a drop: a way of 4 is not dug at all, and the hand ends without a loop', async () => {
+    const sim = makeHandsSim(world((x, y, z) => (y >= FLOOR && z >= 1 && z <= 3 ? 'stone' : undefined)), { start: [0.5, FLOOR, 0.5], items: PICK });
+    drop(sim, 924, [0.5, FLOOR + 0.1, 5.5]);
+    const { value, elapsed } = await drive(sim, pickup(ctxOf(sim), { ids: [924] }));
+    expect(sim.bot.dugBlocks.length).toBeLessThanOrEqual(3);
+    expect(sim.bot.entities[924]).toBeDefined();
+    expect(value.ok).toBe(false);
+    expect(value.reason).toBe('not_picked');
+    expect(value.text).toContain('limit_dig');
+    expect(elapsed).toBeLessThan(40_000);
+  });
+
+  it('digs only what an explicit canDig names: dirt does not let it through stone', async () => {
+    const sim = makeHandsSim(world((x, y, z) => (x === 0 && y === FLOOR + 1 && z === 3 ? 'stone' : undefined)), { start: [0.5, FLOOR, 0.5], items: PICK });
+    drop(sim, 925, [0.5, FLOOR + 0.1, 3.5]);
+    const { value } = await drive(sim, pickup(ctxOf(sim), { ids: [925], canDig: ['dirt'] }));
+    expect(sim.bot.dugBlocks).toEqual([]);
+    expect(sim.bot.entities[925]).toBeDefined();
+    expect(value.ok).toBe(false);
+  });
+});

@@ -102,11 +102,11 @@ const Hand = z.object({
   onCrossfire: z.enum(['retreat', 'continue']).optional(),
   pickup: z.enum(['target_drops', 'none']).optional(),
   goals: z.array(Pos).min(2).max(8).optional().describe('go: 行き先の候補（どれか1つに着けば済み）'),
-  canDig: z.array(z.string().max(40)).min(1).max(12).optional().describe('go・mine: 掘ってよい物（stone・dirt・sand・wood か ブロック id）'),
+  canDig: z.array(z.string().max(40)).min(1).max(12).optional().describe('go・mine・pickup: 掘ってよい物（stone・dirt・sand・wood か ブロック id）。pickup は書かなければ石・土を数マスだけ掘る'),
   canPlace: z.array(z.string().max(40)).min(1).max(6).optional().describe('go・obsidian・portal: 置いてよい物（持っている物だけ使う）'),
   maxDrop: z.number().int().min(0).max(10).optional().describe('go: 一度に落ちてよい段'),
   waterOk: z.boolean().optional().describe('go: 水に入ってよい'),
-  maxDig: z.number().int().min(0).max(200).optional().describe('go・mine: 掘る数の上限'),
+  maxDig: z.number().int().min(0).max(200).optional().describe('go・mine・pickup: 掘る数の上限'),
   maxPlace: z.number().int().min(0).max(100).optional().describe('go・obsidian・portal: 置く数の上限'),
   axis: z.enum(['x', 'z']).optional().describe('portal: 枠が広がる向き（x: 枠は x 方向に広がる、z: z 方向）'),
   enter: z.boolean().optional().describe('portal: 点けたら入る（既定 true）'),
@@ -373,7 +373,7 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       return eat(ctx, { item });
     }
     case 'drop': return drop(ctx, { items: (hand.items ?? []) as Array<{ item: string; count?: number }>, toward: target !== undefined ? String(target) : one });
-    case 'pickup': return pickup(ctx, { radius: hand.range, ids: typeof target === 'number' ? [target] : undefined,
+    case 'pickup': return pickup(ctx, { radius: hand.range, ids: typeof target === 'number' ? [target] : undefined, canDig: hand.canDig, maxDig: hand.maxDig,
       item: typeof target === 'string' && target.trim() ? target.trim().replace(/^minecraft:/u, '') : undefined });
     case 'mine': return mine(ctx, { block: hand.block ?? '', at: cells, count: hand.count, tool: hand.tool, collect: hand.collect, seconds: hand.seconds, canDig: hand.canDig, maxDig: hand.maxDig });
     case 'make': return make(ctx, { item: hand.item ?? '', count: hand.count });
