@@ -1,6 +1,7 @@
 import type { Cell } from '../localMap.js';
 import { blockAt, eyeDistance, freeSlots, inventoryCount, DIG_REACH, type StepContext } from './common.js';
 import { dig } from './dig.js';
+import { furnaceBusy } from './furnace.js';
 import { go } from './go.js';
 import { pickup } from './pickup.js';
 import { currentDimension, forgetStation, stationsOf, type Station } from './stationLedger.js';
@@ -78,8 +79,7 @@ function readFacts(ctx: StepContext, station: Station, targets: Cell[], named: C
   const at = bot.entity?.position;
   const from = centre(station);
   const items = (bot.inventory?.items?.() ?? []) as Array<{ name: string; count: number }>;
-  const busy = ((bot.activeFurnaces ?? []) as Array<{ pos?: { x: number; y: number; z: number } }>)
-    .some(entry => entry.pos && entry.pos.x === station.x && entry.pos.y === station.y && entry.pos.z === station.z);
+  const busy = furnaceBusy(bot, station);
   const holding = station.holds === true;
   const stackable = items.some(item => item.name === station.block && item.count < 64);
   return {
@@ -127,13 +127,13 @@ async function takeUp(ctx: StepContext, station: Station, ms: number): Promise<{
       await go(run.ctx, { goals: beside, range: 1, maxDrop: 3, seconds: Math.max(1, Math.min(3, Math.floor(ms / 1000) - 3)) });
     }
     await dig(run.ctx, { at: [cell], take: true, collect: true });
-    if (inventoryCount(bot, station.block) <= had) await pickup(run.ctx, { item: station.block, radius: 4 });
+    if (inventoryCount(bot, station.block) <= had) await pickup(run.ctx, { item: station.block, radius: 4, canDig: [] });
   } catch { /* the time or the act's stop: said from the pack below */ }
   finally { run.done(); }
   // The time ran out between the break and the pickup: the block is gone and its drop lies near; a short pickup (its own 2 s, the act's stop only) takes it.
   if (inventoryCount(bot, station.block) <= had && blockAt(bot, cell)?.name !== station.block && !ctx.stop.aborted) {
     const rest = limited(ctx, 2000);
-    try { await pickup(rest.ctx, { item: station.block, radius: 4 }); } catch { /* the pack is read below */ }
+    try { await pickup(rest.ctx, { item: station.block, radius: 4, canDig: [] }); } catch { /* the pack is read below */ }
     finally { rest.done(); }
   }
   const name = nameOf(station);

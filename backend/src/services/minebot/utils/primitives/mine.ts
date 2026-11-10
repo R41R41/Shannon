@@ -152,7 +152,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       && dugCells.some(cell => Math.hypot(entity.position.x - cell.x - 0.5, entity.position.y - cell.y, entity.position.z - cell.z - 0.5) <= 3.5)) as any[];
     if (!drops.length) return 'ok';
     if (at) drops.sort((a, b) => a.position.distanceTo(at) - b.position.distanceTo(at));
-    // This pick-up digs nothing (canDig []): digging to a drop that lies in rock is the walk-in below, one rule with the one shared budget (the pick-up's own 1-3 cell dig,
+    // This pick-up digs nothing (canDig []): digging to a drop that lies in rock is the walk-in below, one rule; its rock counts against maxDig for the road too, but each walked-to drop may dig at least POCKET_MIN_DIG cells even when the budget is spent, and maxDig 0 digs nothing (the pick-up's own 1-3 cell dig,
     // issue 3, is for the hands that name a drop and have no walk-in of their own; with both here the same drop would be tried twice).
     const picked = await pickup(ctx, { ids: drops.map(entity => entity.id), canDig: [] });
     if (!picked.ok && picked.reason === 'inventory_full') return 'full';
@@ -298,7 +298,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     const beside = FACES.map(([dx, dy, dz]) => ({ x: cell.x + dx, y: cell.y + dy, z: cell.z + dz }))
       .filter(at => { const name = blockAt(bot, at)?.name; return name !== undefined && !isLiquid(name); });
     if (!beside.length) return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} のまわりに立てる所が無い` };
-    const roadLeft = Math.max(0, roadBudget - result.road);
+    const roadLeft = Math.max(0, roadBudget - result.road - pocketDug);
     const gone = await go(ctx, { goals: beside, range: 0, canDig: roadLeft > 0 ? roadWords : undefined, maxDig: roadLeft, canPlace: undefined,
       seconds: Math.max(5, Math.min(APPROACH_SECONDS, (ctx.deadline - Date.now()) / 1000)) });
     result.road += Number(gone.data?.work?.dug ?? 0);

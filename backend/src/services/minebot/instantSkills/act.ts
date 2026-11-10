@@ -852,7 +852,9 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       try { if (outcome.at) around = aroundText(bodyReader(bot), outcome.at, feetCell(bot)); } catch { /* the line stands without it */ }
       // go's, obsidian's and portal's lines are the contract's own ("<手> 止まった <code>: ...", the counts in it): the code is the closed word.
       const own = hand.do === 'obsidian' || hand.do === 'portal' || hand.do === 'vertical';
-      const line = rush || filling || hand.do === 'go' ? clip(outcome.text) : own ? clip(outcome.text.startsWith(`${hand.do} 止まった`) ? outcome.text : `${hand.do} 止まった ${outcome.reason ?? 'failed'}: ${outcome.text}`) : stoppedLine(wordReason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
+      // The carried-station note is put first in outcome.text; the contract's own line keeps its "<手> 止まった" start, so the note goes after it (the test reads the bare text).
+      const bareText = carried && outcome.text.startsWith(`${carried}。`) ? outcome.text.slice(carried.length + 1) : outcome.text;
+      const line = rush || filling || hand.do === 'go' ? clip(outcome.text) : own ? clip(bareText.startsWith(`${hand.do} 止まった`) ? (carried && bareText !== outcome.text ? `${bareText}（${carried}）` : bareText) : `${hand.do} 止まった ${outcome.reason ?? 'failed'}: ${outcome.text}`) : stoppedLine(wordReason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
       // A hand that stops the act by itself ended (finished) on its own: a cut is only what comes from outside.
       pushLine(index, goesOn ? 'failed' : 'stopped', line, finishedVerdict(outcome, handOps), handOps,
         { ...rushExtra, ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) }, delta);
