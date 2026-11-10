@@ -45,18 +45,24 @@ export const SOON_SECONDS = 10;
 /** A booking is given up after this many failed tries (an enemy near, no spot), and after this long. */
 const DUE_MISSES = 3;
 const DUE_MAX_MS = 25 * 60_000;
+/** The booking lies down only with this much of the act's time left (placing, lying, waking and the pick-up take about 15 s; the hand after it keeps the rest), and never ahead of these hands. */
+const DUE_MIN_LEFT_MS = 25_000;
+const URGENT_HANDS: ReadonlySet<string> = new Set(['eat', 'fight', 'attack', 'shoot', 'hunt', 'bed_burst', 'portal']);
+/** A hostile this near (a skeleton's range) or health this low: the hand ahead is the body's first (the booking waits, no miss is counted). */
+const DUE_THREAT_M = 20;
+const DUE_LOW_HEALTH = 10;
 
 export const isNight = (timeOfDay: number) => timeOfDay >= NIGHT_FROM && timeOfDay <= NIGHT_TO;
 
 /** Every enemy in the box the game forbids sleep for (the threat test the floor uses everywhere else), nearest first. */
-export function enemiesInSleepBox(bot: SleepBody, now = Date.now()): Array<{ name: string; distance: number; at: Cell }> {
+export function enemiesInSleepBox(bot: SleepBody, now = Date.now(), across = BOX_ACROSS, up = BOX_UP): Array<{ name: string; distance: number; at: Cell }> {
   const at = bot.entity?.position;
   if (!at) return [];
   const found: Array<{ name: string; distance: number; at: Cell }> = [];
   for (const entity of Object.values(bot.entities ?? {})) {
     if (!entity?.position || (entity as unknown) === bot.entity) continue;
     const dx = entity.position.x - at.x, dy = entity.position.y - at.y, dz = entity.position.z - at.z;
-    if (Math.abs(dx) > BOX_ACROSS || Math.abs(dz) > BOX_ACROSS || Math.abs(dy) > BOX_UP) continue;
+    if (Math.abs(dx) > across || Math.abs(dz) > across || Math.abs(dy) > up) continue;
     const name = String(entity.name ?? '').toLowerCase();
     let threat = false;
     try { threat = !!name && isThreatEntity({ name, type: entity.type, metadata: entity.metadata }, bot.registry?.entitiesByName?.[name]?.type, now, bot); } catch { threat = false; }
@@ -205,13 +211,17 @@ export async function fireSleepDue(ctx: StepContext, hand: string, index: number
     return null;
   }
   due.sawNight = true;
-  if (hand === 'sleep' || ctx.deadline - Date.now() < 12_000) return null;
+  if (hand === 'sleep' || URGENT_HANDS.has(hand) || ctx.deadline - Date.now() < DUE_MIN_LEFT_MS) return null;
+  if (Number((bot as { health?: number }).health ?? 20) <= DUE_LOW_HEALTH || enemiesInSleepBox(bot, Date.now(), DUE_THREAT_M, DUE_THREAT_M).length) return null;
   const carried = (bot.inventory?.items?.() ?? []).some(item => isBedName(item.name));
   let beside: unknown = null;
   try { beside = bot.findBlock?.({ matching: bot.isABed, maxDistance: 5 }) ?? null; } catch { beside = null; }
   if (!carried && !beside) return null;
   const began = Date.now();
-  const out = await sleep(ctx, { item: due.item, seconds: due.seconds });
+  // `sleep` clears the booking as it starts: if it throws (a reflex or the act's stop aborts it, a zombie wakes the body) the booking is put back, and the throw goes on.
+  let out: StepOutcome;
+  try { out = await sleep(ctx, { item: due.item, seconds: due.seconds }); }
+  catch (error) { if (!bot.sleepDue) bot.sleepDue = due; throw error; }
   if (out.ok) return `寝る予約: 夜になったので手 ${index + 1} の前で寝た（${Math.max(1, Math.round((Date.now() - began) / 1000))} 秒）。${out.text}`;
   due.misses++;
   if (due.misses >= DUE_MISSES) return `寝る予約は取り下げた（${DUE_MISSES} 回寝られなかった: ${out.text.replace(/^sleep 止まった /u, '')}）`;

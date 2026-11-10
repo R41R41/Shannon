@@ -115,16 +115,44 @@ describe('sleep: the booking the body keeps and fires at a break between hands',
     expect(bot.sleepDue).toBeNull();
     expect(await fireSleepDue(ctxOf(bot), 'mine', 2)).toBeNull();
   });
-  it('an enemy in the box keeps it for 3 tries and then gives it up, saying so; a sleep hand itself is left to itself', async () => {
+  it('a failed try (no spot) keeps it for 3 tries and then gives it up, saying so; a sleep hand itself is left to itself', async () => {
     const { bot, skill } = await booked();
     bot.time.timeOfDay = NIGHT;
-    bot.entities = { 2: zombie(2, 3.5) };
+    skill.runImpl.mockImplementation(async () => ({ success: false, failureType: 'no_spot', result: 'no spot' }));
     expect(await fireSleepDue(ctxOf(bot), 'sleep', 0)).toBeNull();
+    expect(skill.runImpl).not.toHaveBeenCalled();
     expect(await fireSleepDue(ctxOf(bot), 'mine', 0)).toContain('次の手の前でもう一度');
     expect(await fireSleepDue(ctxOf(bot), 'mine', 1)).toContain('次の手の前でもう一度');
     expect(await fireSleepDue(ctxOf(bot), 'mine', 2)).toContain('寝る予約は取り下げた');
     expect(bot.sleepDue).toBeNull();
+  });
+  it('a hostile within 20 m, an eat/fight hand or low health go first: the booking waits, no try and no miss is counted (review of run 6)', async () => {
+    const { bot, skill } = await booked();
+    bot.time.timeOfDay = NIGHT;
+    bot.entities = { 2: zombie(2, 3.5) };
+    for (let index = 0; index < 5; index++) expect(await fireSleepDue(ctxOf(bot), 'mine', index)).toBeNull();
+    bot.entities = { 2: zombie(2, 15.5) };
+    expect(await fireSleepDue(ctxOf(bot), 'mine', 0)).toBeNull();
+    bot.entities = {};
+    for (const hand of ['eat', 'fight', 'hunt', 'shoot']) expect(await fireSleepDue(ctxOf(bot), hand, 0)).toBeNull();
+    bot.health = 8;
+    expect(await fireSleepDue(ctxOf(bot), 'mine', 0)).toBeNull();
+    bot.health = 20;
+    expect(await fireSleepDue({ ...ctxOf(bot), deadline: Date.now() + 20_000 }, 'mine', 0)).toBeNull();
     expect(skill.runImpl).not.toHaveBeenCalled();
+    expect(bot.sleepDue).toMatchObject({ misses: 0, sawNight: true });
+    expect(await fireSleepDue(ctxOf(bot), 'mine', 0)).toContain('寝る予約: 夜になったので');
+  });
+  it('a sleep that throws (the act stop, a reflex) puts the booking back and throws on; it is not a miss', async () => {
+    const { bot, skill } = await booked();
+    bot.time.timeOfDay = NIGHT;
+    const stop = new AbortController();
+    skill.runImpl.mockImplementation(async () => { stop.abort('reflex'); return { success: false, failureType: 'no_bed_spot', result: 'x' }; });
+    await expect(fireSleepDue(ctxOf(bot, stop.signal), 'mine', 0)).rejects.toBeInstanceOf(StepStopped);
+    expect(bot.sleepDue).toMatchObject({ misses: 0, sawNight: true });
+    skill.runImpl.mockImplementation(async () => ({ success: true, nightPassed: true, bedLeft: false }));
+    expect(await fireSleepDue(ctxOf(bot), 'mine', 1)).toContain('寝る予約: 夜になったので手 2 の前で寝た');
+    expect(bot.sleepDue).toBeNull();
   });
   it('is dropped in another dimension and after the night went by; kept with no bed to hand', async () => {
     const a = await booked();
