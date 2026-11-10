@@ -66,7 +66,9 @@ describe('run 37: the six walks that did not move, as the act\'s line now reads 
     const bot = stuckBody((x, y, z) => (y === 64 && z === 0 && x >= 0 && x <= 3 ? water(x === 0 ? 5 : 3) : floor(x, y)), [new Vec3(1, 64, 0), new Vec3(2, 64, 0), new Vec3(3, 64, 0)]);
     bot.entity.isInWater = true;
     const line = await lineOf(bot);
-    expect(line.startsWith('一歩ではない（元: 経路探索は道を見つけたが体は進まなかった・水の中・今のマスが水の流れ 5）: ')).toBe(true);
+    // Run 5 (11/11): with no block to lay, the stream hint (what stops it) comes first in the cause; the walk's own causes follow whole.
+    expect(line.startsWith('一歩ではない（元: 流れは dirt か cobblestone を 1 個持てば止められる（上流のマスに置く）・')).toBe(true);
+    expect(line).toContain('経路探索は道を見つけたが体は進まなかった・水の中・今のマスが水の流れ 5）: ');
     expect(line.length).toBeLessThanOrEqual(LINE_MAX_WITH_CAUSE);
   }, 20000);
 
