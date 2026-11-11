@@ -1,6 +1,7 @@
 import { Vec3 } from 'vec3';
 import { feetCell, type BlockReader, type Cell } from '../localMap.js';
 import { dropBurnsIn } from '../dropFate.js';
+import { blackBoxOf } from '../blackbox.js';
 import { blockInSight } from '../probeTools.js';
 import { cellText, freeSlots, inventoryCount, stopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { dig } from './dig.js';
@@ -34,6 +35,11 @@ export interface ObsidianArgs { at: Cell[]; count?: number; seconds?: number; ca
 /** How many places to stand and pour from are tried for one source before it is given up. */
 const MAX_TRIES = 5;
 const MAX_DIG_TRIES = 4;
+/** The core of a stop's reason kept before the numbers (the act line is cut at 160 characters). */
+const CORE_CHARS = 70;
+/** The lava sources round the named ones noted at the start (for the obsidian that one pour sets beside them), how far from a named one they are looked for, and how many are kept. */
+const GROWN_RADIUS = 6;
+const GROWN_CAP = 64;
 /** Run 47 (hold 7): what the hand may dig to make a way to a lava source shut in rock when the planner named nothing. */
 const DEFAULT_CARVE = ['stone', 'deepslate', 'dirt'];
 /** ... and how many blocks that way may dig: the approach through rock and the tunnel (run 47: the first guess, 12, was too few for 16). */
@@ -179,6 +185,19 @@ function poolsOf(cells: Cell[]): Cell[][] {
   return pools;
 }
 
+/** A reason split into its core (the first sentence, cut at its last clause break within CORE_CHARS when longer) and the rest. */
+export function reasonParts(text: string): { core: string; rest: string } {
+  const stop1 = text.indexOf('。');
+  const sentence = stop1 < 0 ? text : text.slice(0, stop1);
+  let cut = sentence.length;
+  if (cut > CORE_CHARS) {
+    const breaks = ['、', '（', ': '].map(mark => sentence.lastIndexOf(mark, CORE_CHARS)).filter(at => at >= 20);
+    cut = breaks.length ? Math.max(...breaks) : CORE_CHARS;
+  }
+  const rest = (cut < sentence.length ? text.slice(cut) : stop1 < 0 ? '' : text.slice(stop1 + 1)).replace(/^[、。:：\s]+/u, '');
+  return { core: sentence.slice(0, cut), rest };
+}
+
 interface Counts { obsidian: number; pours: number; restands: number; placed: number; notes: string[] }
 /** Why a source was not made into obsidian: a closed code and a few words. */
 interface Why { code: string; text: string; at?: Cell }
@@ -197,8 +216,10 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   const stop = (code: string, text: string, at?: Cell): StepOutcome => {
     // The last scoop can move through a drop after collection stopped. A stop must report the inventory at its end, not before water recovery.
     counts.obsidian = Math.max(0, inventoryCount(bot, 'obsidian') - obsidianAtStart);
-    // Run 48 (hold 3): the numbers come first (the act cuts a line at 160 characters from the back, and the count was what was cut).
-    return stopped(bot, code, `obsidian 止まった ${code}: 黒曜石 ${counts.obsidian} 個・水の注ぎ ${counts.pours} 回・立ち直し ${counts.restands} 回。${text}`, at);
+    // Run 48 (hold 3): the numbers come early (the act cuts a line at 160 characters from the back, and the count was what was cut).
+    // 1111 (run 7): and the core of the reason comes before them (one sentence, at most CORE_CHARS), the rest after: the planner read the numbers but not why, and probed in between.
+    const { core, rest } = reasonParts(text);
+    return stopped(bot, code, `obsidian 止まった ${code}: ${core}。黒曜石 ${counts.obsidian} 個・水の注ぎ ${counts.pours} 回・立ち直し ${counts.restands} 回${rest ? `。${rest}` : ''}`, at);
   };
 
   // What each cell the planner named holds now: a lava source (to be set), obsidian already (only mined), anything else (not used, and said).
@@ -237,7 +258,13 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   const waited = new Map<string, number>();
   const waitFor = async (label: string, context: StepContext, until: () => boolean, ms: number): Promise<boolean> => {
     const began = Date.now();
-    try { return await waitUntil(context, until, ms, 100); } finally { waited.set(label, (waited.get(label) ?? 0) + (Date.now() - began)); }
+    let met = false;
+    try { met = await waitUntil(context, until, ms, 100); return met; } finally {
+      const took = Date.now() - began;
+      waited.set(label, (waited.get(label) ?? 0) + took);
+      // The real seconds of every wait go to the black box only (not into the act's line): what the caps cost, and whether the wait ended by its condition.
+      blackBoxOf(bot)?.note('obsidian_wait', { label, ms: took, cap: ms, met });
+    }
   };
 
   /** Give one pour 2–3 s to spread, ending after the named obsidian count has stopped increasing. */
@@ -250,7 +277,8 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
         last = hard; changedAt = Date.now();
         ctx.progress?.(`湖面 ${hard}/${pool.length}・回収 ${gained()}/${want}`);
       }
-      return timeIsUp(ctx) || (Date.now() - began >= SPREAD_MIN_MS && Date.now() - changedAt >= SPREAD_QUIET_MS);
+      // Every named cell set: only the short quiet is waited (what the same flow sets beside them shows within it), not the whole minimum.
+      return timeIsUp(ctx) || ((hard >= pool.length || Date.now() - began >= SPREAD_MIN_MS) && Date.now() - changedAt >= SPREAD_QUIET_MS);
     }, SPREAD_MAX_MS);
   };
 
@@ -407,14 +435,16 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     const here = feetCell(bot)!;
     const nameOf = (cell: Cell) => read(cell.x, cell.y, cell.z)?.name ?? '未ロード';
     const mayBe = (cell: Cell) => { const block = read(cell.x, cell.y, cell.z); return !!block && (isOpenCell(block) || (isSolid(block) && rule.names.has(block.name))); };
+    // The cell over the source may hold obsidian this hand set (water poured earlier, the lava under it set, the face closed over it): it holds a diamond or netherite pick, so it is dug open as a person does.
+    const mayBeOver = (cell: Cell) => mayBe(cell) || read(cell.x, cell.y, cell.z)?.name === 'obsidian';
     const wet = (cell: Cell) => [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, 0, 0]].some(([dx, dy, dz]) => { const block = read(cell.x + dx!, cell.y + dy!, cell.z + dz!); return block?.name === 'lava' || block?.name === 'water'; });
     const over = shift(lava, 'up');
     const reasons: string[] = [];
     const ways: Array<{ k1: Cell; k2: Cell; score: number }> = [];
     for (const side of HORIZONTAL) {
       const k1 = shift(over, side), k2 = shift(k1, side);
-      const needs: Array<[Cell, string]> = [[over, '源の真上'], [k1, '通路'], [shift(k1, 'up'), '通路の上'], [k2, '立ち位置'], [shift(k2, 'up'), '立ち位置の上']];
-      const shut = needs.find(([cell]) => !mayBe(cell));
+      const needs: Array<[Cell, string, ((cell: Cell) => boolean)?]> = [[over, '源の真上', mayBeOver], [k1, '通路'], [shift(k1, 'up'), '通路の上'], [k2, '立ち位置'], [shift(k2, 'up'), '立ち位置の上']];
+      const shut = needs.find(([cell, , allowed]) => !(allowed ?? mayBe)(cell));
       if (shut) { reasons.push(`${side === 'north' ? '北' : side === 'south' ? '南' : side === 'west' ? '西' : '東'}は ${cellText(shut[0])}（${shut[1]}）が ${nameOf(shut[0])}`); continue; }
       const floorless = [k1, k2].find(cell => !isSolid(read(cell.x, cell.y - 1, cell.z)));
       if (floorless) { reasons.push(`${cellText({ ...floorless, y: floorless.y - 1 })} が ${nameOf({ ...floorless, y: floorless.y - 1 })}で床にならない`); continue; }
@@ -435,8 +465,22 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       if (arrived.reason === 'limit_dig' && needed) return { code: 'unreachable', text: `${cellText(way.k2)} まで掘ると 掘る所が ${needed} 要り、上限 ${maxDig} を超える。maxDig=${Number(needed) + 2} なら作れる（obsidian の maxDig）`, at: way.k2 };
       return { code: 'unreachable', text: `${cellText(way.k2)} まで掘って近づけない: ${arrived.text.slice(0, 80)}`, at: way.k2 };
     }
-    const opened = await dig(ctx, { at: [way.k1, shift(way.k1, 'up'), over].filter(cell => !isOpenCell(read(cell.x, cell.y, cell.z))), collect: false });
-    if (!opened.ok) return { code: 'unreachable', text: `面を掘れなかった: ${opened.text.slice(0, 80)}`, at: over };
+    // Only what is still shut is dug (a cell already open is not asked of dig: a partial stop with nothing to dig).
+    const shutCells = [way.k1, shift(way.k1, 'up')].filter(cell => !isOpenCell(read(cell.x, cell.y, cell.z)));
+    if (shutCells.length) {
+      const opened = await dig(ctx, { at: shutCells, collect: false });
+      if (!opened.ok) return { code: 'unreachable', text: `面を掘れなかった: ${opened.text.slice(0, 80)}`, at: shutCells[0] };
+    }
+    if (read(over.x, over.y, over.z)?.name === 'obsidian') {
+      // The obsidian over the source is one of the obsidian asked for: dug with the pick and taken into the pack.
+      const before = inventoryCount(bot, 'obsidian');
+      const own = await dig(ctx, { at: [over], ...(pickOf(bot) ? { tool: pickOf(bot)! } : {}), collect: true });
+      if (!own.ok) return { code: 'unreachable', text: `源の真上の黒曜石 ${cellText(over)} を掘れなかった: ${own.text.slice(0, 80)}`, at: over };
+      counts.notes.push(`源の真上の黒曜石 ${cellText(over)} を掘って開けた（持ち物 +${Math.max(0, inventoryCount(bot, 'obsidian') - before)}）`);
+    } else if (!isOpenCell(read(over.x, over.y, over.z))) {
+      const opened = await dig(ctx, { at: [over], collect: false });
+      if (!opened.ok) return { code: 'unreachable', text: `面を掘れなかった: ${opened.text.slice(0, 80)}`, at: over };
+    }
     counts.notes.push(`${cellText(lava)} は岩に囲まれていたので、${cellText(way.k2)} から ${cellText(way.k1)} と ${cellText(over)} を掘って面を作った`);
     return null;
   };
@@ -548,6 +592,40 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     const here = bot.entity.position;
     return Math.hypot(a.x + 0.5 - here.x, a.z + 0.5 - here.z) - Math.hypot(b.x + 0.5 - here.x, b.z + 0.5 - here.z);
   });
+  // The lava sources round the named ones as they were at the start (at most GROWN_CAP, the nearest first): one pour sets the ones beside the first too, and what the hand's own water set is
+  // dug on, within the same pool, as a person digs every block the flow made (not given to the planner as more cells, not looked for beyond the lava that stood beside the named ones).
+  const namedKeys = new Set(order.map(keyOf));
+  const lavaAtStart: Cell[] = [];
+  if (live.length) {
+    const seen = new Set<string>();
+    for (const named of order) for (let dx = -GROWN_RADIUS; dx <= GROWN_RADIUS; dx++) for (let dy = -2; dy <= 2; dy++) for (let dz = -GROWN_RADIUS; dz <= GROWN_RADIUS; dz++) {
+      const cell = { x: named.x + dx, y: named.y + dy, z: named.z + dz };
+      const key = keyOf(cell);
+      if (namedKeys.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      if (isLavaSource(read(cell.x, cell.y, cell.z))) lavaAtStart.push(cell);
+    }
+    lavaAtStart.sort((a, b) => Math.min(...order.map(named => dist(a, named))) - Math.min(...order.map(named => dist(b, named))));
+    lavaAtStart.length = Math.min(lavaAtStart.length, GROWN_CAP);
+  }
+  const grownDone = new Set<string>();
+  /** The cells dug by this hand so far (the pack shows them a moment later than the dig: the count of obsidian made is not read from the pack alone). */
+  let mined = 0;
+  /** The cells of the start's lava that are obsidian now and touch the pool (or one already taken in): added to what is dug. */
+  const addGrown = (pool: Cell[], pending: Map<string, Cell>): void => {
+    if (!lavaAtStart.length || Math.max(gained(), mined) >= want) return;
+    const touching = new Set(pool.map(keyOf));
+    for (const key of grownDone) touching.add(key);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const cell of lavaAtStart) {
+        const key = keyOf(cell);
+        if (grownDone.has(key) || read(cell.x, cell.y, cell.z)?.name !== 'obsidian') continue;
+        if (!FACES.some(face => touching.has(keyOf(shift(cell, face))))) continue;
+        grownDone.add(key); touching.add(key); pending.set(key, cell); grew = true;
+      }
+    }
+  };
   for (const pool of poolsOf(order)) {
     const pending = new Map(pool.map(cell => [keyOf(cell), cell]));
     const triedPours = new Set<string>();
@@ -566,8 +644,10 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       const spread = pool.length > 1 && isLavaSource(read(lava.x, lava.y, lava.z));
       const failure = await oneSource(lava, spread ? pool : undefined);
       counts.obsidian = gained();
+      if (!spread && !failure) mined++;
       if (!spread) pending.delete(keyOf(lava));
       else if (failure) triedPours.add(keyOf(lava)); // Another pour may still set this cell; it can then be mined.
+      if (!failure || failure.code !== 'limit_time') addGrown(pool, pending);
       if (failure?.code === 'limit_time') { if (waterLeft) await scoopBack(waterLeft); return stop('limit_time', `${seconds} 秒の上限に達した`, lava); }
       if (failure?.code === 'inventory_full') { if (waterLeft) await scoopBack(waterLeft); return stop('inventory_full', failure.text, lava); }
       if (failure) failures.push(failure);
@@ -583,6 +663,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   if (waterLeft && await scoopBack(waterLeft)) waterLeft = null;
 
   const waterBack = inventoryCount(bot, 'water_bucket') >= bucketsAtStart;
+  if (grownDone.size) counts.notes.push(`水が固めた隣の黒曜石 ${grownDone.size} 個も続けて掘った`);
   counts.obsidian = gained();
   if (!waterBack && waterLeft) counts.notes.push(`水が ${cellText(waterLeft)} に残った`);
   const waitedWords = [...waited.entries()].filter(([, ms]) => ms >= 1500).map(([label, ms]) => `${label}待った ${(ms / 1000).toFixed(1)} 秒`).join('・');

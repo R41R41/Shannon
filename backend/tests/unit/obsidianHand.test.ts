@@ -326,7 +326,7 @@ describe('obsidian: what it refuses before it begins', () => {
     for (let slot = 9; slot <= 44; slot++) sim.bot.inventory.slots[slot] = { name: slot === 20 ? 'obsidian' : 'dirt', count: slot === 20 ? 64 : 1 } as never;
     const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)] }));
     expect(outcome.reason).toBe('inventory_full');
-    expect(outcome.text).toMatch(/^obsidian 止まった inventory_full: 黒曜石 \d+ 個・水の注ぎ \d+ 回・立ち直し \d+ 回。持ち物が満杯（36\/36）で黒曜石を拾えない。drop で空ける/u);
+    expect(outcome.text).toMatch(/^obsidian 止まった inventory_full: 持ち物が満杯（36\/36）で黒曜石を拾えない。黒曜石 \d+ 個・水の注ぎ \d+ 回・立ち直し \d+ 回。drop で空ける/u);
     expect(sim.bot.poured).toEqual([]);
     expect(sim.bot.dugBlocks ?? []).toEqual([]);
     expect(Math.hypot(sim.bot.entity.position.x - 0.5, sim.bot.entity.position.z - 0.5)).toBeLessThan(0.1);
@@ -351,7 +351,7 @@ describe('obsidian: what it refuses before it begins', () => {
     sim.bot.game.dimension = 'the_nether';
     const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)] }));
     expect(outcome.reason).toBe('stuck');
-    expect(outcome.text).toMatch(/^obsidian 止まった stuck: 黒曜石 \d+ 個・水の注ぎ \d+ 回・立ち直し \d+ 回。ネザーでは水を注いでも蒸発して/u);
+    expect(outcome.text).toMatch(/^obsidian 止まった stuck: ネザーでは水を注いでも蒸発して.*。黒曜石 \d+ 個・水の注ぎ \d+ 回・立ち直し \d+ 回/u);
     expect(sim.bot.poured).toEqual([]);
   });
   it('takes the sources that are lava and says which it skipped', async () => {
@@ -361,7 +361,8 @@ describe('obsidian: what it refuses before it begins', () => {
     expect(outcome.text).toContain('飛ばした (3,63,0) は stone');
   });
   it('fails with the count it got when the sources named run out before the count (no_lava, the number said)', async () => {
-    const sim = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK) });
+    // One lone source: nothing beside it for the pour to set.
+    const sim = makeHandsSim(over(flat, box('lava', 8, 8, 63, 63, 0, 0)), { items: stacks(WATER, PICK) });
     const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)], count: 2 }));
     expect(outcome.ok).toBe(false);
     expect(outcome.reason).toBe('no_lava');
@@ -393,8 +394,9 @@ describe('obsidian: its limits, and the act round it', () => {
     expect(Date.now() - began).toBeGreaterThan(180_000);
     expect(Date.now() - began).toBeLessThan(320_000);
     expect(sim.count('water_bucket')).toBe(1);
-    // The water can also set the two cells the head did not name. Only its 22 cells may be mined.
-    expect(sim.bot.dugBlocks.slice().sort()).toEqual(cells.map(cell => `obsidian@${cell.x},${cell.y},${cell.z}`).sort());
+    // The water can also set the two cells the head did not name (1111: those are dug on as the flow's own, within the count): 22 in all, all obsidian, none outside the lake.
+    expect(sim.bot.dugBlocks).toHaveLength(22);
+    expect(sim.bot.dugBlocks.every((entry: string) => /^obsidian@(\d+),63,(\d)$/u.test(entry))).toBe(true);
     expect(sim.bot.poured.length).toBeLessThan(cells.length);
   }, 120_000);
 
@@ -553,7 +555,7 @@ describe('obsidian: a lava source shut in rock (run 47, hold 7)', () => {
     const small = makeHandsSim(deep(), { items: stacks(WATER, PICK) });
     const refused = await drive(small, run(small, { at: [at(10, 58, 0)], seconds: 60, maxDig: 2 }));
     expect(refused.ok).toBe(false);
-    expect(refused.text).toMatch(/^obsidian 止まった unreachable: .* まで掘ると 掘る所が \d+ 要り、上限 2 を超える。maxDig=\d+ なら作れる/u);
+    expect(refused.text).toMatch(/^obsidian 止まった unreachable: .* まで掘ると 掘る所が \d+ 要り、上限 2 を超える。黒曜石 \d+ 個・水の注ぎ \d+ 回・立ち直し \d+ 回。maxDig=\d+ なら作れる/u);
     expect(refused.text).not.toContain('面を作った');
     const wide = makeHandsSim(deep(), { items: stacks(WATER, PICK) });
     const made = await drive(wide, run(wide, { at: [at(10, 58, 0)], seconds: 120, maxDig: 60 }));
@@ -563,17 +565,66 @@ describe('obsidian: a lava source shut in rock (run 47, hold 7)', () => {
     const sim = makeHandsSim(shut(), { items: stacks(WATER, PICK) });
     const outcome = await drive(sim, run(sim, { at: [at(10, 62, 0)], seconds: 60, canDig: ['sand'] }));
     expect(outcome.ok).toBe(false);
-    expect(outcome.text).toMatch(/^obsidian 止まった unreachable: 黒曜石 \d+ 個・水の注ぎ \d+ 回・立ち直し \d+ 回。\(10,62,0\) は岩に囲まれ（.*stone.*）、掘って面と立ち位置を作る道も無い/u);
+    expect(outcome.text).toMatch(/^obsidian 止まった unreachable: \(10,62,0\) は岩に囲まれ.*。黒曜石 \d+ 個・水の注ぎ \d+ 回・立ち直し \d+ 回。.*stone.*掘って面と立ち位置を作る道も無い/u);
     expect(sim.bot.dugBlocks ?? []).toEqual([]);
   });
 });
 
+describe('obsidian: what one pour sets beside the named source, and the obsidian over a shut source (1111, run 7)', () => {
+  it('digs the next source that the same pour set when only one was named and count asks for two (C)', async () => {
+    const sim = makeHandsSim(over(flat, box('lava', 8, 9, 63, 63, 0, 0)), { items: stacks(WATER, PICK) });
+    const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)], count: 2, seconds: 120 }));
+    expect(outcome.ok).toBe(true);
+    expect(sim.count('obsidian')).toBe(2);
+    expect(outcome.text).toContain('水が固めた隣の黒曜石 1 個');
+    expect(sim.bot.poured).toHaveLength(1);
+    expect(sim.count('water_bucket')).toBe(1);
+  }, 120_000);
+
+  it('does not dig the next source beyond the count asked for (C)', async () => {
+    const sim = makeHandsSim(over(flat, box('lava', 8, 9, 63, 63, 0, 0)), { items: stacks(WATER, PICK) });
+    const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)], count: 1, seconds: 120 }));
+    expect(outcome.ok).toBe(true);
+    expect(sim.count('obsidian')).toBe(1);
+  }, 120_000);
+
+  it('opens a source whose cell over it is already obsidian, taking that obsidian too (A)', async () => {
+    const sim = makeHandsSim(over(flat, box('lava', 10, 10, 62, 62, 0, 0), box('obsidian', 10, 10, 63, 63, 0, 0)), { items: stacks(WATER, PICK) });
+    const outcome = await drive(sim, run(sim, { at: [at(10, 62, 0)], seconds: 120 }));
+    expect(outcome.ok).toBe(true);
+    expect(outcome.text).toContain('源の真上の黒曜石');
+    expect(sim.count('obsidian')).toBeGreaterThanOrEqual(2);
+    expect(sim.count('water_bucket')).toBe(1);
+  }, 120_000);
+
+  it('puts the reason before the numbers in a stop line, the long rest after them (E)', async () => {
+    const sim = makeHandsSim(over(flat, box('lava', 10, 10, 62, 62, 0, 0)), { items: stacks(WATER, PICK) });
+    const outcome = await drive(sim, run(sim, { at: [at(10, 62, 0)], seconds: 60, canDig: ['sand'] }));
+    expect(outcome.ok).toBe(false);
+    const text = outcome.text;
+    expect(text).toMatch(/^obsidian 止まった unreachable: .+。黒曜石 \d+ 個・水の注ぎ \d+ 回・立ち直し \d+ 回/u);
+    expect(text.indexOf('岩に囲まれ')).toBeLessThan(text.indexOf('黒曜石 0 個'));
+  });
+
+  it('keeps the real seconds of each wait in the black box, not in the act line', async () => {
+    const notes: Array<[string, Record<string, unknown>]> = [];
+    const sim = makeHandsSim(over(flat, lake(8, 9, 0, 0)), { items: stacks(WATER, PICK) });
+    const { installBlackBox } = await import('../../src/services/minebot/utils/blackbox.js');
+    const box1 = installBlackBox(sim.bot, '/tmp/bb-obsidian-test');
+    const note = box1.note.bind(box1);
+    box1.note = (kind: string, data: Record<string, unknown> = {}) => { notes.push([kind, data]); note(kind, data); };
+    await drive(sim, run(sim, { at: [at(8, 63, 0), at(9, 63, 0)], seconds: 120 }));
+    expect(notes.filter(([kind]) => kind === 'obsidian_wait').length).toBeGreaterThan(0);
+    expect(notes.find(([kind]) => kind === 'obsidian_wait')![1]).toMatchObject({ label: expect.any(String), ms: expect.any(Number), cap: expect.any(Number) });
+  }, 120_000);
+});
+
 describe('obsidian: the numbers come first in a stop line (run 48, hold 3)', () => {
   it('names the count, the pours and the stands before anything long, so that the 160 characters of a line keep them', async () => {
-    const sim = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK) });
+    const sim = makeHandsSim(over(flat, box('lava', 8, 8, 63, 63, 0, 0)), { items: stacks(WATER, PICK) });
     const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0), at(40, 63, 0)], count: 3, seconds: 120 }));
     expect(outcome.ok).toBe(false);
-    expect(outcome.text).toMatch(/^obsidian 止まった \w+: 黒曜石 1 個・水の注ぎ 1 回・立ち直し \d+ 回。/u);
+    expect(outcome.text).toMatch(/^obsidian 止まった \w+: .+。黒曜石 1 個・水の注ぎ 1 回・立ち直し \d+ 回/u);
     expect(outcome.text).toContain('（3 個のうち 1 個）');
     expect(outcome.text.slice(0, 160)).toContain('黒曜石 1 個');
   });
