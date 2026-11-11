@@ -66,7 +66,7 @@ describe('a village in view', () => {
 
   it('is recognised near the surface by a bell, or by a village work site with another marker or villagers beside it', () => {
     expect(detectVillage(body([[60, 64, -40, 'bell']]))).toMatchObject({ kind: 'village', direction: '北東', distance: 72 });
-    expect(detectVillage(body([[30, 64, 0, 'hay_block'], [36, 64, 4, 'composter']]))?.evidence).toContain('干し草1（パン3）');
+    expect(detectVillage(body([[30, 64, 0, 'hay_block'], [36, 64, 4, 'composter']]))?.evidence).toContain('干し草1（パン3）＝約33点');
     expect(detectVillage(body([[30, 64, 0, 'composter']], { 7: { name: 'villager', position: new Vec3(33, 64, 2) } }))?.evidence).toContain('村人1人');
   });
 
@@ -76,7 +76,7 @@ describe('a village in view', () => {
     const hay: Array<[number, number, number, string]> = Array.from({ length: 20 }, (_, i) => [88, 64, i, 'hay_block'] as [number, number, number, string]);
     const village = detectVillage(body([[30, 64, 0, 'bell'], ...beds, ...hay, [32, 64, 3, 'chest'], [33, 6, 3, 'chest']]));
     expect(village?.evidence).toContain('ベッド6台');
-    expect(village?.evidence).toContain('干し草20（パン60）');
+    expect(village?.evidence).toContain('干し草20（パン60）＝約660点');
     expect(village?.evidence).toContain('箱1');
     expect(village?.evidence).toContain('一周 約120秒（目安）');
     expect(village?.evidence).not.toContain('takeOk');

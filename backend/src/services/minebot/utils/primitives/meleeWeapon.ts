@@ -17,3 +17,16 @@ export async function takeUpMeleeWeapon(ctx: StepContext): Promise<{ weapon: str
   catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
   return { weapon, takenUp };
 }
+
+/** A sword or axe of stone or better in the pack (the held one counts): a hunt of an animal needs one, bare hands and a wooden sword take about ten blows for a cow. Null when none is carried. */
+export function stoneOrBetterMelee(items: Array<{ name: string }>): string | null {
+  const ranks = ['stone', 'iron', 'diamond', 'netherite'];
+  let best: string | null = null, bestRank = -1;
+  for (const item of items) {
+    const found = /^(stone|iron|diamond|netherite)_(sword|axe)$/u.exec(String(item?.name ?? ''));
+    if (!found) continue;
+    const rank = ranks.indexOf(found[1]) * 2 + (found[2] === 'sword' ? 1 : 0);
+    if (rank > bestRank) { bestRank = rank; best = found[0]; }
+  }
+  return best;
+}

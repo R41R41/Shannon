@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 import { noteBiome, emptyPlaceMemory } from '../../src/modules/minecraftLearning/places.js';
-import { overWater, surfaceKind, treeHeading, treesInSight, treeWeight, woodLine } from '../../src/services/minebot/utils/treeSearch.js';
+import { overWater, surfaceKind, treeHeading, treesInSight, treeWeight, woodLine, woodNear, woodNearOf } from '../../src/services/minebot/utils/treeSearch.js';
 import ExploreForStructure from '../../src/services/minebot/instantSkills/exploreForStructure.js';
 
 // Run 24, the world with no tree within 128 m of the start: the first order asked for logs and the body had no way to look for any
@@ -35,6 +35,17 @@ const bodyAt = (extra: Record<string, unknown> = {}) => ({
   entity: { position: new Vec3(0.5, 64, 0.5), yaw: 0 }, entities: {}, registry, game: { dimension: 'overworld' }, world: { getColumns: () => [] as any[] }, ...extra }) as any;
 
 describe('trees in sight, and which way to look', () => {
+  it('counts the logs and the trees within 24 m (logs touching are one tree), and reads past 64 logs up to 128', () => {
+    const trunk = (x: number, z: number) => [0, 1, 2, 3].map(dy => [x, 70 + dy, z]);
+    const bot = bodyAt({ world: { getColumns: () => columnsWithLogs([...trunk(5, 3), ...trunk(6, 4), ...trunk(12, 3), [60, 70, 3]] as number[][]) } });
+    expect(woodNearOf(treesInSight(bot, 128, 128).hits)).toEqual({ logs: 12, trees: 2, withinM: 24 });
+    expect(woodNear(bot)).toEqual({ logs: 12, trees: 2, withinM: 24 });
+    expect(woodLine(bot)).toContain('24m以内に原木 12 本・木 2 本／128m以内に原木 13 本');
+    const wood = Array.from({ length: 100 }, (_, i) => [20 + (i % 10), 70 + Math.floor(i / 10), 3 + (i % 3) * 4]);
+    expect(treesInSight(bodyAt({ world: { getColumns: () => columnsWithLogs(wood) } }), 128, 128).count).toBe(100);
+    expect(treesInSight(bodyAt({ world: { getColumns: () => columnsWithLogs(wood) } })).count).toBe(64);
+  });
+
   it('counts the logs among the chunks sent and names the nearest', () => {
     const bot = bodyAt({ world: { getColumns: () => columnsWithLogs([[40, 70, 3], [41, 70, 3], [90, 66, -20]]) } });
     const seen = treesInSight(bot);
@@ -168,7 +179,7 @@ describe('the line about wood at the top of the map the route is planned from (r
     const planks = registry.blocksByName.oak_planks.minStateId as number;
     const columns = [...columnsWithLogs([[40, 70, 3], [41, 70, 3]]), { chunkX: 0, chunkZ: -3, column: { minY: -64, sections: new Array(24).fill(null).map((_, index) => index === 8 ? { data: { palette: [0, planks], get: (cell: number) => (cell === 5 ? planks : 0) } } : null) } }];
     const line = woodLine(bodyAt({ world: { getColumns: () => columns } }), 2000);
-    expect(line).toMatch(/^木: 40m 東 \(40,70,3\) oak_log×2（128m以内に原木2本見える）/);
+    expect(line).toMatch(/^木: 40m 東 \(40,70,3\) oak_log×2（24m以内に原木なし／128m以内に原木 2 本）/);
     expect(line).toContain('板材の建物');
   });
 

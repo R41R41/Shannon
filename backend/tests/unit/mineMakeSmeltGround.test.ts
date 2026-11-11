@@ -80,6 +80,23 @@ describe('mine on the practice ground', () => {
     expect(g.dugLog).toHaveLength(6);
   }, 100_000);
 
+  it('2b. logs: a tree of four with another ten blocks off and a count of six: the body walks on to the second tree for the rest (run 7: ten asked, four got); with no other tree within 16 m it ends as before and says so', async () => {
+    const g = open();
+    for (let y = 64; y <= 67; y++) { g.set(11, y, 8, 'oak_log'); g.set(11, y, 18, 'oak_log'); }
+    const outcome = await mine(stepContext(g.bot, undefined, 100), { block: 'oak_log', at: [cell(11, 64, 8)], count: 6, seconds: 90 });
+    expect(outcome.ok, outcome.text).toBe(true);
+    expect(outcome.text).toContain('mine 済 oak_log 6 個');
+    expect(outcome.text).toContain('2 本の木');
+    expect(g.countOf('oak_log')).toBeGreaterThanOrEqual(5);
+    const h = open();
+    for (let y = 64; y <= 67; y++) { h.set(11, y, 8, 'oak_log'); h.set(11, y, 40, 'oak_log'); }
+    const alone = await mine(stepContext(h.bot, undefined, 100), { block: 'oak_log', at: [cell(11, 64, 8)], count: 6, seconds: 90 });
+    expect(alone.ok, alone.text).toBe(true);
+    expect(alone.text).toContain('mine 済 oak_log 4 個');
+    expect(alone.text).toContain('つながりが尽きた（ほしい 6 個に足りない）');
+    expect(alone.text).toContain('16m 以内に他の oak_log なし');
+  }, 100_000);
+
   it('3a. no tool that makes iron ore drop: stops with no_tool and digs nothing', async () => {
     const g = open();
     veinScene(g);
@@ -416,6 +433,18 @@ describe('make on the practice ground', () => {
     expect(outcome.ok, outcome.text).toBe(true);
     expect(g.countOf('shield')).toBe(1);
     expect(g.countOf('stripped_oak_log')).toBe(0);
+  });
+
+  it('0b. a shield with no log in the pack and wood standing near: the stop says how much wood is near and the mine that covers it (run 7: three stops on "oak_log×1" with the trees beside)', async () => {
+    const g = open();
+    g.set(10, 64, 8, 'crafting_table');
+    for (let y = 64; y <= 67; y++) g.set(14, y, 8, 'oak_log');
+    g.give('iron_ingot', 1);
+    const outcome = await make(stepContext(g.bot), { item: 'shield' });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toBe('missing');
+    expect(outcome.text).toContain('近くに原木 4 本・木 1 本（24m 以内）');
+    expect(outcome.text).toMatch(/mine oak_log count=\d+ で足りる/u);
   });
 
   it('1. two logs and a table at hand: planks, sticks, then the wooden pickaxe (the chain), nothing else touched', async () => {

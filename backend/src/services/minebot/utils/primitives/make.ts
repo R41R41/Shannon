@@ -8,6 +8,7 @@ import { withProgress } from './progressUnits.js';
 import { craftEvents } from './craftEvents.js';
 import { withWoodForms } from './woodRecipes.js';
 import { resolveWoodName, syncPack } from './craftSync.js';
+import { woodNear } from '../treeSearch.js';
 
 /**
  * make: one item, and the parts it is made of, in a chain of crafts (hands-contract.md 4). The planner says what and how many; the body
@@ -122,6 +123,17 @@ export async function make(ctx: StepContext, input: MakeArgs): Promise<StepOutco
   });
 }
 
+/** When a log is what a make lacks: how much wood stands near (the frame's own scan), and the mine that would cover it. Empty when no log is lacking or nothing was scanned. */
+function woodShortWords(bot: any, short: Map<string, number>): string {
+  const logName = [...short.keys()].find(part => /_log$/u.test(part));
+  if (!logName) return '';
+  const near = woodNear(bot);
+  if (!near) return '';
+  const need = short.get(logName) ?? 1;
+  if (!near.logs) return `。${near.withinM}m 以内に原木なし`;
+  return `。近くに原木 ${near.logs} 本・木 ${near.trees} 本（${near.withinM}m 以内）。mine ${logName} count=${need} ${near.logs >= need ? 'で足りる' : 'では足りない（遠くの木も要る）'}`;
+}
+
 async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const name = String(args.item ?? '');
@@ -136,7 +148,7 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
   if (!obtain(bot, name, before + count, state, [])) {
     const lacking = [...state.short.entries()].map(([part, n]) => `${part}×${n}`);
     const held = stacksOut(new Map([...stock.entries()].filter(([, n]) => n > 0).slice(0, 8)));
-    return fail(bot, 'missing', `${lacking.join('・') || '?'}（作る物 ${name}×${count} と途中の物の分。何も作っていない${held.length ? `。持っている ${held.join(' ')}` : ''}）`);
+    return fail(bot, 'missing', `${lacking.join('・') || '?'}（作る物 ${name}×${count} と途中の物の分。何も作っていない${held.length ? `。持っている ${held.join(' ')}` : ''}）${woodShortWords(bot, state.short)}`);
   }
   // Room in the pack for what comes of it: a pack with no free slot takes the item only into a stack it already has.
   if (freeSlots(bot) === 0) {

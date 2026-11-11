@@ -226,6 +226,8 @@ export interface WorldObservation {
    * biomes and how far the land has been seen, each with count, distance, direction and coordinates; 3,000 characters at most.
    */
   mapSummary?: string;
+  /** The logs within 24 m of the body and how many trees they make (the same scan as the map's wood line): the amount of wood standing near, for weighing against what is needed. Absent when nothing was scanned (not the overworld, no chunks). */
+  woodNear?: { logs: number; trees: number; withinM: number };
   /**
    * How the body came to be where it is, said for two minutes after it: reconnect (the connection dropped and the body went back in by
    * itself; it did not die: died is false and the place is where it was), respawn (it died; died is true), portal (another

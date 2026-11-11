@@ -10,6 +10,7 @@ import { go } from './go.js';
 import { dugCellName, noteDugCell } from './dugCells.js';
 import { steadyInWater } from './footing.js';
 import { withProgress } from './progressUnits.js';
+import { scanLoadedBlocks } from '../loadedBlockScan.js';
 
 /**
  * mine: a vein, cell by cell (hands-contract.md 3). The planner names the block (`iron_ore`; `deepslate_iron_ore` is the same kind of ore, so a vein
@@ -28,6 +29,8 @@ export interface MineArgs {
 /** Cells of the vein the body will follow: a hard stop on a vein that does not end (a block as common as stone). */
 const MAX_TRACE = 256;
 const DEFAULT_COUNT = 24;
+/** A tree is five to ten logs: a count the planner asked for that one tree cannot give is finished at the next tree of the same kind, if one stands within this many metres of where the last log was dug (run 7: 10 asked, 4 got, the vein "ran out" with a wood beside it). Logs only: an ore vein is not left for another. */
+const HOP_M = 16;
 const DEFAULT_SECONDS = 60;
 const DEFAULT_MAX_DIG = 16;
 /** The rock a way to an ore is dug through, said in a stop that had no dig list (end1109o04). `go` reads the words stone and dirt as its categories, so cobblestone, sandstone, terracotta, clay and the like are dug as well; never an ore. */
@@ -159,7 +162,8 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   const open = new Map<string, Cell>(starts.map(cell => [keyOf(cell), cell]));
   const attempts = new Map<string, number>();
   let sincePick = 0, failsInARow = 0, missedNote = '', capped = false, footNote = '';
-  let pocketDug = 0, pocketMs = 0, pocketDrops = 0;
+  let pocketDug = 0, pocketMs = 0, pocketDrops = 0, treesHopped = 0, hopFound = true;
+  const isLogKind = /_log$/u.test(block);
   const pocketTried = new Set<number>();
 
   /** Picks up what the dug cells dropped. 'full' when the pack has no room for it. */
@@ -219,6 +223,23 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       if (!isKind(blockAt(bot, cell)?.name)) { open.delete(key); continue; }
       const near = reachable(cell), dist = eyeDistance(bot, cell);
       if (!pick || (near && !pick.near) || (near === pick.near && dist < pick.dist)) pick = { cell, near, dist };
+    }
+    if (!pick && isLogKind && asked) {
+      // The tree is used up and the count is not reached: the nearest log of the same kind within HOP_M of the last one dug, not seen yet (the walk to it is the approach below).
+      const from = dugCells[dugCells.length - 1] ?? starts[0];
+      try {
+        const hits = scanLoadedBlocks(bot as never, [block], { maxDistance: HOP_M + 6, maxHits: 96 }).hits
+          .filter(hit => !seen.has(keyOf({ x: hit.position.x, y: hit.position.y, z: hit.position.z })) && Math.hypot(hit.position.x - from.x, hit.position.y - from.y, hit.position.z - from.z) <= HOP_M && isKind(blockAt(bot, hit.position)?.name))
+          .sort((a, b) => Math.hypot(a.position.x - from.x, a.position.z - from.z) - Math.hypot(b.position.x - from.x, b.position.z - from.z));
+        // The nearest tree's foot: of the logs within two blocks of the nearest one's column, the lowest (a trunk is mined from the bottom; its top is reached by then).
+        const nearest = hits[0];
+        const next = nearest ? hits.filter(hit => Math.hypot(hit.position.x - nearest.position.x, hit.position.z - nearest.position.z) <= 2 && Math.abs(hit.position.y - nearest.position.y) <= 12).sort((a, b) => a.position.y - b.position.y)[0] : undefined;
+        if (next) {
+          const nextCell = { x: next.position.x, y: next.position.y, z: next.position.z };
+          seen.add(keyOf(nextCell)); open.set(keyOf(nextCell), nextCell); treesHopped++;
+          pick = { cell: nextCell, near: reachable(nextCell), dist: eyeDistance(bot, nextCell) };
+        } else hopFound = false;
+      } catch { hopFound = false; }
     }
     if (!pick) break;
     const cell = pick.cell, key = keyOf(cell);
@@ -296,7 +317,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   const aside = avoided.length ? `。掘らなかった: ${avoided.slice(0, 3).map(entry => entry.why).join('／')}${avoided.length > 3 ? ` ほか${avoided.length - 3}` : ''}` : '';
   const last = dugCells[dugCells.length - 1] ?? starts[0];
   if (result.dug >= count) {
-    return { ok: true, at: last, text: `mine 済 ${block} ${result.dug} 個（${got ? `${got} を得た` : '拾っていない'}）・たどった ${result.visited} マス${road}${keptNote}${lost}${aside}` };
+    return { ok: true, at: last, text: `mine 済 ${block} ${result.dug} 個（${got ? `${got} を得た` : '拾っていない'}）・たどった ${result.visited} マス${treesHopped ? `・${treesHopped + 1} 本の木` : ''}${road}${keptNote}${lost}${aside}` };
   }
   const unreached = skipped.filter(entry => entry.kind === 'unreachable');
   if (unreached.length) {
@@ -308,7 +329,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     return problem('no_block', avoided.length ? `掘れるマスが無い: ${avoided[0].why}` : `${block} のつながりに掘れるマスが無い`, starts[0]);
   }
   // The vein ran out before the count: that is an end, not a failure.
-  return { ok: true, at: last, text: `mine 済 ${block} ${result.dug} 個（${got ? `${got} を得た` : '拾っていない'}）・たどった ${result.visited} マス・${capped ? `${MAX_TRACE} マスたどって止めた（つながりがまだ続く）` : 'つながりが尽きた'}${asked ? `（ほしい ${count} 個に足りない）` : ''}${road}${keptNote}${lost}${aside}` };
+  return { ok: true, at: last, text: `mine 済 ${block} ${result.dug} 個（${got ? `${got} を得た` : '拾っていない'}）・たどった ${result.visited} マス・${capped ? `${MAX_TRACE} マスたどって止めた（つながりがまだ続く）` : 'つながりが尽きた'}${asked ? `（ほしい ${count} 個に足りない）` : ''}${isLogKind && asked && !hopFound ? `・${HOP_M}m 以内に他の ${block} なし` : ''}${treesHopped ? `・${treesHopped + 1} 本の木` : ''}${road}${keptNote}${lost}${aside}` };
 
   /**
    * What a stop at the way's dig limit says: the maxDig that covers everything dug so far in this mine and the way still to dig (go's count is only the way still

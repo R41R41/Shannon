@@ -18,9 +18,10 @@ const { stepLabel } = await import('../../src/services/minebot/utils/actLabel.js
 const { ACT_HANDS, HAND_KINDS } = await import('../../src/services/minebot/instantSkills/act.js');
 
 let nextId = 100;
-function setup(ground: (x: number, y: number, z: number) => string = (_x, y) => y < 64 ? 'stone' : 'air') {
+function setup(ground: (x: number, y: number, z: number) => string = (_x, y) => y < 64 ? 'stone' : 'air', weapon: string | null = 'stone_sword') {
   const sim = makeSim(ground);
   const bot = sim.bot;
+  if (weapon) sim.give(weapon, 1);
   const here = bot.entity.position;
   const animal = (name: string, dx: number, options: { baby?: boolean; dz?: number } = {}) => {
     const metadata: unknown[] = [];
@@ -317,6 +318,39 @@ describe('hunt next to the stations carryAway reads (11/11 integration)', () => 
     await hunt(ctx(), { kinds: 'cow' });
     expect(pickupMock).toHaveBeenCalled();
     expect(pickupMock.mock.calls.every(call => Array.isArray(call[1].canDig) && call[1].canDig.length === 0)).toBe(true);
+  });
+
+  it('does not hunt with bare hands, a wooden sword or a pickaxe (run 7: four cows by hand, 38 s): it stops at once with the way to a sword, and strikes nobody', async () => {
+    for (const weapon of [null, 'wooden_sword', 'stone_pickaxe']) {
+      const { animal, ctx, kills } = setup(undefined, weapon);
+      kills();
+      animal('cow', 4);
+      const out = await hunt(ctx(), { kinds: 'cow' });
+      expect(out.ok).toBe(false);
+      expect(out.reason).toBe('no_weapon');
+      expect(out.text).toContain('stone_sword は丸石 2＋棒 1');
+      expect(out.text).toContain('持っている武器・道具');
+      expect(attackMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it('hunts with a stone axe, and names the weapon in what it says', async () => {
+    const { animal, ctx, kills } = setup(undefined, 'stone_axe');
+    kills();
+    animal('cow', 4);
+    const out = await hunt(ctx(), { kinds: 'cow' });
+    expect(out.ok).toBe(true);
+    expect(out.text).toContain('武器 stone_axe');
+  });
+
+  it('hunts bare-handed only when starving (food 6 or less), and says so first', async () => {
+    const { animal, ctx, kills, bot } = setup(undefined, null);
+    (bot as any).food = 5;
+    kills();
+    animal('cow', 4);
+    const out = await hunt(ctx(), { kinds: 'cow' });
+    expect(out.ok).toBe(true);
+    expect(out.text).toContain('素手で狩った（満腹 5）');
   });
 
   it('names the first animal it will go for as the cell the body is going to (the nearest adult of the kinds in range), none when there is none', () => {

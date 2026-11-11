@@ -51,11 +51,35 @@ interface TreeBody {
 export interface TreesSeen { count: number; nearest: LoadedBlockHit | null; hits: LoadedBlockHit[] }
 
 /** The logs among the loaded chunks within `range`: how many were counted (up to 64), the nearest, and the hits. */
-export function treesInSight(bot: TreeBody, range = TREE_SCAN_M): TreesSeen {
+export function treesInSight(bot: TreeBody, range = TREE_SCAN_M, maxHits = 64): TreesSeen {
   try {
-    const scan = scanLoadedBlocks(bot as never, LOG_NAMES, { maxDistance: range, maxHits: 64 });
+    const scan = scanLoadedBlocks(bot as never, LOG_NAMES, { maxDistance: range, maxHits });
     return { count: scan.hits.length, nearest: scan.hits[0] ?? null, hits: scan.hits };
   } catch { return { count: 0, nearest: null, hits: [] }; }
+}
+
+/** How much wood stands near: the logs within `withinM` of the body and how many trees they make (logs touching by a side, an edge or a corner are one tree). */
+export interface WoodNear { logs: number; trees: number; withinM: number }
+export const WOOD_NEAR_M = 24;
+export const WOOD_SCAN_HITS = 128;
+export function woodNearOf(hits: LoadedBlockHit[], withinM = WOOD_NEAR_M): WoodNear {
+  const near = hits.filter(hit => hit.distance <= withinM);
+  const parent = near.map((_, index) => index);
+  const find = (index: number): number => { while (parent[index] !== index) { parent[index] = parent[parent[index]]; index = parent[index]; } return index; };
+  const byCell = new Map<string, number>();
+  near.forEach((hit, index) => byCell.set(`${hit.position.x},${hit.position.y},${hit.position.z}`, index));
+  near.forEach((hit, index) => {
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+      if (!dx && !dy && !dz) continue;
+      const other = byCell.get(`${hit.position.x + dx},${hit.position.y + dy},${hit.position.z + dz}`);
+      if (other !== undefined) parent[find(index)] = find(other);
+    }
+  });
+  return { logs: near.length, trees: new Set(near.map((_, index) => find(index))).size, withinM };
+}
+/** The logs within WOOD_NEAR_M of the body (and the trees they make), for the frame: the amount the mind weighs against what it needs. Read with the wood line (one scan, kept 8 s). Never throws. */
+export function woodNear(bot: TreeBody, now = Date.now()): WoodNear | null {
+  try { woodLine(bot, now); return cached.get(bot)?.near ?? null; } catch { return null; }
 }
 
 /** The cardinal heading nearest a compass direction of the memory ("北東" counts as north or east, by which axis the offset is longer). */
@@ -138,7 +162,7 @@ export function overWater(bot: Pick<TreeBody, 'blockAt'>, from: { x: number; y: 
 const compass = (from: Vec3, to: { x: number; z: number }) => compassDirection(from, to);
 const where = (from: Vec3, at: { x: number; y: number; z: number }) => `${Math.round(Math.hypot(at.x - from.x, at.z - from.z))}m ${compass(from, at)} (${at.x},${at.y},${at.z})`;
 
-const cached = new WeakMap<object, { at: number; line: string }>();
+const cached = new WeakMap<object, { at: number; line: string; near: WoodNear | null }>();
 const WOOD_LINE_TTL_MS = 8_000;
 
 /**
@@ -154,15 +178,20 @@ export function woodLine(bot: TreeBody, now = Date.now()): string {
   if (hit && now - hit.at < WOOD_LINE_TTL_MS) return hit.line;
   const here = bot.entity.position;
   let line = '';
+  let nearNow: WoodNear | null = null;
   try {
-    const trees = treesInSight(bot);
+    const trees = treesInSight(bot, TREE_SCAN_M, WOOD_SCAN_HITS);
     const parts: string[] = [];
     if (trees.nearest) {
       const at = trees.nearest.position.floored();
       // "112m 北 (x,y,z) oak_log×12": the nearest log and the logs standing within ten blocks of it (a tree is five to ten, a wood many more).
       const stand = trees.hits.filter(hit => hit.position.distanceTo(trees.nearest!.position) <= 10).length;
-      parts.push(`${where(here, at)} ${trees.nearest.name}×${stand}（${TREE_SCAN_M}m以内に原木${trees.count >= 64 ? '64本以上' : `${trees.count}本`}見える）`);
+      const near = woodNearOf(trees.hits);
+      nearNow = near;
+      const nearText = near.logs ? `${near.withinM}m以内に原木 ${near.logs} 本・木 ${near.trees} 本` : `${near.withinM}m以内に原木なし`;
+      parts.push(`${where(here, at)} ${trees.nearest.name}×${stand}（${nearText}／${TREE_SCAN_M}m以内に原木 ${trees.count >= WOOD_SCAN_HITS ? `${WOOD_SCAN_HITS} 本以上` : `${trees.count} 本`}）`);
     } else {
+      nearNow = { logs: 0, trees: 0, withinM: WOOD_NEAR_M };
       const { heading, why } = treeHeading(bot);
       parts.push(`原木が${TREE_SCAN_M}m以内の読み込み済みの範囲に1本も見えません（砂漠・荒野・海・川には木がほぼ無い。村を探しに行っても木は無い）。`
         + `木を探すなら explore-for-structure structureType=tree（${heading.name}へ。${why}）`);
@@ -179,6 +208,6 @@ export function woodLine(bot: TreeBody, now = Date.now()): string {
     if (sources.length) parts.push(`木材の出どころ: ${sources.join('、')}`);
     line = `木: ${parts.join('。')}`;
   } catch { line = ''; }
-  cached.set(bot, { at: now, line });
+  cached.set(bot, { at: now, line, near: nearNow });
   return line;
 }

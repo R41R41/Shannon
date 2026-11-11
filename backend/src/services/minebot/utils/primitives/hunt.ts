@@ -6,6 +6,7 @@ import { withProgress } from './progressUnits.js';
 import { deathLedgerOf } from '../deathLedger.js';
 import { bodyReader } from '../localMap.js';
 import { solidBetween } from '../probeTools.js';
+import { stoneOrBetterMelee } from './meleeWeapon.js';
 
 /**
  * hunt: the food animals around the body, until none is left in the radius or `count` have fallen, and what they dropped (2026-11-11, owner request after run 5:
@@ -136,6 +137,16 @@ async function huntAround(ctx0: StepContext, args: HuntArgs, state: { kills: num
   if ('problem' in parsed) return stopped(bot, 'invalid_input', `hunt 止まった invalid_input: ${parsed.problem}`);
   const kinds = new Set(parsed.kinds);
   const kindsText = parsed.kinds.join(',');
+  // Bare hands (or a wooden sword, a pickaxe) take about ten blows for one cow (run 7, 11/11: four cows by hand, 38 s). A stone sword or axe first; only a body that is starving (food 6 or
+  // less: health no longer comes back) hunts with what it has, and says so. Nothing moves: the stop comes at once, and the way to a sword is in the words.
+  const heldItems = (bot.inventory?.items?.() ?? []) as Array<{ name: string }>;
+  const armedWith = stoneOrBetterMelee([...heldItems, ...(bot.heldItem ? [bot.heldItem as { name: string }] : [])]);
+  const hunger = Number(bot.food);
+  const bareHunt = !armedWith && Number.isFinite(hunger) && hunger <= 6;
+  if (!armedWith && !bareHunt) {
+    const carried = [...new Set(heldItems.map(item => String(item.name)).filter(name => /_(sword|axe|pickaxe|shovel|hoe)$/u.test(name)))].join('・') || 'なし';
+    return stopped(bot, 'no_weapon', `hunt 止まった no_weapon: 石以上の剣か斧が無い。素手・木の剣・ツルハシでは牛 1 体に約 10 回殴る。stone_sword は丸石 2＋棒 1（作業台）で作れる。持ってから出し直す。持っている武器・道具: ${carried}`);
+  }
   const centre = bot.entity.position.clone();
   const packBefore = packCounts(bot);
   const ledger = deathLedgerOf(bot);
@@ -270,7 +281,9 @@ async function huntAround(ctx0: StepContext, args: HuntArgs, state: { kills: num
   const babyText = babies ? `、子 ${babies} 体は倒さない` : '';
   const got = `拾った: ${gainedText(bot, packBefore)}`;
   const lyingText = lying.size ? `。拾えず落ちたまま ${lying.size} 個${gaveUp.size ? '（拾いに行ったが入らなかった物を含む）' : ''}` : '';
-  const facts = `${killedText} 体倒した${state.count !== null ? `（count=${state.count}）` : ''}${passedText}${lostText}${leftText}${babyText}、${got}${lyingText}、${spent}秒`;
+  const heldNow = String(bot.heldItem?.name ?? '');
+  const weaponText = armedWith ? `武器 ${/^(stone|iron|diamond|netherite)_(sword|axe)$/u.test(heldNow) ? heldNow : armedWith}、` : `素手で狩った（満腹 ${hunger}）、`;
+  const facts = `${weaponText}${killedText} 体倒した${state.count !== null ? `（count=${state.count}）` : ''}${passedText}${lostText}${leftText}${babyText}、${got}${lyingText}、${spent}秒`;
   const progress = { unit: 'item' as const, done: state.kills, left: state.count === null ? null : Math.max(0, state.count - state.kills) };
 
   if (fullStop) return { ...stopped(bot, 'full', `hunt 止まった full: 持ち物が満杯（${facts}）`), progress };

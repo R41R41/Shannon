@@ -1,7 +1,7 @@
 import { timedEngagement } from '../utils/engagement.js';
 import { airLevel } from '../utils/airSupplyDefault.js';
 import { potionIn } from '../utils/potionContents.js';
-import { woodLine } from '../utils/treeSearch.js';
+import { woodLine, woodNear } from '../utils/treeSearch.js';
 import type { Vec3 } from 'vec3';
 import type { NearbyEntityObservation, WorldDelta, WorldFrame, WorldInventoryStack, WorldObservation, WorldVector } from './types.js';
 import { roundedExertion, type Exertion } from '../utils/exertionMeter.js';
@@ -458,6 +458,9 @@ export function captureWorldObservation(bot?: unknown, options: { threatReach?: 
         const text = [wood, map].filter(Boolean).join('\n');
         return text ? { mapSummary: wood && map ? `${wood}\n${map.slice(0, Math.max(0, 3000 - wood.length - 1))}` : text } : {};
       } catch { return {}; }
+    })(),
+    ...(() => {
+      try { const near = woodNear(observedBot as never); return near ? { woodNear: near } : {}; } catch { return {}; }
     })(),
     ...(() => {
       // How the body came to be here (client.ts): a reconnect is not a respawn.

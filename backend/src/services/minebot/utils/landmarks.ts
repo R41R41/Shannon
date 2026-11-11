@@ -83,7 +83,7 @@ export function detectVillage(bot: LandmarkBot): Landmark | null {
     const folk = villagers.filter(villager => villager.position.distanceTo(seed.position) <= VILLAGE_SPAN).length;
     const evidence: string[] = [];
     if (beds2) evidence.push(`ベッド${beds2}台`);
-    if (hay) evidence.push(`干し草${hay}（パン${hay * 3}）`);
+    if (hay) evidence.push(`干し草${hay}（パン${hay * 3}）＝約${hay * 33}点`);
     if (chests) evidence.push(`箱${chests}`);
     if (folk) evidence.push(`村人${folk}人`);
     const others = [...counts.entries()].filter(([name]) => name !== 'bed' && name !== 'hay_block').sort((a, b) => b[1] - a[1]).slice(0, 2).map(([name, count]) => `${name}×${count}`);
