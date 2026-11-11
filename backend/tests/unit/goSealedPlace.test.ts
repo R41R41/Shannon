@@ -48,6 +48,32 @@ describe('a place that is a block the go may not dig', () => {
   });
 });
 
+describe('run 7: a place in a village house wall (run 6: a go to a cobblestone cell of a house)', () => {
+  // A wall of cobblestone five high at (5,*,0); the roof is open air over it.
+  const wall: Ground = (x, y, z) => {
+    if (Math.abs(x) > 30 || Math.abs(z) > 30) return null;
+    if (y < FLOOR) return 'stone';
+    if (x === 5 && z === 0 && y >= FLOOR && y <= FLOOR + 4) return 'cobblestone';
+    return 'air';
+  };
+  it('in a village: not raised to the roof; says the cell is a house wall and the way in from outside (range=3, dig takeOk)', async () => {
+    const sim = makeSim(wall, { start: [0.5, FLOOR, 0.5], items: [{ name: 'stone_pickaxe', count: 1 }] });
+    (sim.bot as any).landmarks = [{ kind: 'village', distance: 5, direction: '東', position: { x: 8, y: FLOOR, z: 0 }, evidence: 'ベッド3台' }];
+    const { value } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 5, y: FLOOR + 1, z: 0 }], canDig: ['dirt'], seconds: 30 } as never));
+    expect(value.ok).toBe(false);
+    expect(value.reason).toBe('dead_end');
+    expect(value.text).toContain('村の家のマス');
+    expect(value.text).toContain('range=3');
+    expect(value.text).toContain('takeOk');
+    expect(value.text).not.toContain('→y=');
+  });
+  it('outside a village the same cell is said as before (canDig), and the raise to the ground over it is kept', async () => {
+    const sim = makeSim(wall, { start: [0.5, FLOOR, 0.5], items: [{ name: 'stone_pickaxe', count: 1 }] });
+    const { value } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 5, y: FLOOR + 1, z: 0 }], canDig: ['dirt'], seconds: 30 } as never));
+    expect(value.text).not.toContain('村の家のマス');
+  });
+});
+
 describe('run52: the whole arrival radius is buried, not just the named cell', () => {
   const hill: Ground = (x, y, z) => {
     if (Math.abs(x) > 12 || Math.abs(z) > 12) return null;

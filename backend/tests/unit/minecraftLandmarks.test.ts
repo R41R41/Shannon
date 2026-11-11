@@ -5,7 +5,7 @@ import { compassDirection, detectVillage } from '../../src/services/minebot/util
 import { captureWorldObservation } from '../../src/services/minebot/cognition/worldFrame.js';
 import { conditionsMatch, describeSituation, seedItems } from '../../src/modules/minecraftLearning/index.js';
 
-const STATES: Record<string, number> = { air: 0, stone: 1, bell: 10, hay_block: 11, composter: 12, white_bed: 13, red_bed: 14, barrel: 15, oak_log: 16 };
+const STATES: Record<string, number> = { air: 0, stone: 1, bell: 10, hay_block: 11, composter: 12, white_bed: 13, red_bed: 14, barrel: 15, oak_log: 16, chest: 17 };
 const registry = { blocksByName: Object.fromEntries(Object.entries(STATES).map(([name, state]) => [name, { minStateId: state, maxStateId: state }])) };
 
 /** A world of 16x16x16 sections with real palettes: only the listed cells are not air. */
@@ -66,8 +66,23 @@ describe('a village in view', () => {
 
   it('is recognised near the surface by a bell, or by a village work site with another marker or villagers beside it', () => {
     expect(detectVillage(body([[60, 64, -40, 'bell']]))).toMatchObject({ kind: 'village', direction: '北東', distance: 72 });
-    expect(detectVillage(body([[30, 64, 0, 'hay_block'], [36, 64, 4, 'composter']]))?.evidence).toContain('hay_block×1');
+    expect(detectVillage(body([[30, 64, 0, 'hay_block'], [36, 64, 4, 'composter']]))?.evidence).toContain('干し草1（パン3）');
     expect(detectVillage(body([[30, 64, 0, 'composter']], { 7: { name: 'villager', position: new Vec3(33, 64, 2) } }))?.evidence).toContain('村人1人');
+  });
+
+  it('counts the whole village (run 6: 3 beds in the cluster of 9, hay 104 m off): beds, hay, chests at the village height, a round of about 160 s, and how to take', () => {
+    // The seed is the bell at (30,64,0); the beds and hay lie 60 m from it (outside the 48 m that proves a village, inside the 72 that counts it); a chest 58 down is not the village's.
+    const beds: Array<[number, number, number, string]> = [0, 4, 8, 12, 16, 20].flatMap(dz => [[90, 64, dz, 'white_bed'], [91, 64, dz, 'white_bed']] as Array<[number, number, number, string]>);
+    const hay: Array<[number, number, number, string]> = Array.from({ length: 20 }, (_, i) => [88, 64, i, 'hay_block'] as [number, number, number, string]);
+    const village = detectVillage(body([[30, 64, 0, 'bell'], ...beds, ...hay, [32, 64, 3, 'chest'], [33, 6, 3, 'chest']]));
+    expect(village?.evidence).toContain('ベッド6台');
+    expect(village?.evidence).toContain('干し草20（パン60）');
+    expect(village?.evidence).toContain('箱1');
+    expect(village?.evidence).toContain('一周 約120秒（目安）');
+    expect(village?.evidence).toContain('go range=3 → dig takeOk');
+    expect(village?.evidence.length).toBeLessThanOrEqual(160);
+    // A chest alone is no village.
+    expect(detectVillage(body([[30, 64, 0, 'chest'], [32, 64, 0, 'chest'], [34, 64, 0, 'chest']]))).toBeNull();
   });
 
   it('is not claimed for beds and barrels alone, nor for markers deep underground (run 17: 8 barrels and 4 beds at y -13)', () => {

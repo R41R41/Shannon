@@ -166,6 +166,23 @@ const FALLING = /^(?:sand|red_sand|gravel|suspicious_sand|suspicious_gravel|anvi
 /** Made by people: left alone near a villager. */
 const VILLAGE_MADE = /(?:_planks|_fence|_slab|_stairs|_door|_trapdoor|_bed|glass|glass_pane|bookshelf|hay_block|_wall|bricks|_wool|_carpet|lantern)$/u;
 const VILLAGE_REACH = 40;
+/** The village's mark (utils/landmarks) counts a cell as inside when it is this near it flat and this near it in height. */
+const VILLAGE_MARK_M = 64;
+const VILLAGE_MARK_DY = 12;
+
+/**
+ * True when a cell lies in a village: inside the village mark the body keeps (64 m flat, 12 in height), or within VILLAGE_REACH of a villager. Read from marks and villagers, never from coordinates
+ * the planner gave; the village's own walls, floors and stairs are what a go never digs.
+ */
+export function inVillageAt(bot: any, cell: Cell): boolean {
+  const mark = ((bot?.landmarks ?? []) as Array<{ kind?: string; position?: { x: number; y: number; z: number } }>).find(entry => entry?.kind === 'village' && entry.position);
+  if (mark?.position && Math.hypot(cell.x - mark.position.x, cell.z - mark.position.z) <= VILLAGE_MARK_M && Math.abs(cell.y - mark.position.y) <= VILLAGE_MARK_DY) return true;
+  return Object.values(bot?.entities ?? {}).some((entity: any) => entity?.name === 'villager' && entity.position
+    && Math.hypot(entity.position.x - cell.x - 0.5, entity.position.y - cell.y, entity.position.z - cell.z - 0.5) <= VILLAGE_REACH);
+}
+
+// Short: the stop's line is 160 characters and the hint is what is cut first. The longer way is in the prep stage's words.
+const VILLAGE_OUTSIDE_HINT = '村の壁は go で掘らない。外 3〜4m へ go range=3 → dig 座標 takeOk（箱は chest takeAll）';
 /** Standing beside these hurts (a step into a cell next to one is not taken). */
 const BESIDE_HAZARD = new Set(['lava', 'magma_block', 'cactus', 'fire', 'soul_fire']);
 /** A fire beside a place this near the body is walked to and put out (a blaze camp's floor); a farther one is said (it may go out by itself, and a far place has others). */
@@ -925,6 +942,8 @@ export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>
       const around = { x: cell.x + d[0], y: cell.y + d[1], z: cell.z + d[2] };
       if (standable(read, around.x, around.y, around.z)) { near = around; break; }
     }
+    // A cell inside a village's house (a wall, a floor, a stair): not a place to dig into (go leaves the village's things standing), and the way to what lies in it is from outside.
+    if (inVillageAt(bot, cell)) return `行き先 ${cellText(cell)}${dy ? `（頭の高さの ${cellText(at)}）` : ''} は ${name} の壁・床の中（村の家のマス）|${VILLAGE_OUTSIDE_HINT}`;
     return `行き先 ${cellText(cell)}${dy ? `（頭の高さの ${cellText(at)}）` : ''} は ${name} で canDig に無い${near ? `。隣の立てる所 ${cellText(near)}` : ''}`
       + `|${near ? `隣の立てる所 ${cellText(near)} へ` : '立てる所（地表の高さ）を行き先に'}。掘り進むなら canDig に ${name}（遅い）`;
   }
@@ -1243,6 +1262,8 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const far = Math.hypot(cell.x - start.x, cell.z - start.z) > 2 * BURIED_FAR_M;
     const ground = far ? buriedSurface(bot, cell) : buriedSurface(bot, cell, SEALED_NEAR_M, SEALED_NEAR_DEPTH);
     if (ground === null) return cell;
+    // A cell in a village's wall under its roof is not raised to the roof (the body would be sent to the top of a house): it is said as it is, with the way in from outside.
+    if (!far && inVillageAt(bot, cell) && ground - cell.y >= 1 && ground - cell.y <= SEALED_NEAR_DEPTH) return cell;
     raised.push(`${cellText(cell)}→y=${ground}`);
     return { ...cell, y: ground };
   });
@@ -1681,7 +1702,7 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       try { found = await plan(movementsFor(relax), goal, ms, false); } catch { found = null; }
       if (found && found.status === 'success') return outcome(found);
     }
-    return fail('dead_end', `掘っても置いても道が無い（行き止まり）${ignored}`, '別の行き先を');
+    return fail('dead_end', `掘っても置いても道が無い（行き止まり）${ignored}`, inVillageAt(bot, near()) ? '村の家へは外 3〜4m へ go range=3 → dig takeOk' : '別の行き先を');
   };
 
   /** Climbs where the body stands: dig the roof if it may be, lay a block under the feet at the top of the jump, a level at a time. */

@@ -160,12 +160,19 @@ function computeMarks(bot: MarkBody, feet: Cell): Mark[] {
   // The cells round an ore and a fluid's level, by the cell's state (one shared answer per state: no Block built per cell).
   const read = bodyReader(bot as never);
   /** A bed, chest or field within the village's reach is the village's (said so: taking it is the planner's choice). */
-  const villages = (cell: Cell) => !!village && Math.hypot(cell.x - village.position.x, cell.z - village.position.z) <= 64;
+  const villages = (cell: Cell) => !!village && Math.hypot(cell.x - village.position.x, cell.z - village.position.z) <= 64 && Math.abs(cell.y - village.position.y) <= VILLAGE_INSIDE_Y;
   // Working places, two or three of each kind; a furnace with its batch.
   const kept = new Map<string, number>();
   const keep = (kind: string, most: number) => { const n = kept.get(kind) ?? 0; if (n >= most) return false; kept.set(kind, n + 1); return true; };
+  const bedCells: Cell[] = [];
   for (const hit of scan('places')) {
     const kind = hit.name.endsWith('_bed') ? 'bed' : hit.name;
+    // The two halves of one bed are one bed (a head and a foot side by side).
+    if (kind === 'bed') {
+      const half = cellOf(hit.position);
+      if (bedCells.some(other => other.y === half.y && Math.abs(other.x - half.x) + Math.abs(other.z - half.z) <= 1)) continue;
+      bedCells.push(half);
+    }
     if (!keep(kind, kind === 'bed' || kind === 'chest' ? 3 : 2)) continue;
     const cell = cellOf(hit.position);
     let note: string | ((now: number) => string) = '';

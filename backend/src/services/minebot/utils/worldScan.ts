@@ -146,7 +146,13 @@ export function summarizeScan(bot: ScanBody, scan: SlicedScanResult & { coverage
   else if (nether) absent.push('ネザーの幹');
   // A village's marks.
   const village: Array<[string, string]> = [['bell', '村の鐘'], ['bed', 'ベッド'], ['chest', '箱・樽'], ['hay', '干し草'], ['farm', '畑・作物']];
-  for (const [key, label] of village) { const entry = get(key); if (entry.count) row(1, label, entry.count, entry.hits[0], key === 'bed' ? entry.hits[0].name : ''); }
+  for (const [key, label] of village) {
+    const entry = get(key);
+    if (!entry.count) continue;
+    // The beds are counted by half (a head and a foot): a bed is two. A chest or barrel 12 or more under the body is said to be underground (a mineshaft's is no village's).
+    const underground = key === 'chest' && Math.floor(centre.y) - entry.hits[0].y >= 12 ? '地下' : '';
+    row(1, label, key === 'bed' ? Math.ceil(entry.count / 2) : entry.count, entry.hits[0], key === 'bed' ? entry.hits[0].name : underground);
+  }
   if (get('bell').count) facts.push(`村の鐘が ${wayWords(centre, get('bell').hits[0])}`);
   if (get('bed').count) facts.push(`ベッドが ${wayWords(centre, get('bed').hits[0])}`);
   // Iron ore: the nearest (often buried: dug to), and the nearest with a face open to the air (walked to).
