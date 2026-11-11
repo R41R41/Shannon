@@ -329,22 +329,21 @@ describe('vertical: a pillar sends no block while the body is falling into its c
 
 describe('vertical: an ore the planner names in canDig (run 48, hold 1)', () => {
   const ore = (name: string) => world('andesite', 64, [cell(name, 0, 63, 1)]);
-  it('digs a copper_ore in the way without it being in canDig (run 7: lapis_ore stopped a stair), and says it broke it; with copper_ore in canDig it goes the same', async () => {
-    const bare = sim0(ore('copper_ore'));
-    const through0 = await drive(bare, run(bare, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 56 })));
-    expect(through0.ok).toBe(true);
-    expect(bare.bot.dugBlocks.some((entry: string) => entry.startsWith('copper_ore@0,63,1'))).toBe(true);
-    expect(through0.text).toContain('邪魔な物を壊した copper_ore×1');
+  it('stops at copper_ore when canDig lacks it, saying to add it; with copper_ore in canDig the stair digs it and goes on', async () => {
+    const refused = sim0(ore('copper_ore'));
+    const stopped = await drive(refused, run(refused, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 56 })));
+    expect(stopped).toMatchObject({ ok: false, code: 'cannot_dig' });
+    expect(stopped.text).toContain('copper_ore(0,63,1) は canDig に無い');
+    expect(stopped.text).toContain('canDig に copper_ore を足せば進む');
     const allowed = sim0(ore('copper_ore'));
     const through = await drive(allowed, run(allowed, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 56, canDig: [...DIG, 'copper_ore'] })));
     expect(through.ok).toBe(true);
     expect(allowed.bot.dugBlocks.some((entry: string) => entry.startsWith('copper_ore@0,63,1'))).toBe(true);
   });
-  it('digs gravel in the way too; a block the body never breaks named in canDig is told as such, with no "add it" hint', async () => {
-    const gravel = sim0(ore('gravel'));
-    const through = await drive(gravel, run(gravel, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 56, canDig: ['stone', 'dirt', 'andesite'] })));
-    expect(through.ok).toBe(true);
-    expect(gravel.bot.dugBlocks.some((entry: string) => entry.startsWith('gravel@0,63,1'))).toBe(true);
+  it('a category word never includes an ore (stone stays stone), and a block the body never breaks named in canDig is told as such, with no "add it" hint', async () => {
+    const category = sim0(ore('iron_ore'));
+    const stopped = await drive(category, run(category, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 56, canDig: ['stone', 'dirt', 'andesite'] })));
+    expect(stopped).toMatchObject({ ok: false, code: 'cannot_dig' });
     const spawner = sim0(ore('spawner'));
     const refused = await drive(spawner, run(spawner, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 56, canDig: [...DIG, 'spawner'] })));
     expect(refused).toMatchObject({ ok: false, code: 'cannot_dig' });

@@ -6,8 +6,7 @@ import { blockAt, cellNow, cellText, eyeDistance, findItem, freeSlots, inventory
 import { cheaperThanAsked, dig } from './dig.js';
 import { pickup } from './pickup.js';
 import { canWorkOn } from './getNear.js';
-import { digRuleOf, go } from './go.js';
-import { roadNeeded } from '../routeBudget.js';
+import { go } from './go.js';
 import { dugCellName, noteDugCell } from './dugCells.js';
 import { steadyInWater } from './footing.js';
 import { withProgress } from './progressUnits.js';
@@ -98,9 +97,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   const collect = args.collect !== false;
   // Ore lies inside rock: without a dig list the way is dug through the rock and earth words of ROCK_ROAD (never an ore, a chest, a door or a bed), at most DEFAULT_MAX_DIG blocks.
   const roadWords = args.canDig?.length ? [...args.canDig] : ROCK_ROAD.split(',');
-  const ruleNames = digRuleOf(bot.registry, roadWords).names;
-  // A hand that gives no maxDig gets the way's own number from the route plan (run 7), and DEFAULT_MAX_DIG only when the way cannot be planned.
-  let roadBudget = clamp(Math.round(Number(args.maxDig ?? DEFAULT_MAX_DIG)), 0, 200);
+  const roadBudget = clamp(Math.round(Number(args.maxDig ?? DEFAULT_MAX_DIG)), 0, 200);
   const asked = args.count !== undefined;
   const wanted = kindOf(block);
   const isKind = (name: string | undefined) => name !== undefined && kindOf(name) === wanted;
@@ -338,10 +335,6 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     const beside = FACES.map(([dx, dy, dz]) => ({ x: cell.x + dx, y: cell.y + dy, z: cell.z + dz }))
       .filter(at => { const name = blockAt(bot, at)?.name; return name !== undefined && !isLiquid(name); });
     if (!beside.length) return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} のまわりに立てる所が無い` };
-    if (args.maxDig === undefined && roadWords.length) {
-      const needed = roadNeeded(bot, beside, name => ruleNames.has(name));
-      if (needed !== null) roadBudget = Math.max(roadBudget, result.road + pocketDug + needed);
-    }
     const roadLeft = Math.max(0, roadBudget - result.road - pocketDug);
     const gone = await go(ctx, { goals: beside, range: 0, canDig: roadLeft > 0 ? roadWords : undefined, maxDig: roadLeft, canPlace: undefined,
       seconds: Math.max(5, Math.min(APPROACH_SECONDS, (ctx.deadline - Date.now()) / 1000)) });

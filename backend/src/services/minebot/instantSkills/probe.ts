@@ -41,7 +41,7 @@ const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: pa
   + 'around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。'
   + 'worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）/ '
   + 'frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ '
-  + 'route（to への最短の道を掘る数・置く数つきで見積る。動く前の見積り）/ camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。'
+  + 'route（to への最短の道を掘る数・置く数つきで見積る。動く前の目安で、go は別の探索で歩くので数は多少ずれる）/ camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。'
   + 'lane（' + LANE_PROJECTION_NOTE + 'spawner の四方向のレーン計画。省略時は近い湧き場。丸石・建築順・支え・生き物・待ち場からの距離と危険。build の standAtCell は cells の足マス参照、group は同じ立ち位置で最大6マス、末尾の walk は from（既定は足）からの歩数、立ち位置なしは全て null。facts 末尾の standFact は standFacts の参照で noStand・blockedByCreature・fireNear。目から4.3以内で視線が通り、火・液体・マグマ・縁を避ける。計画のマスを避け、先行設置が成功した地形も含め四方向・上下1段までを2000マス探索し、歩数・従来順位の順に立ち位置を選ぶ。着けない場合は noStand: unreachable。実地形を確認して go で立ち位置へ→同じ group の place、占有マスは組の末尾で再確認。fireNear は立ち位置なしなら null、安全なら false。読むだけ）。'
   + 'bedsite（target:#id。エンドの現在phase2進入から、実在庫かつ黒曜石12個以内のベッド配置候補・施工セル・立場を読む。初回はpacket_history_pending。施工や起爆はしない）。'
   + 'roofsite（radius既定16内の（見える目が 0 なら体が半径 24 まで広げて読む）、3×3完成屋根の中心・既屋根外注視位置から目が見える見込みのエンダーマン（8〜48m）が多い順に5件。必要ブロック数・距離つき。予測なので go 後に fight target=enderman が再確認）。'

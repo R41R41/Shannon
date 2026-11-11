@@ -141,25 +141,6 @@ export function travelMovements(bot: CustomBot): any {
   return buildMovements(bot, ...travelProfile((bot.entity as any)?.isInWater || false));
 }
 
-/** What a block dug with water at its side costs the route search on top of its dig (a dry block or a way round is taken first). Under 100, so it stays a way. */
-export const WET_DIG_COST = 40;
-const LIQUID_BLOCKS = new Set(['water', 'lava', 'flowing_water', 'flowing_lava', 'bubble_column']);
-/** True when a liquid lies directly over the block: dug, it comes down on the body's head and flows into the hole. */
-export function liquidOver(bot: any, block: any): boolean {
-  const at = block?.position;
-  if (!at) return false;
-  try { return LIQUID_BLOCKS.has(String(bot.blockAt(at.offset(0, 1, 0))?.name)); } catch { return false; }
-}
-/** True when a liquid lies at one of the four sides of the block (the cells a dug block lets water in from; not above, not below). */
-export function liquidBeside(bot: any, block: any): boolean {
-  const at = block?.position;
-  if (!at) return false;
-  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-    try { if (LIQUID_BLOCKS.has(String(bot.blockAt(at.offset(dx, 0, dz))?.name))) return true; } catch { /* unloaded */ }
-  }
-  return false;
-}
-
 /** True when lava lies over the block or beside it (the cells a dug block lets a liquid in from; below is not a way for a liquid to come in). */
 function lavaAround(bot: any, block: any): boolean {
   const at = block?.position;
@@ -211,10 +192,7 @@ export function buildMovements(
   defaultMove.dontCreateFlow = false;
   {
     const base = defaultMove.safeToBreak.bind(defaultMove);
-    // Run 7 (Lai: "ブロックを掘って流れてきた水に流されてる"): a block with a liquid over it is never dug (it comes down on the head); a block with water at its
-    // side may be (a shore is always beside water, run 25) but costs WET_DIG_COST more, so a dry block or a way round is taken first.
-    defaultMove.safeToBreak = (block: any) => !lavaAround(bot, block) && !liquidOver(bot, block) && base(block);
-    defaultMove.exclusionAreasBreak.push((block: any) => (liquidBeside(bot, block) ? WET_DIG_COST : 0));
+    defaultMove.safeToBreak = (block: any) => !lavaAround(bot, block) && base(block);
   }
   defaultMove.digCost = digCost;
   defaultMove.placeCost = placeCost;

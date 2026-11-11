@@ -1,14 +1,13 @@
 import { Vec3 } from 'vec3';
 import { describe, expect, it } from 'vitest';
-import { budgetOf, footingHeld, goBudgetFor, placeBlocksHeld, roadNeeded } from '../../src/services/minebot/utils/routeBudget.js';
+import { placeBlocksHeld, planFromBody } from '../../src/services/minebot/utils/routeBudget.js';
 import { planRoute } from '../../src/services/minebot/utils/routePlan.js';
 import { runProbe } from '../../src/services/minebot/instantSkills/probe.js';
 import type { BlockReader, MapBlock } from '../../src/services/minebot/utils/localMap.js';
 
-// Run 7 (Lai): the body knows how many blocks a way needs; the numbers a hand left out come from the plan, and a limit the way cannot keep is said before the body moves.
+// Run 7 (Lai): what the body gives the plan, and probe kind=route (an estimate before the body moves; go and mine do not run it).
 const STONE: MapBlock = { name: 'stone', solid: true }, AIR: MapBlock = { name: 'air', solid: false };
 const rock: BlockReader = (x, y) => (y <= 63 ? STONE : AIR);
-const FLOOR = { maxDig: 40, maxPlace: 24 };
 const at = (x: number, y: number, z: number) => ({ x, y, z });
 
 /** A body over fixed blocks: `blockAt` answers as prismarine's blocks do, the pack is the stacks given. */
@@ -20,56 +19,14 @@ function bodyOver(read: BlockReader, feet = at(0, 64, 0), items: Array<{ name: s
   } as any;
 }
 
-describe('budgetOf: a limit the hand left out is the plan\'s number', () => {
-  it('never under what the go had, and a fifth and two over a way that needs more', () => {
-    const little = planRoute(rock, at(0, 64, 0), [at(0, 58, 0)], { placeBlocks: 20 });
-    expect(budgetOf(little, {}, FLOOR)).toMatchObject({ maxDig: 40, maxPlace: 24 });
-    const long = planRoute(rock, at(0, 64, 0), [at(0, 34, 0)], { placeBlocks: 60, maxDig: 80 });
-    expect(long.totals.dig).toBe(30);
-    expect(budgetOf(long, {}, { maxDig: 10, maxPlace: 24 }).maxDig).toBe(Math.ceil(30 * 1.2) + 2);
-  });
-
-  it('a limit the hand gave is kept, and a way over it is told with the number the way needs', () => {
-    const plan = planRoute(rock, at(0, 64, 0), [at(0, 34, 0)], { placeBlocks: 0, maxDig: 16 });
-    expect(plan.status).toBe('over');
-    const budget = budgetOf(plan, { maxDig: 16 }, FLOOR);
-    expect(budget.maxDig).toBe(16);
-    expect(budget.over).toMatchObject({ code: 'limit_dig' });
-    expect(budget.over!.needed).toBeGreaterThan(16);
-    expect(budget.over!.text).toMatch(/この道は掘る所が \d+ あり、上限 16 を超える/u);
-    expect(budget.over!.text.length).toBeLessThanOrEqual(90);
-  });
-
-  it('a limit of the hand that the plan keeps says nothing', () => {
-    const plan = planRoute(rock, at(0, 64, 0), [at(0, 58, 0)], { placeBlocks: 20, maxDig: 16 });
-    expect(budgetOf(plan, { maxDig: 16, maxPlace: 10 }, FLOOR).over).toBeUndefined();
-  });
-});
-
 describe('what the body gives the plan', () => {
-  it('counts the cheap blocks the pack can lay, and names the default footing it holds', () => {
-    const bot = bodyOver(rock, at(0, 64, 0), [{ name: 'cobblestone', count: 30 }, { name: 'dirt', count: 5 }, { name: 'oak_planks', count: 40 }, { name: 'gravel', count: 20 }]);
+  it('counts the blocks the pack can lay by default (the three go lays), not planks, gravel or other stone', () => {
+    const bot = bodyOver(rock, at(0, 64, 0), [{ name: 'cobblestone', count: 30 }, { name: 'dirt', count: 5 }, { name: 'stone', count: 9 }, { name: 'oak_planks', count: 40 }, { name: 'gravel', count: 20 }]);
     expect(placeBlocksHeld(bot)).toBe(35);
-    expect(footingHeld(bot)).toEqual(['cobblestone', 'dirt']);
-    expect(footingHeld(bodyOver(rock))).toEqual([]);
   });
-
-  it('roadNeeded: the blocks a mine\'s way digs, grown by a fifth and two; null when no way is planned', () => {
-    const bot = bodyOver(rock, at(0, 64, 0), [{ name: 'iron_pickaxe', count: 1 }]);
-    const needed = roadNeeded(bot, [at(6, 58, 0)], name => name === 'stone');
-    expect(needed).toBeGreaterThanOrEqual(Math.ceil(15 * 1.2) + 2);
-    expect(roadNeeded(bot, [at(6, 58, 0)], () => false)).toBeNull();
-    expect(roadNeeded({ entity: null } as any, [at(1, 64, 0)], () => true)).toBeNull();
-  });
-
-  it('goBudgetFor: nothing is planned for a place far off, and a limit of 0 is not read as a ceiling to check', () => {
-    const bot = bodyOver(rock, at(0, 64, 0), [{ name: 'iron_pickaxe', count: 1 }]);
-    const input = { range: 0, maxDrop: 3, waterOk: false, diggable: (name: string) => name === 'stone', placeBlocks: 0, floor: FLOOR };
-    expect(goBudgetFor(bot, [at(200, 64, 0)], { ...input, asked: {} })).toBeNull();
-    const none = goBudgetFor(bot, [at(6, 58, 0)], { ...input, asked: { maxDig: 0 } });
-    expect(none?.over).toBeUndefined();
-    const over = goBudgetFor(bot, [at(6, 58, 0)], { ...input, asked: { maxDig: 5 } });
-    expect(over?.over?.code).toBe('limit_dig');
+  it('planFromBody: null for a body with no feet; a plan otherwise', () => {
+    expect(planFromBody({ entity: null } as any, [at(1, 64, 0)])).toBeNull();
+    expect(planFromBody(bodyOver(rock), [at(3, 64, 0)])?.status).toBe('success');
   });
 });
 

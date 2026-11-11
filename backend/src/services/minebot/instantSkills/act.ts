@@ -29,7 +29,6 @@ import { pickup } from '../utils/primitives/pickup.js';
 import { shoot } from '../utils/primitives/shoot.js';
 import { pillarUp } from '../utils/primitives/pillarUp.js';
 import { go, goProblem } from '../utils/primitives/go.js';
-import { footingHeld } from '../utils/routeBudget.js';
 import { vertical } from '../utils/primitives/vertical.js';
 import { obsidian, obsidianProblem, OBSIDIAN_DEFAULTS, OBSIDIAN_LIMITS } from '../utils/primitives/obsidian.js';
 import { OBSIDIAN_RECOVERY_MS } from '../utils/obsidianContract.js';
@@ -311,7 +310,7 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       const problem = goProblem(hand as Record<string, unknown>, spec => cellOf(ctx, hand, spec) !== null);
       if (problem) return bad(`go: ${problem}`);
       const goals = (hand.goals ?? [hand.to]).map(spec => cellOf(ctx, hand, spec)!);
-      return go(ctx, { goals, range: hand.range, canDig: hand.canDig, canPlace: hand.canPlace ?? (footingHeld(bot).length ? footingHeld(bot) : undefined), maxDrop: hand.maxDrop, waterOk: hand.waterOk, seconds: hand.seconds,
+      return go(ctx, { goals, range: hand.range, canDig: hand.canDig, canPlace: hand.canPlace, maxDrop: hand.maxDrop, waterOk: hand.waterOk, seconds: hand.seconds,
         maxDig: hand.maxDig, maxPlace: hand.maxPlace, sprint: hand.sprint ?? 'auto' });
     }
     case 'vertical': {
