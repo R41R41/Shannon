@@ -244,7 +244,7 @@ function createExecuteNode(
           '../responses/DiscordArtifactResponsesExecutor.js'
         );
         const executor = new DiscordArtifactResponsesExecutor(fca.createToolsForRun());
-        const responseResult = await executor.run(fcaState);
+        const responseResult = await executor.run(fcaState, state._abortSignal);
         return {
           finalAnswer: responseResult.lastAssistantContent,
           taskTree: responseResult.taskTree,

@@ -66,6 +66,8 @@ export type Platform =
   | 'youtube'
   | 'notion'
   | 'minebot'
+  | 'minebot:bot'
+  | `minecraft:${string}`
   | 'youtube:live_chat';
 
 /**

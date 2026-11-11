@@ -1,5 +1,4 @@
 import { createRequire } from 'node:module';
-import type { Bot } from 'mineflayer';
 
 const require = createRequire(import.meta.url);
 const installedMineflayerVersion: string = require('mineflayer/package.json').version;
@@ -33,8 +32,15 @@ export function needsPlayerLoadedHandshake(
     && !atLeast(mineflayerVersion, [4, 38, 0]);
 }
 
+/** Only what the handshake touches: the version, a spawn listener, and the raw client's write. */
+export interface HandshakeBot {
+  version: string;
+  on(event: 'spawn', listener: () => void): unknown;
+  _client: { write(name: string, params: object): unknown };
+}
+
 export function installPlayerLoadedHandshake(
-  bot: Pick<Bot, 'version' | 'on' | '_client'>,
+  bot: HandshakeBot,
   mineflayerVersion: string = installedMineflayerVersion,
 ): void {
   // Register before any consumer waits for spawn. This mirrors Mineflayer's

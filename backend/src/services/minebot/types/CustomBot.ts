@@ -44,6 +44,7 @@ export type ArmorCategory =
 interface CustomBotEvents extends BotEvents {
   [key: `taskPer${number}ms`]: () => void;
   minebotActionProgress: (progress: ActionProgress) => void;
+  minebotTargetAttacked: (target: Entity) => void;
 }
 
 export type DroppedItem = {

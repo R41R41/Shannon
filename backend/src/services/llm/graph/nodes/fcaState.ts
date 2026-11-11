@@ -75,7 +75,7 @@ export function buildFcaState(input: FlatFcaStateInput): FunctionCallingAgentSta
   const channel = {} as FcaChannelAdapter;
   for (const [key, value] of Object.entries(input)) {
     if (compositionKeys.has(key as keyof FcaComposition)) {
-      (composition as unknown as Record<string, unknown>)[key] = value;
+      Object.assign(composition, { [key]: value });
     } else if (channelKeys.has(key as keyof FcaChannelAdapter)) {
       (channel as Record<string, unknown>)[key] = value;
     }

@@ -18,9 +18,9 @@ const { goals } = pathfinder;
 
 const log = createLogger('Minebot:Combat:Executor');
 
-// minebotTargetAttacked is emitted for GoalVerifier but is not in CustomBotEvents (shared type); emit it untyped, as before.
+// minebotTargetAttacked is emitted for GoalVerifier; emit tolerates a bot double without emit, as before.
 function emitTargetAttacked(bot: CustomBot, target: Entity): void {
-    (bot as unknown as { emit?: (event: string, ...args: unknown[]) => boolean }).emit?.('minebotTargetAttacked', target);
+    bot.emit?.('minebotTargetAttacked', target);
 }
 
 export class ActionExecutor {

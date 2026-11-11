@@ -59,7 +59,7 @@ export async function createProbeBot(port: number, username = 'ShannonProbe', ac
         // A run never waits for the owner to approve a sign-in (it would sit there polling Microsoft).
         onMsaCode: () => { console.error('PROBE_ACCOUNT_SIGN_IN_REQUIRED'); process.exit(78); } }
       : { username, auth: 'offline' as const }) }) as CustomBot;
-  installPlayerLoadedHandshake(bot as unknown as Parameters<typeof installPlayerLoadedHandshake>[0]);
+  installPlayerLoadedHandshake(bot);
   installRegistryRepairs(bot);
   installAirSupplyDefault(bot);
   // As production has it (client.ts): use_item written with the body's look, not rotation 0, 0 (end1108h8).
