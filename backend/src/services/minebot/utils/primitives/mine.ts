@@ -328,7 +328,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     const why = gone.ok ? `${placeText(bot, cell)} の隣まで行ったが、手が届かない・見えない` : gone.text.replace(/^go 止まった [a-z_]+: /u, '');
     if (!gone.ok && gone.reason === 'limit_dig') {
       // go says how many it would dig ("掘る所が N"): that number, with the maxDig that covers it, is what the next mine is sent with.
-      const need = Number(/掘る所が (d+)/u.exec(gone.text)?.[1]);
+      const need = Number(/掘る所が (\d+)/u.exec(gone.text)?.[1]);
       const hint = Number.isFinite(need) && need > 0
         ? `。届くには約 ${need} マス掘る（上限 ${roadBudget}）。maxDig=${need + 4} を付けて同じ mine をもう一度。もっと遠く深い鉱石は go maxDig=… で先に近づく` : '';
       return { fatal: true, reason: 'limit_dig', text: `道を掘る上限 ${roadBudget} マスに着いた（${placeText(bot, cell)} にまだ届かない）${hint}` };
@@ -340,7 +340,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     const allowed = roadLeft > 0 ? `許された物（${roadWords.join('・')}）だけを掘っても` : spent ? `道の掘り ${result.road} マス（maxDig ${roadBudget} を使い切った）で` : '掘らずに（maxDig が 0）';
     // end1109o04: iron ore 14 blocks down "had no way without digging"; the hand was not sent again with a dig list, and she called the
     // iron far and waited for the night. Without one, the stop says the same hand with the rock to dig.
-    const needed = Number(/掘る所が (d+)/u.exec(gone.text)?.[1]);
+    const needed = Number(/掘る所が (\d+)/u.exec(gone.text)?.[1]);
     const retry = spent ? (Number.isFinite(needed) && needed > 0 ? `。届くには約 ${needed} マス掘る（上限 ${roadBudget}）。maxDig=${needed + 4} を付けて同じ mine をもう一度。もっと遠く深い鉱石は go maxDig=… で先に近づく`
         : `。まだ遠いなら maxDig を ${roadBudget} より大きくする（ただし近くの別の鉱脈のほうが早くないか先に見る）`) : roadLeft > 0 ? '' : `。maxDig を 1 以上にすれば（既定 ${DEFAULT_MAX_DIG}）、岩（${ROCK_ROAD}）を掘って近づく（鉱石は岩の中にあるので、掘る道なら普通は届く）`;
     return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ${allowed}届く道が無い（${why.slice(0, 70)}）${retry}` };

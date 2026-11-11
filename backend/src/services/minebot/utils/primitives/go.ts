@@ -175,6 +175,9 @@ const VILLAGE_MARK_DY = 12;
  * the planner gave; the village's own walls, floors and stairs are what a go never digs.
  */
 export function inVillageAt(bot: any, cell: Cell): boolean {
+  // Only a built block counts (a village's cobblestone too; it lies nowhere natural near one): natural rock or ore under a village is dug as anywhere else.
+  const here = String(blockAt(bot, cell)?.name ?? '');
+  if (!VILLAGE_MADE.test(here) && !/^(?:mossy_)?cobblestone$/u.test(here)) return false;
   const mark = ((bot?.landmarks ?? []) as Array<{ kind?: string; position?: { x: number; y: number; z: number } }>).find(entry => entry?.kind === 'village' && entry.position);
   if (mark?.position && Math.hypot(cell.x - mark.position.x, cell.z - mark.position.z) <= VILLAGE_MARK_M && Math.abs(cell.y - mark.position.y) <= VILLAGE_MARK_DY) return true;
   return Object.values(bot?.entities ?? {}).some((entity: any) => entity?.name === 'villager' && entity.position
@@ -1684,8 +1687,8 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       ...(stranded && requestedDrop > limits.maxDrop ? [[{ drops: true }, () => fail('no_return', `ツルハシもブロックも無いので、登って戻れない降り（${STRANDED_MAX_DROP + 1} 段以上）は取らない。この道は降りると戻れない`,
         '来た道で戻るか、ブロック（丸石・ネザーラック）かツルハシを手に入れてから')] as [Relax, (found: Plan) => StepOutcome]] : []),
       [{ hazards: true }, douseWay],
-      ...(state.dug >= limits.maxDig || state.placed >= limits.maxPlace ? [[{ limits: true }, () => state.dug >= limits.maxDig
-        ? fail('limit_dig', `掘る数の上限 ${limits.maxDig} に着いた（この先にも掘る所がある）`, 'maxDig を増やすか、別の道を')
+      ...(state.dug >= limits.maxDig || state.placed >= limits.maxPlace ? [[{ limits: true }, (found: Plan) => state.dug >= limits.maxDig
+        ? fail('limit_dig', `掘る数の上限 ${limits.maxDig} に着いた（この道は掘る所が ${[...found.digs.values()].reduce((a, b) => a + b, 0) + state.dug}）`, 'maxDig を増やすか、別の道を')
         : fail('limit_place', `置く数の上限 ${limits.maxPlace} に着いた（この先にも置く所がある）`, placeMore('maxPlace を増やすか、別の道を'))] as [Relax, (found: Plan) => StepOutcome]] : []),
       [{ upstream: true }, () => fail('dead_end', '道は流れる水を天井の下で上流へ遡る一歩だけ（押し戻されて進めない）', '上流の水源を汲むかブロックで塞ぐか、別の道を')],
       [{ tool: true }, found => fail('no_tool', `${shown(found.digs) || '掘る所'} を掘る道だが、持っている道具では掘れない`, 'ツルハシなどを手に入れるか、別の道を')],

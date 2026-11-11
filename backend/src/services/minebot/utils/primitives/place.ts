@@ -246,8 +246,9 @@ async function placeCells(ctx: StepContext, args: PlaceArgs, tally: { laid: numb
       }
     }
     if (blockAt(bot, cell)?.name !== args.block) {
-      if (await laidLate(bot, cell, args.block, () => ctx.stop.aborted || Date.now() >= ctx.deadline)) lateNote = 'サーバーの返事が遅れたが置けた';
-      if (blockAt(bot, cell)?.name !== args.block) return result(stopped(bot, 'not_placed', `${placeText(bot, cell)} は置いた後も ${cellNow(bot, cell)}（${(LATE_ANSWER_MS / 1000).toFixed(1)} 秒待っても ${args.block} が見えない。サーバーが受け付けない）`, cell));
+      // No error was thrown, so the answer is not late: a short look, not the late-answer wait.
+      await wait(ctx, 300);
+      if (blockAt(bot, cell)?.name !== args.block) return result(stopped(bot, 'not_placed', `${placeText(bot, cell)} は置いた後も ${cellNow(bot, cell)}（サーバーが受け付けない）`, cell));
     }
     try { noteOwned(bot, cell, args.block); } catch { /* the ledger is a help */ }
     try { noteStation(bot, args.block, cell); } catch { /* the list of stations to carry is a help */ }

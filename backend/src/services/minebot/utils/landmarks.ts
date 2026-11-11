@@ -89,7 +89,6 @@ export function detectVillage(bot: LandmarkBot): Landmark | null {
     const others = [...counts.entries()].filter(([name]) => name !== 'bed' && name !== 'hay_block').sort((a, b) => b[1] - a[1]).slice(0, 2).map(([name, count]) => `${name}×${count}`);
     evidence.push(...others);
     if (beds2) evidence.push(`一周 約${Math.floor(Math.min(ROUND_MAX_SECONDS, beds2 * SECONDS_PER_BED + ROUND_FIXED_SECONDS) / 10) * 10}秒（目安）`);
-    evidence.push('取り方: 家の外へ go range=3 → dig takeOk（箱は chest takeAll）');
     return { kind: 'village', distance: Math.round(seed.distance), direction: compassDirection(origin, seed.position),
       position: { x: seed.position.x, y: seed.position.y, z: seed.position.z }, evidence: evidence.slice(0, -1).join('、') + `。${evidence[evidence.length - 1]}` };
   }

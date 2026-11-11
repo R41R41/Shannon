@@ -291,7 +291,7 @@ export function feetWaterWords(bot: any): string | null {
   const parts: string[] = [];
   if (inWater) {
     const level = waterLevel(bot, feet);
-    if (level !== null && level > 0) parts.push(`流れる水（流れ ${level}）`);
+    if (level !== null && level > 0) parts.push(level >= 8 ? '落ちる水' : '流れる水');
     else {
       let depth = 1;
       while (depth < 8 && holdsWater(blockAt(bot, { x: feet.x, y: feet.y - depth, z: feet.z }))) depth++;

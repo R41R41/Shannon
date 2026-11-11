@@ -79,7 +79,7 @@ describe('a village in view', () => {
     expect(village?.evidence).toContain('干し草20（パン60）');
     expect(village?.evidence).toContain('箱1');
     expect(village?.evidence).toContain('一周 約120秒（目安）');
-    expect(village?.evidence).toContain('go range=3 → dig takeOk');
+    expect(village?.evidence).not.toContain('takeOk');
     expect(village?.evidence.length).toBeLessThanOrEqual(160);
     // A chest alone is no village.
     expect(detectVillage(body([[30, 64, 0, 'chest'], [32, 64, 0, 'chest'], [34, 64, 0, 'chest']]))).toBeNull();

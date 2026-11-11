@@ -141,8 +141,7 @@ export function travelMovements(bot: CustomBot): any {
   return buildMovements(bot, ...travelProfile((bot.entity as any)?.isInWater || false));
 }
 
-/** A movement profile for the route planner, not yet applied (see setMovements). */
-/** True when lava lies over the block or beside it (the cells a dug block lets a liquid in from). */
+/** True when lava lies over the block or beside it (the cells a dug block lets a liquid in from; below is not a way for a liquid to come in). */
 function lavaAround(bot: any, block: any): boolean {
   const at = block?.position;
   if (!at) return false;
@@ -152,6 +151,7 @@ function lavaAround(bot: any, block: any): boolean {
   return false;
 }
 
+/** A movement profile for the route planner, not yet applied (see setMovements). dontCreateFlow is off for every profile, travel included. */
 export function buildMovements(
   bot: CustomBot,
   allow1by1towers = false,
