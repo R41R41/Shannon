@@ -26,7 +26,11 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@shannon/common": ["../common/dist/index.d.ts"]
+      "@shannon/common": ["../common/dist/index.d.ts"],
+      // zod の型を 1 組にそろえる。import 'zod' は types.d.cts を指すが @langchain/core は zod/v3 を使うため、
+      // 型が 2 組になって全体の tsc がメモリ不足で回らなかった（2026-11-11 の測定：この 1 行で 1.8GB・約 18 秒）。
+      // 型の解決だけに効く。実行時の zod は変わらない。
+      "zod": ["../node_modules/zod/v3/index.d.ts"]
     },
     "typeRoots": ["./node_modules/@types", "./src/types"]
   },
