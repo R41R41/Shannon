@@ -136,12 +136,12 @@ function realWalk(): { walk: GoWalk; asked: () => number } {
   return { walk: (ctx, args) => { calls++; return goWalk(ctx, args); }, asked: () => calls };
 }
 
-describe('go: the plan is drawn first and walked when it is complete', () => {
+describe('go: the route search walks first; the plan walks when it stops for want of time or for the dig limit', () => {
   const wall = over(flat, box('stone', 3, 5, FLOOR, FLOOR + 6, -R - 1, R + 1));
 
-  it('through a wall: the plan digs the cells of its way, with canDig as the leave, before the route search is asked, and the line says the way', async () => {
+  it('through a wall: after the route search stops (search_timeout), the plan digs the cells of its way, with canDig as the leave, and the line says the way', async () => {
     const sim = makeSim(wall, { items: stacks(PICK) });
-    const { walk, asked } = realWalk();
+    const { walk, asked } = stopsOnce('search_timeout');
     const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'] }, walk));
     expect(outcome.ok).toBe(true);
     expect(outcome.text).toMatch(/計画の道: \d+ マス・掘 [1-9]\d*・置 0/u);
@@ -149,7 +149,26 @@ describe('go: the plan is drawn first and walked when it is complete', () => {
     expect(sim.bot.dugBlocks.length).toBeGreaterThanOrEqual(3);
     expect(sim.bot.dugBlocks.every((line: string) => line.startsWith('stone@'))).toBe(true);
     expect(sim.world.nameAt(4, FLOOR, 8)).toBe('stone');   // the wall away from the way stands
-    expect(asked()).toBe(1);                               // only for what was left after the plan
+    expect(asked()).toBe(2);                               // the first stop, then what was left after the plan
+  });
+
+  it('the route search walks first: through a wall it is asked once and the plan is not drawn when it arrives', async () => {
+    const sim = makeSim(wall, { items: stacks(PICK) });
+    const { walk, asked } = realWalk();
+    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'] }, walk));
+    expect(outcome.ok).toBe(true);
+    expect(outcome.text).not.toContain('計画の道');
+    expect(asked()).toBe(1);
+  });
+
+  it('search_timeout on open ground: the plan walks the open way to the goal without digging', async () => {
+    const sim = makeSim(flat, { items: stacks(PICK) });
+    const { walk } = stopsOnce('search_timeout');
+    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(12, FLOOR, 9)], canDig: ['stone'] }, walk));
+    expect(outcome.ok).toBe(true);
+    expect(outcome.text).toContain('計画の道');
+    expect(sim.bot.dugBlocks).toEqual([]);
+    expect(Math.floor(sim.bot.entity.position.x)).toBe(12);
   });
 
   it('an open way is taken without digging: a wall with a gap is walked through the gap', async () => {

@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeSim, type Ground, type Sim, type Stack } from '../helpers/physicsBody.js';
-import { goWalk as go, type GoArgs } from '../../src/services/minebot/utils/primitives/go.js';
+import { go, type GoArgs } from '../../src/services/minebot/utils/primitives/go.js';
 import { inHole } from '../../src/services/minebot/utils/primitives/holeExit.js';
 import type { StepContext } from '../../src/services/minebot/utils/primitives/common.js';
 
-// (go here is the walk of the route search, goWalk: these test its own hole climb and its stops; go as a whole then tries the plan, tests/unit/goPlanned.test.ts.)
 // A body at the bottom of a 1x1 hole, held by the limit of digs: it climbs out by itself (a cheap block from the pack, no canPlace), the climb
 // is not counted in the way's limits, it is tried once a go, and a hole that can be walked out of is no hole. Real client physics (tests/helpers/physicsBody).
 beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] }); });

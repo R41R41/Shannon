@@ -1099,9 +1099,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
 // ---- the planned way (run 7, Lai: "目的座標を指定したときにそこに至る最短経路を出力するアルゴリズム ... 出来る限り道があれば掘らずに移動") ----
 
 /**
- * The plan (utils/routePlan, followed by utils/routeFollow) is drawn first, a few hundred milliseconds, before the route search (the pathfinder) is asked anything: a go that has a complete
- * plan walks it (the plan digs nothing where a way stands open). The pathfinder walks when no complete plan is there, and after the plan's walk for what is left of the way.
- * After the pathfinder stops for want of time or for the dig limit, a partial plan may take its place.
+ * The walk of the route search (goWalk, with every guard of a go: stopIf, fire, lava, the fall, bridges, unsafe, no_return, the time) goes first. After it stops for want of time or for the
+ * dig limit, a plan (utils/routePlan, followed by utils/routeFollow) may take its place.
  */
 export const PLAN_STOPS: ReadonlySet<string> = new Set(['search_timeout', 'limit_dig']);
 /** The plan's time (ms; the plan's own default is 300). */
@@ -1179,10 +1178,9 @@ function followHandsOf(ctx: StepContext, args: GoArgs, deadline: number): Follow
 }
 
 /**
- * go: the plan first (utils/routePlan: walking, level cuts, stair cuts, shaft cuts and laid blocks only; water and lava kept off; it digs nothing where a way stands open), walked by
- * utils/routeFollow with the caller's limits and permissions as they were (canDig names what the plan may cut, canPlace what it may lay, maxDig and maxPlace what is left). With no complete
- * plan, the walk of the route search (goWalk) goes; when it stops for want of time or for the dig limit (PLAN_STOPS), a partial plan may walk. What is left after a plan's walk is the route
- * search's, inside the go's own seconds. The line says "計画の道: N マス・掘 M・置 K". mine's approach to an ore goes by this hand, so it is the same there.
+ * go: the walk of the route search (goWalk) goes first, with every guard of a go. When it stops for want of time or for the dig limit (PLAN_STOPS), a plan (utils/routePlan: walking, level
+ * cuts, stair cuts, shaft cuts and laid blocks; water and lava kept off) is walked by utils/routeFollow with the caller's limits as they were; a partial plan that lays blocks is not. What is
+ * left after a plan's walk is the route search's, inside the go's own seconds. The line says "計画の道: N マス・掘 M・置 K". mine's approach to an ore goes by this hand.
  */
 export type GoWalk = (ctx: StepContext, args: GoArgs) => Promise<StepOutcome>;
 async function goPlanned(ctx: StepContext, args: GoArgs): Promise<StepOutcome> { return goPlannedWith(ctx, args, goWalk); }
@@ -1220,7 +1218,7 @@ export async function goPlannedWith(ctx: StepContext, args: GoArgs, walk: GoWalk
     return done;
   };
   /** What is left of the way after a plan's walk: the route search inside the go's own seconds (when under a second is left, the plan's own end is the answer). */
-  const finish = async (done: FollowOutcome, before: { dug: number; placed: number; steps: number }): Promise<StepOutcome> => {
+  const finish = async (done: FollowOutcome, before: { dug: number; placed: number; steps: number }, note = ''): Promise<StepOutcome> => {
     const secondsLeft = Math.floor((end - Date.now()) / 1000);
     const dug = before.dug + done.digs, placed = before.placed + done.places;
     if (secondsLeft < AGAIN_MIN_LEFT_MS / 1000) {
@@ -1231,21 +1229,12 @@ export async function goPlannedWith(ctx: StepContext, args: GoArgs, walk: GoWalk
     const work = second.data?.work;
     return {
       ...second,
-      text: `${second.text}。${plannedWords(done)}${second.ok || !done.reason ? '' : `（計画: ${done.reason.slice(0, 40)}）`}`,
+      text: `${note}${second.text}。${plannedWords(done)}${second.ok || !done.reason ? '' : `（計画: ${done.reason.slice(0, 40)}）`}`,
       ...(work ? { data: { ...second.data, work: { ...work, dug: (work.dug ?? 0) + dug, placed: (work.placed ?? 0) + placed, steps: (work.steps ?? 0) + before.steps + done.steps } } } : {}),
     };
   };
   const moved = (done: FollowOutcome) => done.steps > 0 || done.digs > 0 || done.places > 0;
 
-  // The plan first: a complete plan inside the limits is walked, with nothing waited for.
-  const full = { dig: maxDig, place: maxPlace };
-  if (end - Date.now() >= AGAIN_MIN_LEFT_MS) {
-    const lead = makePlan(full, PLAN_MS);
-    if (fits(lead, full, false)) {
-      const done = await walkPlan(lead, full, 'plan_first');
-      if (moved(done)) return finish(done, { dug: 0, placed: 0, steps: 0 });
-    }
-  }
   const first = await walk(ctx, args);
   const code = first.reason ?? '';
   if (first.ok || ctx.stop?.aborted || !PLAN_STOPS.has(code)) return first;
@@ -1254,9 +1243,12 @@ export async function goPlannedWith(ctx: StepContext, args: GoArgs, walk: GoWalk
   const left = { dig: maxDig - before.dug, place: maxPlace - before.placed };
   const plan = makePlan(left, PLAN_MS);
   if (!fits(plan, left, true)) return first;
+  // A partial plan that lays blocks leaves the body in the air with nothing to finish it (the go's own climb is the route search's): only a complete plan lays.
+  // After limit_dig the go's own climb (a roof or a blocker it may not dig) is the honest stop: a plan that lays blocks does not take it over.
+  if (plan.totals.place > 0 && (plan.status !== 'success' || code === 'limit_dig')) return first;
   const done = await walkPlan(plan, left, code);
   if (!moved(done)) return { ...first, text: `${first.text}。計画の道も進めない: ${(done.reason ?? done.stopped).slice(0, 40)}` };
-  return finish(done, before);
+  return finish(done, before, /(?:水の入った穴|穴の底)だったので[^。]*。/u.exec(first.text ?? '')?.[0] ?? '');
 }
 
 

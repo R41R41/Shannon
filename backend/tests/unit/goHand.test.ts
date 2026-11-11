@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 import { makeSim, type Ground, type Sim, type Stack } from '../helpers/physicsBody.js';
-import { digRuleOf, go, goMilliseconds, goWalk, goProblem, hazardAtFeet, placeNamesOf, type GoArgs } from '../../src/services/minebot/utils/primitives/go.js';
+import { digRuleOf, go, goMilliseconds, goProblem, hazardAtFeet, placeNamesOf, type GoArgs } from '../../src/services/minebot/utils/primitives/go.js';
 import { StepStopped, type StepContext, type StepOutcome } from '../../src/services/minebot/utils/primitives/common.js';
 import { feetCell } from '../../src/services/minebot/utils/localMap.js';
 
@@ -284,8 +284,7 @@ describe('go: up and down', () => {
     const sim = makeSim(ground, { items: stacks(PICK, COBBLE(12)) });
     // No horizontal route was found: exercise go's existing climb at the current feet, not a route around the roof/rail.
     sim.bot.pathfinder.getPathFromTo = function* () { yield { result: { status: 'noPath', path: [] } }; } as never;
-    // The walk of the route search itself (goWalk): go as a whole would then try the plan (primitives/go: goPlanned), which lays blocks the way up.
-    const outcome = await drive(sim, goWalk(ctxOf(sim), { goals: [goal(6, FLOOR + 5, 0)], canDig: [kind === 'roof' ? 'stone' : 'rail'], canPlace: ['cobblestone'], maxDig: 0 }));
+    const outcome = await drive(sim, run(sim, { canDig: [kind === 'roof' ? 'stone' : 'rail'], canPlace: ['cobblestone'], maxDig: 0 }, goal(6, FLOOR + 5, 0)));
     expect(outcome.reason).toBe('limit_dig');
     expect(sim.bot.dugBlocks).toEqual([]);
     expect(sim.bot.placedBlocks).toEqual([]);
