@@ -4,7 +4,7 @@ import { climbableBank, nearestDryStand, swimOntoBank } from '../exitWater.js';
 import { eyeInWater } from '../digTimeIn.js';
 import { feetCell, type Cell } from '../localMap.js';
 import { holdsWater } from '../waterBlocks.js';
-import { blockAt, cellText, isAirLike, StepStopped, wait, type StepContext } from './common.js';
+import { blockAt, cellText, StepStopped, wait, type StepContext } from './common.js';
 import { pillarEmpty, pillarUp } from './pillarUp.js';
 import { place } from './place.js';
 import { damBlockHeld, flowingAt, stanchStream, waterLevel } from './stanch.js';

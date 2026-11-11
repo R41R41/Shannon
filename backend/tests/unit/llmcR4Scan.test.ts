@@ -54,7 +54,7 @@ function build(radius: number, options: { trees?: boolean } = {}) {
     ...(options.trees !== false ? { '1,0': column(put => { plain(put); for (let y = 64; y <= 68; y++) put(4, y, 4, 'oak_log'); for (let y = 64; y <= 66; y++) put(10, y, 10, 'birch_log'); }) } : {}),
     '0,2': column(put => {
       plain(put);
-      put(5, 64, 5, 'bell'); put(2, 64, 2, 'red_bed'); put(2, 64, 9, 'white_bed'); put(9, 64, 2, 'chest'); put(9, 64, 9, 'barrel'); put(12, 64, 12, 'hay_block');
+      put(5, 64, 5, 'bell'); put(2, 64, 2, 'red_bed'); put(3, 64, 2, 'red_bed'); put(2, 64, 9, 'white_bed'); put(3, 64, 9, 'white_bed'); put(9, 64, 2, 'chest'); put(9, 64, 9, 'barrel'); put(12, 64, 12, 'hay_block');
       for (let x = 0; x < 6; x++) { put(x, 63, 14, 'farmland'); put(x, 64, 14, 'wheat'); }
       put(8, 40, 8, 'iron_ore');
     }),

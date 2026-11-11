@@ -57,6 +57,8 @@ export function makeHandsSim(ground: Ground, options: { start?: [number, number,
       const { name, level } = parse(raw);
       block = new Block(mcData.blocksByName[name].id, 0, level);
       block.position = new Vec3(x, y, z);
+      // The game's own time by the sim's base time (a Block built without a registry knows no tool): five times slower with the eyes in water, five times more off the ground.
+      block.digTime = (_held: unknown, _creative: boolean, eyeInWater: boolean, offGround: boolean) => (name === 'obsidian' ? 9400 : 300) * (eyeInWater ? 5 : 1) * (offGround ? 5 : 1);
       cache.set(cacheKey, block);
     }
     return block;

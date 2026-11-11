@@ -147,7 +147,7 @@ describe('steadyInWater: a stream', () => {
     const sim = makeSim(tunnel, { start: [0.5, FLOOR, 0.5] });
     (sim.bot as any).waterPush = { at: Date.now() - 2000, dx: 0, dz: 1.1, meters: 1.1 };
     const words = feetWaterWords(sim.bot) ?? '';
-    expect(words).toContain('足元: 流れる水（流れ 3）');
+    expect(words).toContain('足元: 流れる水・直近');
     expect(words).toContain('2 秒で 南へ 1.1m 押された');
     expect(words).toContain('頭は水の外');
     const dryBot = makeSim(tunnel, { start: [0.5, FLOOR, 2.5] });
