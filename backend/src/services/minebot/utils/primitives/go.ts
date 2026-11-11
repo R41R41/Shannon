@@ -11,6 +11,7 @@ import { chooseTool, canHarvest, nearlyBroken, handDigForWay } from '../toolChoi
 import { installDoorRules, isDoorlike, mapBlockOf, nodeCell, NO_ENTER, standable } from '../walkRules.js';
 import { clip } from '../actReport.js';
 import { blockAt, cellText, fullPackWatch, inventoryCount, isAirLike, letGo, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { goBudgetFor } from '../routeBudget.js';
 import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
 import { dig } from './dig.js';
 import { climbBlocker, pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
@@ -1251,6 +1252,17 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const why = floorlessAt(bot, safeCells[0], rule, placing)!;
     return fail('no_floor', why, /なら .* の上に立てる$/u.test(why) ? 'その 1 つ下を行き先に' : /^行き先 .* は宙/u.test(why) ? '立てる所を行き先に（宙へ渡るなら canPlace）' : '別の行き先を');
   }
+  // Run 7: the way is planned first (utils/routePlan, read-only). A hand that left maxDig or maxPlace out gets the plan's numbers (never under the defaults); one that set a limit
+  // the way cannot keep is told before the body moves, with the number the way needs.
+  // What a stop at the place limit says to do: without waterOk the search lays a bridge over any water on the way (end1108h32 S9: 39 laid 13 m over a lake), so the swim is named first.
+  const placeMore = (hint: string): string => limits.waterOk ? hint : `水・谷を渡るなら waterOk で下りて泳ぐ（橋は 1 秒に 1 個で遅い）。陸なら ${hint}`;
+  const budget = goBudgetFor(bot, grounded, { range: limits.range, maxDrop: limits.maxDrop, waterOk: limits.waterOk, asked: { maxDig: args.maxDig, maxPlace: args.maxPlace },
+    diggable: name => rule.names.has(name), placeBlocks: place.held.reduce((total, name) => total + inventoryCount(bot, name), 0), floor: GO_DEFAULTS });
+  if (budget) {
+    limits.maxDig = budget.maxDig; limits.maxPlace = budget.maxPlace;
+    // A body at the bottom of a hole climbs out first when the limit holds it (holeNote), so that stop keeps its own way below.
+    if (budget.over && !inHole(bot)) return fail(budget.over.code, budget.over.text, budget.over.code === 'limit_dig' ? 'maxDig を増やすか、別の道を' : placeMore('maxPlace を増やすか、別の道を'));
+  }
   // A whole closed arrival space is said before any search; a blocked centre alone never closes a radius goal.
   // Match goMovements: explicit permission or a body already in water may swim.
   // Reject only when every acceptable arrival cell is known incompatible.
@@ -1531,11 +1543,6 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     if (timeLeft() <= 0) return limitTime(near() ? distanceTo(bot, near()).toFixed(0) : '?');
     return null;
   };
-  /**
-   * What a stop at the place limit says to do. Without waterOk the search lays a bridge over any water on the way (end1108h32 S9: 39 laid 13 m
-   * over a lake, and the stop said only to raise maxPlace): the swim is named first.
-   */
-  const placeMore = (hint: string): string => limits.waterOk ? hint : `水・谷を渡るなら waterOk で下りて泳ぐ（橋は 1 秒に 1 個で遅い）。陸なら ${hint}`;
   /** The cells a route breaks and fills against what is left of the limits: the stop, or null. A route over the limit is not begun. */
   const budgetOf = (digs: number, places: number): { code: string; text: string } | null => {
     if (state.dug + digs > limits.maxDig) return { code: 'limit_dig', text: `この道は掘る所が ${digs} あり、上限 ${limits.maxDig} の残り ${Math.max(0, limits.maxDig - state.dug)} を超える（出し直しは maxDig=${digs + 2} 以上）` };

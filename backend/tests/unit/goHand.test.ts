@@ -275,6 +275,31 @@ describe('go: through a wall (canDig)', () => {
   });
 });
 
+describe('go: the way is planned before it is walked (run 7)', () => {
+  const wall = over(flat, box('stone', 3, 5, FLOOR, FLOOR + 6, -R - 1, R + 1));
+
+  it('a limit the way cannot keep is said before the body moves, with the number the way needs and "動く前の見積り"', async () => {
+    const sim = makeSim(wall, { items: stacks(PICK) });
+    const outcome = await drive(sim, run(sim, { canDig: ['stone'], maxDig: 3 }));
+    expect(outcome.reason).toBe('limit_dig');
+    expect(outcome.text).toMatch(/この道は掘る所が \d+ あり、上限 3 を超える（動く前の見積り/u);
+    expect(outcome.text.length).toBeLessThanOrEqual(160);
+    // go's old words ("掘る所が N") are what a mine reads the number from.
+    expect(Number(/掘る所が (\d+)/u.exec(outcome.text)![1])).toBeGreaterThan(3);
+    expect(sim.bot.dugBlocks).toEqual([]);
+    expect(feetCell(sim.bot)).toMatchObject({ x: 0, y: FLOOR, z: 0 });
+  });
+
+  it('a limit left out is the number of the plan: a way that digs a good deal is still begun', async () => {
+    // A wall 8 thick over 3 high: the way digs 2 cells for each of 8 columns... under 40; the default is never read as a ceiling lower than the plan.
+    const thick = over(flat, box('stone', 3, 10, FLOOR, FLOOR + 6, -R - 1, R + 1));
+    const sim = makeSim(thick, { items: stacks(PICK) });
+    const outcome = await drive(sim, run(sim, { canDig: ['stone'], seconds: 180, searchMs: 600_000 }, goal(13, FLOOR, 0)));
+    expect(outcome.ok).toBe(true);
+    expect(counts(outcome)!.dug).toBeGreaterThanOrEqual(8);
+  });
+});
+
 describe('go: up and down', () => {
   it.each(['roof', 'blocker'] as const)('reports an exhausted climbing dig budget for an allowed %s without digging', async kind => {
     const cliff = over(flat, box('stone', 3, R, FLOOR, FLOOR + 4, -R - 1, R + 1));

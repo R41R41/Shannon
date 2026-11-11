@@ -9,6 +9,8 @@ import { digMsWithBestTool } from '../utils/bestToolDigTime.js';
 import { bodyReader, feetCell, type Cell } from '../utils/localMap.js';
 import { eyeOf, probeAround, probeColumn, probePath, probeHistory, probeSight, type AroundEntity, type SightCreature } from '../utils/probeTools.js';
 import { handsNear } from '../utils/handHistory.js';
+import { planRoute, summarizeRoute } from '../utils/routePlan.js';
+import { routeOptionsOf } from '../utils/routeBudget.js';
 import { scanWorld } from '../utils/worldScan.js';
 import { isThreatEntity, NEUTRAL_UNTIL_STRUCK } from '../utils/hostileMobHints.js';
 import { closingSpeed } from '../utils/threatTracker.js';
@@ -28,9 +30,10 @@ import { laneProbeFields, LANE_PROJECTION_NOTE } from '../utils/huntLane.js';
  *   camp    the Nether's blaze spawner, the cells within three blocks of it to stand on (a floor, two open cells, no edge, no fire) and the hideouts (footings no blaze of it can see; to go to when
  *           the health runs low) (S2: the same as find-structure blaze_spawner).
  *   lane    four read-only lane plans: cells, counts, support order, occupants, reach, safe footings and groups of up to six.
+ *   route   the way to `to` with walking, cuts (level, stair, shaft) and laid blocks, shortest, nothing dug that a liquid is over or lava beside; the blocks it digs and lays, before the body moves.
  * The answer is JSON: { v: 1, kind, text, ... } with the sentence first, the dangerous facts said as they are.
  */
-export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite', 'frames', 'camp', 'lane', 'den', 'bedsite', 'roofsite'] as const;
+export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite', 'frames', 'camp', 'lane', 'den', 'bedsite', 'roofsite', 'route'] as const;
 const Pos = z.object({ x: z.number(), y: z.number(), z: z.number() }).strict();
 
 const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ '
@@ -38,7 +41,7 @@ const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: pa
   + 'around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。'
   + 'worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）/ '
   + 'frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ '
-  + 'camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。'
+  + 'route（to への最短の道を掘る数・置く数つきで見積る。動く前の見積り）/ camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。'
   + 'lane（' + LANE_PROJECTION_NOTE + 'spawner の四方向のレーン計画。省略時は近い湧き場。丸石・建築順・支え・生き物・待ち場からの距離と危険。build の standAtCell は cells の足マス参照、group は同じ立ち位置で最大6マス、末尾の walk は from（既定は足）からの歩数、立ち位置なしは全て null。facts 末尾の standFact は standFacts の参照で noStand・blockedByCreature・fireNear。目から4.3以内で視線が通り、火・液体・マグマ・縁を避ける。計画のマスを避け、先行設置が成功した地形も含め四方向・上下1段までを2000マス探索し、歩数・従来順位の順に立ち位置を選ぶ。着けない場合は noStand: unreachable。実地形を確認して go で立ち位置へ→同じ group の place、占有マスは組の末尾で再確認。fireNear は立ち位置なしなら null、安全なら false。読むだけ）。'
   + 'bedsite（target:#id。エンドの現在phase2進入から、実在庫かつ黒曜石12個以内のベッド配置候補・施工セル・立場を読む。初回はpacket_history_pending。施工や起爆はしない）。'
   + 'roofsite（radius既定16内の（見える目が 0 なら体が半径 24 まで広げて読む）、3×3完成屋根の中心・既屋根外注視位置から目が見える見込みのエンダーマン（8〜48m）が多い順に5件。必要ブロック数・距離つき。予測なので go 後に fight target=enderman が再確認）。'
@@ -54,9 +57,9 @@ class Probe extends InstantSkill {
     this.description = DESCRIPTION;
     this.maxDurationMs = 30_000;
     this.params = [
-      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan・worksite・frames・camp・lane・den・bedsite・roofsite', required: true },
+      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan・worksite・frames・camp・lane・den・bedsite・roofsite・route', required: true },
       { name: 'to', type: 'json', schema: Pos, description: 'path: 行きたいマス' },
-      { name: 'from', type: 'json', schema: Pos, description: 'path・sight・lane: 出発・目の位置の足のマス（既定は足）' },
+      { name: 'from', type: 'json', schema: Pos, description: 'path・route・sight・lane: 出発・目の位置の足のマス（既定は足）' },
       { name: 'target', type: 'json', schema: z.union([Pos, z.string().max(64), z.number()]), description: 'sight: ブロック {x,y,z} か生き物 "#id"' },
       { name: 'x', type: 'number', description: 'column: 列の x（既定は足）/ frames: 探す中心の x' },
       { name: 'z', type: 'number', description: 'column: 列の z（既定は足）/ frames: 探す中心の z' },
@@ -66,14 +69,15 @@ class Probe extends InstantSkill {
       { name: 'at', type: 'json', schema: Pos, description: 'history: 場所（既定は足）' },
       { name: 'retreat', type: 'json', schema: Pos, description: 'worksite: 帰還先（逆向きの道を別に調べる）' },
       { name: 'spawner', type: 'json', schema: Pos, description: 'lane: 湧き場のマス（省略時はネザーの読み込み済みの範囲の近い湧き場）' },
+      { name: 'range', type: 'number', description: 'route: to にどこまで近づけばよいか（m、既定 0）' },
     ];
   }
 
   async runImpl(kind: string, to?: { x: number; y: number; z: number } | null, from?: { x: number; y: number; z: number } | null,
     target?: { x: number; y: number; z: number } | string | number | null, x?: number | null, z?: number | null, yFrom?: number | null, yTo?: number | null,
     radius?: number | null, at?: { x: number; y: number; z: number } | null, retreat?: { x: number; y: number; z: number } | null,
-    spawner?: { x: number; y: number; z: number } | null) {
-    const result = await runProbe(this.bot as any, { kind, to, from, target, x, z, yFrom, yTo, radius, at, retreat, spawner });
+    spawner?: { x: number; y: number; z: number } | null, range?: number | null) {
+    const result = await runProbe(this.bot as any, { kind, to, from, target, x, z, yFrom, yTo, radius, at, retreat, spawner, range });
     return result;
   }
 }
@@ -84,6 +88,7 @@ export interface ProbeInput {
   retreat?: { x: number; y: number; z: number } | null;
   radius?: number | null; at?: { x: number; y: number; z: number } | null;
   spawner?: { x: number; y: number; z: number } | null;
+  range?: number | null;
 }
 
 /** A creature named as the contract does: "#12", "12" or 12 (an id), else the nearest of that name. */
@@ -185,6 +190,16 @@ export async function runProbe(bot: any, input: ProbeInput): Promise<{ success: 
     case 'path': {
       if (!input.to) return bad('path には to {x,y,z} が要る');
       return answer(await probePath(read, input.from ? cellOf(input.from) : feet, cellOf(input.to)));
+    }
+    case 'route': {
+      if (!input.to) return bad('route には to {x,y,z} が要る');
+      const goal = cellOf(input.to);
+      if (![goal.x, goal.y, goal.z].every(Number.isFinite)) return bad('route の座標は有限の数で書く');
+      const plan = planRoute(read, input.from ? cellOf(input.from) : feet, [goal], routeOptionsOf(bot, { range: typeof input.range === 'number' && input.range > 0 ? Math.min(32, input.range) : 0 }));
+      const t = plan.totals;
+      return answer({ v: 1, kind: 'route', text: summarizeRoute(plan, `(${goal.x},${goal.y},${goal.z})`), status: plan.status, steps: t.steps, walk: t.walk, up: t.up, down: t.down, dig: t.dig, place: t.place, seconds: t.seconds,
+        digs: plan.digsByName, wet: plan.wet.length, ...(plan.frontier ? { frontier: plan.frontier } : {}), ...(plan.over ? { over: plan.over } : {}), ...(plan.alt ? { alt: plan.alt } : {}),
+        points: plan.steps.filter((_, i) => i % Math.max(1, Math.ceil(plan.steps.length / 12)) === 0 || i === plan.steps.length - 1).map(step => step.to), ms: plan.ms } as any);
     }
     case 'sight': {
       if (input.target === undefined || input.target === null) return bad('sight には target（{x,y,z} か "#id"）が要る');

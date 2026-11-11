@@ -683,7 +683,7 @@ export function planRoute(read: BlockReader, from: Cell, goalCells: Cell[], opti
   const dy = start.y - goalLevel;
   const shaft = dy > 0 ? { dig: dy + 2 * (dx + dz), back: dy } : null;
   const over = { ...fewest, status: 'over' as const, over: { needed: fewest.totals.dig, ceiling, shaft } };
-  if (walkPlan || walked.closest !== start) over.alt = altOf();
+  if (walkPlan || walked.closest !== grid.index(start.x, start.y, start.z)) over.alt = altOf();
   return over;
 }
 
