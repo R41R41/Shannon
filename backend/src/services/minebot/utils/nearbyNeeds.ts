@@ -45,7 +45,7 @@ const CACHE_MS = 3_000;
 const CACHE_MOVE = 4;
 const RAY_STEP = 0.25;
 
-const FOOD_ANIMALS = new Set(['cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom']);
+export const FOOD_ANIMALS = new Set(['cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom']);
 const IRON_ORES = ['iron_ore', 'deepslate_iron_ore'];
 const COAL_ORES = ['coal_ore', 'deepslate_coal_ore'];
 /**

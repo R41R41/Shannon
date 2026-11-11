@@ -229,6 +229,11 @@ export interface WorldObservation {
   /** The logs within 24 m of the body and how many trees they make (the same scan as the map's wood line): the amount of wood standing near, for weighing against what is needed. Absent when nothing was scanned (not the overworld, no chunks). */
   woodNear?: { logs: number; trees: number; withinM: number };
   /**
+   * What lies near, by purpose (utils/nearbyResources): wood (logs and trees within 128 m, the nearest three trees by their foot), food_animal (per kind, within 48 m), food_village (hay and fields, within 128 m),
+   * ore (the marks' own), bed, water. Each: how many, how far the count reaches (range), the nearest places as full coordinates. The body only lists; what is enough is the planner's.
+   */
+  nearbyResources?: Array<{ purpose: 'wood' | 'food_animal' | 'food_village' | 'ore' | 'bed' | 'water'; kind: string; count: number; range: number; trees?: number; sites: Array<{ x: number; y: number; z: number; note?: string }> }>;
+  /**
    * How the body came to be where it is, said for two minutes after it: reconnect (the connection dropped and the body went back in by
    * itself; it did not die: died is false and the place is where it was), respawn (it died; died is true), portal (another
    * dimension), login (the first arrival of the connection). Run 24: a reconnect in the Nether was taken for a respawn and a shelter was

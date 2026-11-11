@@ -82,6 +82,11 @@ export function woodNear(bot: TreeBody, now = Date.now()): WoodNear | null {
   try { woodLine(bot, now); return cached.get(bot)?.near ?? null; } catch { return null; }
 }
 
+/** The logs the wood line was made from (nearest first, up to WOOD_SCAN_HITS within TREE_SCAN_M): one scan shared with the frame's lists. */
+export function woodHits(bot: TreeBody, now = Date.now()): LoadedBlockHit[] {
+  try { woodLine(bot, now); return cached.get(bot)?.hits ?? []; } catch { return []; }
+}
+
 /** The cardinal heading nearest a compass direction of the memory ("北東" counts as north or east, by which axis the offset is longer). */
 function cardinalOf(from: { x: number; z: number }, to: { x: number; z: number }): Heading {
   const dx = to.x - from.x, dz = to.z - from.z;
@@ -162,7 +167,7 @@ export function overWater(bot: Pick<TreeBody, 'blockAt'>, from: { x: number; y: 
 const compass = (from: Vec3, to: { x: number; z: number }) => compassDirection(from, to);
 const where = (from: Vec3, at: { x: number; y: number; z: number }) => `${Math.round(Math.hypot(at.x - from.x, at.z - from.z))}m ${compass(from, at)} (${at.x},${at.y},${at.z})`;
 
-const cached = new WeakMap<object, { at: number; line: string; near: WoodNear | null }>();
+const cached = new WeakMap<object, { at: number; line: string; near: WoodNear | null; hits: LoadedBlockHit[] }>();
 const WOOD_LINE_TTL_MS = 8_000;
 
 /**
@@ -179,8 +184,10 @@ export function woodLine(bot: TreeBody, now = Date.now()): string {
   const here = bot.entity.position;
   let line = '';
   let nearNow: WoodNear | null = null;
+  let hitsNow: LoadedBlockHit[] = [];
   try {
     const trees = treesInSight(bot, TREE_SCAN_M, WOOD_SCAN_HITS);
+    hitsNow = trees.hits;
     const parts: string[] = [];
     if (trees.nearest) {
       const at = trees.nearest.position.floored();
@@ -208,6 +215,6 @@ export function woodLine(bot: TreeBody, now = Date.now()): string {
     if (sources.length) parts.push(`木材の出どころ: ${sources.join('、')}`);
     line = `木: ${parts.join('。')}`;
   } catch { line = ''; }
-  cached.set(bot, { at: now, line, near: nearNow });
+  cached.set(bot, { at: now, line, near: nearNow, hits: hitsNow });
   return line;
 }

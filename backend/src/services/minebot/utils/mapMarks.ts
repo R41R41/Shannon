@@ -101,6 +101,14 @@ export function mapMarkLines(bot: MarkBody, now = Date.now(), fresh = false): st
   return renderMarks(marks, feet, now);
 }
 
+/** The marks the last scan found (kind, cell, the name and note as the lines say them), read with the same cache period as the lines: for the frame's resource lists. Never throws. */
+export function currentMarks(bot: MarkBody, now = Date.now()): Array<{ kind: string; cell: Cell; name: string; note: string }> {
+  try {
+    mapMarkLines(bot, now);
+    return (cache.get(bot as object)?.marks ?? []).map(mark => ({ kind: mark.kind, cell: mark.cell, name: mark.name, note: typeof mark.note === 'function' ? mark.note(now) : mark.note }));
+  } catch { return []; }
+}
+
 /** The lines of the marks seen from `feet`: nearest first within each order, at most MAX_LINES, the four nearest crystals. */
 function renderMarks(marks: Mark[], feet: Cell, now: number): string[] {
   const seen = marks.map(mark => ({ mark, distance: Math.hypot(mark.cell.x - feet.x, mark.cell.y - feet.y, mark.cell.z - feet.z) }));
