@@ -24,6 +24,10 @@ jobs:
       - run: npm run build -w common
       - run: npm run check:backend-strict -w backend
         if: ${{ !cancelled() }}
+      - run: cd backend && npx tsc --noEmit -p tsconfig.json
+        if: ${{ !cancelled() }}
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
       - run: npm run check:dead-code
         if: ${{ !cancelled() }}
       - run: npm run test:offline -w backend
