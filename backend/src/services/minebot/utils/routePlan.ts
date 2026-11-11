@@ -11,7 +11,7 @@
  *
  * Steps are the shapes of utils/stairLine and utils/tunnelWalk (stepNeeds): the same cells are dug and the same floor stood on, so the tunnel walk runs a plan as it is.
  * The rules for a cell are the walk's own (utils/walkRules): what is open, what is a floor, what is lava. Water and lava are not entered (water only when asked);
- * a block with lava over or beside it, or any liquid over it, is not dug; a block with water at its side is dug only at a price, with one block to seal it.
+ * a block with lava over or beside it is not dug; a block with water at its side or over it is dug only at a price (over it, a higher one), with one block to seal it.
  */
 import type { BlockReader, Cell, MapBlock } from './localMap.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
@@ -135,6 +135,8 @@ const DIG_EXTRA_S = 0.15, PLACE_S = 0.45;
 const DIG_WEIGHT_S = 0.6, PLACE_WEIGHT_S = 0.4;
 /** Standing or passing beside lava; digging a block with water at its side; a falling block over a dug cell. */
 const LAVA_BESIDE_S = 8, WET_DIG_S = 20, FALLING_ABOVE_S = 4;
+/** Water over the block to dig: a flood from above is harder to hold than one from the side, so it costs more (the hand seals it first: utils/primitives/wetWall). */
+const WET_UP_S = 40;
 
 export interface RouteStep {
   kind: StepKind;
@@ -269,7 +271,7 @@ class RouteSearch {
     return cost;
   }
 
-  /** What digging the cells costs, and why not: null when one of them may not be cut (lava or any liquid over it, lava beside it, a wall, a hole where a block is wanted). */
+  /** What digging the cells costs, and why not: null when one of them may not be cut (lava over or beside it; water over it only at a high price, with a block to seal it, a wall, a hole where a block is wanted). */
   private cut(cells: Array<[number, number, number]>, weights: Weights, own: Array<[number, number, number]>): { dig: Cell[]; wet: Cell[]; cost: number } | null {
     const dig: Cell[] = [], wet: Cell[] = [];
     let cost = 0;
@@ -278,8 +280,10 @@ class RouteSearch {
       if (info.kind === 'open') continue;
       if (info.kind !== 'rock') return null;
       const above = this.grid.info(x, y + 1, z);
-      if (above.kind === 'water' || above.kind === 'lava') return null;
+      if (above.kind === 'lava') return null;
       let wetHere = false;
+      const wetUp = above.kind === 'water';
+      if (wetUp) wetHere = true;
       for (const [dx, dz] of DIRS) {
         const side = this.grid.info(x + dx, y, z + dz);
         if (side.kind === 'lava') return null;
@@ -288,7 +292,7 @@ class RouteSearch {
       dig.push({ x, y, z });
       cost += info.seconds + DIG_EXTRA_S + weights.dig;
       if (above.falling) cost += FALLING_ABOVE_S;
-      if (wetHere) { wet.push({ x, y, z }); cost += WET_DIG_S + PLACE_S + weights.place; }
+      if (wetHere) { wet.push({ x, y, z }); cost += WET_DIG_S + (wetUp ? WET_UP_S : 0) + PLACE_S + weights.place; }
     }
     return { dig, wet, cost };
   }

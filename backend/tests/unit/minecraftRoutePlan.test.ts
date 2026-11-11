@@ -105,7 +105,7 @@ describe('planRoute: water and lava', () => {
   const dugSides = (read: BlockReader, plan: ReturnType<typeof planRoute>, name: string) => plan.steps.flatMap(step => step.dig)
     .filter(cell => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => read(cell.x + dx, cell.y, cell.z + dz)?.name === name));
 
-  it('a block with water over it is not dug; the way goes by the dry corridor', () => {
+  it('a block with water over it is dug only when sealable, and the dry corridor is taken first', () => {
     const read = corridors((x, y, z) => (x === 5 && z === 0 && y === 66 ? WATER : null));
     const plan = planRoute(read, at(0, 64, 2), [at(10, 64, 2)], { ms: 3000 });
     expect(plan.status).toBe('success');
@@ -130,6 +130,15 @@ describe('planRoute: water and lava', () => {
     const shut = planRoute(both, at(0, 64, 2), [at(10, 64, 2)], { ms: 3000 });
     expect(shut.status).toBe('none');
     expect(dugSides(half, round, 'lava')).toHaveLength(0);
+  });
+
+  it('water over every way: dug at a high price with a block to seal it; lava over every way: not dug at all', () => {
+    const over = (liquid: MapBlock) => corridors((x, y, z) => (x === 5 && (z === 0 || z === 4) && y === 66 ? liquid : null));
+    const wet = planRoute(over(WATER), at(0, 64, 2), [at(10, 64, 2)], { placeBlocks: 5, ms: 3000 });
+    expect(wet.status).toBe('success');
+    expect(wet.wet.length).toBeGreaterThanOrEqual(1);
+    const lava = planRoute(over(LAVA), at(0, 64, 2), [at(10, 64, 2)], { placeBlocks: 5, ms: 3000 });
+    expect(lava.status).not.toBe('success');
   });
 
   it('a dug block with water at its side is dug when there is no other way, with one block to seal it', () => {
