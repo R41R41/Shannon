@@ -76,9 +76,10 @@ export interface VerticalEvidence {
 export const DEFAULT_FOOTING = ['cobblestone', 'cobbled_deepslate', 'dirt'] as const;
 /**
  * Blocks that are in the way of a stair or a shaft and cost nothing to break (a mineshaft's fence and rails, a web, a torch, a ladder, vines): dug without being in `canDig`
- * (run 46: a stair of 22 levels stopped at an oak fence for the planner to say it may be dug). Planks, doors, chests, beds and the rest are the planner's to allow.
+ * (run 46: a stair of 22 levels stopped at an oak fence for the planner to say it may be dug). Run 7: an ore and gravel as well (lapis_ore and gravel stopped a stair
+ * that the dug block would have paid for: an ore is picked up, gravel is dug again as it falls); the result says what was dug. Planks, doors, chests, beds and the rest are the planner's to allow.
  */
-export const INCIDENTAL_IN_THE_WAY = /^(?:.*_fence|.*_rail|rail|cobweb|torch|wall_torch|soul_torch|redstone_torch|ladder|vine|string|tripwire|tripwire_hook)$/u;
+export const INCIDENTAL_IN_THE_WAY = /^(?:.*_fence|.*_rail|rail|cobweb|torch|wall_torch|soul_torch|redstone_torch|ladder|vine|string|tripwire|tripwire_hook|.*_ore|ancient_debris|gravel)$/u;
 const TOWARD: Record<VerticalToward, [number, number]> = { north: [0, -1], south: [0, 1], west: [-1, 0], east: [1, 0] };
 const LIQUIDS = new Set(['water', 'lava', 'flowing_water', 'flowing_lava', 'bubble_column']);
 const FALLING = /^(?:gravel|sand|red_sand|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/u;
