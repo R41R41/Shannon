@@ -1,5 +1,6 @@
 import { canHarvest } from '../toolChoice.js';
-import { feetCell, type Cell } from '../localMap.js';
+import { feetCell, peekMapStop, type Cell } from '../localMap.js';
+import { closedWord } from '../actReport.js';
 import { blockAt, cellNow, cellText, eyeDistance, findItem, freeSlots, inventoryCount, placeText, stopped, wait,
   type StepContext, type StepOutcome } from './common.js';
 import { cheaperThanAsked, dig } from './dig.js';
@@ -310,6 +311,23 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   return { ok: true, at: last, text: `mine 済 ${block} ${result.dug} 個（${got ? `${got} を得た` : '拾っていない'}）・たどった ${result.visited} マス・${capped ? `${MAX_TRACE} マスたどって止めた（つながりがまだ続く）` : 'つながりが尽きた'}${asked ? `（ほしい ${count} 個に足りない）` : ''}${road}${keptNote}${lost}${aside}` };
 
   /**
+   * What a stop at the way's dig limit says: the maxDig that covers everything dug so far in this mine and the way still to dig (go's count is only the way still
+   * to dig: a number under the limit just reached can never be enough, and a body told it lowered the limit to it and asked again). The second stop at the same
+   * place gives no number, but the two ways that need none. Short, and at the start: the act's line is cut from the back.
+   */
+  function digAdvice(cell: Cell, need: number): string {
+    if (!Number.isFinite(need) || need <= 0) return '';
+    const before = peekMapStop(bot, { kind: 'mine', at: cell, reason: closedWord('limit_dig') }) + peekMapStop(bot, { kind: 'mine', at: cell, reason: closedWord('unreachable') });
+    if (before >= 1) {
+      const above = cellText({ x: cell.x, y: cell.y + 1, z: cell.z });
+      return `同じ所で maxDig を変えても止まった。数を足し直さず、go で ${above} の近くまで行く（range 2、canDig に岩）か、上から掘る（その上のマスから dig で下へ）`;
+    }
+    const total = result.road + pocketDug + need;
+    const said = Math.max(total + 2, roadBudget + 2);
+    return `道を掘る上限 ${roadBudget} に着いた。この mine にはあと約 ${need} マス要る（合計 ${total}）。maxDig=${said} で同じ mine`;
+  }
+
+  /**
    * Gets the body to where it can dig the cell: the hand `go` to a cell beside it (any of its six faces), digging only what `canDig` names and no more than what is left
    * of `maxDig`; without `canDig` it digs nothing. The way is drawn first and not walked half, and a way that makes no headway is given up after a few redraws
    * (go's own rules), so a cell that cannot be reached is told at once.
@@ -327,11 +345,10 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     if (reachable(cell)) return null;
     const why = gone.ok ? `${placeText(bot, cell)} の隣まで行ったが、手が届かない・見えない` : gone.text.replace(/^go 止まった [a-z_]+: /u, '');
     if (!gone.ok && gone.reason === 'limit_dig') {
-      // go says how many it would dig ("掘る所が N"): that number, with the maxDig that covers it, is what the next mine is sent with.
+      // go says how many it would dig ("掘る所が N"): the maxDig that covers what is dug so far in this mine and that way is what the next mine is sent with, said at the start of the line.
       const need = Number(/掘る所が (\d+)/u.exec(gone.text)?.[1]);
-      const hint = Number.isFinite(need) && need > 0
-        ? `。届くには約 ${need} マス掘る（上限 ${roadBudget}）。maxDig=${need + 4} を付けて同じ mine をもう一度。もっと遠く深い鉱石は go maxDig=… で先に近づく` : '';
-      return { fatal: true, reason: 'limit_dig', text: `道を掘る上限 ${roadBudget} マスに着いた（${placeText(bot, cell)} にまだ届かない）${hint}` };
+      const advice = digAdvice(cell, need);
+      return { fatal: true, reason: 'limit_dig', text: advice ? `${advice}（${placeText(bot, cell)} にまだ届かない）` : `道を掘る上限 ${roadBudget} マスに着いた（${placeText(bot, cell)} にまだ届かない）` };
     }
     // The hand's own seconds are the hand's limit; the approach's cap is only that this cell was not reached in that time.
     if (!gone.ok && gone.reason === 'limit_time' && Date.now() >= ctx.deadline) return { fatal: true, reason: 'limit_time', text: `${seconds} 秒の上限に着いた` };
@@ -341,7 +358,9 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     // end1109o04: iron ore 14 blocks down "had no way without digging"; the hand was not sent again with a dig list, and she called the
     // iron far and waited for the night. Without one, the stop says the same hand with the rock to dig.
     const needed = Number(/掘る所が (\d+)/u.exec(gone.text)?.[1]);
-    const retry = spent ? (Number.isFinite(needed) && needed > 0 ? `。届くには約 ${needed} マス掘る（上限 ${roadBudget}）。maxDig=${needed + 4} を付けて同じ mine をもう一度。もっと遠く深い鉱石は go maxDig=… で先に近づく`
+    const advice = spent && Number.isFinite(needed) && needed > 0 ? digAdvice(cell, needed) : '';
+    if (advice) return { fatal: false, reason: 'unreachable', text: `${advice}（${placeText(bot, cell)} へ届く道が無い）` };
+    const retry = spent ? (Number.isFinite(needed) && needed > 0 ? ''
         : `。まだ遠いなら maxDig を ${roadBudget} より大きくする（ただし近くの別の鉱脈のほうが早くないか先に見る）`) : roadLeft > 0 ? '' : `。maxDig を 1 以上にすれば（既定 ${DEFAULT_MAX_DIG}）、岩（${ROCK_ROAD}）を掘って近づく（鉱石は岩の中にあるので、掘る道なら普通は届く）`;
     return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ${allowed}届く道が無い（${why.slice(0, 70)}）${retry}` };
   }

@@ -14,6 +14,7 @@ import { blockAt, cellText, fullPackWatch, inventoryCount, isAirLike, letGo, sto
 import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
 import { dig } from './dig.js';
 import { climbBlocker, pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
+import { HOLE_MAX_LEVELS, HOLE_ROCK, HOLE_ROOF_DIGS, inHole, type HoleReading } from './holeExit.js';
 import { bodyOverlap, placeFacts } from '../placeFacts.js';
 import { blackBoxOf } from '../blackbox.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
@@ -1537,7 +1538,7 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const placeMore = (hint: string): string => limits.waterOk ? hint : `水・谷を渡るなら waterOk で下りて泳ぐ（橋は 1 秒に 1 個で遅い）。陸なら ${hint}`;
   /** The cells a route breaks and fills against what is left of the limits: the stop, or null. A route over the limit is not begun. */
   const budgetOf = (digs: number, places: number): { code: string; text: string } | null => {
-    if (state.dug + digs > limits.maxDig) return { code: 'limit_dig', text: `この道は掘る所が ${digs} あり、上限 ${limits.maxDig} の残り ${Math.max(0, limits.maxDig - state.dug)} を超える` };
+    if (state.dug + digs > limits.maxDig) return { code: 'limit_dig', text: `この道は掘る所が ${digs} あり、上限 ${limits.maxDig} の残り ${Math.max(0, limits.maxDig - state.dug)} を超える（出し直しは maxDig=${digs + 2} 以上）` };
     if (state.placed + places > limits.maxPlace) return { code: 'limit_place', text: `この道は置く所が ${places} あり、上限 ${limits.maxPlace} の残り ${Math.max(0, limits.maxPlace - state.placed)} を超える` };
     return null;
   };
@@ -1551,7 +1552,7 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     if (state.veto) { try { nav.setGoal?.(null); } catch { /* stopped below */ } }
   };
   const VETO_HINTS: Record<string, string> = { limit_dig: 'maxDig を増やすか、別の道を', limit_place: placeMore('maxPlace を増やすか、別の道を'), stuck: '別の道か別の行き先を（同じ手の繰り返しは同じ所で止まる）', threat_exposed: '敵が離れるのを待つか、別の道・行き先を' };
-  const vetoed = (): StepOutcome | null => state.veto ? fail(state.veto.code, state.veto.text, state.veto.hint ?? VETO_HINTS[state.veto.code] ?? '別の道を') : null;
+  const vetoed = (): StepOutcome | null => state.veto ? fail(state.veto.code, `${state.veto.code === 'limit_dig' ? holeNote : ''}${state.veto.text}`, state.veto.hint ?? VETO_HINTS[state.veto.code] ?? '別の道を') : null;
 
   const notes: WayNotes = { opened: [], leaves: 0 };
   // Work that holds the body still on purpose: its own dig or climb, or the executor digging or laying, as long as something has been dug or laid in the last 5 s.
@@ -1709,12 +1710,15 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   };
 
   /** Climbs where the body stands: dig the roof if it may be, lay a block under the feet at the top of the jump, a level at a time. */
-  const climb = async (toY: number): Promise<{ levels: number; stop?: StepOutcome }> => {
+  const climb = async (toY: number, hole?: { digs: number }): Promise<{ levels: number; stop?: StepOutcome }> => {
     let levels = 0, floorDigs = 0;
-    while (levels < CLIMB_CHUNK && (feetCell(bot)?.y ?? toY) < toY) {
+    // Out of a hole the body climbs on its own limits: a cheap block from the pack, rock and earth over the head, and none of it counts against the way's limits.
+    const digOver = () => hole ? hole.digs >= HOLE_ROOF_DIGS : state.dug >= limits.maxDig;
+    const mayDig = (name: string) => hole ? HOLE_ROCK.test(name) || rule.names.has(name) : rule.names.has(name);
+    while (levels < (hole ? HOLE_MAX_LEVELS : CLIMB_CHUNK) && (feetCell(bot)?.y ?? toY) < toY) {
       if (timeLeft() <= 0) break;
-      if (state.placed >= limits.maxPlace) return { levels, stop: fail('limit_place', `置く数の上限 ${limits.maxPlace} に着いた`, 'maxPlace を増やすか、別の道を') };
-      const block = place.held.find(name => inventoryCount(bot, name) > 0);
+      if (!hole && state.placed >= limits.maxPlace) return { levels, stop: fail('limit_place', `置く数の上限 ${limits.maxPlace} に着いた`, 'maxPlace を増やすか、別の道を') };
+      const block = hole ? holeBlockHeld() : place.held.find(name => inventoryCount(bot, name) > 0);
       if (!block) return { levels, stop: fail('no_blocks', `登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : 'canPlace に置ける物が無い'}）`, noBlocksHint()) };
       // Run 44 (hold 1): the feet are read standing. The climb began while the walk before it still jumped (its last point was lifted onto a
       // trapdoor), the feet read a cell up at y 65.17, and the level was laid for a cell the body was half in (0.80) and no jump reaches.
@@ -1743,7 +1747,7 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         // Run 42 (+820 q64, replayed on its own ground): the body stood on a moss carpet (0.06 up its cell). The dig called the carpet "already
         // open" (the walk passes through it), dug nothing and said ok, and the climb tried again every 0.3 s for 115 s until the go's time ran
         // out: 3 steps in 120 s. The carpet is dug as the floor it is (`thin`), and a floor that is still there after its dig stops the climb.
-        if (quick && state.dug < limits.maxDig && floorDigs < 2) {
+        if (quick && !digOver() && floorDigs < 2) {
           floorDigs++;
           manualBusy = true;
           let dug: StepOutcome;
@@ -1760,26 +1764,27 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       const roofBlock = blockAt(bot, roof);
       if (roofBlock && !isAirLike(roofBlock) && roofBlock.name !== 'water' && roofBlock.name !== 'lava') {
         const above = nameAt(bot, roof.x, roof.y + 1, roof.z);
-        if (!rule.names.has(roofBlock.name) || state.dug >= limits.maxDig) {
-          return { levels, stop: fail(state.dug >= limits.maxDig ? 'limit_dig' : 'dead_end',
-            state.dug >= limits.maxDig ? `掘る数の上限 ${limits.maxDig} に着いた（残り 0）。頭の上 ${cellText(roof)} が ${roofBlock.name} で登れない`
+        if (!mayDig(roofBlock.name) || digOver()) {
+          return { levels, stop: fail(digOver() ? 'limit_dig' : 'dead_end',
+            digOver() ? `掘る数の上限 ${hole ? HOLE_ROOF_DIGS : limits.maxDig} に着いた（残り 0）。頭の上 ${cellText(roof)} が ${roofBlock.name} で登れない`
               : `頭の上 ${cellText(roof)} が ${roofBlock.name} で登れない（掘ってよい物に無い）`,
-            state.dug >= limits.maxDig ? '別の場所から' : 'canDig に足すか、別の場所から') };
+            digOver() ? '別の場所から' : 'canDig に足すか、別の場所から') };
         }
         if (above && FALLING.test(above)) return { levels, stop: fail('dead_end', `頭の上 ${cellText(roof)} を掘ると、その上の ${above} が落ちてくる`, '別の場所から') };
         manualBusy = true;
         let dug: StepOutcome;
         try { dug = await dig(ctx, { at: [roof], collect: false }); } finally { manualBusy = false; }
+        if (hole && dug.ok) hole.digs++;
         if (!dug.ok) return { levels, stop: fail(dug.reason === 'lava_behind' ? 'lava' : 'dead_end', dug.text.slice(0, 90), '別の場所から') };
       }
       // Run 59 (hold 3): a rail (or a torch, a flower) in the feet cell takes the level's block: it is dug like the roof when canDig allows,
       // otherwise the climb says which block stops it (it once jumped twice over a mineshaft's rail and said only that the jump fell short).
       const blocker = climbBlocker(bot, feetCell(bot)!);
       if (blocker) {
-        if (!rule.names.has(blocker.name) || state.dug >= limits.maxDig) {
-          return { levels, stop: fail(state.dug >= limits.maxDig ? 'limit_dig' : 'dead_end',
-            state.dug >= limits.maxDig ? `掘る数の上限 ${limits.maxDig} に着いた（残り 0）。${blocker.words}` : `${blocker.words}（掘ってよい物に無い）`,
-            state.dug >= limits.maxDig ? '別の場所から' : `canDig に ${blocker.name} を足すか、別の場所から`) };
+        if (!mayDig(blocker.name) || digOver()) {
+          return { levels, stop: fail(digOver() ? 'limit_dig' : 'dead_end',
+            digOver() ? `掘る数の上限 ${hole ? HOLE_ROOF_DIGS : limits.maxDig} に着いた（残り 0）。${blocker.words}` : `${blocker.words}（掘ってよい物に無い）`,
+            digOver() ? '別の場所から' : `canDig に ${blocker.name} を足すか、別の場所から`) };
         }
         manualBusy = true;
         let dug: StepOutcome;
@@ -1798,6 +1803,42 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       levels++;
     }
     return { levels };
+  };
+
+  /** The block a climb out of a hole lays: one of canPlace that is held, else any cheap block of the pack (the same ones strandedPack counts). */
+  const holeBlockHeld = (): string | undefined => {
+    const named = place.held.find(name => inventoryCount(bot, name) > 0);
+    if (named) return named;
+    for (const item of (bot.inventory?.items?.() ?? []) as any[]) {
+      const name = String(item?.name ?? '');
+      if (Number(item?.count ?? 0) > 0 && BRIDGE_BLOCKS.test(name) && !FALLING.test(name)) return name;
+    }
+    return undefined;
+  };
+
+  /**
+   * A body that dug (or fell) into a hole it cannot walk out of, held by the limit of the digs: it climbs out by itself, one block laid under the feet a
+   * level at a time (rock and earth over the head dug), up to the first height with a way off sideways. It keeps no count in the way's limits, and
+   * is tried once a go. 'out' when the body is on the higher level (the way is drawn again from there), else the words for the stop.
+   */
+  let holeTried = false;
+  let holeNote = '';
+  const tryHoleExit = async (): Promise<'out' | string> => {
+    if (holeTried) return '';
+    holeTried = true;
+    const hole: HoleReading | null = inHole(bot);
+    if (!hole) return '';
+    if (!holeBlockHeld() && hole.roofDigs === 0) return '穴の中。積める物が無い（ツルハシで掘る物も、置ける建材も持っていない）';
+    if (!holeBlockHeld()) return '穴の中。積める物が無い';
+    const before = feetCell(bot)?.y ?? hole.toY;
+    // The way's counts do not move for this climb: the laid blocks and dug roof are the body's own business, and the way still has its whole budget.
+    const dug = state.dug, placed = state.placed;
+    let climbed: Awaited<ReturnType<typeof climb>>;
+    try { climbed = await timed('climbMs', () => climb(hole.toY, { digs: 0 })); } finally { state.dug = dug; state.placed = placed; }
+    letGo(bot);
+    const rose = (feetCell(bot)?.y ?? before) - before;
+    if (rose >= 1) { holeNote = `穴の底だったので、先に ${rose} 段積んで出た。`; return 'out'; }
+    return climbed.stop ? `穴の中。出られなかった（${climbed.stop.text.replace(/^go 止まった [a-z_]+: /u, '').slice(0, 60)}）` : '';
   };
 
   /** The mending of a body that stands still: the first tries are a jump and a step back; later the cells ahead are cleared or filled. */
@@ -1922,10 +1963,24 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       let out: GoOutcome = nowhere;
       if (drawn.status === 'success') {
         const over = budgetOf(countOf(drawn), drawn.places);
-        if (over) return fail(over.code, over.text, over.code === 'limit_dig' ? 'maxDig を増やすか、別の道を' : placeMore('maxPlace を増やすか、別の道を'));
+        if (over) {
+          let inside = '';
+          if (over.code === 'limit_dig') {
+            const exit = await tryHoleExit();
+            if (exit === 'out') { state.redraws++; continue; }
+            inside = exit ? `${exit}。` : '';
+          }
+          return fail(over.code, `${over.code === 'limit_dig' ? holeNote : ''}${inside}${over.text}`, over.code === 'limit_dig' ? 'maxDig を増やすか、別の道を' : placeMore('maxPlace を増やすか、別の道を'));
+        }
         out = await timed('walkMs', () => goWith(ctx, legGoal, timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true }));
       }
-      const blocked = vetoed();
+      let blocked = vetoed();
+      if (blocked && blocked.reason === 'limit_dig') {
+        letGo(bot);
+        const exit = await tryHoleExit();
+        if (exit === 'out') { state.veto = null; state.redraws++; continue; }
+        if (exit) blocked = { ...blocked, text: `${exit}。${blocked.text}` };
+      }
       if (blocked) { letGo(bot); return blocked; }
       if (out.magma) return fail('unsafe', `足幅が ${cellText(out.magma)} の magma_block に掛かるため移動を止めた${holeUnderCentreWords((x, y, z) => nameAt(bot, x, y, z), bot.entity?.position)}`, '安全な床へ離れてから');
       if (drawAfterRefusal) {

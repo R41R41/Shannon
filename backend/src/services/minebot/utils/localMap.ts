@@ -531,6 +531,12 @@ export function noteMapStop(bot: MapBody, stop: { kind: string; from?: Cell; at:
   return entry;
 }
 
+/** How many times a step has stopped at this kind, place and reason lately; it only reads (the act counts the stop when the hand ends). */
+export function peekMapStop(bot: MapBody, stop: { kind: string; from?: Cell; at: Cell; reason: string }, now = Date.now()): number {
+  const entry = mapMemoryOf(bot).stops.get(`${stop.kind}|${stop.from ? cellKey(stop.from) : ''}|${cellKey(stop.at)}|${stop.reason}`);
+  return entry && now - entry.lastAt <= STOP_MS ? entry.count : 0;
+}
+
 /** The recent stops, newest first, in the contract's form: "(201,45,277)→(201,48,277) 一歩ではない ×7 23秒前". */
 export function recentStopLines(bot: MapBody, now = Date.now(), limit = STOPS_SHOWN): string[] {
   const memory = mapMemoryOf(bot);
