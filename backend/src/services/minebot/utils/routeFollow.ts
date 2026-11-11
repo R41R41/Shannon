@@ -1,6 +1,6 @@
 /**
- * followRoute: walks a plan of utils/routePlan with the hands the body already has (run 7, Lai: "その道で動く"). It is used by go only when the route search of the walk (the pathfinder)
- * stopped (search_timeout, limit_dig, dead_end, no way) or when the plan digs clearly fewer blocks than the way the pathfinder drew (primitives/go: planned). It is never the first way.
+ * followRoute: walks a plan of utils/routePlan with the hands the body already has (run 7, Lai: "その道で動く"). go draws the plan first and walks it when it is complete (primitives/go: planned);
+ * the route search of the walk (the pathfinder) walks what is left, or all of it when no complete plan is there.
  *
  * - Steps the tunnel walk takes as cells (a level walked, one up or down, a level cut, a stair cut, a shaft) go in runs to `cells` (utils/tunnelWalk.walkCells: it digs, refuses lava
  *   beside a cell and remembers the cells walked).
@@ -36,7 +36,7 @@ export interface FollowHands {
 
 export interface FollowOptions {
   /** A plan made from the body's cell now, or null when none can be made (asked after a difference). */
-  replan?: (from: Cell) => RoutePlan | null;
+  replan?: (from: Cell, used: { digs: number; places: number }) => RoutePlan | null;
   maxReplans?: number;
   deadline: number;
   /** The most blocks this follow may dig and lay (the caller's limits that are left). Absent: the plan's own numbers are the bound. */
@@ -156,7 +156,7 @@ export async function followRoute(initial: RoutePlan, hands: FollowHands, option
     }
     if (!off && plan.status === 'partial' && options.replan && out.replans < maxReplans && plan.steps.length) {
       // The plan ended at its frontier (the box or the time ended): plan again from there.
-      const again = options.replan(hands.feet());
+      const again = options.replan(hands.feet(), { digs: out.digs, places: out.places });
       if (again && (again.status === 'success' || again.status === 'partial') && again.steps.length) { out.replans++; plan = again; continue; }
     }
     if (!off) {
@@ -165,7 +165,7 @@ export async function followRoute(initial: RoutePlan, hands: FollowHands, option
     }
     // Not where the plan said: plan again from here, the cells dug so far being open.
     if (out.replans >= maxReplans || !options.replan) return { ...out, stopped: 'off_route', at: off, reason: `計画のマスに着けなかった（いま (${off.x},${off.y},${off.z})）` };
-    const again = options.replan(off);
+    const again = options.replan(off, { digs: out.digs, places: out.places });
     if (!again || (again.status !== 'success' && again.status !== 'partial') || !again.steps.length) return { ...out, stopped: 'off_route', at: off, reason: '出し直しの道が無い' };
     out.replans++;
     plan = again;

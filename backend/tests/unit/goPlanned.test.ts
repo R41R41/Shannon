@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeSim, type Ground, type Sim, type Stack } from '../helpers/physicsBody.js';
-import { goPlannedWith, goWalk, planClearlyFewer, plannedWords, type GoArgs, type GoWalk } from '../../src/services/minebot/utils/primitives/go.js';
+import { goPlannedWith, goWalk, plannedWords, type GoArgs, type GoWalk } from '../../src/services/minebot/utils/primitives/go.js';
 import { StepStopped, type StepContext, type StepOutcome } from '../../src/services/minebot/utils/primitives/common.js';
 import { followRoute, runsOf, type FollowHands } from '../../src/services/minebot/utils/routeFollow.js';
 import { planRoute } from '../../src/services/minebot/utils/routePlan.js';
 import type { BlockReader, MapBlock } from '../../src/services/minebot/utils/localMap.js';
 
-// Run 7 (Lai): the plan of utils/routePlan is walked by go when the walk of the route search stops (search_timeout, limit_dig, dead_end) or the plan digs clearly fewer.
+// Run 7 (Lai): the plan of utils/routePlan is drawn first by go and walked when it is complete; the route search walks otherwise and after.
 // Part one: utils/routeFollow with hands that only record. Part two: go's glue over the real client physics (tests/helpers/physicsBody), the walk of the route search
 // given as a stub that stops where a real search would (goPlannedWith), the plan, the tunnel walk and the place hand real.
 void StepStopped;
@@ -15,14 +15,7 @@ vi.mock('../../src/services/minebot/utils/digBlockVerified.js', async original =
 const STONE: MapBlock = { name: 'stone', solid: true }, AIR: MapBlock = { name: 'air', solid: false };
 const at = (x: number, y: number, z: number) => ({ x, y, z });
 
-describe('planClearlyFewer / plannedWords', () => {
-  it('compares only a way that digs enough, and asks for a clear difference', () => {
-    expect(planClearlyFewer(5, 0)).toBe(false);          // too short a dig to ask
-    expect(planClearlyFewer(12, 10)).toBe(false);        // not clearly fewer
-    expect(planClearlyFewer(12, 7)).toBe(true);          // 5 fewer, 42 %
-    expect(planClearlyFewer(30, 20)).toBe(false);        // 10 fewer but 33 %
-    expect(planClearlyFewer(30, 0)).toBe(true);
-  });
+describe('plannedWords', () => {
   it('says the way walked in one short phrase', () => {
     expect(plannedWords({ steps: 14, digs: 6, places: 2, replans: 0 })).toBe('計画の道: 14 マス・掘 6・置 2');
     expect(plannedWords({ steps: 14, digs: 6, places: 2, replans: 1 })).toContain('出し直し 1 回');
@@ -134,32 +127,47 @@ const stops = (reason: string): StepOutcome => ({ ok: false, reason, text: `go �
 /** A walk of the route search that stops the first time it is asked (as a real one would) and is the real one after. */
 function stopsOnce(reason: string): { walk: GoWalk; asked: () => number } {
   let calls = 0;
-  return { walk: (ctx, args, hooks) => (++calls === 1 ? Promise.resolve(stops(reason)) : goWalk(ctx, args, hooks)), asked: () => calls };
+  return { walk: (ctx, args) => (++calls === 1 ? Promise.resolve(stops(reason)) : goWalk(ctx, args)), asked: () => calls };
 }
 const goalAt = (x: number, y: number, z: number) => ({ x, y, z });
+/** A walk of the route search that counts how many times it is asked, and is the real one. */
+function realWalk(): { walk: GoWalk; asked: () => number } {
+  let calls = 0;
+  return { walk: (ctx, args) => { calls++; return goWalk(ctx, args); }, asked: () => calls };
+}
 
-describe('go: the plan walks when the walk of the route search stopped', () => {
+describe('go: the plan is drawn first and walked when it is complete', () => {
   const wall = over(flat, box('stone', 3, 5, FLOOR, FLOOR + 6, -R - 1, R + 1));
 
-  it('search_timeout: the plan digs the cells of its way through the wall, with canDig as the leave, and the line says the way', async () => {
+  it('through a wall: the plan digs the cells of its way, with canDig as the leave, before the route search is asked, and the line says the way', async () => {
     const sim = makeSim(wall, { items: stacks(PICK) });
-    const { walk } = stopsOnce('search_timeout');
-    const args: GoArgs = { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'] };
-    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), args, walk));
+    const { walk, asked } = realWalk();
+    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'] }, walk));
     expect(outcome.ok).toBe(true);
     expect(outcome.text).toMatch(/計画の道: \d+ マス・掘 [1-9]\d*・置 0/u);
     expect(Math.floor(sim.bot.entity.position.x)).toBe(8);
     expect(sim.bot.dugBlocks.length).toBeGreaterThanOrEqual(3);
     expect(sim.bot.dugBlocks.every((line: string) => line.startsWith('stone@'))).toBe(true);
     expect(sim.world.nameAt(4, FLOOR, 8)).toBe('stone');   // the wall away from the way stands
+    expect(asked()).toBe(1);                               // only for what was left after the plan
   });
 
-  it('digs nothing it was not told to dig: with no canDig the plan has no way through and the stop stands as it was', async () => {
+  it('an open way is taken without digging: a wall with a gap is walked through the gap', async () => {
+    const gap = over(wall, box('air', 3, 5, FLOOR, FLOOR + 6, 6, 6));
+    const sim = makeSim(gap, { items: stacks(PICK) });
+    const { walk } = realWalk();
+    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 6)], canDig: ['stone'] }, walk));
+    expect(outcome.ok).toBe(true);
+    expect(sim.bot.dugBlocks).toEqual([]);
+  });
+
+  it('digs nothing it was not told to dig: with no canDig there is no complete plan, the route search goes and its stop stands as it was', async () => {
     const sim = makeSim(wall, { items: stacks(PICK) });
-    const { walk } = stopsOnce('dead_end');
+    const { walk, asked } = stopsOnce('dead_end');
     const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)] }, walk));
     expect(outcome.ok).toBe(false);
     expect(outcome.reason).toBe('dead_end');
+    expect(asked()).toBe(1);
     expect(sim.bot.dugBlocks).toEqual([]);
   });
 
@@ -172,10 +180,10 @@ describe('go: the plan walks when the walk of the route search stopped', () => {
     expect(sim.bot.dugBlocks).toEqual([]);
   });
 
-  it('other stops (stuck, lava, unsafe) are not the plan\'s: the stop is returned as it is', async () => {
+  it('other stops (stuck, lava, unsafe, dead_end) are not the plan\'s: the stop is returned as it is', async () => {
     const sim = makeSim(wall, { items: stacks(PICK) });
     const { walk, asked } = stopsOnce('stuck');
-    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'] }, walk));
+    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)] }, walk));
     expect(outcome.reason).toBe('stuck');
     expect(asked()).toBe(1);
     expect(sim.bot.dugBlocks).toEqual([]);
@@ -197,7 +205,7 @@ describe('go: the plan walks when the walk of the route search stopped', () => {
   it('keeps out of the water: the plan goes round a pond, and the body is never in it', async () => {
     const pond = over(flat, box('water', 3, 5, FLOOR - 3, FLOOR - 1, -3, 3));
     const sim = makeSim(pond, { items: stacks(PICK) });
-    const { walk } = stopsOnce('search_timeout');
+    const { walk } = realWalk();
     let swam = false;
     const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(9, FLOOR, 0)], canDig: ['stone'] }, walk), () => {
       const p = sim.bot.entity.position;
@@ -206,59 +214,20 @@ describe('go: the plan walks when the walk of the route search stopped', () => {
     expect(outcome.ok).toBe(true);
     expect(swam).toBe(false);
     expect(Math.floor(sim.bot.entity.position.x)).toBe(9);
-    expect(outcome.text).toContain('計画の道');
   });
 });
 
-describe('go: the plan walks when it digs clearly fewer than the way the walk of the route search drew', () => {
-  const tall = over(flat, box('stone', 3, 5, FLOOR, FLOOR + 6, -R - 1, R + 1));
-  // A wall eight thick and two high across the whole ground: one cut and the top of it is walked (the plan and the pathfinder both find it: no compare asked).
-  const low = over(flat, box('stone', 3, 10, FLOOR, FLOOR + 1, -R - 1, R + 1));
-
-  it('goWalk asks once a go, after drawing a way of six cuts or more, and stops before it digs a block when the answer is yes', async () => {
-    const sim = makeSim(tall, { items: stacks(PICK) });
-    const asked: number[] = [];
-    const outcome = await drive(sim, goWalk(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'] }, { cheaper: pathDigs => { asked.push(pathDigs); return true; } }));
-    expect(outcome.ok).toBe(false);
-    expect(outcome.reason).toBe('plan_cheaper');
-    expect(asked).toHaveLength(1);
-    expect(asked[0]).toBeGreaterThanOrEqual(6);
-    expect(sim.bot.dugBlocks).toEqual([]);
-  });
-
-  it('goWalk goes on with its own way when the answer is no, and asks nothing of a way that digs few', async () => {
-    const sim = makeSim(tall, { items: stacks(PICK) });
-    const asked: number[] = [];
-    const outcome = await drive(sim, goWalk(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'] }, { cheaper: pathDigs => { asked.push(pathDigs); return false; } }));
-    expect(outcome.ok).toBe(true);
-    expect(asked).toHaveLength(1);
-    const few = makeSim(low, { items: stacks(PICK) });
-    const askedFew: number[] = [];
-    const walked = await drive(few, goWalk(ctxOf(few), { goals: [goalAt(14, FLOOR, 0)], canDig: ['stone'] }, { cheaper: pathDigs => { askedFew.push(pathDigs); return true; } }));
-    expect(walked.ok).toBe(true);
-    expect(askedFew).toEqual([]);
-  });
-
-  it('the plan way is walked after the compare said yes, with the limits left, and the line says it', async () => {
-    const sim = makeSim(tall, { items: stacks(PICK) });
-    let calls = 0;
-    // The first walk is the real one asked with a compare that says yes (the plan here digs the same, so the real compare would say no: the answer is forced).
-    const walk: GoWalk = (ctx, args, hooks) => (++calls === 1 ? goWalk(ctx, args, hooks && { cheaper: () => true }) : goWalk(ctx, args, hooks));
-    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'], maxDig: 20 }, walk));
-    expect(outcome.ok).toBe(true);
-    expect(outcome.text).toMatch(/計画の道: [0-9]+ マス・掘 [1-9][0-9]*/u);
-    expect(Math.floor(sim.bot.entity.position.x)).toBe(8);
-    expect(calls).toBe(2);
-  });
-
-  it('a plan that cannot be walked after the compare leaves the walk of the route search as it was (nothing is lost)', async () => {
-    const sim = makeSim(tall, { items: stacks(PICK) });
-    let calls = 0;
-    const walk: GoWalk = (ctx, args, hooks) => (++calls === 1 ? goWalk(ctx, args, hooks && { cheaper: () => true }) : goWalk(ctx, args, hooks));
-    // maxDig 4 is less than the way needs: the plan is not usable, so the walk runs again with the limit as given and says its own stop.
-    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'], maxDig: 4 }, walk));
-    expect(outcome.ok).toBe(false);
-    expect(outcome.reason).toBe('limit_dig');
-    expect(sim.bot.dugBlocks).toEqual([]);
+describe('followRoute: the plan made again is drawn with what was used taken off the limits', () => {
+  it('replan is told how many were dug and laid so far', async () => {
+    const read: BlockReader = (x, y, z) => (x >= 3 && x <= 4 && y >= 64 && y <= 65 ? STONE : floorTo(63)(x, y, z));
+    const plan = planRoute(read, at(0, 64, 0), [at(8, 64, 0)], {});
+    let feet = at(0, 64, 0);
+    const { hands } = recordingHands({
+      cells: async cells => { feet = at(0, 64, 0); return { stopped: 'plan_end', steps: cells.length, digs: 2 }; },
+      feet: () => feet,
+    });
+    const told: Array<{ digs: number; places: number }> = [];
+    await followRoute(plan, hands, { deadline: Date.now() + 60_000, maxReplans: 1, replan: (_from, used) => { told.push({ ...used }); return null; } });
+    expect(told).toEqual([{ digs: 2, places: 0 }]);
   });
 });

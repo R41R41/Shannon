@@ -1096,36 +1096,26 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   try { return await goPlanned(ctx, args); } finally { edge.allowedDrop = was; }
 }
 
-// ---- the planned way (run 7, Lai: "目的座標を指定したときにそこに至る最短経路を出力するアルゴリズム ... その道で動く") ----
+// ---- the planned way (run 7, Lai: "目的座標を指定したときにそこに至る最短経路を出力するアルゴリズム ... 出来る限り道があれば掘らずに移動") ----
 
-/** The walk of the route search (the pathfinder) goes first. The plan (utils/routePlan, followed by utils/routeFollow) walks only when that walk stopped for one of these, or when the plan digs clearly fewer. */
-export const PLAN_STOPS: ReadonlySet<string> = new Set(['search_timeout', 'limit_dig', 'dead_end', 'unreachable', 'no_path']);
-/** The way the pathfinder drew is compared with the plan only when it digs this many blocks or more (a short dig is not worth the plan's few milliseconds), once a go. */
-export const PLAN_ASK_MIN_DIGS = 6;
-/** "Clearly fewer": at least this many fewer blocks dug, and at least this share of the way's own. */
-export const PLAN_FEWER_BY = 4;
-export const PLAN_FEWER_SHARE = 0.4;
-/** The plan's time while a way is being compared (ms), and after a stop (the plan's own default is 300). */
-export const PLAN_COMPARE_MS = 150;
-export const PLAN_AFTER_STOP_MS = 300;
+/**
+ * The plan (utils/routePlan, followed by utils/routeFollow) is drawn first, a few hundred milliseconds, before the route search (the pathfinder) is asked anything: a go that has a complete
+ * plan walks it (the plan digs nothing where a way stands open). The pathfinder walks when no complete plan is there, and after the plan's walk for what is left of the way.
+ * After the pathfinder stops for want of time or for the dig limit, a partial plan may take its place.
+ */
+export const PLAN_STOPS: ReadonlySet<string> = new Set(['search_timeout', 'limit_dig']);
+/** The plan's time (ms; the plan's own default is 300). */
+export const PLAN_MS = 300;
 /** The plan is made again at most this many times when the body is not where it said. */
 export const PLAN_REPLANS = 3;
-/** Less than this left of the go's seconds: the plan is not begun. */
+/** After the pathfinder has stopped: less than this left of the go's seconds, no plan is begun. */
 const PLAN_MIN_LEFT_MS = 4000;
-
-/** Whether the plan digs clearly fewer blocks than the pathfinder's way. */
-export function planClearlyFewer(pathDigs: number, planDigs: number): boolean {
-  return pathDigs >= PLAN_ASK_MIN_DIGS && pathDigs - planDigs >= Math.max(PLAN_FEWER_BY, Math.ceil(pathDigs * PLAN_FEWER_SHARE));
-}
+/** Less than this left of the go's seconds: the pathfinder is not asked again. */
+const AGAIN_MIN_LEFT_MS = 1000;
 
 /** The words of a way walked by the plan: how many cells, dug, laid. */
 export function plannedWords(done: Pick<FollowOutcome, 'steps' | 'digs' | 'places' | 'replans'>): string {
   return `計画の道: ${done.steps} マス・掘 ${done.digs}・置 ${done.places}${done.replans ? `・出し直し ${done.replans} 回` : ''}`;
-}
-
-export interface PlanHooks {
-  /** Called once a go, after a way is drawn that digs `pathDigs`: true when the plan is clearly cheaper (goWalk then stops before it moves, with `plan_cheaper`). */
-  cheaper?: (pathDigs: number, dugSoFar: number, placedSoFar: number) => boolean;
 }
 
 /** What the plan is given from a go's arguments: what may be dug (canDig, and what the tools break), what may be laid (canPlace held), the limits that are left. */
@@ -1189,12 +1179,12 @@ function followHandsOf(ctx: StepContext, args: GoArgs, deadline: number): Follow
 }
 
 /**
- * go: the walk of the route search first (goWalk). When it stops for want of a way (PLAN_STOPS), or the way it drew digs more blocks than the plan clearly would, the plan
- * (utils/routePlan: walking, level cuts, stair cuts, shaft cuts and laid blocks only; water and lava kept off) is walked by utils/routeFollow, with the caller's limits and
- * permissions as they were (canDig names what the plan may cut, canPlace what it may lay, maxDig and maxPlace what is left). The line says "計画の道: N マス・掘 M・置 K".
- * mine's approach to an ore goes by this hand, so it is the same there.
+ * go: the plan first (utils/routePlan: walking, level cuts, stair cuts, shaft cuts and laid blocks only; water and lava kept off; it digs nothing where a way stands open), walked by
+ * utils/routeFollow with the caller's limits and permissions as they were (canDig names what the plan may cut, canPlace what it may lay, maxDig and maxPlace what is left). With no complete
+ * plan, the walk of the route search (goWalk) goes; when it stops for want of time or for the dig limit (PLAN_STOPS), a partial plan may walk. What is left after a plan's walk is the route
+ * search's, inside the go's own seconds. The line says "計画の道: N マス・掘 M・置 K". mine's approach to an ore goes by this hand, so it is the same there.
  */
-export type GoWalk = (ctx: StepContext, args: GoArgs, hooks?: PlanHooks) => Promise<StepOutcome>;
+export type GoWalk = (ctx: StepContext, args: GoArgs) => Promise<StepOutcome>;
 async function goPlanned(ctx: StepContext, args: GoArgs): Promise<StepOutcome> { return goPlannedWith(ctx, args, goWalk); }
 /** goPlanned with the walk of the route search given (the tests give a stub that stops where a real search would). */
 export async function goPlannedWith(ctx: StepContext, args: GoArgs, walk: GoWalk): Promise<StepOutcome> {
@@ -1203,54 +1193,74 @@ export async function goPlannedWith(ctx: StepContext, args: GoArgs, walk: GoWalk
   const end = Math.min(ctx.deadline, startedAt + (args.seconds ?? GO_DEFAULTS.seconds) * 1000);
   const maxDig = args.maxDig ?? GO_DEFAULTS.maxDig, maxPlace = args.maxPlace ?? GO_DEFAULTS.maxPlace;
   // Against the dragon the walk of the route search keeps the breath and the perch away (the plan does not read them): there the plan is not used.
-  if (isEnd(bot) && endDragonOf(bot)) return walk(ctx, args, undefined);
+  if (isEnd(bot) && endDragonOf(bot)) return walk(ctx, args);
   const goalCells = (args.goals ?? []).slice(0, 8);
   const makePlan = (left: { dig: number; place: number }, ms: number): RoutePlan | null => (goalCells.length ? planFromBody(bot, goalCells, planOptionsFor(bot, args, left, ms)) : null);
-  let cached: RoutePlan | null = null;
-  const hooks: PlanHooks = {
-    cheaper: (pathDigs, dug, placed) => {
-      const plan = makePlan({ dig: maxDig - dug, place: maxPlace - placed }, PLAN_COMPARE_MS);
-      cached = plan;
-      return !!plan && plan.status === 'success' && plan.steps.length > 0 && plan.totals.dig <= maxDig - dug && plan.totals.place <= maxPlace - placed && planClearlyFewer(pathDigs, plan.totals.dig);
-    },
+  const fits = (plan: RoutePlan | null, left: { dig: number; place: number }, partialOk: boolean): plan is RoutePlan =>
+    !!plan && (plan.status === 'success' || (partialOk && plan.status === 'partial')) && plan.steps.length > 0 && plan.totals.dig <= left.dig && plan.totals.place <= left.place;
+  /** The plan walked; the replans are drawn with what the follow has used taken off the limits. */
+  const walkPlan = async (plan: RoutePlan, left: { dig: number; place: number }, code: string): Promise<FollowOutcome> => {
+    const hands = followHandsOf(ctx, args, end);
+    let done: FollowOutcome;
+    try {
+      done = await followRoute(plan, hands, {
+        deadline: end, maxDig: left.dig, maxPlace: left.place, maxReplans: PLAN_REPLANS,
+        replan: (_from, used) => {
+          const rest = { dig: left.dig - (used?.digs ?? 0), place: left.place - (used?.places ?? 0) };
+          const next = makePlan(rest, PLAN_MS);
+          return fits(next, rest, true) ? next : null;
+        },
+      });
+    } catch (error) {
+      if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) letGo(bot);
+      throw error;
+    }
+    letGo(bot);
+    blackBoxOf(nativeActionHost(bot))?.note('go_planned', { code, stopped: done.stopped, steps: done.steps, digs: done.digs, places: done.places, replans: done.replans });
+    return done;
   };
-  const first = await walk(ctx, args, hooks);
-  const code = first.reason ?? '';
-  if (first.ok || ctx.stop?.aborted || !(PLAN_STOPS.has(code) || code === 'plan_cheaper')) return first;
-  const cheaper = code === 'plan_cheaper';
-  const before = { dug: first.data?.work?.dug ?? 0, placed: first.data?.work?.placed ?? 0, steps: first.data?.work?.steps ?? 0 };
-  /** The same go with no compare, after the plan was not walked (or walked part of the way): the walk of the route search as it always was, with what is left. */
-  const again = (dug: number, placed: number): Promise<StepOutcome> => {
-    const secondsLeft = Math.ceil((end - Date.now()) / 1000);
-    return walk(ctx, { ...args, maxDig: Math.max(0, maxDig - dug), maxPlace: Math.max(0, maxPlace - placed), seconds: Math.min(120, Math.max(5, secondsLeft)) }, undefined);
+  /** What is left of the way after a plan's walk: the route search inside the go's own seconds (when under a second is left, the plan's own end is the answer). */
+  const finish = async (done: FollowOutcome, before: { dug: number; placed: number; steps: number }): Promise<StepOutcome> => {
+    const secondsLeft = Math.floor((end - Date.now()) / 1000);
+    const dug = before.dug + done.digs, placed = before.placed + done.places;
+    if (secondsLeft < AGAIN_MIN_LEFT_MS / 1000) {
+      const text = `${plannedWords(done)}${done.reason ? `（計画: ${done.reason.slice(0, 40)}）` : ''}`;
+      return done.stopped === 'reached' ? { ok: true, text, at: done.at } : { ok: false, text, reason: done.stopped === 'timeout' ? 'timeout' : done.stopped, ...(done.at ? { at: done.at } : {}) };
+    }
+    const second = await walk(ctx, { ...args, maxDig: Math.max(0, maxDig - dug), maxPlace: Math.max(0, maxPlace - placed), seconds: Math.min(120, secondsLeft) });
+    const work = second.data?.work;
+    return {
+      ...second,
+      text: `${second.text}。${plannedWords(done)}${second.ok || !done.reason ? '' : `（計画: ${done.reason.slice(0, 40)}）`}`,
+      ...(work ? { data: { ...second.data, work: { ...work, dug: (work.dug ?? 0) + dug, placed: (work.placed ?? 0) + placed, steps: (work.steps ?? 0) + before.steps + done.steps } } } : {}),
+    };
   };
-  if (end - Date.now() < PLAN_MIN_LEFT_MS) return cheaper ? again(before.dug, before.placed) : first;
-  const left = { dig: maxDig - before.dug, place: maxPlace - before.placed };
-  const plan = cheaper && cached ? cached : makePlan(left, PLAN_AFTER_STOP_MS);
-  const usable = !!plan && (plan.status === 'success' || plan.status === 'partial') && plan.steps.length > 0 && plan.totals.dig <= left.dig && plan.totals.place <= left.place;
-  if (!usable) return cheaper ? again(before.dug, before.placed) : first;
-  const hands = followHandsOf(ctx, args, end);
-  let done: FollowOutcome;
-  try {
-    done = await followRoute(plan!, hands, { deadline: end, maxDig: left.dig, maxPlace: left.place, maxReplans: PLAN_REPLANS, replan: () => makePlan(left, PLAN_AFTER_STOP_MS) });
-  } catch (error) {
-    if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) letGo(bot);
-    throw error;
+  const moved = (done: FollowOutcome) => done.steps > 0 || done.digs > 0 || done.places > 0;
+
+  // The plan first: a complete plan inside the limits is walked, with nothing waited for.
+  const full = { dig: maxDig, place: maxPlace };
+  if (end - Date.now() >= AGAIN_MIN_LEFT_MS) {
+    const lead = makePlan(full, PLAN_MS);
+    if (fits(lead, full, false)) {
+      const done = await walkPlan(lead, full, 'plan_first');
+      if (moved(done)) return finish(done, { dug: 0, placed: 0, steps: 0 });
+    }
   }
-  letGo(bot);
-  blackBoxOf(nativeActionHost(bot))?.note('go_planned', { code, stopped: done.stopped, steps: done.steps, digs: done.digs, places: done.places, replans: done.replans });
-  const moved = done.steps > 0 || done.digs > 0 || done.places > 0;
-  if (!moved) return cheaper ? again(before.dug, before.placed) : { ...first, text: `${first.text}。計画の道も進めない: ${(done.reason ?? done.stopped).slice(0, 40)}` };
-  const second = await again(before.dug + done.digs, before.placed + done.places);
-  const work = second.data?.work;
-  return {
-    ...second,
-    text: `${second.text}。${plannedWords(done)}${second.ok || !done.reason ? '' : `（計画: ${done.reason.slice(0, 40)}）`}`,
-    ...(work ? { data: { ...second.data, work: { ...work, dug: (work.dug ?? 0) + before.dug + done.digs, placed: (work.placed ?? 0) + before.placed + done.places, steps: (work.steps ?? 0) + before.steps + done.steps } } } : {}),
-  };
+  const first = await walk(ctx, args);
+  const code = first.reason ?? '';
+  if (first.ok || ctx.stop?.aborted || !PLAN_STOPS.has(code)) return first;
+  const before = { dug: first.data?.work?.dug ?? 0, placed: first.data?.work?.placed ?? 0, steps: first.data?.work?.steps ?? 0 };
+  if (end - Date.now() < PLAN_MIN_LEFT_MS) return first;
+  const left = { dig: maxDig - before.dug, place: maxPlace - before.placed };
+  const plan = makePlan(left, PLAN_MS);
+  if (!fits(plan, left, true)) return first;
+  const done = await walkPlan(plan, left, code);
+  if (!moved(done)) return { ...first, text: `${first.text}。計画の道も進めない: ${(done.reason ?? done.stopped).slice(0, 40)}` };
+  return finish(done, before);
 }
 
-export async function goWalk(ctx: StepContext, args: GoArgs, hooks?: PlanHooks): Promise<StepOutcome> {
+
+export async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const timing: GoTiming = { totalMs: 0, searchMs: 0, walkMs: 0, digMs: 0, placeMs: 0, climbMs: 0, mendMs: 0, sprintMs: 0, digs: 0, places: 0, searches: 0, metres: 0, relays: 0, walls: 0 };
   const timed = async <T>(key: 'searchMs' | 'walkMs' | 'climbMs' | 'mendMs', work: () => Promise<T>): Promise<T> => {
@@ -2038,7 +2048,7 @@ export async function goWalk(ctx: StepContext, args: GoArgs, hooks?: PlanHooks):
     }
   };
 
-  let attempt = 0, noway = 0, mends = 0, partialWalks = 0, compared = false;
+  let attempt = 0, noway = 0, mends = 0, partialWalks = 0;
   /**
    * S8 (2026-11-05; S4's c1 lab: 144 m, one of four ended 44 m short on search_timeouts in a row; 249 m, four search_timeouts): the same search from the same place ran
    * out of its time twice, and the part it found comes no nearer. The body cuts the way itself: a point on the straight line 24 m on (then 12 m), any height within
@@ -2140,13 +2150,6 @@ export async function goWalk(ctx: StepContext, args: GoArgs, hooks?: PlanHooks):
       }
       let out: GoOutcome = nowhere;
       if (drawn.status === 'success') {
-        // Run 7: a way that digs a good many blocks is asked of the plan once a go (a few milliseconds); clearly fewer there, and the plan walks it (goPlanned).
-        if (hooks?.cheaper && !compared && countOf(drawn) >= PLAN_ASK_MIN_DIGS) {
-          compared = true;
-          let better = false;
-          try { better = hooks.cheaper(countOf(drawn), state.dug, state.placed); } catch { better = false; }
-          if (better) { letGo(bot); return fail('plan_cheaper', `この道は掘る所が ${countOf(drawn)} あり、計画の道のほうがずっと少ない`, '計画の道で歩く'); }
-        }
         const over = budgetOf(countOf(drawn), drawn.places);
         if (over) {
           let inside = '';

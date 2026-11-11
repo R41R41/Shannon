@@ -472,11 +472,10 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       if (!opened.ok) return { code: 'unreachable', text: `面を掘れなかった: ${opened.text.slice(0, 80)}`, at: shutCells[0] };
     }
     if (read(over.x, over.y, over.z)?.name === 'obsidian') {
-      // The obsidian over the source is one of the obsidian asked for: dug with the pick and taken into the pack.
-      const before = inventoryCount(bot, 'obsidian');
-      const own = await dig(ctx, { at: [over], ...(pickOf(bot) ? { tool: pickOf(bot)! } : {}), collect: true });
+      // The obsidian over the source is over lava: what is dug there falls into the lava and burns (no water is poured yet). It is dug open to make the face, not counted as taken.
+      const own = await dig(ctx, { at: [over], ...(pickOf(bot) ? { tool: pickOf(bot)! } : {}), collect: false });
       if (!own.ok) return { code: 'unreachable', text: `源の真上の黒曜石 ${cellText(over)} を掘れなかった: ${own.text.slice(0, 80)}`, at: over };
-      counts.notes.push(`源の真上の黒曜石 ${cellText(over)} を掘って開けた（持ち物 +${Math.max(0, inventoryCount(bot, 'obsidian') - before)}）`);
+      counts.notes.push(`源の真上の黒曜石 ${cellText(over)} を掘って開けた（溶岩の上なので落とし物は焼ける。持ち物には入らない）`);
     } else if (!isOpenCell(read(over.x, over.y, over.z))) {
       const opened = await dig(ctx, { at: [over], collect: false });
       if (!opened.ok) return { code: 'unreachable', text: `面を掘れなかった: ${opened.text.slice(0, 80)}`, at: over };
@@ -566,7 +565,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       if (await scoopBack(water)) waterLeft = null;
       await waitFor('水が引くのを', ctx, () => !waterNear(lava), DRY_WAIT_MS);
     }
-    if (!covered && !water && burnsAt()) counts.notes.push(`${cellText(lava)} は溶岩が流れ込む所を水なしで掘った（落とし物が焼けるかもしれない）`);
+    if (!covered && !water && burnsAt()) { counts.notes.push(`${cellText(lava)} は溶岩が流れ込む所を水なしで掘った（落とし物が焼けるかもしれない）`); dugUncovered = true; }
     if (!obsidianRoom()) { if (waterLeft && await scoopBack(waterLeft)) waterLeft = null; return { code: 'inventory_full', text: fullWords(), at: lava }; }
     const beforeDig = inventoryCount(bot, 'obsidian');
     const failure = await mineAt(lava);
@@ -611,6 +610,8 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   const grownDone = new Set<string>();
   /** The cells dug by this hand so far (the pack shows them a moment later than the dig: the count of obsidian made is not read from the pack alone). */
   let mined = 0;
+  /** Set when the last cell was dug with lava able to take the drop and no water over it: it is then counted only when the pack shows it. */
+  let dugUncovered = false;
   /** The cells of the start's lava that are obsidian now and touch the pool (or one already taken in): added to what is dug. */
   const addGrown = (pool: Cell[], pending: Map<string, Cell>): void => {
     if (!lavaAtStart.length || Math.max(gained(), mined) >= want) return;
@@ -642,9 +643,12 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       if (!obsidianRoom()) { if (waterLeft) await scoopBack(waterLeft); return stop('inventory_full', fullWords(), lava); }
       ctx.progress?.(`${cellText(lava)} (${gained()}/${want})`);
       const spread = pool.length > 1 && isLavaSource(read(lava.x, lava.y, lava.z));
+      const gainedBefore = gained();
+      dugUncovered = false;
       const failure = await oneSource(lava, spread ? pool : undefined);
       counts.obsidian = gained();
-      if (!spread && !failure) mined++;
+      // Counted as mined unless it was dug where the drop could burn with no water over it; then only when the pack shows it.
+      if (!spread && !failure && (!dugUncovered || gained() > gainedBefore)) mined++;
       if (!spread) pending.delete(keyOf(lava));
       else if (failure) triedPours.add(keyOf(lava)); // Another pour may still set this cell; it can then be mined.
       if (!failure || failure.code !== 'limit_time') addGrown(pool, pending);
