@@ -36,9 +36,9 @@ export function droppedKind(entity: DroppedLike): string | null {
 }
 
 /** Remembers item entities the body threw itself. Junk kinds only; returns how many were noted. */
-export function noteSelfDropped(bot: object, itemName: string, entities: DroppedLike[], now: number = Date.now()): number {
-  // Junk kinds, and the spare pickaxes the tidy throws (inventoryTidy surplusPickaxes); other things may be fetched back on purpose.
-  if (!isThrowable(itemName) && !itemName.endsWith('_pickaxe')) return 0;
+export function noteSelfDropped(bot: object, itemName: string, entities: DroppedLike[], now: number = Date.now(), anyKind = false): number {
+  // Junk kinds, and the spare pickaxes the tidy throws (inventoryTidy surplusPickaxes); other things may be fetched back on purpose. `anyKind`: a drop the planner asked for by name (the act's drop) is the planner's to leave, whatever it is.
+  if (!anyKind && !isThrowable(itemName) && !itemName.endsWith('_pickaxe')) return 0;
   const host = hostOf(bot);
   let map = records.get(host);
   if (!map) { map = new Map(); records.set(host, map); }

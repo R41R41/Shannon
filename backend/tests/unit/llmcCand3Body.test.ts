@@ -146,7 +146,7 @@ describe('drop: level toward the freest way, where it lay, and whether it is far
     const { ctx } = dropper({ landAt: from => from.offset(1, 0, 0.2) });
     const out = await drop(ctx, { items: [{ item: 'cobblestone', count: 10 }] });
     expect(out.text).toContain('cobblestone×10 を投げた（残り54）');
-    expect(out.text).toContain('近い（3m 未満）: ここに立ち続ける・近くを歩くと拾い直す。離れてから続ける');
+    expect(out.text).toContain('近い（3m 未満）ので');
   });
 
   it('the way behind her (where she came from) is taken when it is as free as any, not the way she faces (where she goes next)', async () => {

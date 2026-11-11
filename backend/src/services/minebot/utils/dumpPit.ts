@@ -63,16 +63,18 @@ export function liquidNearPit(bot: PitBody, feet: Vec3): string | null {
 /**
  * The hole to dig from the cell the body stands in (`feet`, floored): of the four columns beside it, the one needing the fewest digs
  * (at most MAX_PIT_DIGS), none beside or under liquid, none under a falling block, none through bedrock or equipment. Null when none
- * qualifies, or when the body does not stand with air at feet and head over a solid floor.
+ * qualifies, or when the body does not stand with air at feet and head over a solid floor. `depthBelowFeet` (1 to 3, default 3) is how many cells under the
+ * feet the hole goes (the drop's own is 2: out of a standing body's reach, 1.8 m down).
  */
-export function planDumpPit(bot: PitBody, feet: Vec3): DumpPitPlan | null {
+export function planDumpPit(bot: PitBody, feet: Vec3, options: { depthBelowFeet?: number } = {}): DumpPitPlan | null {
+  const depth = Math.max(1, Math.min(DEPTH_BELOW_FEET, Math.round(options.depthBelowFeet ?? DEPTH_BELOW_FEET)));
   const standable = isAir(bot.blockAt(feet)) && isAir(bot.blockAt(feet.offset(0, 1, 0))) && !!bot.blockAt(feet.offset(0, -1, 0))
     && !isAir(bot.blockAt(feet.offset(0, -1, 0)));
-  if (!standable || feet.y - DEPTH_BELOW_FEET - 1 < LOWEST_CELL_Y) return null;
+  if (!standable || feet.y - depth - 1 < LOWEST_CELL_Y) return null;
   let best: { plan: DumpPitPlan; cost: number } | null = null;
   for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
     const x = feet.x + ox, z = feet.z + oz;
-    const levels = [1, 0, -1, -2, -3].map(dy => feet.y + dy);
+    const levels = [1, 0, ...Array.from({ length: depth }, (_, i) => -1 - i)].map(dy => feet.y + dy);
     const dig: Vec3[] = [];
     let ok = true;
     for (const y of levels) {
@@ -90,7 +92,7 @@ export function planDumpPit(bot: PitBody, feet: Vec3): DumpPitPlan | null {
     }
     if (!ok || dig.length > MAX_PIT_DIGS) continue;
     // The ring round the whole column (the body's own column apart), and the cell under its bottom.
-    const around: Vec3[] = [new Vec3(x, feet.y - DEPTH_BELOW_FEET - 1, z)];
+    const around: Vec3[] = [new Vec3(x, feet.y - depth - 1, z)];
     for (const y of levels) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
       const cell = new Vec3(x + dx, y, z + dz);
       if (cell.x === feet.x && cell.z === feet.z) continue;
