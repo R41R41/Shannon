@@ -43,10 +43,15 @@ export interface FollowOptions {
   maxDig?: number;
   maxPlace?: number;
   now?: () => number;
+  /**
+   * Asked before every run and every group of cells, with the cell the body stands in: the go's own guards (stop, stopIf, the fall, fire and lava) are the caller's.
+   * A stop it throws goes on as it is (a StepStopped); an outcome it returns ends the follow with it.
+   */
+  guard?: (run: Run, from: Cell) => Pick<FollowOutcome, 'stopped' | 'at' | 'reason'> | null;
 }
 
 export interface FollowOutcome {
-  stopped: 'reached' | 'timeout' | 'blocked' | 'off_route' | 'plan_end' | 'limit_dig' | 'limit_place';
+  stopped: 'reached' | 'timeout' | 'blocked' | 'off_route' | 'plan_end' | 'limit_dig' | 'limit_place' | 'unsafe' | 'no_return';
   steps: number;
   digs: number;
   places: number;
@@ -116,11 +121,18 @@ export async function followRoute(initial: RoutePlan, hands: FollowHands, option
     };
     for (const run of runs) {
       if (now() > options.deadline) return { ...out, stopped: 'timeout', at: hands.feet() };
+      const refused = options.guard?.(run, hands.feet());
+      if (refused) return { ...out, ...refused };
       if (run.kind === 'cells') {
         const wet = run.steps.some(step => step.dig.some(cell => hands.wetAt(cell)));
         const groups: Array<{ cells: Cell[]; steps: RouteStep[] }> = wet ? run.steps.map(step => ({ cells: [step.to], steps: [step] })) : [{ cells: run.cells, steps: run.steps }];
         let ended = false;
         for (const group of groups) {
+          if (group !== groups[0]) {
+            if (now() > options.deadline) return { ...out, stopped: 'timeout', at: hands.feet() };
+            const again = options.guard?.({ kind: 'cells', cells: group.cells, steps: group.steps }, hands.feet());
+            if (again) return { ...out, ...again };
+          }
           const limit = overLimit(group.steps.reduce((n, step) => n + step.dig.length, 0), 0);
           if (limit) return limit;
           if (wet) { const stop = await sealed(group.steps[0]); if (stop) return stop; }

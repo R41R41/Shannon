@@ -1096,6 +1096,11 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   try { return await goPlanned(ctx, args); } finally { edge.allowedDrop = was; }
 }
 
+/** The words of a stop for a magma block under the feet's width (goWalk's and the plan's walk say it alike). */
+function magmaStopWords(bot: any, magma: Cell): string {
+  return `足幅が ${cellText(magma)} の magma_block に掛かるため移動を止めた${holeUnderCentreWords((x, y, z) => nameAt(bot, x, y, z), bot.entity?.position)}`;
+}
+
 // ---- the planned way (run 7, Lai: "目的座標を指定したときにそこに至る最短経路を出力するアルゴリズム ... 出来る限り道があれば掘らずに移動") ----
 
 /**
@@ -1135,13 +1140,21 @@ function planOptionsFor(bot: any, args: GoArgs, left: { dig: number; place: numb
     placeBlocks: Math.min(Math.max(0, left.place), held.reduce((sum, name) => sum + inventoryCount(bot, name), 0)),
     waterOk: args.waterOk === true,
     range: args.range ?? GO_DEFAULTS.range,
-    maxDrop: args.maxDrop ?? GO_DEFAULTS.maxDrop,
+    maxDrop: planDropOf(bot, args),
     ms,
   };
 }
 
+/** The fall the plan's walk may take: the go's maxDrop, and for a body that could not climb back (strandedPack) the one level goWalk keeps to. */
+function planDropOf(bot: any, args: GoArgs): number {
+  const asked = args.maxDrop ?? GO_DEFAULTS.maxDrop;
+  const place = placeNamesOf(bot, args.canPlace);
+  const kept = roofBlocksKeptFromGo(nativeActionHost(bot), bot, place.held);
+  return strandedPack(bot, place.held.filter(name => !kept.includes(name))) ? Math.min(asked, STRANDED_MAX_DROP) : asked;
+}
+
 /** The hands a plan is followed with: the tunnel walk's cells, a walk that digs and lays nothing, the place hand, the hand's own water seal. */
-function followHandsOf(ctx: StepContext, args: GoArgs, deadline: number): FollowHands {
+function followHandsOf(ctx: StepContext, args: GoArgs, deadline: number, before?: (feet: Vec3, next: Vec3) => string | null): FollowHands {
   const bot = ctx.bot;
   const nav = bot.pathfinder as any;
   const cells = (args.goals ?? []).slice(0, 8);
@@ -1157,13 +1170,14 @@ function followHandsOf(ctx: StepContext, args: GoArgs, deadline: number): Follow
     cells: list => walkCells(bot, list, {
       isEnd: feet => cells.some(cell => Math.hypot(cell.x - feet.x, cell.y - feet.y, cell.z - feet.z) <= range),
       deadline,
+      ...(before ? { before } : {}),
       pillar: async height => { const block = layBlock(); if (!block) throw new Error('no block to lay'); return pillarUp(ctx, { n: height, block }); },
     }),
     walkTo: async cell => {
       const previous = nav?.movements;
       try {
         // No digging, no laying: the plan chose which blocks are cut; this is the ground between them.
-        nav.setMovements(goMovements(bot, { maxDrop: args.maxDrop ?? GO_DEFAULTS.maxDrop, waterOk: args.waterOk === true, maxDig: 0, maxPlace: 0, sprint: false }, { names: new Set(), ignored: [] }, [], walkState));
+        nav.setMovements(goMovements(bot, { maxDrop: planDropOf(bot, args), waterOk: args.waterOk === true, maxDig: 0, maxPlace: 0, sprint: false }, { names: new Set(), ignored: [] }, [], walkState));
         await goWith(ctx, new goals.GoalBlock(cell.x, cell.y, cell.z), Math.max(500, Math.min(8000, deadline - Date.now())), notes, { stuckMs: GO_STUCK_MS, onGround: true });
       } finally { letGo(bot); try { if (previous) nav.setMovements(previous); } catch { /* the profile stays */ } }
       const feet = feetNow();
@@ -1198,11 +1212,37 @@ export async function goPlannedWith(ctx: StepContext, args: GoArgs, walk: GoWalk
     !!plan && (plan.status === 'success' || (partialOk && plan.status === 'partial')) && plan.steps.length > 0 && plan.totals.dig <= left.dig && plan.totals.place <= left.place;
   /** The plan walked; the replans are drawn with what the follow has used taken off the limits. */
   const walkPlan = async (plan: RoutePlan, left: { dig: number; place: number }, code: string): Promise<FollowOutcome> => {
-    const hands = followHandsOf(ctx, args, end);
+    // The go's own guards, on the plan's walk too: a stop (a reflex's, the stopIf's, the act's cancel) ends it as it ends goWalk, the fall stays inside maxDrop, and a cell with fire or lava
+    // in it or beside it, or a magma block under the feet's width, is 'unsafe' (the words of goWalk's). The time is `end`, inside the go's seconds and the command's deadline.
+    const maxDrop = planDropOf(bot, args);
+    let unsafe: string | null = null;
+    const stopNow = () => { if (ctx.stop?.aborted) { letGo(bot); throw new StepStopped(String(ctx.stop.reason ?? 'stopped')); } };
+    const hazardWords = (cell: Cell): string | null => {
+      const magma = magmaAtFootprint((x, y, z) => nameAt(bot, x, y, z), bot.entity?.position);
+      if (magma) return magmaStopWords(bot, magma);
+      const why = hazardAtFeet(bot, cell.x, cell.y, cell.z);
+      return why ? `${cellText(cell)} は${why}（溶岩・火・マグマ・サボテン・ベリー・ウィザーローズとその隣には行かない）` : null;
+    };
+    const hands = followHandsOf(ctx, args, end, (_feet, next) => { stopNow(); return (unsafe = hazardWords(next)); });
     let done: FollowOutcome;
     try {
       done = await followRoute(plan, hands, {
         deadline: end, maxDig: left.dig, maxPlace: left.place, maxReplans: PLAN_REPLANS,
+        guard: (run, from) => {
+          stopNow();
+          const steps = run.kind === 'cells' ? run.steps : [run.step];
+          let at = from;
+          for (const step of steps) {
+            if (at.y - step.to.y > maxDrop) return { stopped: 'no_return', at: step.to, reason: `降り ${at.y - step.to.y} 段は maxDrop ${maxDrop} を超える（${cellText(at)} から ${cellText(step.to)}）` };
+            at = step.to;
+          }
+          const magma = magmaAtFootprint((x, y, z) => nameAt(bot, x, y, z), bot.entity?.position);
+          for (const cell of [from, ...steps.map(step => step.to)]) {
+            const words = magma ? magmaStopWords(bot, magma) : cell === from ? null : hazardWords(cell);
+            if (words) { unsafe = words; return { stopped: 'unsafe', at: cell, reason: words }; }
+          }
+          return null;
+        },
         replan: (_from, used) => {
           const rest = { dig: left.dig - (used?.digs ?? 0), place: left.place - (used?.places ?? 0) };
           const next = makePlan(rest, PLAN_MS);
@@ -1214,6 +1254,7 @@ export async function goPlannedWith(ctx: StepContext, args: GoArgs, walk: GoWalk
       throw error;
     }
     letGo(bot);
+    if (done.stopped === 'blocked' && unsafe) done = { ...done, stopped: 'unsafe', reason: unsafe };
     blackBoxOf(nativeActionHost(bot))?.note('go_planned', { code, stopped: done.stopped, steps: done.steps, digs: done.digs, places: done.places, replans: done.replans });
     return done;
   };
@@ -1234,6 +1275,19 @@ export async function goPlannedWith(ctx: StepContext, args: GoArgs, walk: GoWalk
     };
   };
   const moved = (done: FollowOutcome) => done.steps > 0 || done.digs > 0 || done.places > 0;
+  /** A plan's walk that ended on a guard of the go (unsafe, the fall, the time) is that stop, said with the codes and words of goWalk's; the route search does not go on from there. */
+  const guarded = (done: FollowOutcome, before: { dug: number; placed: number; steps: number }): StepOutcome | null => {
+    if (done.stopped !== 'unsafe' && done.stopped !== 'no_return' && done.stopped !== 'timeout') return null;
+    const at = feetCell(bot) ?? done.at;
+    const seconds = args.seconds ?? GO_DEFAULTS.seconds;
+    const code = done.stopped === 'timeout' ? 'limit_time' : done.stopped;
+    let left = 0;
+    try { left = Math.round(Math.min(...goalCells.map(cell => distanceTo(bot, cell)))); } catch { /* unknown */ }
+    const why = done.stopped === 'timeout' ? `${seconds} 秒の上限に着いた（行き先まで あと ${left}m）` : done.reason ?? done.stopped;
+    const hint = done.stopped === 'timeout' ? 'seconds を増やすか、行き先を近くに' : done.stopped === 'unsafe' ? '安全な床へ離れてから、または別の道・行き先を' : '別の道を（降りると戻れない）';
+    const text = clip(`go 止まった ${code}: ${why}。${plannedWords(done)}。${hint}`, 160);
+    return { ...stopped(bot, code, text, at ?? undefined), data: { work: { dug: before.dug + done.digs, placed: before.placed + done.places, steps: before.steps + done.steps, redraws: 0 } } };
+  };
 
   const first = await walk(ctx, args);
   const code = first.reason ?? '';
@@ -1247,6 +1301,8 @@ export async function goPlannedWith(ctx: StepContext, args: GoArgs, walk: GoWalk
   // After limit_dig the go's own climb (a roof or a blocker it may not dig) is the honest stop: a plan that lays blocks does not take it over.
   if (plan.totals.place > 0 && (plan.status !== 'success' || code === 'limit_dig')) return first;
   const done = await walkPlan(plan, left, code);
+  const hard = guarded(done, before);
+  if (hard) return hard;
   if (!moved(done)) return { ...first, text: `${first.text}。計画の道も進めない: ${(done.reason ?? done.stopped).slice(0, 40)}` };
   return finish(done, before, /(?:水の入った穴|穴の底)だったので[^。]*。/u.exec(first.text ?? '')?.[0] ?? '');
 }
@@ -2079,7 +2135,7 @@ export async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcom
       const stop = vetoed() ?? limitStop();
       if (stop) return stop;
       const magma = magmaAtFootprint((x, y, z) => nameAt(bot, x, y, z), bot.entity?.position);
-      if (magma) return fail('unsafe', `足幅が ${cellText(magma)} の magma_block に掛かるため移動を止めた${holeUnderCentreWords((x, y, z) => nameAt(bot, x, y, z), bot.entity?.position)}`, '安全な床へ離れてから');
+      if (magma) return fail('unsafe', magmaStopWords(bot, magma), '安全な床へ離れてから');
       if (reached()) return arrived();
       const gated = await douseAtPlaces();
       if (gated) return gated;
@@ -2162,7 +2218,7 @@ export async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcom
         if (exit) blocked = { ...blocked, text: `${exit}。${blocked.text}` };
       }
       if (blocked) { letGo(bot); return blocked; }
-      if (out.magma) return fail('unsafe', `足幅が ${cellText(out.magma)} の magma_block に掛かるため移動を止めた${holeUnderCentreWords((x, y, z) => nameAt(bot, x, y, z), bot.entity?.position)}`, '安全な床へ離れてから');
+      if (out.magma) return fail('unsafe', magmaStopWords(bot, out.magma), '安全な床へ離れてから');
       if (drawAfterRefusal) {
         drawAfterRefusal = false;
         // Drawn again from the ground, at rest (a place refused at the top of a jump leaves the body in the air: a route drawn there starts from air).

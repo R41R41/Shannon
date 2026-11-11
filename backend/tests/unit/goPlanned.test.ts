@@ -250,3 +250,115 @@ describe('followRoute: the plan made again is drawn with what was used taken off
     expect(told).toEqual([{ digs: 2, places: 0 }]);
   });
 });
+
+// The plan's walk goes through the go's own guards: a stop (a reflex's, the stopIf's, the act's cancel), the time, the fall, fire and lava.
+describe('go: the plan walked after search_timeout keeps the go\'s guards', () => {
+  const wall = over(flat, box('stone', 3, 5, FLOOR, FLOOR + 6, -R - 1, R + 1));
+  const plain = { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'] };
+
+  it('a stop (the act\'s cancel, a reflex) ends the plan\'s walk at once, as it ends the route search\'s: a StepStopped, the body let go, nowhere near the 60 s', async () => {
+    const sim = makeSim(wall, { items: stacks(PICK) });
+    const controller = new AbortController();
+    const ctx = { ...ctxOf(sim), stop: controller.signal };
+    const { walk } = stopsOnce('search_timeout');
+    const startedAt = Date.now();
+    let abortedAt = 0;
+    const run = drive(sim, goPlannedWith(ctx, plain, walk), elapsed => { if (elapsed >= 300 && !abortedAt) { abortedAt = Date.now(); controller.abort('reflex'); } });
+    await expect(run).rejects.toBeInstanceOf(StepStopped);
+    expect(abortedAt).toBeGreaterThan(startedAt);
+    expect(Date.now() - abortedAt).toBeLessThanOrEqual(1500);
+    expect(Math.floor(sim.bot.entity.position.x)).toBeLessThan(8);
+  });
+
+  it('a stopIf (hostileWithin: the act aborts the stop with its reason) is the same stop, with its reason kept', async () => {
+    const sim = makeSim(wall, { items: stacks(PICK) });
+    const controller = new AbortController();
+    const ctx = { ...ctxOf(sim), stop: controller.signal };
+    const { walk } = stopsOnce('search_timeout');
+    const run = drive(sim, goPlannedWith(ctx, plain, walk), elapsed => { if (elapsed === 300) controller.abort('stop_if_hostile:zombie'); });
+    await expect(run).rejects.toMatchObject({ name: 'StepStopped', why: 'stop_if_hostile:zombie' });
+  });
+
+  it('a stop before the plan\'s first run is a stop too (nothing is dug)', async () => {
+    const sim = makeSim(wall, { items: stacks(PICK) });
+    const controller = new AbortController();
+    const ctx = { ...ctxOf(sim), stop: controller.signal };
+    const stopsThenAborts: GoWalk = async () => { controller.abort('reflex'); return stops('search_timeout'); };
+    // The go returns the walk's own stop when the signal is already up (nothing is begun); the plan is not walked.
+    const outcome = await drive(sim, goPlannedWith(ctx, plain, stopsThenAborts));
+    expect(outcome.reason).toBe('search_timeout');
+    expect(sim.bot.dugBlocks).toEqual([]);
+  });
+
+  it('the time: the plan\'s walk is inside the go\'s seconds, and the end is limit_time (as goWalk\'s), not timeout', async () => {
+    const thick = over(flat, box('stone', 3, 36, FLOOR, FLOOR + 6, -R - 1, R + 1));
+    const sim = makeSim(thick, { items: stacks(PICK) });
+    const { walk } = stopsOnce('search_timeout');
+    const startedAt = Date.now();
+    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(38, FLOOR, 0)], canDig: ['stone'], maxDig: 200, seconds: 8 }, walk));
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toBe('limit_time');
+    expect(outcome.text).toContain('8 秒の上限');
+    expect(outcome.text).toContain('計画の道');
+    expect(Date.now() - startedAt).toBeLessThanOrEqual(8000 + 1500);
+  });
+
+  it('the command\'s own deadline bounds the plan\'s walk as well', async () => {
+    const thick = over(flat, box('stone', 3, 36, FLOOR, FLOOR + 6, -R - 1, R + 1));
+    const sim = makeSim(thick, { items: stacks(PICK) });
+    const { walk } = stopsOnce('search_timeout');
+    const startedAt = Date.now();
+    const ctx = { ...ctxOf(sim), deadline: startedAt + 6000 };
+    const outcome = await drive(sim, goPlannedWith(ctx, { goals: [goalAt(38, FLOOR, 0)], canDig: ['stone'], maxDig: 200, seconds: 60 }, walk));
+    expect(outcome.reason).toBe('limit_time');
+    expect(Date.now() - startedAt).toBeLessThanOrEqual(6000 + 1500);
+  });
+
+  it('lava that appears in the next cell is unsafe, with the go\'s code, and the body does not go in', async () => {
+    const sim = makeSim(wall, { items: stacks(PICK) });
+    const { walk } = stopsOnce('search_timeout');
+    let lit = false;
+    let inLava = false;
+    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), plain, walk), elapsed => {
+      if (!lit && elapsed >= 100) { lit = true; for (let z = -8; z <= 8; z++) sim.world.set(6, FLOOR, z, 'lava'); }
+      const p = sim.bot.entity.position;
+      if (sim.world.nameAt(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === 'lava') inLava = true;
+    });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toBe('unsafe');
+    expect(outcome.text).toContain('go 止まった unsafe');
+    expect(inLava).toBe(false);
+  });
+
+  it('fire that spreads over the next cells is unsafe too', async () => {
+    const sim = makeSim(wall, { items: stacks(PICK) });
+    const { walk } = stopsOnce('search_timeout');
+    let lit = false;
+    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), plain, walk), elapsed => { if (!lit && elapsed >= 100) { lit = true; for (let z = -8; z <= 8; z++) sim.world.set(6, FLOOR, z, 'fire'); } });
+    expect(outcome.reason).toBe('unsafe');
+    expect(outcome.text).toContain('fire');
+  });
+
+  it('a fall past maxDrop is not begun: a pit deeper than maxDrop is not walked into by the plan', async () => {
+    const pit = over(flat, box('air', 6, 6, FLOOR - 6, FLOOR, 0, 0));
+    const sim = makeSim(pit, { items: stacks(PICK) });
+    const { walk } = stopsOnce('search_timeout');
+    let lowest = Infinity;
+    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(6, FLOOR - 6, 0)], maxDrop: 3 }, walk), () => { lowest = Math.min(lowest, sim.bot.entity.position.y); });
+    expect(outcome.ok).toBe(false);
+    expect(lowest).toBeGreaterThan(FLOOR - 3.5);
+  });
+});
+
+describe('followRoute: the guard is asked before each run and ends the follow with its outcome', () => {
+  it('a guard\'s stop is the follow\'s stop, before the run is begun; a throw goes on as it is', async () => {
+    const plan = planRoute(floorTo(63), at(0, 64, 0), [at(6, 64, 0)], {});
+    const unsafe = recordingHands();
+    const done = await followRoute(plan, unsafe.hands, { deadline: Date.now() + 60_000, guard: (_run, from) => ({ stopped: 'unsafe', at: from, reason: 'fire' }) });
+    expect(done.stopped).toBe('unsafe');
+    expect(unsafe.calls).toEqual([]);
+    const thrown = recordingHands();
+    await expect(followRoute(plan, thrown.hands, { deadline: Date.now() + 60_000, guard: () => { throw new StepStopped('reflex'); } })).rejects.toBeInstanceOf(StepStopped);
+    expect(thrown.calls).toEqual([]);
+  });
+});

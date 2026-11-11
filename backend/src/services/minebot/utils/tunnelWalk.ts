@@ -294,6 +294,8 @@ export interface WalkOptions {
    * walk goes on from the cell it landed in, to the next cell of the plan it can step to (run 24: "off_line (drop)" five times a second).
    */
   onDrop?: 'replan' | 'continue';
+  /** Asked before each step with the feet and the next cell: the caller's own guards. A StepStopped it throws goes on; a reason it returns stops the walk (blocked) before the step. */
+  before?: (feet: Vec3, next: Vec3) => string | null;
 }
 
 const sleep = (bot: CustomBot, ms: number) => actionDelay(bot, ms);
@@ -450,6 +452,8 @@ export async function walkCells(bot: CustomBot, cells: Vec3[], options: WalkOpti
     if (Date.now() > options.deadline) return { stopped: 'timeout', steps, digs };
     const next = cells[index];
     if (feet.x === next.x && feet.y === next.y && feet.z === next.z) continue;
+    const refused = options.before?.(feet, next);
+    if (refused) return { stopped: 'blocked', steps, digs, at: next, reason: refused };
     if (!isStep(feet, next)) {
       // A trail is the places the body has stood: after a step down it did not plan, the way goes on at the first cell further along that
       // the body can step to (or is standing in), not from the start again.
