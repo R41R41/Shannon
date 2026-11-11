@@ -1,8 +1,9 @@
 /**
  * What the route plan (utils/routePlan) is given from a live body.
  *
- * Run 7: the body can read how many blocks a way would need before it moves, and `probe kind=route` says so. It is an estimate only: go and mine keep their own limits and
- * their own route search (the plan is not what they walk), so nothing here changes a limit or stops a hand. Nothing here digs or lays.
+ * Run 7: the body can read how many blocks a way would need before it moves, and `probe kind=route` says so. go walks the plan (utils/routeFollow, primitives/go: goPlanned) only when
+ * the walk of its own route search stops (search_timeout, limit_dig, dead_end) or the plan digs clearly fewer; mine's approach to an ore goes by go. Nothing here digs or lays,
+ * and nothing here changes a limit or a permission: go gives the plan its own canDig, canPlace, maxDig and maxPlace.
  */
 import { bodyReader, feetCell, type Cell } from './localMap.js';
 import { planRoute, type RouteOptions, type RoutePlan } from './routePlan.js';

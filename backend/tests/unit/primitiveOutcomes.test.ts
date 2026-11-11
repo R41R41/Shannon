@@ -14,7 +14,7 @@ import { pillarUp } from '../../src/services/minebot/utils/primitives/pillarUp.j
 import { StepStopped } from '../../src/services/minebot/utils/primitives/common.js';
 import { mine } from '../../src/services/minebot/utils/primitives/mine.js';
 import { walk } from '../../src/services/minebot/utils/primitives/walk.js';
-import { go, blockedAroundPlace, digRuleOf } from '../../src/services/minebot/utils/primitives/go.js';
+import { go, goWalk, blockedAroundPlace, digRuleOf } from '../../src/services/minebot/utils/primitives/go.js';
 import { attack } from '../../src/services/minebot/utils/primitives/attack.js';
 import { fight } from '../../src/services/minebot/utils/primitives/fight.js';
 import { drop, eat, equip } from '../../src/services/minebot/utils/primitives/body.js';
@@ -222,7 +222,8 @@ describe('go (r45-hold1-go-partial, r45-hold2-local-go-partial, r45-hold10-goal-
       if (options.timeout === 777) { yield { result: { status: 'timeout', path: [{ x: 14, y: 64, z: 14, hash: '14,64,14' }], visitedNodes: 6016 } }; return; }
       yield* real.call(this, movements, start, goal, options);
     };
-    const outcome = await go(stepContext(g.bot, undefined, 60), { goals: [cell(28, 64, 28)], seconds: 30, canDig: ['stone'], searchMs: 777 });
+    // goWalk: the walk of the route search itself (go as a whole then tries the plan, which would walk this open ground).
+    const outcome = await goWalk(stepContext(g.bot, undefined, 60), { goals: [cell(28, 64, 28)], seconds: 30, canDig: ['stone'], searchMs: 777 });
     expect(outcome).toMatchObject({ ok: false, reason: 'search_timeout' });
     const progress = outcome.progress!;
     expect(progress.lastSearch).toMatchObject({ status: 'timeout', len: 1, nodes: 6016, endM: 19.8 });
