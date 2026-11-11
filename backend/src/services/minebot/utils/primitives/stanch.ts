@@ -48,6 +48,13 @@ export function damBlockHeld(bot: any): string | null {
   return DAM_BLOCKS.find(name => (held.get(name) ?? 0) >= 1) ?? null;
 }
 
+/** How many blocks of the cheap kinds the pack holds (what a wall of water can be sealed with). */
+export function damBlocksHeld(bot: any): number {
+  let total = 0;
+  for (const item of (bot.inventory?.items?.() ?? []) as any[]) if (DAM_BLOCKS.includes(String(item?.name))) total += Number(item?.count ?? 0);
+  return total;
+}
+
 const key = (cell: Cell) => `${cell.x},${cell.y},${cell.z}`;
 const SIDES: Array<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]];
 /** A falling stream feeds like a source. */

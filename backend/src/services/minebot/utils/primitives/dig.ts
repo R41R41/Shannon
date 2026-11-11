@@ -18,6 +18,9 @@ import { assessBreathingDig, assessBreathingWork, breathingWorkWords } from '../
 import { digSlowed, installVanillaDigTime } from '../digTimeIn.js';
 import { steadyInWater } from './footing.js';
 import { noteDugCell } from './dugCells.js';
+import { sealWetFaces, wetFaces } from './wetWall.js';
+import { damBlockHeld } from './stanch.js';
+import { place } from './place.js';
 
 /**
  * dig: the cells in order (design mb-llm-centric 2.3). The tool is the one asked for, else the quickest carried that makes the block
@@ -263,12 +266,19 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     }
     const lava = lavaReleasedBy(bot, vecOf(cell));
     if (lava) return result(stopped(bot, 'lava_behind', `${placeText(bot, cell)} を掘ると、隣の溶岩 ${cellText({ x: lava.x, y: lava.y, z: lava.z })} が体の所へ流れ込む`, cell));
-    // A planner's dig of a block water touches near a body in a tunnel (a lake's wall) floods what the body stands in (on an open shore it does not: the dig goes on). A bucket is filled through such a wall by use (the body opens, fills and closes it).
-    const waterNext = args.openSight && !args.wallOpen ? waterBeside(bot, cell) : null;
-    const feetNow = feetCell(bot);
-    if (waterNext && feetNow && Math.hypot(cell.x - feetNow.x, cell.z - feetNow.z) <= 3 && blockAt(bot, feetNow)?.name !== 'water' && bodyEnclosed(bot, feetNow)) {
-      return result(stopped(bot, 'water_behind', `${placeText(bot, cell)} の ${block.name} は隣の ${cellText(waterNext)} が水で、掘ると流れ込む（坑道が水没して出られなくなる）。`
-        + '水を汲みたいなら use bucket（体が壁を開けて汲んで塞ぐ）。水を避けて掘るなら別の列から', cell));
+    // Water behind the cell (run 7, 11/11): its side and top faces are sealed with a cheap block before it is dug, so it opens dry (wetWall). What cannot be sealed is left; a body shut in a tunnel is
+    // then stopped as before (a lake's wall opened on it floods what it stands in), an open shore is dug on. A bucket is filled through such a wall by use (wallOpen: the body opens, fills and plugs it).
+    if (!args.wallOpen && !args.take) {
+      const wetNow = wetFaces(bot, cell);
+      if (wetNow.length) {
+        const sealed = await sealWetFaces(ctx, cell);
+        if (sealed.words) done.push(sealed.words);
+        const feetNow = feetCell(bot);
+        if (sealed.left.length && feetNow && Math.hypot(cell.x - feetNow.x, cell.z - feetNow.z) <= 3 && blockAt(bot, feetNow)?.name !== 'water' && bodyEnclosed(bot, feetNow)) {
+          return result(stopped(bot, 'water_behind', `${placeText(bot, cell)} の ${block.name} は隣の ${cellText(sealed.left[0].at)} が水で、掘ると流れ込む（坑道が水没して出られなくなる）。`
+            + `${sealed.block ? `塞ごうとして ${sealed.left.length} 面残った。` : `dirt か cobblestone を ${wetNow.length} 個持てば体が塞いで掘る。`}水を汲みたいなら use bucket（体が壁を開けて汲んで塞ぐ）。水を避けて掘るなら別の列から`, cell));
+        }
+      }
     }
     let threats: ExposingThreat[] = [];
     try { threats = threatsExposedBy(bot, vecOf(cell)); } catch { threats = []; }
@@ -354,8 +364,16 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     if (!seeing) tally.dug++;
     tally.current = null;
     await wait(ctx, 150);
-    const now = blockAt(bot, cell);
-    const refilled = now && !isAirLike(now) && now.name !== 'water' && now.name !== 'lava' ? `（掘った後、今は ${now.name}: 上から落ちてきた）` : now && (now.name === 'water' || now.name === 'lava') ? `（掘った後、${now.name} が流れ込んだ）` : '';
+    let now = blockAt(bot, cell);
+    // Water came in with the hole (the cells behind it were not read, or could not be sealed): a cheap block goes back into the cell at once, where the body can reach it, before the flood spreads.
+    let plugged = '';
+    if (now?.name === 'water' && damBlockHeld(bot) && eyeDistance(bot, cell) <= DIG_REACH) {
+      const dam = damBlockHeld(bot)!;
+      const plug = await place(ctx, { block: dam, at: [cell] });
+      now = blockAt(bot, cell);
+      plugged = plug.ok && now?.name !== 'water' ? `（水が流れ込んだので ${dam} で穴を塞いだ）` : '';
+    }
+    const refilled = plugged || (now && !isAirLike(now) && now.name !== 'water' && now.name !== 'lava' ? `（掘った後、今は ${now.name}: 上から落ちてきた）` : now && (now.name === 'water' || now.name === 'lava') ? `（掘った後、${now.name} が流れ込んだ）` : '');
     const left = usesLeft(bot.heldItem);
     done.push(`${cellText(cell)} ${block.name} を掘った（${seeing ? `${seeing}、` : ''}${tool.held}、${((Date.now() - started) / 1000).toFixed(1)}秒${left !== null && left <= 10 ? `、${bot.heldItem?.name} 残り${left}回` : ''}${own ? `。${ownerWords(own)}` : ''}）${refilled}`);
     ctx.progress?.(`${done.length}/${cells.length}`);

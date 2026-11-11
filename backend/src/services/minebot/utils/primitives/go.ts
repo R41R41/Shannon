@@ -20,6 +20,7 @@ import { blackBoxOf } from '../blackbox.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { meterProgress, round1 } from './progressUnits.js';
 import { ThreatExposedError } from '../exposureGuard.js';
+import { sealedAt, sealWetFaces, wetFaces } from './wetWall.js';
 import { surfaceSwimControls, swimControls, swimPulse } from './swim.js';
 import { waterExitWords } from './waterExit.js';
 import { stanchStream } from './stanch.js';
@@ -1123,6 +1124,8 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const stranded = strandedPack(bot, place.held);
   if (stranded && limits.maxDrop > STRANDED_MAX_DROP) limits.maxDrop = STRANDED_MAX_DROP;
   const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, exposed: new Map(), avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
+  /** Water behind a cell the route digs is sealed first (wetWall): how many faces held and how many were left, said in the result. */
+  const wet = { sealed: 0, left: 0 };
   const start = feetCell(bot)!;
   const picksAtStart = pickaxesOf(bot);
   /** S8: the times this go cut its way itself at a point on the line (relay). */
@@ -1172,7 +1175,7 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       cells[i] = { ...cell, y };
     });
   }
-  const tail = () => `${cellText(feetCell(bot) ?? start)} 道 ${state.steps} 歩・掘 ${state.dug}・置 ${state.placed}・引き直し ${state.redraws} 回${pickaxeWords(bot, picksAtStart, state.dug)}${raised.length ? `。地中の行き先を地表へ上げた: ${raised.join("、")}` : ""}${lowered.length ? `。宙の行き先を下の地面へ下ろした: ${lowered.join("、")}` : ""}${sunk.length ? `。水面の行き先を水の中へ下ろした: ${sunk.join("、")}` : ""}`;
+  const tail = () => `${cellText(feetCell(bot) ?? start)} 道 ${state.steps} 歩・掘 ${state.dug}・置 ${state.placed}・引き直し ${state.redraws} 回${pickaxeWords(bot, picksAtStart, state.dug)}${raised.length ? `。地中の行き先を地表へ上げた: ${raised.join("、")}` : ""}${lowered.length ? `。宙の行き先を下の地面へ下ろした: ${lowered.join("、")}` : ""}${sunk.length ? `。水面の行き先を水の中へ下ろした: ${sunk.join("、")}` : ""}${wet.sealed || wet.left ? `。水の隣の掘り: 塞いだ ${wet.sealed}・残り ${wet.left}` : ""}`;
   const fail = (code: string, reason: string, hint: string): StepOutcome => {
     const at = feetCell(bot) ?? start;
     const head = `go 止まった ${code}: `;
@@ -1359,6 +1362,18 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const countingDig = async function (this: unknown, ...rest: unknown[]) {
     const at = (rest[0] as { position?: { x: number; y: number; z: number } } | undefined)?.position;
     let result: unknown;
+    // Water behind the cell: sealed before the dig (a route dug into a lake's wall in run 7, waterOk or not). A failure here never stops the dig.
+    if (counting && at) {
+      try {
+        const cell = { x: at.x, y: at.y, z: at.z };
+        if (wetFaces(bot, cell).length && !sealedAt(bot, cell)) {
+          // The seal is the hand's own footing, not the route's: a block the server refuses here is told in the words, never counted as a refused place of the route.
+          const wasCounting = counting;
+          counting = false;
+          try { const out = await sealWetFaces(ctx, cell); state.placed += out.sealed.length; wet.sealed += out.sealed.length; wet.left += out.left.length; } finally { counting = wasCounting; }
+        }
+      } catch (error) { if (error instanceof StepStopped) throw error; }
+    }
     const digBegan = Date.now();
     try { result = await originalDig.apply(host, rest); }
     catch (error) { if (counting && error instanceof ThreatExposedError) noteExposed(at, error); throw error; }

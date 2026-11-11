@@ -206,7 +206,7 @@ describe('dig under water', () => {
     expect(out.reason, out.text).not.toBe('breathing_work');
     expect(sim.bot.placedBlocks).toEqual(['dirt@0,22,0']);
   });
-  it('does not dig the wall between a dry tunnel and a lake (water_behind), but does where use has opened it for a bucket', async () => {
+  it('does not dig the wall between a dry tunnel and a lake without a block to seal it with (water_behind, saying a dirt would do), but does where use has opened it for a bucket', async () => {
     const FLOOR = 64;
     const shore: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y < FLOOR ? 'stone' : x === 0 && y === FLOOR && z === -2 ? 'stone' : x === 0 && y === FLOOR && z === -3 ? 'water~0' : 'air');
     // A tunnel along z (side walls and a roof): the body is enclosed, so water let in has only its own cell to run to.
@@ -216,10 +216,23 @@ describe('dig under water', () => {
     const refused = await drive(sim, dig(ctxOf(sim, { x: 0, y: FLOOR, z: 0 }), { at: [{ x: 0, y: FLOOR, z: -2 }], openSight: true }));
     expect(refused).toMatchObject({ ok: false, reason: 'water_behind' });
     expect(refused.text).toContain('use bucket');
+    expect(refused.text).toContain('dirt か cobblestone を 1 個持てば体が塞いで掘る');
     expect(sim.world.nameAt(0, FLOOR, -2)).toBe('stone');
-    // Other callers of dig (go, mine, the reflexes) have their own guards and are not touched.
+    // Every dig reads the water behind its cell now (a go's and a mine's own digs seal in their own way): without openSight it is held back the same.
     const plain = await drive(sim, dig(ctxOf(sim, { x: 0, y: FLOOR, z: 0 }), { at: [{ x: 0, y: FLOOR, z: -2 }], collect: false }));
-    expect(plain.ok, plain.text).toBe(true);
+    expect(plain).toMatchObject({ ok: false, reason: 'water_behind' });
+  });
+  it('seals the water behind the wall with a block it holds and then digs the wall dry (run 7: a go dug into a lake and was carried 1.4 m)', async () => {
+    const FLOOR = 64;
+    const shore: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y < FLOOR ? 'stone' : x === 0 && y === FLOOR && z === -2 ? 'stone' : x === 0 && y === FLOOR && z === -3 ? 'water~0' : 'air');
+    const world: Ground = (x, y, z) => (shore(x, y, z) === 'air' && (Math.abs(x) >= 1 || y >= FLOOR + 2) ? 'stone' : shore(x, y, z));
+    const sim = makeHandsSim(world, { start: [0.5, FLOOR, 0.5], items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'dirt', count: 4 }] });
+    const out = await drive(sim, dig(ctxOf(sim, { x: 0, y: FLOOR, z: 0 }), { at: [{ x: 0, y: FLOOR, z: -2 }], collect: false }));
+    expect(out.ok, out.text).toBe(true);
+    expect(out.text).toContain('裏の水 1 マスを dirt で塞いでから掘った');
+    expect(sim.bot.placedBlocks).toEqual(['dirt@0,64,-3']);
+    expect(sim.world.nameAt(0, FLOOR, -2)).toBe('air');
+    expect(sim.world.nameAt(0, FLOOR, -3)).toBe('dirt');
   });
   it('does not refuse a dig beside water on an open shore (air round the body: the flow harms nothing)', async () => {
     const FLOOR = 64;

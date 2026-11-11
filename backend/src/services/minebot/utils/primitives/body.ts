@@ -213,7 +213,7 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
     const wanted = Math.max(1, Math.round(want.count ?? have));
     const keepOne = KEEP_LAST.test(want.item);
     const count = Math.min(have - (keepOne ? 1 : 0), wanted);
-    if (keepOne && count < wanted) kept.push(`${want.item} の最後の 1 本は投げない（ツルハシは種類ごとに 1 本残す。今の 1 本が壊れた時の予備で、無いと素手で掘ることになる。空きが要るなら丸石などの石を捨てる）`);
+    if (keepOne && count < wanted) kept.push(`${want.item} の最後の 1 本は投げない（ツルハシは種類ごとに 1 本残す。今の 1 本が壊れた時の予備で、無いと素手で掘ることになる。空きが要るなら丸石・土・砂利など別の物を投げる）`);
     if (count <= 0) continue;
     plan.push({ item: want.item, have, wanted, count, keepOne });
   }

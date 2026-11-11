@@ -4,6 +4,7 @@ import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { serverRefusalStepCost } from './serverRefusals.js';
 import { refusedDigBreakCost } from './refusedDigs.js';
+import { sealedBreakCost, wetBreakCost } from './primitives/wetWall.js';
 import { lavaBesideStepCost } from './lavaClearance.js';
 import { soulSandStepCost } from './huntNetherWalk.js';
 import { CustomBot } from '../types.js';
@@ -251,6 +252,9 @@ export function buildMovements(
   (defaultMove as any).exclusionAreasStep.push(serverRefusalStepCost(bot));
   // Blocks a dig rule has just refused (lava behind, a hostile shut out) are not dug through by a route.
   (defaultMove as any).exclusionAreasBreak.push(refusedDigBreakCost(bot));
+  // A block with water behind it is dug only after the water is sealed: a dry way within a few steps is preferred (wetCost), and a plug the body laid itself is not dug out again (sealedBreakCost).
+  (defaultMove as any).exclusionAreasBreak.push(wetBreakCost(bot));
+  (defaultMove as any).exclusionAreasBreak.push(sealedBreakCost(bot));
   // Lava is given room: a step with lava in the next cell costs a detour of eight (see lavaClearance).
   (defaultMove as any).exclusionAreasStep.push(lavaBesideStepCost(bot as any));
   // Soul sand slows the body to 40%: a step onto it costs what the time costs, so a way round is taken when it is not much longer (utils/huntNetherWalk).
