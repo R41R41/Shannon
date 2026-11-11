@@ -18,7 +18,7 @@ import { assessBreathingDig, assessBreathingWork, breathingWorkWords } from '../
 import { digSlowed, installVanillaDigTime } from '../digTimeIn.js';
 import { steadyInWater } from './footing.js';
 import { noteDugCell } from './dugCells.js';
-import { sealWetFaces, wetFaces } from './wetWall.js';
+import { noteSealed, sealWetFaces, wetFaces } from './wetWall.js';
 import { damBlockHeld } from './stanch.js';
 import { place } from './place.js';
 
@@ -268,7 +268,9 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     if (lava) return result(stopped(bot, 'lava_behind', `${placeText(bot, cell)} を掘ると、隣の溶岩 ${cellText({ x: lava.x, y: lava.y, z: lava.z })} が体の所へ流れ込む`, cell));
     // Water behind the cell (run 7, 11/11): its side and top faces are sealed with a cheap block before it is dug, so it opens dry (wetWall). What cannot be sealed is left; a body shut in a tunnel is
     // then stopped as before (a lake's wall opened on it floods what it stands in), an open shore is dug on. A bucket is filled through such a wall by use (wallOpen: the body opens, fills and plugs it).
-    if (!args.wallOpen && !args.take) {
+    // A body already standing in water (a lake bed, a river's logs) digs on: its footing is wet and a seal would be laid cell after cell for nothing.
+    const standingWet = ['water', 'flowing_water'].includes(String(blockAt(bot, feetCell(bot) ?? cell)?.name));
+    if (!args.wallOpen && !args.take && !standingWet) {
       const wetNow = wetFaces(bot, cell);
       if (wetNow.length) {
         const sealed = await sealWetFaces(ctx, cell);
@@ -367,10 +369,11 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     let now = blockAt(bot, cell);
     // Water came in with the hole (the cells behind it were not read, or could not be sealed): a cheap block goes back into the cell at once, where the body can reach it, before the flood spreads.
     let plugged = '';
-    if (now?.name === 'water' && damBlockHeld(bot) && eyeDistance(bot, cell) <= DIG_REACH) {
+    if (!args.wallOpen && !args.take && now?.name === 'water' && damBlockHeld(bot) && eyeDistance(bot, cell) <= DIG_REACH) {
       const dam = damBlockHeld(bot)!;
       const plug = await place(ctx, { block: dam, at: [cell] });
       now = blockAt(bot, cell);
+      if (plug.ok && now?.name !== 'water') noteSealed(bot, cell);
       plugged = plug.ok && now?.name !== 'water' ? `（水が流れ込んだので ${dam} で穴を塞いだ）` : '';
     }
     const refilled = plugged || (now && !isAirLike(now) && now.name !== 'water' && now.name !== 'lava' ? `（掘った後、今は ${now.name}: 上から落ちてきた）` : now && (now.name === 'water' || now.name === 'lava') ? `（掘った後、${now.name} が流れ込んだ）` : '');

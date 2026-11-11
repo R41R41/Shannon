@@ -48,7 +48,7 @@ export function wetCost(bot: any, cell: Cell): number {
 }
 
 type SealedBody = { sealedCells?: Map<string, number> };
-const noteSealed = (bot: any, cell: Cell, now = Date.now()) => {
+export const noteSealed = (bot: any, cell: Cell, now = Date.now()) => {
   const body = bot as SealedBody;
   (body.sealedCells ??= new Map()).set(key(cell), now);
   if (body.sealedCells.size > 256) for (const [at, when] of body.sealedCells) if (now - when > SEALED_MS) body.sealedCells.delete(at);

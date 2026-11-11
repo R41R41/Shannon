@@ -230,7 +230,7 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
       if (cap?.reserve) {
         const reserved = cap.block;
         const entry = plan.find(candidate => candidate.item === reserved);
-        if (entry) entry.count -= 1;
+        if (entry) { entry.count -= 1; entry.wanted -= 1; }
       }
     } else if (result.threat) {
       return stopped(bot, 'threat_exposed', 'drop 止まった threat_exposed: 敵が近い（捨てるのは後で。足元に投げると拾い直すので、穴は掘らず捨てなかった）');
@@ -268,7 +268,6 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
     if (went > 0) thrownKinds.push(entry.item);
     done.push(`${entry.item}×${went} を投げた（残り${inventoryCount(bot, entry.item)}）`);
   }
-  if (cap?.reserve) asked += 1;
   if (kept.length && !done.length) return stopped(bot, 'last_pickaxe_kept', kept.join('。'));
   const progress = () => ({ unit: 'item' as const, done: thrown, left: Math.max(0, asked - thrown) });
   // The hole: the stacks are let fall, the cover goes on, and what lies where is read (the items are the body's own from then on: no pick-up of its own looks at them).

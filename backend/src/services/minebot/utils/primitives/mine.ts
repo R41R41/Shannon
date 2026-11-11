@@ -31,6 +31,11 @@ const MAX_TRACE = 256;
 const DEFAULT_COUNT = 24;
 /** A tree is five to ten logs: a count the planner asked for that one tree cannot give is finished at the next tree of the same kind, if one stands within this many metres of where the last log was dug (run 7: 10 asked, 4 got, the vein "ran out" with a wood beside it). Logs only: an ore vein is not left for another. */
 const HOP_M = 16;
+/** A log is a tree's only with leaves within two cells of it (a village's frame or a built wall of the same wood is not a tree to hop to). */
+const leavesNear = (bot: any, at: { x: number; y: number; z: number }): boolean => {
+  for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) for (let dy = 0; dy <= 4; dy++) if (/leaves$/u.test(String(blockAt(bot, { x: at.x + dx, y: at.y + dy, z: at.z + dz })?.name))) return true;
+  return false;
+};
 const DEFAULT_SECONDS = 60;
 const DEFAULT_MAX_DIG = 16;
 /** The rock a way to an ore is dug through, said in a stop that had no dig list (end1109o04). `go` reads the words stone and dirt as its categories, so cobblestone, sandstone, terracotta, clay and the like are dug as well; never an ore. */
@@ -229,7 +234,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       const from = dugCells[dugCells.length - 1] ?? starts[0];
       try {
         const hits = scanLoadedBlocks(bot as never, [block], { maxDistance: HOP_M + 6, maxHits: 96 }).hits
-          .filter(hit => !seen.has(keyOf({ x: hit.position.x, y: hit.position.y, z: hit.position.z })) && Math.hypot(hit.position.x - from.x, hit.position.y - from.y, hit.position.z - from.z) <= HOP_M && isKind(blockAt(bot, hit.position)?.name))
+          .filter(hit => !seen.has(keyOf({ x: hit.position.x, y: hit.position.y, z: hit.position.z })) && Math.hypot(hit.position.x - from.x, hit.position.y - from.y, hit.position.z - from.z) <= HOP_M && isKind(blockAt(bot, hit.position)?.name) && leavesNear(bot, hit.position))
           .sort((a, b) => Math.hypot(a.position.x - from.x, a.position.z - from.z) - Math.hypot(b.position.x - from.x, b.position.z - from.z));
         // The nearest tree's foot: of the logs within two blocks of the nearest one's column, the lowest (a trunk is mined from the bottom; its top is reached by then).
         const nearest = hits[0];
