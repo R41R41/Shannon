@@ -140,7 +140,7 @@ export class RoutineRecorder {
         const { minOccurrences } = config.routines;
         const existingRoutineSkills = new Set(
             this.routineManager.getAll().flatMap(r =>
-                r.steps
+                (r.steps ?? [])
                     .filter(s => 'skill' in s)
                     .map(s => (s as { skill: string }).skill),
             ),

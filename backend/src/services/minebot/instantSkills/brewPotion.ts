@@ -206,7 +206,8 @@ class BrewPotion extends InstantSkill {
 
   /** windowにアイテムを入れる */
   private async clickWindowItem(window: any, item: any, destSlot: number): Promise<void> {
-    await this.bot.transfer({
+    // mineflayer は実行時に nbt を読むが、同梱の型 TransferOptions には載っていない。
+    const options: Parameters<typeof this.bot.transfer>[0] & { nbt?: unknown } = {
       window,
       itemType: item.type,
       metadata: item.metadata,
@@ -216,7 +217,8 @@ class BrewPotion extends InstantSkill {
       sourceEnd: window.inventoryEnd,
       destStart: destSlot,
       destEnd: destSlot + 1,
-    });
+    };
+    await this.bot.transfer(options);
   }
 
   private async waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {

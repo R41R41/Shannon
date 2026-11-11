@@ -18,6 +18,11 @@ const { goals } = pathfinder;
 
 const log = createLogger('Minebot:Combat:Executor');
 
+// minebotTargetAttacked is emitted for GoalVerifier but is not in CustomBotEvents (shared type); emit it untyped, as before.
+function emitTargetAttacked(bot: CustomBot, target: Entity): void {
+    (bot as unknown as { emit?: (event: string, ...args: unknown[]) => boolean }).emit?.('minebotTargetAttacked', target);
+}
+
 export class ActionExecutor {
     private strafeDirection = 1;
 
@@ -89,7 +94,7 @@ export class ActionExecutor {
             this.bot.deactivateItem(); // Attacks while using a shield are rejected by the server.
             await this.bot.lookAt(target.position.offset(0, target.height * 0.8, 0), true);
             await this.bot.attack(target);
-            this.bot.emit?.('minebotTargetAttacked', target);
+            emitTargetAttacked(this.bot, target);
             return true;
         } catch (e) {
             log.warn(`⚠ meleeAttack: ${e instanceof Error ? e.message : e}`);
@@ -113,7 +118,7 @@ export class ActionExecutor {
 
             await this.bot.lookAt(target.position.offset(0, target.height * 0.8, 0), true);
             await this.bot.attack(target);
-            this.bot.emit?.('minebotTargetAttacked', target);
+            emitTargetAttacked(this.bot, target);
             return true;
         } catch (e) {
             log.warn(`⚠ jumpAttack: ${e instanceof Error ? e.message : e}`);
@@ -129,7 +134,7 @@ export class ActionExecutor {
             this.bot.deactivateItem();
             await this.bot.lookAt(target.position.offset(0, target.height * 0.8, 0), true);
             await this.bot.attack(target);
-            this.bot.emit?.('minebotTargetAttacked', target);
+            emitTargetAttacked(this.bot, target);
 
             // #4 fix: setTimeout ではなく await で後退。次の tick とレースしない
             this.bot.setControlState('back', true);

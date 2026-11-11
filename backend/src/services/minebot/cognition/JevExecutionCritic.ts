@@ -230,7 +230,7 @@ const criticQuestions = {
   failure_cause: {
     type: 'choice',
     instructions: 'Select the dominant CURRENT cause supported by evidence. If current health/oxygen plus threats make continuing immediately unsafe, choose UNSAFE even when an earlier receipt has no_path. NONE means no current blocker. MISSING_RESOURCE means a prerequisite actually blocks the current action, not input items already observed inside a working furnace or final products that are still being made. Use UNKNOWN for insufficient evidence.',
-    criteria: Object.fromEntries(FAILURE_CAUSES.map(value => [value, value.replaceAll('_', ' ').toLowerCase()])),
+    criteria: Object.fromEntries(FAILURE_CAUSES.map(value => [value, value.replace(/_/g, ' ').toLowerCase()])),
   },
   next_control: {
     type: 'choice',

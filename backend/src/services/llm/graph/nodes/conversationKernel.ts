@@ -1,6 +1,6 @@
 import { StructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { runFcaLoop, type FcaBoundTool, type FcaModel, type FcaRunResult } from '../../../../modules/fca/index.js';
+import { runFcaLoop, type FcaBoundTool, type FcaModel, type FcaRunResult, type FcaSignal } from '../../../../modules/fca/index.js';
 import type { ExecutionResult } from '../types.js';
 
 export const REQUEST_TOOLS_NAME = 'request-tools';
@@ -73,7 +73,8 @@ export function langchainToolsForFca(
     async execute(args, signal) {
       try {
         hooks?.onToolStarting?.(tool.name, asArgs(args));
-        const content = await tool.invoke(asArgs(args), { signal });
+        // runFcaLoop は呼び出し元の AbortSignal をそのまま渡す。FcaSignal は AbortSignal の狭い見え方。
+        const content = await tool.invoke(asArgs(args), { signal: signal as AbortSignal });
         const text = typeof content === 'string' ? content : JSON.stringify(content);
         return { content: text };
       } catch (error) {
@@ -100,9 +101,9 @@ export async function runConversationFca(input: {
   const registered = inputTools.find(tool => tool.name === 'task-complete');
   const catalog = [...langchainToolsForFca(inputTools, toolHooks), registered ? {
     ...completeTool,
-    async execute(args, signal) {
+    async execute(args: unknown, signal: FcaSignal) {
       try {
-        const content = await registered.invoke(asArgs(args), { signal });
+        const content = await registered.invoke(asArgs(args), { signal: signal as AbortSignal });
         return { content: typeof content === 'string' ? content : JSON.stringify(content), done: true, value: asArgs(args) };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

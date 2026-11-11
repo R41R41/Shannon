@@ -68,7 +68,7 @@ export class AnthropicStructuredDecisionGateway {
     const record = value as Record<string, unknown>;
     for (const [name, field] of Object.entries(fields)) {
       const item = record[name];
-      if (!Object.hasOwn(record, name) || typeof item !== field.type
+      if (!Object.prototype.hasOwnProperty.call(record, name) || typeof item !== field.type
         || field.type === 'number' && (typeof item !== 'number' || !Number.isFinite(item)
           || field.minimum !== undefined && item < field.minimum || field.maximum !== undefined && item > field.maximum)
         || field.enum && !field.enum.includes(item as string)) throw new Error('MINECRAFT_COGNITION_JSON_INVALID');
@@ -83,7 +83,7 @@ function classifierFields(schema: Record<string, unknown>): Record<string, Field
     || Array.isArray(properties) || !Array.isArray(schema.required)) throw new Error('MINECRAFT_COGNITION_SCHEMA_UNSUPPORTED');
   const fields = properties as Record<string, Field>;
   if (!Object.keys(fields).length || schema.required.length !== Object.keys(fields).length || new Set(schema.required).size !== Object.keys(fields).length
-    || schema.required.some(name => typeof name !== 'string' || !Object.hasOwn(fields, name))) throw new Error('MINECRAFT_COGNITION_SCHEMA_UNSUPPORTED');
+    || schema.required.some(name => typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(fields, name))) throw new Error('MINECRAFT_COGNITION_SCHEMA_UNSUPPORTED');
   for (const field of Object.values(fields)) {
     if (!field || !['number', 'string'].includes(field.type)
       || Object.keys(field).some(key => !['type', 'enum', 'minimum', 'maximum'].includes(key))

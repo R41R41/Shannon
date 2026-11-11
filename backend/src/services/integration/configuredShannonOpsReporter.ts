@@ -96,7 +96,7 @@ function labRunning(): Promise<boolean> {
     execFile('pgrep', ['-f', 'minecraft-campaign-live-probe'], { timeout: 5_000 }, (error, stdout) => {
       // pgrep exits 1 when nothing matches; any other failure is treated as "running", the safe side.
       if (!error) resolve(stdout.trim().length > 0);
-      else resolve((error as NodeJS.ErrnoException & { code?: number | string }).code !== 1);
+      else resolve((error as { code?: unknown }).code !== 1);
     });
   });
 }

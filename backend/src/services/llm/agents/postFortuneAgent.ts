@@ -418,7 +418,7 @@ export class PostFortuneAgent {
     for (const [sign, symbol] of Object.entries(ZODIAC_SYMBOLS)) {
       const labeled = `${symbol} ${sign}`;
       if (out.includes(labeled)) continue;
-      out = out.replaceAll(sign, labeled);
+      out = out.split(sign).join(labeled);
     }
     return out;
   }

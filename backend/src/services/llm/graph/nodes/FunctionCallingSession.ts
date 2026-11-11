@@ -555,7 +555,7 @@ export class FunctionCallingSession {
                     const inventoryDiff = channelAdapter.getInventoryDiff?.();
                     if (inventoryDiff) extra.push({ role: 'system', content: inventoryDiff });
                     try {
-                      const effects = channelAdapter.getActiveEffects?.() ?? this.blackboardAccessor()?.activeEffects;
+                      const effects = channelAdapter.getActiveEffects?.() ?? this.blackboardAccessor?.()?.activeEffects;
                       if (effects?.length) extra.push({ role: 'system', content: `⚠️ 【アクティブ状態効果】${effects.map(e => `${e.name}(Lv${e.amplifier + 1})`).join(', ')}` });
                     } catch { /* optional */ }
                     try {

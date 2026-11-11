@@ -1,6 +1,7 @@
 import { bindMinecraftMemory, revokeMinecraftMemory } from './runtime/memoryContext.js';
 import {
   MinebotInput,
+  Platform,
   MinebotStartOrStopInput,
 } from '@shannon/common';
 import pkg from 'minecrafthawkeye';
@@ -27,6 +28,8 @@ import { Utils } from './utils/index.js';
 import { installPlayerLoadedHandshake } from './utils/playerLoadedHandshake.js';
 import { installRegistryRepairs } from './utils/registryRepairs.js';
 import { installAirSupplyDefault } from './utils/airSupplyDefault.js';
+// 共有の Platform 型に 'minebot:bot' が無いが、画面側が受け取る値なので変えずに型だけ合わせる。
+const MINEBOT_SERVICE = 'minebot:bot' as unknown as Platform;
 import { installUseItemRotation } from './utils/useItemRotation.js';
 import { edgeGuardPlugin } from './utils/edgeGuard.js';
 import { breathingReflexPlugin } from './utils/breathingReflex.js';
@@ -143,7 +146,7 @@ export class MinebotClient extends BaseClient {
     this.connectionEnded = false;
     this.explicitlyDisconnected = false;
     const connectedBot = this.bot;
-    installPlayerLoadedHandshake(connectedBot);
+    installPlayerLoadedHandshake(connectedBot as unknown as Parameters<typeof installPlayerLoadedHandshake>[0]); // CustomBot の on は型が違うが、使うのは spawn だけ
     installRegistryRepairs(connectedBot);
     installAirSupplyDefault(connectedBot);
     // end1108h8: a bow drawn or a shield raised turned the body south on the server (use_item written with rotation 0, 0).
@@ -416,7 +419,7 @@ export class MinebotClient extends BaseClient {
         const result = await this.startBot(data);
         if (!result) return;
         emitWebServiceStatus({
-          service: 'minebot:bot',
+          service: MINEBOT_SERVICE,
           status: this.getStatus(),
         });
       } else if (serviceCommand === 'stop') {
@@ -425,12 +428,12 @@ export class MinebotClient extends BaseClient {
         const result = await this.stopBot(data);
         if (!result) return;
         emitWebServiceStatus({
-          service: 'minebot:bot',
+          service: MINEBOT_SERVICE,
           status: this.getStatus(),
         });
       } else if (serviceCommand === 'status') {
         emitWebServiceStatus({
-          service: 'minebot:bot',
+          service: MINEBOT_SERVICE,
           status: this.getStatus(),
         });
       }
@@ -545,7 +548,7 @@ export class MinebotClient extends BaseClient {
   public lifecycleState(): { phase: 'joined' | 'absent' | 'unknown'; serverName: string | null; uuid: string | null } {
     const bot = this.bot;
     if ((!bot || this.connectionEnded) && !this.autoReconnecting) return { phase: 'absent', serverName: null, uuid: null };
-    if (!bot || this.connectionEnded) return { phase: 'unknown', serverName: this.lastBotData?.serverName ?? null, uuid: null };
+    if (!bot || this.connectionEnded) return { phase: 'unknown', serverName: (this.lastBotData && 'serverName' in this.lastBotData ? this.lastBotData.serverName : null) ?? null, uuid: null };
     return { phase: bot.entity && bot.player?.uuid ? 'joined' : 'unknown', serverName: bot.connectedServerName ?? null, uuid: bot.player?.uuid?.toLowerCase() ?? null };
   }
   /** Uses the existing configured native body, with no old planner fallback or process spawn permission. */

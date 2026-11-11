@@ -17,7 +17,7 @@ const isNotionUrl = (value: unknown): value is string => {
     const url = new URL(value);
     return url.protocol === 'https:'
       && (url.hostname === 'notion.so' || url.hostname === 'www.notion.so')
-      && Boolean(url.pathname.replaceAll('/', ''))
+      && Boolean(url.pathname.replace(/[/]/g, ''))
       && !url.username
       && !url.password;
   } catch {

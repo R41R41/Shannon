@@ -33,7 +33,6 @@ import { EventRouter } from './routing/EventRouter.js';
 import { snapshotMemoryEnvelope } from '../memory/requestMemory.js';
 import { getIdentityBindingLookup } from '../runtime/identityBindingGateway.js';
 import { applyDiscordIdentityMemoryGate, applyWebIdentityMemoryGate } from '../identity/identityMemoryGate.js';
-import { config } from '../../config/env.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -119,10 +118,9 @@ export class LLMService {
       enablePromptHotReload();
 
       // Initialize nodes and build unified Shannon graph
-      const { emotionNode, fca } = await initializeNodes();
+      const { fca } = await initializeNodes();
       this.unifiedFca = fca;
-      (this as any)._emotionNode = emotionNode;
-      this.shannonGraph = buildShannonGraph({ emotionNode, fca });
+      this.shannonGraph = buildShannonGraph({ fca });
 
       // Initialize all agents via orchestrator
       await this.agentOrchestrator.initializeAgents();
@@ -329,10 +327,8 @@ export class LLMService {
 
       // Shannon Graph を再構築（SubTaskPlanner + SubTaskExecutor をルーチン依存付きで組込み）
       const { initializeNodes } = await import('./graph/nodeFactory.js');
-      // emotionNode は再初期化不要 — 既存 FCA の PromptBuilder から取得不可なので
       // buildShannonGraph に routineManager/routineExecutor を渡して再構築
       this.shannonGraph = buildShannonGraph({
-        emotionNode: (this as any)._emotionNode,
         fca: this.unifiedFca,
         routineManager: manager,
         routineExecutor: executor,

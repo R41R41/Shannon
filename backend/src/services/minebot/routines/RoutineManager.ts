@@ -81,7 +81,7 @@ export class RoutineManager {
 
         await this.saveToFile(def);
         this.routines.set(def.name, def);
-        log.info(`Created routine "${def.name}" (${def.steps.length} steps)`, 'green');
+        log.info(`Created routine "${def.name}" (${def.steps?.length ?? 0} steps)`, 'green');
     }
 
     async update(name: string, updates: Partial<RoutineDefinition>): Promise<void> {

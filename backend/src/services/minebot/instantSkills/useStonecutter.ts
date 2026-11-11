@@ -107,7 +107,8 @@ class UseStonecutter extends InstantSkill {
 
           // 開いたコンテナではプレイヤー側スロット番号が通常 inventory
           // と異なるため、slot を直接クリックせず transfer で移す。
-          await this.bot.transfer({
+          // mineflayer's transfer accepts nbt at runtime; the bundled TransferOptions type omits it.
+          const transferOptions = {
             window: stonecutterWindow,
             itemType: currentInput.type,
             metadata: currentInput.metadata,
@@ -117,7 +118,8 @@ class UseStonecutter extends InstantSkill {
             sourceEnd: stonecutterWindow.inventoryEnd,
             destStart: 0,
             destEnd: 1,
-          });
+          };
+          await this.bot.transfer(transferOptions);
           await actionDelay(this.bot, 200);
           log.info(`🪨 石切台入力: ${stonecutterWindow.slots[0]?.name ?? 'empty'} x${stonecutterWindow.slots[0]?.count ?? 0}`);
 

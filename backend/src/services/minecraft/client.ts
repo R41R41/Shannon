@@ -1,5 +1,6 @@
 import {
   MinecraftServerName,
+  Platform,
   ServiceStatus
 } from '@shannon/common';
 import { exec } from 'child_process';
@@ -216,6 +217,8 @@ export class MinecraftClient extends BaseClient {
     });
 
     for (const server of this.VALID_SERVERS) {
+      // The per-server service name 'minecraft:<server>' is not in the shared Platform union (left for a shared-type fix); the web hub routes by this string.
+      const serverService = `minecraft:${server}` as Platform;
       registerServiceCommandHandler(`minecraft:${server}`, async (serviceCommand) => {
         if (this.status !== 'running') return;
         if (serviceCommand === 'start') {
@@ -223,7 +226,7 @@ export class MinecraftClient extends BaseClient {
           logger.info(`MinecraftClient: Start server result: ${JSON.stringify(result)}`);
           const status = await this.getServerStatus(server);
           emitWebServiceStatus({
-            service: `minecraft:${server}`,
+            service: serverService,
             status,
           });
         } else if (serviceCommand === 'stop') {
@@ -231,13 +234,13 @@ export class MinecraftClient extends BaseClient {
           logger.info(`MinecraftClient: Stop server result: ${JSON.stringify(result)}`);
           const status = await this.getServerStatus(server);
           emitWebServiceStatus({
-            service: `minecraft:${server}`,
+            service: serverService,
             status,
           });
         } else if (serviceCommand === 'status') {
           const status = await this.getServerStatus(server);
           emitWebServiceStatus({
-            service: `minecraft:${server}`,
+            service: serverService,
             status,
           });
         }

@@ -64,7 +64,10 @@ export class RoutineExecutor {
         const startTime = Date.now();
         const vars: Record<string, unknown> = { ...params };
         const stepResults: RoutineStepResult[] = [];
-        const totalSteps = this.countSteps(routine.steps);
+        // A routine with only an instruction belongs to the sub-agent executor; before, undefined steps threw here as well.
+        const routineSteps = routine.steps;
+        if (!routineSteps) throw new Error(`Routine "${routine.name}" has no steps`);
+        const totalSteps = this.countSteps(routineSteps);
         const { abortSignal } = options;
 
         log.info(`▶ Routine "${routine.name}" start (${totalSteps} steps)`, 'cyan');
@@ -77,7 +80,7 @@ export class RoutineExecutor {
         this.bot.executingSkill = true;
 
         try {
-            await this.executeSteps(routine.steps, vars, stepResults, abortSignal);
+            await this.executeSteps(routineSteps, vars, stepResults, abortSignal);
 
             const durationMs = Date.now() - startTime;
             const summary = this.buildSummary(routine.name, stepResults, durationMs);

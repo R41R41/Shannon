@@ -193,7 +193,8 @@ class EnchantItem extends InstantSkill {
   }
 
   private async transferToSlot(window: any, item: any, destination: number, count: number): Promise<void> {
-    await this.bot.transfer({
+    // mineflayer は nbt を読む（inventory.js）が、型の TransferOptions に nbt が無いので、型を広げた変数で渡す。
+    const options: Parameters<CustomBot['transfer']>[0] & { nbt?: unknown } = {
       window,
       itemType: item.type,
       metadata: item.metadata,
@@ -203,7 +204,8 @@ class EnchantItem extends InstantSkill {
       sourceEnd: window.inventoryEnd,
       destStart: destination,
       destEnd: destination + 1,
-    });
+    };
+    await this.bot.transfer(options);
   }
 
 }

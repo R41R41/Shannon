@@ -208,8 +208,7 @@ function createExecuteNode(
       getInitialMemory: state._getInitialMemory,
       selectedModel: state.selectedModel,
       classifyMode: state.mode,
-      needsTools: state.needsTools,
-      needsPlanning: state.needsPlanning,
+      // needsTools / needsPlanning は ShannonState に無く、これまでも常に undefined だった（型の誤りで見つかった）。
     });
 
     const runFcaPath = async (): Promise<Partial<ShannonStateType>> => {
@@ -272,7 +271,7 @@ function createExecuteNode(
         const { PromptBuilder } = await import('./nodes/prompt/PromptBuilder.js');
 
         // ツール定義を構築 (Anthropic ネイティブ形式)
-        const tools: import('@anthropic-ai/sdk').Tool[] = [];
+        const tools: import('@anthropic-ai/sdk').default.Tool[] = [];
 
         // task-complete ツール
         tools.push({

@@ -45,10 +45,11 @@ export class DiscordArtifactResponsesExecutor {
 
   constructor(private readonly allTools: StructuredTool[]) {}
 
-  async run(state: FunctionCallingAgentState): Promise<DiscordArtifactResponsesResult> {
+  async run(state: FunctionCallingAgentState, signal?: AbortSignal): Promise<DiscordArtifactResponsesResult> {
+    const { composition, channel } = state;
     const goal = state.userMessage?.trim() ?? '';
-    const platform = state.context?.platform ?? null;
-    const allowed = resolveTaskToolPolicy(goal, platform, state.allowedTools) ?? [];
+    const platform = composition.context?.platform ?? null;
+    const allowed = resolveTaskToolPolicy(goal, platform, composition.allowedTools) ?? [];
     const tools = this.allTools.filter((tool) => allowed.includes(tool.name));
     if (!goal || platform !== 'discord' || tools.length === 0) {
       throw new OpenAIResponsesError('Discord artifact Responses executor received an unsupported task');
@@ -57,18 +58,16 @@ export class DiscordArtifactResponsesExecutor {
     this.configureContextualTools(tools, state);
     const promptBuilder = new PromptBuilder();
     const instructions = promptBuilder.buildSystemPrompt(
-      state.emotionState,
-      state.context,
-      state.environmentState,
-      state.memoryState,
-      state.memoryPrompt,
-      state.relationshipPrompt,
-      state.selfModelPrompt,
-      state.strategyPrompt,
-      state.internalStatePrompt,
-      state.worldModelPrompt,
-      state.classifyMode,
-      state.needsTools,
+      composition.context,
+      composition.environmentState,
+      composition.memoryPrompt,
+      composition.relationshipPrompt,
+      composition.selfModelPrompt,
+      composition.strategyPrompt,
+      composition.internalStatePrompt,
+      composition.worldModelPrompt,
+      composition.classifyMode,
+      composition.needsTools,
     );
     const responseTools = tools.map((tool) => toResponsesTool(tool));
     const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
@@ -79,7 +78,7 @@ export class DiscordArtifactResponsesExecutor {
     let routePolyline: string | null = null;
 
     const model = process.env.SHANNON_RESPONSES_MODEL
-      || state.selectedModel
+      || composition.selectedModel
       || 'gpt-5.6-terra';
     const loop = new OpenAIResponsesToolLoop(config.openaiApiKey, model);
     logger.info(`🧭 Discord artifact executor: Responses API model=${model}, tools=${tools.length}`, 'cyan');
@@ -88,7 +87,7 @@ export class DiscordArtifactResponsesExecutor {
       instructions,
       input: goal,
       tools: responseTools,
-      signal: state.abortSignal,
+      signal,
       maxTurns: Number(process.env.SHANNON_RESPONSES_MAX_TURNS ?? 12),
       reasoningEffort: normalizeReasoningEffort(process.env.SHANNON_RESPONSES_REASONING ?? 'low'),
       execute: async (calls) => {
@@ -104,17 +103,19 @@ export class DiscordArtifactResponsesExecutor {
           {
             goal,
             platform,
-            channelId: state.channelId,
+            channelId: composition.channelId,
             taskId: state.taskId,
-            context: state.context,
+            context: composition.context,
+            envelope: composition.requestEnvelope,
+            signal,
             steps,
             stepCounter,
             lastThinkingContent: null,
-            onToolStarting: state.onToolStarting,
-            onTaskTreeUpdate: state.onTaskTreeUpdate,
+            onToolStarting: channel.onToolStarting,
+            onTaskTreeUpdate: channel.onTaskTreeUpdate,
             routePolyline,
           },
-          state.abortSignal,
+          signal,
         );
         stepCounter = execution.stepCounter;
         routePolyline = execution.routePolyline;
@@ -141,6 +142,7 @@ export class DiscordArtifactResponsesExecutor {
               goal,
               steps,
               state,
+              signal,
             ),
           };
         }
@@ -155,7 +157,7 @@ export class DiscordArtifactResponsesExecutor {
             successfulToolNames.delete('create-travel-brief');
             outputs[createdIndex].output = 'Completion rejected: a route map was explicitly requested but was not embedded. Run compute-route, then create-travel-brief again.';
           } else {
-            const delivery = await this.deliverCreatedArtifact(created.message, goal, toolMap, state, steps);
+            const delivery = await this.deliverCreatedArtifact(created.message, goal, toolMap, state, steps, signal);
             stepCounter = steps.length;
             if (delivery) {
               successfulToolNames.add('send-artifact-on-discord');
@@ -197,9 +199,9 @@ export class DiscordArtifactResponsesExecutor {
         setContext?: (...args: unknown[]) => void;
       };
       if (tool.name === 'ask-user-on-discord') {
-        contextual.setContext?.(state.context ?? null, state.taskId);
+        contextual.setContext?.(state.composition.context ?? null, state.taskId);
       } else if (tool.name === 'update-plan') {
-        contextual.setContext?.(state.channelId, state.taskId);
+        contextual.setContext?.(state.composition.channelId, state.taskId);
       }
     }
   }
@@ -210,6 +212,7 @@ export class DiscordArtifactResponsesExecutor {
     toolMap: Map<string, StructuredTool>,
     state: FunctionCallingAgentState,
     steps: HierarchicalSubTask[],
+    signal?: AbortSignal,
   ): Promise<ResponsesTerminal | null> {
     const artifact = JSON.parse(raw) as {
       artifactId?: string;
@@ -217,8 +220,8 @@ export class DiscordArtifactResponsesExecutor {
       routeMapIncluded?: boolean;
     };
     const sendTool = toolMap.get('send-artifact-on-discord');
-    const channelId = state.context?.discord?.channelId ?? state.channelId;
-    const guildId = state.context?.discord?.guildId;
+    const channelId = state.composition.context?.discord?.channelId ?? state.composition.channelId;
+    const guildId = state.composition.context?.discord?.guildId;
     if (!sendTool || !artifact.artifactId || !channelId || !guildId) return null;
 
     const deliveryStep: HierarchicalSubTask = {
@@ -233,7 +236,14 @@ export class DiscordArtifactResponsesExecutor {
       strategy: 'PDFをDiscordへ添付しています。',
       hierarchicalSubTasks: steps,
       currentSubTaskId: deliveryStep.id,
-    }, 'discord', state.channelId, state.taskId, state.onTaskTreeUpdate);
+    }, {
+      platform: 'discord',
+      channelId: state.composition.channelId,
+      taskId: state.taskId,
+      envelope: state.composition.requestEnvelope,
+      signal,
+      onTaskTreeUpdate: state.channel.onTaskTreeUpdate,
+    });
 
     const rawDelivery = await sendTool.invoke({
       artifactId: artifact.artifactId,
@@ -257,6 +267,7 @@ export class DiscordArtifactResponsesExecutor {
       goal,
       steps,
       state,
+      signal,
     );
   }
 
@@ -266,6 +277,7 @@ export class DiscordArtifactResponsesExecutor {
     goal: string,
     steps: HierarchicalSubTask[],
     state: FunctionCallingAgentState,
+    signal?: AbortSignal,
   ): ResponsesTerminal {
     const taskTree: TaskTreeState = {
       status: status === 'completed' ? 'completed' : 'in_progress',
@@ -275,13 +287,14 @@ export class DiscordArtifactResponsesExecutor {
       hierarchicalSubTasks: steps,
       subTasks: null,
     };
-    this.taskTreePublisher.publishTaskTree(
-      taskTree,
-      'discord',
-      state.channelId,
-      state.taskId,
-      state.onTaskTreeUpdate,
-    );
+    this.taskTreePublisher.publishTaskTree(taskTree, {
+      platform: 'discord',
+      channelId: state.composition.channelId,
+      taskId: state.taskId,
+      envelope: state.composition.requestEnvelope,
+      signal,
+      onTaskTreeUpdate: state.channel.onTaskTreeUpdate,
+    });
     return { status, content, taskTree };
   }
 }

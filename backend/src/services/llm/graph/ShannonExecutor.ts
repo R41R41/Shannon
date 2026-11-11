@@ -1119,9 +1119,10 @@ export class ShannonExecutor {
                                 // 新方式: Haiku サブエージェント
                                 const { SubAgentRoutineExecutor } = await import('../../minebot/routines/SubAgentRoutineExecutor.js');
                                 const subAgent = new SubAgentRoutineExecutor();
+                                const routineBot = this.deps.bot; // the narrowing from the `if` above does not reach into the closure below
                                 const result = await withActionSignal(this.deps.bot, state.abortSignal, () => subAgent.execute(def, toolInput, {
                                     abortSignal: state.abortSignal,
-                                    bot: this.deps.bot,
+                                    bot: routineBot,
                                     onTaskTreeUpdate: state.onTaskTreeUpdate,
                                 }));
                                 resultText = result.summary;

@@ -31,7 +31,7 @@ export function reactionEvidence(input: ReactionObservation, consent: { subjectI
   const signals: Readonly<Record<string, InterestEvidence['signal']>> = {
     '👀': 'interested', '🎮': 'wants_to_play', '📌': 'saved', '🙅': 'less_of_topic',
   };
-  const signal = input.reaction && Object.hasOwn(signals, input.reaction) ? signals[input.reaction] : undefined;
+  const signal = input.reaction && Object.prototype.hasOwnProperty.call(signals, input.reaction) ? signals[input.reaction] : undefined;
   if (!signal) return null;
   return Object.freeze({ evidenceId: input.id, subjectId: input.subjectId, audienceKey: key,
     sourceMessageId: input.sourceMessageId, topicId: input.topicId, signal,

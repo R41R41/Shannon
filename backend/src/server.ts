@@ -32,7 +32,7 @@ import { registerMainRadarRoutes } from './bootstrap/mainRadar.js';
 
 class Server {
   private readonly webAccess = createWebAccess(config.webAuth.firebaseProjectId);
-  private app!: express.Application;
+  private app!: express.Express;
   private llmService: LLMService;
   private discordBot: DiscordBot | null = null;
   private webClient: WebClient | null = null;

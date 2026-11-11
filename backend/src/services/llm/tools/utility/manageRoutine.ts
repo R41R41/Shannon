@@ -93,7 +93,7 @@ export class ManageRoutineTool extends StructuredTool {
                 r.stats.runs > 0
                     ? `${Math.round((r.stats.successes / r.stats.runs) * 100)}%`
                     : 'N/A';
-            return `- routine:${r.name} — ${r.description} [${r.steps.length} steps, ${r.stats.runs} runs, ${rate} success, source: ${r.source}]`;
+            return `- routine:${r.name} — ${r.description} [${r.steps?.length ?? 0} steps, ${r.stats.runs} runs, ${rate} success, source: ${r.source}]`;
         });
 
         return `Registered routines (${routines.length}):\n${lines.join('\n')}`;
@@ -147,7 +147,7 @@ export class ManageRoutineTool extends StructuredTool {
             log.info(`Registered routine tool "routine:${def.name}" in FCA`, 'green');
         }
 
-        return `Routine "${def.name}" created successfully with ${def.steps.length} steps. You can now call it as "routine:${def.name}".`;
+        return `Routine "${def.name}" created successfully with ${def.steps?.length ?? 0} steps. You can now call it as "routine:${def.name}".`;
     }
 
     private async handleEdit(
