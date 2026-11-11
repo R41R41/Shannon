@@ -1828,16 +1828,20 @@ async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     holeTried = true;
     const hole: HoleReading | null = inHole(bot);
     if (!hole) return '';
+    // A dry shaft dug down on purpose, with the goal under the feet: climbing out would throw the depth away and the way would dig it again. The stop stands (the head adds maxDig).
+    const goalY = near().y;
+    if (!hole.wet && goalY < (feetCell(bot)?.y ?? goalY)) return '下へ掘り進めた縦穴の途中（出ずに、この深さから続けられる）';
     if (!holeBlockHeld() && hole.roofDigs === 0) return '穴の中。積める物が無い（ツルハシで掘る物も、置ける建材も持っていない）';
     if (!holeBlockHeld()) return '穴の中。積める物が無い';
     const before = feetCell(bot)?.y ?? hole.toY;
     // The way's counts do not move for this climb: the laid blocks and dug roof are the body's own business, and the way still has its whole budget.
     const dug = state.dug, placed = state.placed;
     let climbed: Awaited<ReturnType<typeof climb>>;
-    try { climbed = await timed('climbMs', () => climb(hole.toY, { digs: 0 })); } finally { state.dug = dug; state.placed = placed; }
+    let usedDug = 0, usedPlaced = 0;
+    try { climbed = await timed('climbMs', () => climb(hole.toY, { digs: 0 })); } finally { usedDug = state.dug - dug; usedPlaced = state.placed - placed; state.dug = dug; state.placed = placed; }
     letGo(bot);
     const rose = (feetCell(bot)?.y ?? before) - before;
-    if (rose >= 1) { holeNote = `穴の底だったので、先に ${rose} 段積んで出た。`; return 'out'; }
+    if (rose >= 1) { holeNote = `${hole.wet ? '水の入った穴' : '穴の底'}だったので、先に ${rose} 段積んで出た（置いた ${usedPlaced} 個・掘った ${usedDug} 個、上限には数えない）。`; return 'out'; }
     return climbed.stop ? `穴の中。出られなかった（${climbed.stop.text.replace(/^go 止まった [a-z_]+: /u, '').slice(0, 60)}）` : '';
   };
 

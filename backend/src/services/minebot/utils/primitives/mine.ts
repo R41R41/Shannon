@@ -318,13 +318,11 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   function digAdvice(cell: Cell, need: number): string {
     if (!Number.isFinite(need) || need <= 0) return '';
     const before = peekMapStop(bot, { kind: 'mine', at: cell, reason: closedWord('limit_dig') }) + peekMapStop(bot, { kind: 'mine', at: cell, reason: closedWord('unreachable') });
-    if (before >= 1) {
-      const above = cellText({ x: cell.x, y: cell.y + 1, z: cell.z });
-      return `同じ所で maxDig を変えても止まった。数を足し直さず、go で ${above} の近くまで行く（range 2、canDig に岩）か、上から掘る（その上のマスから dig で下へ）`;
-    }
     const total = result.road + pocketDug + need;
-    const said = Math.max(total + 2, roadBudget + 2);
-    return `道を掘る上限 ${roadBudget} に着いた。この mine にはあと約 ${need} マス要る（合計 ${total}）。maxDig=${said} で同じ mine`;
+    // A stop again at the same place: the estimate was short once, so it grows with each stop, and the number is still said (the other two ways are only added).
+    const said = Math.max(total + 2 + 3 * before, roadBudget + 2 + 3 * before);
+    const again = before >= 1 ? `（前にも止まった所。数で足りなければ、go で ${cellText({ x: cell.x, y: cell.y + 1, z: cell.z })} の近くまで行く（range 2、canDig に岩）か、上から掘る）` : '';
+    return `道を掘る上限 ${roadBudget} に着いた。この mine にはあと約 ${need} マス要る（合計 ${total}）。maxDig=${said} で同じ mine${again}`;
   }
 
   /**

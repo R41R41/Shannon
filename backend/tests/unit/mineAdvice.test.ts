@@ -31,15 +31,16 @@ describe('mine: the advice at the way\'s dig limit', () => {
     expect(outcome.text.indexOf('maxDig=')).toBeLessThan(100);
   }, 200_000);
 
-  it('the second stop at the same place says no number, but go near it or dig from above', async () => {
+  it('the second stop at the same place still says a number (larger), and adds go near it or dig from above', async () => {
     const g = build();
     noteMapStop(g.bot, { kind: 'mine', at: ORE, reason: closedWord('limit_dig') });
     expect(peekMapStop(g.bot, { kind: 'mine', at: ORE, reason: closedWord('limit_dig') })).toBe(1);
     const outcome = await mine(stepContext(g.bot, undefined, 100), { block: 'iron_ore', at: [ORE], count: 1, canDig: ['stone'], maxDig: 3, seconds: 90 });
     expect(outcome.reason).toBe('limit_dig');
-    expect(outcome.text).toContain('同じ所で maxDig を変えても止まった');
+    expect(outcome.text).toContain('前にも止まった所');
     expect(outcome.text).toContain('(17,65,8)');
-    expect(outcome.text).not.toMatch(/maxDig=\d/u);
+    const total = Number(/合計 (\d+)/u.exec(outcome.text)?.[1]);
+    expect(Number(/maxDig=(\d+)/u.exec(outcome.text)?.[1])).toBeGreaterThanOrEqual(total + 5);
     // The peek only reads.
     expect(peekMapStop(g.bot, { kind: 'mine', at: ORE, reason: closedWord('limit_dig') })).toBe(1);
   }, 200_000);

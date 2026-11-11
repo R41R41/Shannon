@@ -62,6 +62,27 @@ describe('go: out of a hole held by the limit of digs', () => {
   });
 });
 
+describe('go: wet pit and dry shaft dug on purpose', () => {
+  it('(f) a pit with water in it is climbed out of, and the note says how many were laid and dug', async () => {
+    const wet = over(shaft, box('water', 0, 0, 60, 62, 0, 0));
+    const sim = makeSim(wet, { start: [0.5, 60, 0.5], items: [PICK, DIRT(12)] });
+    expect(inHole(sim.bot)).toMatchObject({ wet: true });
+    const outcome = await drive(sim, run(sim, { canDig: ['stone'], maxDig: 1 }));
+    expect(outcome.ok).toBe(true);
+    expect(Math.floor(sim.bot.entity.position.y)).toBeGreaterThanOrEqual(FLOOR);
+    expect(sim.bot.placedBlocks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(g) a dry shaft with the goal under the feet is not climbed out of', async () => {
+    const deep = over(flat, box('air', 0, 0, 60, 63, 0, 0));
+    const sim = makeSim(deep, { start: [0.5, 63, 0.5], items: [PICK, DIRT(12)] });
+    const outcome = await drive(sim, run(sim, { canDig: ['stone'], maxDig: 1 }, { x: 0, y: 40, z: 6 }));
+    expect(outcome.ok).toBe(false);
+    expect(sim.bot.placedBlocks).toEqual([]);
+    expect(Math.floor(sim.bot.entity.position.y)).toBeLessThan(FLOOR);
+  });
+});
+
 describe('inHole', () => {
   it('(b) is a hole for a 1x1 shaft and not for a room that can be walked out of', () => {
     const sim = makeSim(shaft, { start: [0.5, 60, 0.5], items: [DIRT(2)] });
