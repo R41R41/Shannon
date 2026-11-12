@@ -661,6 +661,23 @@ describe('obsidian: the drop kept from lava, and no block on the water for nothi
     expect(outcome.ok).toBe(false);
     expect(outcome.reason).toBe('lava_danger');
   });
+  it('in the Nether pours no water over set obsidian (it boils away and the bucket is lost): lava under it is said, lava beside it is put out with a block', async () => {
+    const under = makeHandsSim(over(flat, box('obsidian', 8, 8, 63, 63, 0, 0), box('lava', 8, 8, 62, 62, 0, 0)), { items: stacks(PICK, WATER) });
+    under.bot.game.dimension = 'the_nether';
+    const refused = await drive(under, run(under, { at: [at(8, 63, 0)] }));
+    expect(refused.reason).toBe('lava_danger');
+    expect(refused.text).toContain('ネザーでは水が蒸発する');
+    expect(under.bot.poured).toEqual([]);
+    expect(under.count('water_bucket')).toBe(1);
+    expect(under.nameAt(8, 63, 0)).toBe('obsidian');
+    const side = makeHandsSim(over(flat, box('obsidian', 8, 8, 63, 63, 0, 0), box('lava', 9, 9, 63, 63, 0, 0)), { items: stacks(PICK, WATER, DIRT) });
+    side.bot.game.dimension = 'the_nether';
+    const dug = await drive(side, run(side, { at: [at(8, 63, 0)], canPlace: ['dirt'], maxPlace: 2 }));
+    expect(dug.ok).toBe(true);
+    expect(side.bot.poured).toEqual([]);
+    expect(side.count('obsidian')).toBe(1);
+    expect(side.count('water_bucket')).toBe(1);
+  });
   it('lays nothing on its own water over the hole (the cover is the hand\'s), with blocks in the pack', async () => {
     const sim = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK, DIRT) });
     const first = await drive(sim, run(sim, { at: [at(8, 63, 0)] }));

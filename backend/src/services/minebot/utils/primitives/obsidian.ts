@@ -3,6 +3,7 @@ import { feetCell, type BlockReader, type Cell } from '../localMap.js';
 import { dropBurns, dropBurnsIn, dropRisk } from '../dropFate.js';
 import { ownedAt } from '../ownedBlocks.js';
 import { blocksKeepDrop } from './dropGuard.js';
+import { waterReachesBody } from './wetWall.js';
 import { blackBoxOf } from '../blackbox.js';
 import { blockInSight } from '../probeTools.js';
 import { cellText, freeSlots, inventoryCount, stopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
@@ -237,8 +238,11 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   if (live.length && !inventoryCount(bot, 'water_bucket')) {
     return stop('no_bucket', inventoryCount(bot, 'bucket') ? '水の入ったバケツが無い（空の bucket だけ。先に水源で汲む）' : '水の入ったバケツ（water_bucket）を持っていない', live[0]);
   }
-  // Water does not stay in the Nether: it steams away where it is poured.
-  if (live.length && dimensionOf(bot).includes('nether')) return stop('stuck', 'ネザーでは水を注いでも蒸発して溶岩が固まらない（オーバーワールドの溶岩で）', live[0]);
+  // Water does not stay in the Nether: it steams away where it is poured (the bucket comes back empty). Set obsidian there is dug only where blocks keep its drop.
+  const inNether = dimensionOf(bot).includes('nether');
+  /** Water can be poured here and now (a water bucket held, not in the Nether). */
+  const waterUsable = () => !inNether && inventoryCount(bot, 'water_bucket') > 0;
+  if (live.length && inNether) return stop('stuck', 'ネザーでは水を注いでも蒸発して溶岩が固まらない（オーバーワールドの溶岩で）', live[0]);
   const pick = pickOf(bot);
   if (!pick) return stop('no_tool', 'ダイヤのツルハシ（diamond_pickaxe か netherite_pickaxe）を持っていない', live[0] ?? mineOnly[0]);
   // Run 46 (hold 6): the pack was full (36 of 36); two obsidian were made and dug, and neither could be picked up (no free slot, no obsidian stack to join): 117 s, 0 obsidian.
@@ -360,8 +364,12 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     return inventoryCount(bot, 'water_bucket') >= bucketsAtStart;
   };
 
-  /** The obsidian at `lava` dug, from a place that reaches it and is clear of lava; null when it is, else why not. */
-  const mineAt = async (lava: Cell, covered = false): Promise<Why | null> => {
+  /**
+   * The obsidian at `lava` dug, from a place that reaches it and is clear of lava; null when it is, else why not. `cover`: the hand's own water left over the hole,
+   * dug from a stand it does not run onto (wetWall.waterReachesBody, the check the drop's guard makes before it pours: feet level with the water on open ground, over it in a tunnel).
+   */
+  const mineAt = async (lava: Cell, cover: Cell | null = null): Promise<Why | null> => {
+    const covered = !!cover;
     const refused = new Set<string>();
     let last: Why = { code: 'unreachable', text: `${cellText(lava)} を掘れる所に立てない（届く 4.8m 内に、見えて、溶岩の無い立てる所が無い）`, at: lava };
     for (let attempt = 0; attempt < MAX_DIG_TRIES; attempt++) {
@@ -372,7 +380,11 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       const guardOut = (stand: Cell) => guardCells.some(cell => eyeTo(stand, cell) > USE_REACH);
       const rank = (stand: Cell) => (sameCell(stand, here) && !guardOut(stand) ? -100 : 0) + (stand.y > lava.y ? 0 : 8) + (isWater(read(stand.x, stand.y, stand.z)) ? 20 : 0)
         + (guardOut(stand) ? 12 : 0) + Math.hypot(stand.x - here.x, stand.z - here.z);
-      const stand = standCells(read, lava, 6, lava.y - 1, lava.y + 4, true).filter(cell => !refused.has(keyOf(cell)) && diggableFrom(read, cell, lava)).sort((a, b) => rank(a) - rank(b))[0];
+      const reaching = standCells(read, lava, 6, lava.y - 1, lava.y + 4, true).filter(cell => !refused.has(keyOf(cell)) && diggableFrom(read, cell, lava));
+      const stand = reaching.filter(cell => !cover || !waterReachesBody(bot, cover, cell, 0)).sort((a, b) => rank(a) - rank(b))[0];
+      if (!stand && cover && reaching.length) {
+        return { code: 'lava_danger', text: `${cellText(lava)} を掘れる所は、周りの溶岩を固めるためにかけた水 ${cellText(cover)} が体に流れる所だけ（足が水と同じ高さ・囲まれた所なら水より 1 段上の立ち位置が要る）`, at: lava };
+      }
       if (!stand) return last;
       const moved = await moveTo(ctx, stand);
       if (moved) { refused.add(keyOf(stand)); counts.restands++; last = { code: 'unreachable', text: `${cellText(stand)} に着けない: ${moved.text.slice(0, 70)}`, at: stand }; continue; }
@@ -514,8 +526,9 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   const oneSource = async (lava: Cell, pool?: Cell[]): Promise<Why | null> => {
     let waterCell: Cell | null = null;
     let setHard = read(lava.x, lava.y, lava.z)?.name === 'obsidian';
-    // Run 8: water is poured over set obsidian only where blocks cannot keep its drop (lava right under it, or no block allowed or held).
-    let needsCover = setHard && needsWater(lava) && inventoryCount(bot, 'water_bucket') > 0;
+    // Run 8: water is poured over set obsidian only where blocks cannot keep its drop (lava right under it, or no block allowed or held). Never in the Nether:
+    // the water boils away and the bucket is lost (1111 review); the dig then keeps the drop with blocks or refuses and says why.
+    let needsCover = setHard && needsWater(lava) && waterUsable();
     const excluded = new Set<string>();
     let last: Why = { code: 'unreachable', text: `${cellText(lava)} に水を注げる所へ行けない`, at: lava };
     let carved = false;
@@ -594,7 +607,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     }
     if (!obsidianRoom()) { if (waterLeft && await scoopBack(waterLeft)) waterLeft = null; return { code: 'inventory_full', text: fullWords(), at: lava }; }
     const beforeDig = inventoryCount(bot, 'obsidian');
-    const failure = await mineAt(lava, covered);
+    const failure = await mineAt(lava, covered ? water : null);
     if (failure) {
       if (waterLeft && await scoopBack(waterLeft)) waterLeft = null;
       return failure;
@@ -661,7 +674,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       const stage = (cell: Cell) => {
         if (read(cell.x, cell.y, cell.z)?.name !== 'obsidian') return 3;
         if (!dropBurnsIn(bot as never, new Vec3(cell.x, cell.y, cell.z))) return 0;
-        return !needsWater(cell) || inventoryCount(bot, 'water_bucket') > 0 || waterLeft ? 1 : 2;
+        return !needsWater(cell) || waterUsable() || waterLeft ? 1 : 2;
       };
       // Take the safe, solidified edge first. Re-evaluate after each dig/pour: both footing and lava change.
       const remaining = [...pending.values()].filter(cell => stage(cell) < 3 || !triedPours.has(keyOf(cell)))

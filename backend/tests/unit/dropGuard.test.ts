@@ -100,9 +100,18 @@ describe('the drop kept before the dig (run 8)', () => {
     const sim = makeHandsSim(worldWith({ '3,64,0': 'obsidian', '3,63,0': 'lava' }), { start: [0.5, FLOOR, 0.5], items: [PICK, WATER] });
     const out = await drive(sim, dig(ctxOf(sim), { at: [{ x: 3, y: FLOOR, z: 0 }] }));
     expect(out.reason).toBe('drop_would_burn');
-    expect(out.text).toContain('上に水をかけると頭に流れる（1 段上から掘れば水をかけられる）');
+    expect(out.text).toContain('上に水をかけると頭に流れる（1 段上・囲まれた所なら 2 段上から掘れば水をかけられる）');
     expect(sim.bot.poured).toEqual([]);
     expect(sim.nameAt(3, FLOOR, 0)).toBe('obsidian');
+  });
+  it('in a tunnel pours no water at the feet height either (it fills the tunnel), and says two steps up; on open ground one step up pours', async () => {
+    const walls = { ...Object.fromEntries([-1, 0, 1, 2, 3, 4].flatMap(x => [64, 65].flatMap(y => [`${x},${y},1`, `${x},${y},-1`]).map(k => [k, 'stone']))), '3,62,0': 'lava' };
+    const sim = makeHandsSim(worldWith(walls), { start: [0.5, FLOOR, 0.5], items: [PICK, WATER] });
+    const out = await drive(sim, dig(ctxOf(sim), { at: [OBSIDIAN] }));
+    expect(out.reason).toBe('drop_would_burn');
+    expect(out.text).toContain('上に置く水が囲まれた足元に流れる（囲まれた所では 2 段上から掘れば水をかけられる）');
+    expect(sim.bot.poured).toEqual([]);
+    expect(sim.nameAt(3, 63, 0)).toBe('obsidian');
   });
   it('digs as before when the drop is not wanted (collect:false), and lays nothing', async () => {
     const sim = makeHandsSim(worldWith({ '4,63,0': 'lava' }), { start: [0.5, FLOOR, 0.5], items: [PICK, DIRT] });

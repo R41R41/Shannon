@@ -113,6 +113,7 @@ export async function guardDrop(ctx: StepContext, cell: Cell, options: DropGuard
     if (!left && risk.under === 'direct') {
       const over = { x: cell.x, y: cell.y + 1, z: cell.z };
       const top = blockAt(bot, over);
+      const feet = feetCell(bot as never);
       if (top?.name === 'water') covered = true;
       else {
         const below = plain(risk.below!);
@@ -122,8 +123,11 @@ export async function guardDrop(ctx: StepContext, cell: Cell, options: DropGuard
         else if (dimensionOf(bot).includes('nether')) why = 'ネザーでは水が蒸発する';
         else if (inventoryCount(bot, 'water_bucket') <= 0) why = '水入りバケツを持っていない';
         // A source over the block runs onto the body when it lies at the head's height or above (the lake face at the feet's height: the water
-        // falls from the head's cell onto the feet, the dig goes five times slower, the body is pushed). Dug from a step higher, it lands at the feet's height or under.
-        else if (waterReachesBody(bot, over, feetCell(bot as never), 0)) why = '上に水をかけると頭に流れる（1 段上から掘れば水をかけられる）';
+        // falls from the head's cell onto the feet, the dig goes five times slower, the body is pushed), and at the feet's height when the body is shut in
+        // (wetWall.waterReachesBody: it fills the tunnel and pushes the body). So the feet stand a step over the block on open ground, two steps in a tunnel.
+        else if (waterReachesBody(bot, over, feet, 0)) why = feet && feet.y === over.y
+          ? '上に置く水が囲まれた足元に流れる（囲まれた所では 2 段上から掘れば水をかけられる）'
+          : '上に水をかけると頭に流れる（1 段上・囲まれた所なら 2 段上から掘れば水をかけられる）';
         else if (!isAirLike(top)) why = `上 ${cellText(over)} が ${top?.name ?? '未ロード'} で水を置けない`;
         else if (eyeDistance(bot, over) > USE_REACH) why = `上 ${cellText(over)} に届かない`;
         else {

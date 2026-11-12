@@ -23,6 +23,7 @@ import { damBlockHeld, waterLevel } from './stanch.js';
 import { place } from './place.js';
 import { stepIntoReach } from './getNear.js';
 import { guardDrop, dropWouldBurn } from './dropGuard.js';
+import { dimensionOf } from './walk.js';
 import { dropRisk } from '../dropFate.js';
 
 /**
@@ -306,7 +307,7 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
         if (pouredOver) { await takeWaterBack(ctx, pouredOver); pouredCells.splice(pouredCells.indexOf(pouredOver), 1); }
         const where = guarded.left.where === 'under' ? '下' : guarded.left.where === 'fall' ? '落ちる先' : guarded.left.where === 'over' ? '上' : '横';
         refusedBurn.push(`${cellText(cell)} は掘らなかった: ${where} ${cellText(guarded.left.at)} が溶岩で落とし物が焼ける`
-          + `（${guarded.left.why}。石を持てば体が埋める・下の溶岩は水入りバケツで上に水をかける。焼けてよいなら collect:false）`);
+          + `（${guarded.left.why}。石を持てば体が埋める${dimensionOf(bot).includes('nether') ? '（ネザーでは水は使えない）' : '・下の溶岩は水入りバケツで上に水をかける'}。焼けてよいなら collect:false）`);
         continue;
       }
     }
