@@ -29,12 +29,12 @@ interface ScanBot {
 const SECTION_VOLUME = 4096;
 
 export function scanLoadedBlocks(bot: ScanBot, names: Iterable<string>,
-  options: { maxHits?: number; maxDistance?: number } = {}): LoadedBlockScan {
+  options: { maxHits?: number; maxDistance?: number; sourceOnly?: boolean } = {}): LoadedBlockScan {
   return scanLoadedBlocksMany(bot, [{ names, ...options }])[0];
 }
 
 /** One search of `scanLoadedBlocksMany`: the names, and its own radius and number of hits. */
-export interface LoadedBlockQuery { names: Iterable<string>; maxHits?: number; maxDistance?: number }
+export interface LoadedBlockQuery { names: Iterable<string>; maxHits?: number; maxDistance?: number; /** Only a fluid's source (its first state, level 0): a lake's flows do not fill maxHits. */ sourceOnly?: boolean }
 
 /**
  * Several searches in one walk over the loaded chunks (the map's marks ask for ten kinds of block at three radii every few blocks the body
@@ -49,18 +49,19 @@ export function scanLoadedBlocksMany(bot: ScanBot, queries: LoadedBlockQuery[]):
     result: { hits: [], columns: 0, reachMetres: 0, sectionsScanned: 0 }, furthestKept: Infinity, threshold: Infinity, done: false }));
   // Every state wanted, and which searches want it.
   const wanted = new Map<number, { name: string; by: Search[] }>();
-  for (const search of searches) {
+  searches.forEach((search, index) => {
+    const query = queries[index];
     for (const name of search.names) {
       const block = bot.registry.blocksByName[name];
       if (block?.minStateId === undefined || block.maxStateId === undefined) continue;
-      for (let state = block.minStateId; state <= block.maxStateId; state++) {
+      for (let state = block.minStateId; state <= (query.sourceOnly ? block.minStateId : block.maxStateId); state++) {
         const entry = wanted.get(state);
         if (!entry) wanted.set(state, { name, by: [search] });
         else if (!entry.by.includes(search)) entry.by.push(search);
       }
     }
     if (search.maxHits <= 0 || ![...search.names].some(name => bot.registry.blocksByName[name]?.minStateId !== undefined && bot.registry.blocksByName[name]?.maxStateId !== undefined)) search.done = true;
-  }
+  });
   if (!wanted.size) return searches.map(search => search.result);
   const origin = bot.entity?.position ?? new Vec3(0, 0, 0);
   const ox = origin.x, oy = origin.y, oz = origin.z;

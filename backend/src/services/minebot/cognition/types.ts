@@ -230,9 +230,9 @@ export interface WorldObservation {
   woodNear?: { logs: number; trees: number; withinM: number };
   /**
    * What lies near, by purpose (utils/nearbyResources): wood (logs and trees within 128 m, the nearest three trees by their foot), food_animal (per kind, within 48 m), food_village (hay and fields, within 128 m),
-   * ore (the marks' own), bed, water. Each: how many, how far the count reaches (range), the nearest places as full coordinates. The body only lists; what is enough is the planner's.
+   * ore (the marks' own), bed, water, lava (pools of sources within 96 m at any height, overworld; `pools` and a note per pool: sources, across, up or down, covered). Each: how many, how far the count reaches (range), the nearest places as full coordinates. The body only lists; what is enough is the planner's.
    */
-  nearbyResources?: Array<{ purpose: 'wood' | 'food_animal' | 'food_village' | 'ore' | 'bed' | 'water'; kind: string; count: number; range: number; trees?: number; sites: Array<{ x: number; y: number; z: number; note?: string }> }>;
+  nearbyResources?: Array<{ purpose: 'wood' | 'food_animal' | 'food_village' | 'ore' | 'bed' | 'water' | 'lava'; kind: string; count: number; range: number; trees?: number; pools?: number; sites: Array<{ x: number; y: number; z: number; note?: string }> }>;
   /**
    * How the body came to be where it is, said for two minutes after it: reconnect (the connection dropped and the body went back in by
    * itself; it did not die: died is false and the place is where it was), respawn (it died; died is true), portal (another

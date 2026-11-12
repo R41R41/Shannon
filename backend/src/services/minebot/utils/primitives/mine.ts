@@ -280,7 +280,8 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       }
     }
     attempts.set(key, (attempts.get(key) ?? 0) + 1);
-    const outcome = await dig(ctx, { at: [cell], tool: args.tool, collect: false });
+    // Run 8: an ore over lava keeps its drop where blocks can do it (dropGuard: the air it would fall through filled, at most two blocks of the cheap ones); dug anyway when they cannot.
+    const outcome = await dig(ctx, { at: [cell], tool: args.tool, collect: false, ...(collect ? { keepDrop: 'try' as const, guardMaxPlace: 2 } : {}) });
     if (outcome.ok) {
       failsInARow = 0;
       result.dug++; sincePick++;

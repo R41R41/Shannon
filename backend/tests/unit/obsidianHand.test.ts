@@ -629,3 +629,44 @@ describe('obsidian: the numbers come first in a stop line (run 48, hold 3)', () 
     expect(outcome.text.slice(0, 160)).toContain('黒曜石 1 個');
   });
 });
+
+describe('obsidian: the drop kept from lava, and no block on the water for nothing (run 8, 11/13)', () => {
+  const DIRT: Stack = { name: 'dirt', count: 8 };
+  it('puts out the lava beside set obsidian with a block it may lay (canPlace), counted in maxPlace, and pours no water for it', async () => {
+    const sim = makeHandsSim(over(flat, box('obsidian', 8, 8, 63, 63, 0, 0), box('lava', 9, 9, 63, 63, 0, 0)), { items: stacks(PICK, DIRT) });
+    const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)], canPlace: ['dirt'], maxPlace: 2 }));
+    expect(outcome.ok).toBe(true);
+    expect(sim.bot.placedBlocks).toEqual(['dirt@9,63,0']);
+    expect(sim.bot.poured).toEqual([]);
+    expect(sim.count('obsidian')).toBe(1);
+    expect(outcome.text).toContain('足場 1 個');
+  });
+  it('does not lay a block it was not let lay: with no canPlace and no water, the obsidian beside lava is not dug and that is said', async () => {
+    const sim = makeHandsSim(over(flat, box('obsidian', 8, 8, 63, 63, 0, 0), box('lava', 9, 9, 63, 63, 0, 0)), { items: stacks(PICK, DIRT) });
+    const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)] }));
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toBe('lava_danger');
+    expect(outcome.text).toContain('落とし物が溶岩で焼けるので掘らなかった');
+    expect(sim.bot.placedBlocks).toEqual([]);
+    expect(sim.nameAt(8, 63, 0)).toBe('obsidian');
+    expect(counts(outcome)!.restands).toBe(0);
+    expect(outcome.text).toContain('固まって掘れていない黒曜石 1 マス・水入りバケツ なし');
+  });
+  it('with lava right under it and neither block nor water, never digs it silently; the safe one is dug first', async () => {
+    const sim = makeHandsSim(over(flat, box('obsidian', 8, 9, 63, 63, 0, 0), box('lava', 9, 9, 62, 62, 0, 0)), { items: stacks(PICK) });
+    const outcome = await drive(sim, run(sim, { at: [at(9, 63, 0), at(8, 63, 0)], count: 2 }));
+    expect(sim.bot.dugBlocks[0]).toContain('8,63,0');
+    expect(sim.nameAt(9, 63, 0)).toBe('obsidian');
+    expect(sim.count('obsidian')).toBe(1);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toBe('lava_danger');
+  });
+  it('lays nothing on its own water over the hole (the cover is the hand\'s), with blocks in the pack', async () => {
+    const sim = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK, DIRT) });
+    const first = await drive(sim, run(sim, { at: [at(8, 63, 0)] }));
+    expect(first.ok).toBe(true);
+    expect(sim.bot.placedBlocks).toEqual([]);
+    expect(first.text).not.toContain('裏の水');
+    expect(sim.count('water_bucket')).toBe(1);
+  });
+});

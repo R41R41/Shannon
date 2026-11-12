@@ -1,4 +1,4 @@
-import type { Cell } from '../localMap.js';
+import { feetCell, type Cell } from '../localMap.js';
 import { blockAt, eyeDistance, USE_REACH, type StepContext } from './common.js';
 import { damBlockHeld, damBlocksHeld, waterLevel } from './stanch.js';
 import { place } from './place.js';
@@ -10,7 +10,7 @@ import { place } from './place.js';
  * dug), seals them before the dig (`sealWetFaces`: a cheap block on each water cell, against the cell's own face) and writes the sealed cells down so a route does not dig its own plug out
  * (`sealedBreakCost`). The planner is not asked: it is the hand's own footing. What cannot be sealed (no block, out of reach, refused) is left and said.
  */
-export interface WetFace { at: Cell; up: boolean; source: boolean }
+export interface WetFace { at: Cell; up: boolean; source: boolean; /** The water's level: 0 a source, 1-7 a flow, 8 and up water falling. */ level: number }
 export interface SealResult { sealed: Cell[]; left: WetFace[]; block: string | null; words: string }
 
 const SIDES: Array<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]];
@@ -32,11 +32,42 @@ export function wetFaces(bot: any, cell: Cell): WetFace[] {
   const faces: WetFace[] = [];
   const probe = (at: Cell, up: boolean) => {
     const level = waterLevel(bot, at);
-    if (level !== null) faces.push({ at, up, source: level === 0 });
+    if (level !== null) faces.push({ at, up, source: level === 0, level });
   };
   for (const [dx, dy, dz] of SIDES) probe({ x: cell.x + dx, y: cell.y + dy, z: cell.z + dz }, false);
   probe({ x: cell.x, y: cell.y + 1, z: cell.z }, true);
   return faces;
+}
+
+/**
+ * The body stands in a tunnel or a shaft (4 or more of the 8 cells round its feet and head are solid): water let in has nowhere to go but the body's own cell. On an open shore (a log, sand
+ * or a pillar block beside a pond) the flow harms nothing and the dig goes on. (Here and not in dig, which imports this file.)
+ */
+export function bodyEnclosed(bot: any, feet: Cell): boolean {
+  let solid = 0;
+  for (const dy of [0, 1]) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+    if (blockAt(bot, { x: feet.x + dx, y: feet.y + dy, z: feet.z + dz })?.boundingBox === 'block') solid++;
+  }
+  return solid >= 4;
+}
+
+/**
+ * Run 8 (11/13, the obsidian at y -55 from a body at -54: 28 blocks laid on water, none of them needed; the owner: "黒曜石の上に無駄にブロックを置いてから掘ってる"):
+ * whether the water let into `cell` reaches the body. Water runs down and sideways, never up: a cell under the feet lets nothing onto them (the column under the
+ * feet is footingDrop's and footingWater's). A cell at the head's height or over it lets water onto the head (breath, a fivefold dig, the run 7 lake). At the feet's
+ * height only a source or a falling stream harms, and only a body shut in a tunnel (it fills the tunnel and pushes the body); a thin flow cut from its source dries
+ * in a few seconds and only wets the feet. A body whose place is not known is taken as reached.
+ */
+export function waterReachesBody(bot: any, cell: Cell, feet: Cell | null, level: number): boolean {
+  if (!feet) return true;
+  if (cell.y < feet.y) return false;
+  if (cell.y > feet.y) return true;
+  return (level === 0 || level >= 8) && bodyEnclosed(bot, feet);
+}
+
+/** The faces of `cell` whose water would reach the body if the cell were dug (`waterReachesBody`): the ones a seal is for. */
+export function harmfulWetFaces(bot: any, cell: Cell, feet: Cell | null = feetCell(bot)): WetFace[] {
+  return wetFaces(bot, cell).filter(face => waterReachesBody(bot, cell, feet, face.level));
 }
 
 /** The price of digging `cell` for a route, in steps: nothing dry costs 0. */
@@ -79,12 +110,13 @@ export function wetBreakCost(bot: unknown): (block: { position?: Cell }) => numb
 }
 
 /**
- * Seals the water cells touching `cell` before it is dug: a cheap block laid on each, nearest to the eyes first (at most MAX_FACES, FACE_MS each, nothing beyond the hand's own time).
+ * Seals the water cells touching `cell` that would reach the body (harmfulWetFaces) before it is dug: a cheap block laid on each, nearest to the eyes first (at most MAX_FACES, FACE_MS each, nothing beyond the hand's own time).
  * A face the hand cannot reach, a refused place or no block held is left (`left`) and said. The cell itself is written down as sealed when all its faces held.
  */
 export async function sealWetFaces(ctx: StepContext, cell: Cell): Promise<SealResult> {
   const bot = ctx.bot;
-  const faces = wetFaces(bot, cell);
+  // Only the water that would reach the body (run 8: the water over a block dug from above it was sealed 28 times for nothing).
+  const faces = harmfulWetFaces(bot, cell);
   if (!faces.length) return { sealed: [], left: [], block: null, words: '' };
   const block = damBlockHeld(bot);
   const left: WetFace[] = [];

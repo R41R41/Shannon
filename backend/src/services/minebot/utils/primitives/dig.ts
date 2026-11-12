@@ -18,10 +18,12 @@ import { assessBreathingDig, assessBreathingWork, breathingWorkWords } from '../
 import { digSlowed, installVanillaDigTime } from '../digTimeIn.js';
 import { steadyInWater } from './footing.js';
 import { noteDugCell } from './dugCells.js';
-import { noteSealed, sealWetFaces, wetFaces } from './wetWall.js';
-import { damBlockHeld } from './stanch.js';
+import { bodyEnclosed, harmfulWetFaces, noteSealed, sealWetFaces, waterReachesBody } from './wetWall.js';
+import { damBlockHeld, waterLevel } from './stanch.js';
 import { place } from './place.js';
 import { stepIntoReach } from './getNear.js';
+import { guardDrop, dropWouldBurn } from './dropGuard.js';
+import { dropRisk } from '../dropFate.js';
 
 /**
  * dig: the cells in order (design mb-llm-centric 2.3). The tool is the one asked for, else the quickest carried that makes the block
@@ -49,6 +51,27 @@ export interface DigArgs {
    * block that water touches. Not a hand's field.
    */
   wallOpen?: boolean;
+  /**
+   * Run 8 (11/13, six obsidian burnt): the drop of the cell is kept from lava before it is dug (utils/primitives/dropGuard): the lava over and beside it put out with a cheap block,
+   * the air it would fall through into lava filled, lava right under it covered by water poured on top (a water bucket carried, taken back after). 'require': a cell whose drop
+   * would still burn is not dug (said; with nothing dug the stop is drop_would_burn); 'try': it is dug anyway. Default: 'require' for a block worth its drop (obsidian, an ore)
+   * that is collected. Not a hand's field.
+   */
+  keepDrop?: 'require' | 'try';
+  /**
+   * Water over the cell is the hand's own cover (obsidian's covered dig: it falls into the hole and sets the lava under it): neither sealed before the dig nor plugged after it.
+   * Not a hand's field.
+   */
+  keepWater?: boolean;
+  /** The blocks the drop's guard may lay (the obsidian hand's canPlace; default the cheap ones), at most `guardMaxPlace`, each laid told to `onGuardPlaced`. Not a hand's field. */
+  guardBlocks?: readonly string[];
+  guardMaxPlace?: number;
+  onGuardPlaced?: (count: number) => void;
+}
+
+/** The blocks whose drop is the reason to dig them (a guard is worth its blocks): obsidian, and ore. Ancient debris and netherite do not burn. */
+export function worthKeeping(name: string): boolean {
+  return name === 'obsidian' || name === 'crying_obsidian' || name.endsWith('_ore');
 }
 
 /** At most this many blocks opened in one hand to see the cells asked. */
@@ -86,17 +109,7 @@ export function waterBeside(bot: any, cell: Cell): Cell | null {
   }
   return null;
 }
-/**
- * The body stands in a tunnel or a shaft (4 or more of the 8 cells round its feet and head are solid): water let in has nowhere to go but the body's own cell. On an open shore (a log, sand
- * or a pillar block beside a pond) the flow harms nothing and the dig goes on.
- */
-export function bodyEnclosed(bot: any, feet: Cell): boolean {
-  let solid = 0;
-  for (const dy of [0, 1]) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
-    if (blockAt(bot, { x: feet.x + dx, y: feet.y + dy, z: feet.z + dz })?.boundingBox === 'block') solid++;
-  }
-  return solid >= 4;
-}
+export { bodyEnclosed };
 const UNBREAKABLE = new Set(['bedrock', 'barrier', 'end_portal_frame', 'end_portal', 'end_gateway', 'command_block', 'structure_block', 'reinforced_deepslate']);
 
 /**
@@ -184,9 +197,15 @@ async function holdTool(ctx: StepContext, block: any, asked: string | undefined,
  * dig) is the aim already held, `goal: 'already'` (one dug is `done`, as before).
  */
 export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome> {
-  const tally: DigTally = { dug: 0, open: 0, current: null };
+  const tally: DigTally = { dug: 0, open: 0, current: null, poured: [] };
   const total = (args.at ?? []).length;
-  return withProgress(() => digCells(ctx, args, tally), outcome => {
+  // Water put on top of a block for its drop goes back into the bucket however the hand ends (a stop between the pour and the dig included).
+  const run = async () => {
+    try { return await digCells(ctx, args, tally); } finally {
+      for (const water of tally.poured.splice(0)) { try { await takeWaterBack(ctx, water); } catch { /* the hand is over */ } }
+    }
+  };
+  return withProgress(run, outcome => {
     if (!total) return undefined;
     // A hand cut in the middle of a cell (the act's stop came while the dig was being confirmed) counts that cell when the world already shows it open.
     const cutOpen = outcome === null && tally.current && isAirLike(blockAt(ctx.bot, tally.current)) ? 1 : 0;
@@ -195,7 +214,7 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
   });
 }
 
-interface DigTally { dug: number; open: number; /** The cell being dug now (cleared once it is counted). */ current: Cell | null }
+interface DigTally { dug: number; open: number; /** The cell being dug now (cleared once it is counted). */ current: Cell | null; /** Water put on top for a drop, not yet taken back. */ poured: Cell[] }
 
 /** A body that has gone this far (m) beyond DIG_REACH of the block it is digging is clearly not digging it any more (the server breaks a block only within ~5.5 m of its face; the run saw 7.8 m): checked this often. */
 export const DIG_DRIFT_MARGIN = 1;
@@ -216,6 +235,10 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
   // The cells asked, with any block dug to see one of them put just before it (openSight); those are not counted as cells of the hand.
   const queue = [...cells];
   const opening = new Map<string, string>();
+  /** The drop's guard (run 8): blocks laid, cells not dug for a drop that would burn, and water put on top not yet taken back. */
+  let guardPlaced = 0;
+  const refusedBurn: string[] = [];
+  const pouredCells = tally.poured;
   for (let index = 0; index < queue.length; index++) {
     const cell = queue[index];
     const seeing = opening.get(cellKey(cell));
@@ -266,14 +289,36 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       }
       return result(stopped(bot, 'not_visible', `${placeText(bot, cell)} の ${block.name} が見えない：間に ${sight.between.map(b => `${cellText(b.at)} ${b.name}`).join('、') || '固いブロック'}（目から${distance.toFixed(1)}m）`, cell));
     }
+    // Run 8: the drop kept from lava (dropGuard), and the lava a dig would let onto the body put out first (as the old crushReleasingLava did; run 8 stopped twice on lava_behind).
+    const keep = args.keepDrop ?? (args.collect !== false && !args.take && worthKeeping(String(block.name)) ? 'require' : undefined);
+    let ownWater = !!args.keepWater;
+    let pouredOver: Cell | null = null;
+    const guardOptions = (aroundOnly: boolean) => ({ ...(args.guardBlocks ? { blocks: args.guardBlocks } : {}),
+      maxPlace: Math.max(0, (args.guardMaxPlace ?? GUARD_MAX_PLACE) - guardPlaced), water: keep === 'require' && !args.keepWater, aroundOnly });
+    if ((keep && dropWouldBurn(bot, cell)) || lavaReleasedBy(bot, vecOf(cell))) {
+      const guarded = await guardDrop(ctx, cell, guardOptions(!keep));
+      guardPlaced += guarded.placed.length;
+      if (guarded.placed.length) args.onGuardPlaced?.(guarded.placed.length);
+      if (guarded.poured) { pouredOver = guarded.poured; pouredCells.push(guarded.poured); }
+      if (guarded.poured || guarded.covered) ownWater = true;
+      if (guarded.words && (guarded.placed.length || guarded.poured)) done.push(guarded.words);
+      if (keep === 'require' && guarded.left) {
+        if (pouredOver) { await takeWaterBack(ctx, pouredOver); pouredCells.splice(pouredCells.indexOf(pouredOver), 1); }
+        const where = guarded.left.where === 'under' ? '下' : guarded.left.where === 'fall' ? '落ちる先' : guarded.left.where === 'over' ? '上' : '横';
+        refusedBurn.push(`${cellText(cell)} は掘らなかった: ${where} ${cellText(guarded.left.at)} が溶岩で落とし物が焼ける`
+          + `（${guarded.left.why}。石を持てば体が埋める・下の溶岩は水入りバケツで上に水をかける。焼けてよいなら collect:false）`);
+        continue;
+      }
+    }
     const lava = lavaReleasedBy(bot, vecOf(cell));
     if (lava) return result(stopped(bot, 'lava_behind', `${placeText(bot, cell)} を掘ると、隣の溶岩 ${cellText({ x: lava.x, y: lava.y, z: lava.z })} が体の所へ流れ込む`, cell));
     // Water behind the cell (run 7, 11/11): its side and top faces are sealed with a cheap block before it is dug, so it opens dry (wetWall). What cannot be sealed is left; a body shut in a tunnel is
     // then stopped as before (a lake's wall opened on it floods what it stands in), an open shore is dug on. A bucket is filled through such a wall by use (wallOpen: the body opens, fills and plugs it).
     // A body already standing in water (a lake bed, a river's logs) digs on: its footing is wet and a seal would be laid cell after cell for nothing.
     const standingWet = ['water', 'flowing_water'].includes(String(blockAt(bot, feetCell(bot) ?? cell)?.name));
-    if (!args.wallOpen && !args.take && !standingWet) {
-      const wetNow = wetFaces(bot, cell);
+    // Run 8 (11/13, 28 blocks laid on water over obsidian dug from above it): only the water that would reach the body is sealed (harmfulWetFaces), and never the hand's own cover.
+    if (!args.wallOpen && !args.take && !ownWater && !standingWet) {
+      const wetNow = harmfulWetFaces(bot, cell);
       if (wetNow.length) {
         const sealed = await sealWetFaces(ctx, cell);
         if (sealed.words) done.push(sealed.words);
@@ -293,8 +338,19 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       return result(stopped(bot, 'threat_exposed', `${placeText(bot, cell)} を開けると、今は届かない ${who} から見える・届くようになる。開けるなら exposeOk:true か exposeOk:["${letIn[0].name}"]（受け入れる種類）`, cell));
     }
     const exposing = threats.length > 0;
-    const tool = await holdTool(ctx, block, args.tool, digSlowed(bot));
+    let tool = await holdTool(ctx, block, args.tool, digSlowed(bot));
     if (tool.fail) return result({ ...tool.fail, at: cell });
+    // Lava that ran in while the blocks were laid and the tool taken up (a flow reaches a cell every second and a half): put out once more.
+    if (keep && dropRisk(bot as never, vecOf(cell)).around.length) {
+      const again = await guardDrop(ctx, cell, { ...guardOptions(true), water: false });
+      guardPlaced += again.placed.length;
+      if (again.placed.length) {
+        args.onGuardPlaced?.(again.placed.length);
+        if (again.words) done.push(again.words);
+        tool = await holdTool(ctx, block, args.tool, digSlowed(bot));
+        if (tool.fail) return result({ ...tool.fail, at: cell });
+      }
+    }
     let workMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : NaN;
     // Other hands use this dig too: changing mine to dig cannot spend the return breath.
     let breath = assessBreathingWork(bot, Number.isFinite(workMs) ? workMs / 1000 : Infinity, cell);
@@ -371,16 +427,26 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     let now = blockAt(bot, cell);
     // Water came in with the hole (the cells behind it were not read, or could not be sealed): a cheap block goes back into the cell at once, where the body can reach it, before the flood spreads.
     let plugged = '';
-    if (!args.wallOpen && !args.take && now?.name === 'water' && damBlockHeld(bot) && eyeDistance(bot, cell) <= DIG_REACH) {
+    // Run 8: not the hand's own cover, and only water that reaches the body (a hole under the feet is left open: its drop lies in it).
+    if (!args.wallOpen && !args.take && !ownWater && now?.name === 'water' && damBlockHeld(bot) && eyeDistance(bot, cell) <= DIG_REACH
+      && waterReachesBody(bot, cell, feetCell(bot), waterLevel(bot, cell) ?? 7)) {
       const dam = damBlockHeld(bot)!;
       const plug = await place(ctx, { block: dam, at: [cell] });
       now = blockAt(bot, cell);
       if (plug.ok && now?.name !== 'water') noteSealed(bot, cell);
       plugged = plug.ok && now?.name !== 'water' ? `（水が流れ込んだので ${dam} で穴を塞いだ）` : '';
     }
+    // The water put on top for the drop: the hole has filled from it and set the lava under it; it goes back into the bucket at once (an empty bucket is the next stop).
+    let pourWords = '';
+    if (pouredOver) {
+      await waitUntil(ctx, () => !dropRisk(bot as never, vecOf(cell)).under, 1500);
+      pourWords = await takeWaterBack(ctx, pouredOver) ? '（上の水はバケツに戻した）' : `（上の水 ${cellText(pouredOver)} をバケツに戻せなかった）`;
+      pouredCells.splice(pouredCells.indexOf(pouredOver), 1);
+    }
+    const burnt = keep && !ownWater && (now?.name === 'lava' || !!dropRisk(bot as never, vecOf(cell)).under) ? '（落とし物は溶岩で焼けたかもしれない）' : '';
     const refilled = plugged || (now && !isAirLike(now) && now.name !== 'water' && now.name !== 'lava' ? `（掘った後、今は ${now.name}: 上から落ちてきた）` : now && (now.name === 'water' || now.name === 'lava') ? `（掘った後、${now.name} が流れ込んだ）` : '');
     const left = usesLeft(bot.heldItem);
-    done.push(`${cellText(cell)} ${block.name} を掘った（${seeing ? `${seeing}、` : ''}${tool.held}、${((Date.now() - started) / 1000).toFixed(1)}秒${left !== null && left <= 10 ? `、${bot.heldItem?.name} 残り${left}回` : ''}${own ? `。${ownerWords(own)}` : ''}）${refilled}`);
+    done.push(`${cellText(cell)} ${block.name} を掘った（${seeing ? `${seeing}、` : ''}${tool.held}、${((Date.now() - started) / 1000).toFixed(1)}秒${left !== null && left <= 10 ? `、${bot.heldItem?.name} 残り${left}回` : ''}${own ? `。${ownerWords(own)}` : ''}）${refilled}${pourWords}${burnt}`);
     ctx.progress?.(`${done.length}/${cells.length}`);
   }
   if (args.collect !== false && dugCells.length) {
@@ -392,8 +458,30 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       done.push(picked.text);
     }
   }
+  for (const water of pouredCells.splice(0)) await takeWaterBack(ctx, water);
+  if (refusedBurn.length) {
+    // Nothing dug: the stop says why (the obsidian hand does not stand elsewhere for it: the lava is under the block wherever the body stands).
+    if (!dugCells.length) return result(stopped(bot, 'drop_would_burn', refusedBurn.join('、'), cells[cells.length - 1]));
+    done.push(...refusedBurn);
+  }
   const allOpen = tally.dug === 0 && tally.open === cells.length;
   return { ok: true, text: done.join('、'), at: cells[cells.length - 1], ...(allOpen ? { goal: 'already' as const, code: 'already_open' } : {}) };
 }
 
 const vecOf = (cell: Cell) => new Vec3(cell.x, cell.y, cell.z);
+/** The most blocks one dig lays to keep its drops from lava. */
+const GUARD_MAX_PLACE = 8;
+
+/** Water this hand put on a block taken back into the bucket (a few tries, from where the body stands). True when the source is gone from there. */
+async function takeWaterBack(ctx: StepContext, water: Cell): Promise<boolean> {
+  const bot = ctx.bot;
+  const { use } = await import('./use.js');
+  const gone = () => blockAt(bot, water)?.name !== 'water' || waterLevel(bot, water) !== 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (gone()) return true;
+    if (!findItem(bot, 'bucket')) return false;
+    try { await use(ctx, { item: 'bucket', at: water }); } catch (error) { if (error instanceof StepStopped) throw error; }
+    if (gone()) return true;
+  }
+  return gone();
+}

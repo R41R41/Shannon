@@ -23,7 +23,7 @@ const MIN_LEFT_MS = 1500;
 
 /** Cheap blocks that stay where they are put, the first held is the dam (never an ore, planks, a crafting block, sand or gravel). Plentiful junk first; cobblestone
  *  (the stuff of tools and a furnace) only when nothing else is held. */
-const DAM_BLOCKS = ['dirt', 'coarse_dirt', 'netherrack', 'andesite', 'diorite', 'granite', 'tuff', 'cobbled_deepslate', 'blackstone', 'basalt', 'smooth_basalt', 'calcite',
+export const DAM_BLOCKS = ['dirt', 'coarse_dirt', 'netherrack', 'andesite', 'diorite', 'granite', 'tuff', 'cobbled_deepslate', 'blackstone', 'basalt', 'smooth_basalt', 'calcite',
   'end_stone', 'terracotta', 'sandstone', 'red_sandstone', 'deepslate', 'stone', 'stone_bricks', 'nether_bricks', 'cobblestone'];
 
 /** A water cell's level: 0 a source, 1-7 a flow (the larger, the further from its source), 8 and up water falling; null when the cell holds no water (or is not loaded). */

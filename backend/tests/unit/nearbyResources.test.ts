@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
 import { describe, expect, it } from 'vitest';
-import { nearbyResources, treesOf } from '../../src/services/minebot/utils/nearbyResources.js';
+import { lavaPoolsOf, nearbyResources, treesOf } from '../../src/services/minebot/utils/nearbyResources.js';
 
 /**
  * Run 7 (11/11): the planner saw "oak_log×12" and one cow at 9.5 m, and took the cow and the minimum of wood. The body lists by purpose, with counts and the nearest few places:
@@ -20,7 +20,9 @@ function worldWith(blocks: Array<[number, number, number, string]>) {
     const key = `${x >> 4},${z >> 4}`;
     let column = columns.get(key);
     if (!column) { column = new Chunk({ minY: 0, worldHeight: 256 }); columns.set(key, column); }
-    column.setBlockStateId(new Vec3(x & 15, y, z & 15), registry.blocksByName[name].defaultState);
+    // 'lava~3': a fluid at that level (its state is the source's plus the level).
+    const [base, level] = name.split('~');
+    column.setBlockStateId(new Vec3(x & 15, y, z & 15), level === undefined ? registry.blocksByName[base].defaultState : registry.blocksByName[base].minStateId + Number(level));
   }
   for (const [key, column] of columns) { const [cx, cz] = key.split(',').map(Number); world.sync.setColumn(cx, cz, column); }
   return { registry, world };
@@ -75,5 +77,37 @@ describe('nearby resources', () => {
     expect(list.some(entry => entry.purpose === 'food_village' && entry.kind === 'wheat')).toBe(true);
     // No village known: no list of its food.
     expect(nearbyResources(bodyIn(built, new Vec3(0.5, 40, 0.5)), 1_000).some(entry => entry.purpose === 'food_village')).toBe(false);
+  });
+});
+
+// Run 8 (11/13): pools at y 20, -19, -45 and -55 were in sight; the planner was given only the nearest source (27 down across a cave) and took 191 s to reach it.
+describe('nearby lava pools', () => {
+  const pools = (): Array<[number, number, number, string]> => [
+    [6, 38, 0, 'lava'], [7, 38, 0, 'lava'],                       // 2 sources, 2 down, open above
+    [20, 10, 0, 'lava'], [20, 11, 0, 'stone'],                     // 1 source, 30 down, covered
+    [-30, 60, 5, 'lava'], [-31, 60, 5, 'lava'], [-31, 61, 6, 'lava'], // 3 sources (a corner touch), 20 up
+    [3, 40, 3, 'lava~3'], [3, 40, 4, 'lava~2'],                   // flows only: not a pool
+    [100, 40, 0, 'lava'],                                          // beyond 96 m
+  ];
+  it('lists the pools at every height, nearest three by their nearest source, with sources, across, up or down and cover', () => {
+    const built = worldWith(pools());
+    const lava = nearbyResources(bodyIn(built, new Vec3(0.5, 40, 0.5)), 1_000).find(entry => entry.purpose === 'lava')!;
+    expect(lava).toMatchObject({ kind: 'lava', count: 6, pools: 3, range: 96 });
+    expect(lava.sites.map(site => [site.x, site.y, site.z])).toEqual([[6, 38, 0], [20, 10, 0], [-30, 60, 5]]);
+    expect(lava.sites[0].note).toBe('源 2・足から 水平 6m・高さ -2・覆い ×');
+    expect(lava.sites[1].note).toBe('源 1・足から 水平 20m・高さ -30・覆い ○');
+    expect(lava.sites[2].note).toContain('源 3・');
+    expect(lava.sites[2].note).toContain('高さ +20');
+  });
+  it('says nothing of lava in the Nether, nor when there is none', () => {
+    const built = worldWith(pools());
+    const nether = nearbyResources(bodyIn(built, new Vec3(0.5, 40, 0.5), { game: { dimension: 'the_nether' } }), 1_000);
+    expect(nether.some(entry => entry.purpose === 'lava')).toBe(false);
+    const dry = nearbyResources(bodyIn(worldWith([[3, 39, 3, 'stone']]), new Vec3(0.5, 40, 0.5)), 1_000);
+    expect(dry.some(entry => entry.purpose === 'lava')).toBe(false);
+  });
+  it('groups touching sources into one pool', () => {
+    const hits = [[1, 0, 0], [2, 0, 0], [3, 1, 1], [10, 0, 0]].map(([x, y, z]) => ({ name: 'lava', position: new Vec3(x, y, z), distance: Math.hypot(x, y, z) }));
+    expect(lavaPoolsOf(hits).map(pool => pool.sources)).toEqual([3, 1]);
   });
 });

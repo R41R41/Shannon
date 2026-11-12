@@ -1,9 +1,11 @@
 import { Vec3 } from 'vec3';
 import { feetCell, type BlockReader, type Cell } from '../localMap.js';
-import { dropBurnsIn } from '../dropFate.js';
+import { dropBurns, dropBurnsIn, dropRisk } from '../dropFate.js';
+import { ownedAt } from '../ownedBlocks.js';
+import { blocksKeepDrop } from './dropGuard.js';
 import { blackBoxOf } from '../blackbox.js';
 import { blockInSight } from '../probeTools.js';
-import { cellText, freeSlots, inventoryCount, stopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { cellText, freeSlots, inventoryCount, stopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { dig } from './dig.js';
 import { digRuleOf, go } from './go.js';
 import { place } from './place.js';
@@ -250,6 +252,22 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   const bucketsAtStart = inventoryCount(bot, 'water_bucket');
   const foot = footingBlock(bot, args.canPlace);
   const footingLeft = () => (foot ? Math.max(0, Math.min(maxPlace - counts.placed, inventoryCount(bot, foot))) : 0);
+  /**
+   * Run 8 (11/13, six obsidian burnt): the blocks the planner let the hand lay (canPlace, not obsidian, nothing that falls) also put out the lava round a block before it is dug,
+   * within the same maxPlace. With none, the lava round it is set by the hand's own water (the cover), as before.
+   */
+  const guardBlocks = (args.canPlace ?? []).filter(name => !['obsidian', 'crying_obsidian'].includes(name) && !/(sand|gravel|concrete_powder|anvil)$/u.test(name));
+  const placesLeft = () => Math.max(0, maxPlace - counts.placed);
+  /** Whether blocks alone keep the drop of `cell` (no lava right under it, blocks held and allowed for every cell to fill). */
+  const stoneKeeps = (cell: Cell) => blocksKeepDrop(bot, dropRisk(bot as never, new Vec3(cell.x, cell.y, cell.z)), guardBlocks, placesLeft());
+  /** The cells blocks would be laid in to keep the drop of `cell` (the lava round it, the air over lava under it), when blocks can keep it. */
+  const guardTargets = (cell: Cell): Cell[] => {
+    const risk = dropRisk(bot as never, new Vec3(cell.x, cell.y, cell.z));
+    if (!stoneKeeps(cell)) return [];
+    return [...risk.around.map(at => ({ x: at.x, y: at.y, z: at.z })), ...(risk.under === 'fall' ? [{ x: cell.x, y: cell.y - 1, z: cell.z }] : [])];
+  };
+  /** Whether the drop of `cell` would burn and only water over it keeps it. */
+  const needsWater = (cell: Cell) => dropBurns(dropRisk(bot as never, new Vec3(cell.x, cell.y, cell.z))) && !stoneKeeps(cell);
   const gained = () => Math.max(0, inventoryCount(bot, 'obsidian') - obsidianAtStart);
 
   const failures: Why[] = [];
@@ -343,19 +361,27 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   };
 
   /** The obsidian at `lava` dug, from a place that reaches it and is clear of lava; null when it is, else why not. */
-  const mineAt = async (lava: Cell): Promise<Why | null> => {
+  const mineAt = async (lava: Cell, covered = false): Promise<Why | null> => {
     const refused = new Set<string>();
     let last: Why = { code: 'unreachable', text: `${cellText(lava)} を掘れる所に立てない（届く 4.8m 内に、見えて、溶岩の無い立てる所が無い）`, at: lava };
     for (let attempt = 0; attempt < MAX_DIG_TRIES; attempt++) {
       if (timeIsUp(ctx)) return { code: 'limit_time', text: '時間切れ（掘る前）', at: lava };
       const here = feetCell(bot)!;
-      const rank = (stand: Cell) => (sameCell(stand, here) ? -100 : 0) + (stand.y > lava.y ? 0 : 8) + (isWater(read(stand.x, stand.y, stand.z)) ? 20 : 0) + Math.hypot(stand.x - here.x, stand.z - here.z);
+      // Run 8: where blocks are to put out the lava round the block (no water over it), a stand that reaches those cells too (the guard lays from where the body stands).
+      const guardCells = covered ? [] : guardTargets(lava);
+      const guardOut = (stand: Cell) => guardCells.some(cell => eyeTo(stand, cell) > USE_REACH);
+      const rank = (stand: Cell) => (sameCell(stand, here) && !guardOut(stand) ? -100 : 0) + (stand.y > lava.y ? 0 : 8) + (isWater(read(stand.x, stand.y, stand.z)) ? 20 : 0)
+        + (guardOut(stand) ? 12 : 0) + Math.hypot(stand.x - here.x, stand.z - here.z);
       const stand = standCells(read, lava, 6, lava.y - 1, lava.y + 4, true).filter(cell => !refused.has(keyOf(cell)) && diggableFrom(read, cell, lava)).sort((a, b) => rank(a) - rank(b))[0];
       if (!stand) return last;
       const moved = await moveTo(ctx, stand);
       if (moved) { refused.add(keyOf(stand)); counts.restands++; last = { code: 'unreachable', text: `${cellText(stand)} に着けない: ${moved.text.slice(0, 70)}`, at: stand }; continue; }
-      const dug = await dig(ctx, { at: [lava], tool: pick, collect: false });
+      // Run 8: the drop kept from lava (dropGuard, within canPlace and maxPlace); under the hand's own water ('covered') that water is the cover and is neither sealed nor plugged.
+      const dug = await dig(ctx, { at: [lava], tool: pick, collect: false, keepDrop: covered ? 'try' : 'require', ...(covered ? { keepWater: true } : {}),
+        guardBlocks, guardMaxPlace: placesLeft(), onGuardPlaced: count => { counts.placed += count; } });
       if (dug.ok) return null;
+      // The lava is under the block wherever the body stands: no other stand is tried.
+      if (dug.reason === 'drop_would_burn') return { code: 'lava_danger', text: `${cellText(lava)} は落とし物が溶岩で焼けるので掘らなかった（${dug.text.slice(0, 70)}）`, at: lava };
       if (dug.reason === 'lava_behind' || dug.reason === 'footing') {
         refused.add(keyOf(stand)); counts.restands++;
         last = { code: 'lava_danger', text: `${cellText(lava)} を掘ると隣の溶岩が流れ込む（${dug.text.slice(0, 70)}）`, at: lava };
@@ -488,9 +514,8 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   const oneSource = async (lava: Cell, pool?: Cell[]): Promise<Why | null> => {
     let waterCell: Cell | null = null;
     let setHard = read(lava.x, lava.y, lava.z)?.name === 'obsidian';
-    // Obsidian that lava can run into the hole of is covered with water first (the same pour), so that the lava does not take the drop.
-    const burnsAt = () => dropBurnsIn(bot as never, new Vec3(lava.x, lava.y, lava.z));
-    let needsCover = setHard && !!burnsAt() && inventoryCount(bot, 'water_bucket') > 0;
+    // Run 8: water is poured over set obsidian only where blocks cannot keep its drop (lava right under it, or no block allowed or held).
+    let needsCover = setHard && needsWater(lava) && inventoryCount(bot, 'water_bucket') > 0;
     const excluded = new Set<string>();
     let last: Why = { code: 'unreachable', text: `${cellText(lava)} に水を注げる所へ行けない`, at: lava };
     let carved = false;
@@ -498,6 +523,8 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       if (timeIsUp(ctx)) return { code: 'limit_time', text: '時間切れ', at: lava };
       const now = read(lava.x, lava.y, lava.z);
       if (now?.name === 'obsidian') setHard = true;
+      // A source the hand's own guard filled with a block (it lay beside a block dug before): not a failure, left quietly.
+      else if (now && ownedAt(bot, lava, String(now.name))) return { code: 'crushed', text: `${cellText(lava)} は先に ${now.name} で埋めた`, at: lava };
       else if (!isLavaSource(now)) return { code: 'no_lava', text: `${cellText(lava)} は今 ${now?.name ?? '未ロード'}（溶岩の源ではない）`, at: lava };
       const here = feetCell(bot)!;
       const plans = planPours(read, lava, { from: here, excluded, footingOk: footingLeft() > 0 });
@@ -560,15 +587,14 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     const knownIds = new Set((Object.values(bot.entities ?? {}) as any[]).map(entity => Number(entity?.id)));
     const water = waterCell ?? waterLeft;
     if (water) await wait(ctx, SETTLE_BEFORE_DIG_MS);
-    const covered = !!burnsAt() && !!water;
+    const covered = !!water && needsWater(lava);
     if (!covered && water) {
       if (await scoopBack(water)) waterLeft = null;
       await waitFor('水が引くのを', ctx, () => !waterNear(lava), DRY_WAIT_MS);
     }
-    if (!covered && !water && burnsAt()) { counts.notes.push(`${cellText(lava)} は溶岩が流れ込む所を水なしで掘った（落とし物が焼けるかもしれない）`); dugUncovered = true; }
     if (!obsidianRoom()) { if (waterLeft && await scoopBack(waterLeft)) waterLeft = null; return { code: 'inventory_full', text: fullWords(), at: lava }; }
     const beforeDig = inventoryCount(bot, 'obsidian');
-    const failure = await mineAt(lava);
+    const failure = await mineAt(lava, covered);
     if (failure) {
       if (waterLeft && await scoopBack(waterLeft)) waterLeft = null;
       return failure;
@@ -610,8 +636,6 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   const grownDone = new Set<string>();
   /** The cells dug by this hand so far (the pack shows them a moment later than the dig: the count of obsidian made is not read from the pack alone). */
   let mined = 0;
-  /** Set when the last cell was dug with lava able to take the drop and no water over it: it is then counted only when the pack shows it. */
-  let dugUncovered = false;
   /** The cells of the start's lava that are obsidian now and touch the pool (or one already taken in): added to what is dug. */
   const addGrown = (pool: Cell[], pending: Map<string, Cell>): void => {
     if (!lavaAtStart.length || Math.max(gained(), mined) >= want) return;
@@ -632,10 +656,15 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     const triedPours = new Set<string>();
     while (pending.size && gained() < want) {
       const here = feetCell(bot)!;
-      const stage = (cell: Cell) => read(cell.x, cell.y, cell.z)?.name === 'obsidian'
-        ? (dropBurnsIn(bot as never, new Vec3(cell.x, cell.y, cell.z)) ? 1 : 0) : 2;
+      // Run 8: 0 set and nothing burns its drop, 1 set and its drop kept by blocks or water (held, or standing in the world), 2 set and nothing keeps it (dug last, and then
+      // not dug: said), 3 still lava.
+      const stage = (cell: Cell) => {
+        if (read(cell.x, cell.y, cell.z)?.name !== 'obsidian') return 3;
+        if (!dropBurnsIn(bot as never, new Vec3(cell.x, cell.y, cell.z))) return 0;
+        return !needsWater(cell) || inventoryCount(bot, 'water_bucket') > 0 || waterLeft ? 1 : 2;
+      };
       // Take the safe, solidified edge first. Re-evaluate after each dig/pour: both footing and lava change.
-      const remaining = [...pending.values()].filter(cell => stage(cell) < 2 || !triedPours.has(keyOf(cell)))
+      const remaining = [...pending.values()].filter(cell => stage(cell) < 3 || !triedPours.has(keyOf(cell)))
         .sort((a, b) => stage(a) - stage(b) || dist(a, here) - dist(b, here));
       const lava = remaining[0];
       if (!lava) break;
@@ -643,18 +672,16 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       if (!obsidianRoom()) { if (waterLeft) await scoopBack(waterLeft); return stop('inventory_full', fullWords(), lava); }
       ctx.progress?.(`${cellText(lava)} (${gained()}/${want})`);
       const spread = pool.length > 1 && isLavaSource(read(lava.x, lava.y, lava.z));
-      const gainedBefore = gained();
-      dugUncovered = false;
       const failure = await oneSource(lava, spread ? pool : undefined);
       counts.obsidian = gained();
-      // Counted as mined unless it was dug where the drop could burn with no water over it; then only when the pack shows it.
-      if (!spread && !failure && (!dugUncovered || gained() > gainedBefore)) mined++;
+      // Counted as mined (run 8: a cell whose drop would burn is no longer dug: the dig keeps the drop or refuses).
+      if (!spread && !failure) mined++;
       if (!spread) pending.delete(keyOf(lava));
       else if (failure) triedPours.add(keyOf(lava)); // Another pour may still set this cell; it can then be mined.
       if (!failure || failure.code !== 'limit_time') addGrown(pool, pending);
       if (failure?.code === 'limit_time') { if (waterLeft) await scoopBack(waterLeft); return stop('limit_time', `${seconds} 秒の上限に達した`, lava); }
       if (failure?.code === 'inventory_full') { if (waterLeft) await scoopBack(waterLeft); return stop('inventory_full', failure.text, lava); }
-      if (failure) failures.push(failure);
+      if (failure && failure.code !== 'crushed') failures.push(failure);
       if (spread && waterLeft) {
         // Do not begin another batch with an unrecovered source somewhere else.
         if (await scoopBack(waterLeft)) waterLeft = null;
@@ -678,5 +705,8 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   }
   if (timeIsUp(ctx) && !failures.length) return stop('limit_time', `${seconds} 秒の上限に達した${extras ? `（${extras}）` : ''}`, order[0]);
   const why = failures[0] ?? { code: 'no_lava', text: `挙げた溶岩の源 ${order.length} 個を使い切った`, at: order[0] };
-  return stop(why.code, `${why.text}${failures.length > 1 ? `（ほか ${failures.length - 1} 個も）` : ''}${extras ? `。${extras}` : ''}${waterBack ? '' : '。水は戻せていない'}（${want} 個のうち ${counts.obsidian} 個）`, why.at);
+  // design-water-refill (run 8): what was set and not dug, and whether the water is in the bucket, so the planner tells "made but not dug" from "no water to make it".
+  const setLeft = [...order, ...lavaAtStart].filter(cell => read(cell.x, cell.y, cell.z)?.name === 'obsidian').length;
+  const setWords = setLeft ? `。固まって掘れていない黒曜石 ${setLeft} マス・水入りバケツ ${inventoryCount(bot, 'water_bucket') > 0 ? 'あり' : 'なし'}` : '';
+  return stop(why.code, `${why.text}${failures.length > 1 ? `（ほか ${failures.length - 1} 個も）` : ''}${extras ? `。${extras}` : ''}${waterBack ? '' : '。水は戻せていない'}${setWords}（${want} 個のうち ${counts.obsidian} 個）`, why.at);
 }

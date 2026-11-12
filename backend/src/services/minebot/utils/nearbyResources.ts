@@ -13,22 +13,29 @@ import { feetCell, type Cell } from './localMap.js';
  *   - wood: the logs within TREE_SCAN_M, grouped into trees (logs touching are one tree), the nearest three trees by their foot;
  *   - food_animal: food animals the body sees (the entities it is told of, within ANIMAL_M), the nearest three;
  *   - food_village: a village's hay (made into wheat, then bread: three to a block) and its fields, within VILLAGE_M of the body;
- *   - ore: ore with a face open to air (the map marks' own), one place per kind; bed and water: the map marks' own.
+ *   - ore: ore with a face open to air (the map marks' own), one place per kind; bed and water: the map marks' own;
+ *   - lava: the lava pools within LAVA_M at any height (sources only, touching sources one pool), the nearest three pools by their nearest source, each with its sources, how far across
+ *     and how far up or down from the feet, and whether a solid block covers it (run 8, 11/13: four pools at y 20, -19, -45 and -55 were in sight and the planner was given only the
+ *     nearest source, 27 down across a cave; it took 191 s to reach). Overworld only (the Nether is a lava sea).
  * Read from the same scans as the map's marks and the wood line where it can (one more query: the village's hay and fields), kept CACHE_MS or CACHE_MOVE blocks.
  */
 export interface NearbyResource {
-  purpose: 'wood' | 'food_animal' | 'food_village' | 'ore' | 'bed' | 'water';
+  purpose: 'wood' | 'food_animal' | 'food_village' | 'ore' | 'bed' | 'water' | 'lava';
   kind: string;
   count: number;
   /** How far from the body the count reaches (m): what was looked at, so "none" can be told from "not looked". */
   range: number;
   /** For wood: the trees these logs make. */
   trees?: number;
+  /** For lava: the pools these sources make. */
+  pools?: number;
   sites: Array<{ x: number; y: number; z: number; note?: string }>;
 }
 
 export const ANIMAL_M = 48;
 export const VILLAGE_M = 128;
+export const LAVA_M = 96;
+const LAVA_HITS = 2048;
 const SITES = 3;
 /** Places of one kind closer than this to one already named are the same place (a tree's trunk, a field, a pile of hay). */
 const SAME_PLACE_M = 4;
@@ -83,6 +90,26 @@ export function treesOf(hits: LoadedBlockHit[]): Array<{ foot: Cell; logs: numbe
   return [...groups.values()].map(group => {
     const foot = group.reduce((low, hit) => (hit.position.y < low.position.y ? hit : low), group[0]);
     return { foot: cellOf(foot.position), logs: group.length, distance: Math.min(...group.map(hit => hit.distance)), kind: group[0].name };
+  }).sort((a, b) => a.distance - b.distance);
+}
+
+/** Lava sources grouped into pools (touching by a side, an edge or a corner), each with its nearest source, its count, and that source's distance; nearest pool first. */
+export function lavaPoolsOf(hits: LoadedBlockHit[]): Array<{ nearest: Cell; sources: number; distance: number }> {
+  const parent = hits.map((_, index) => index);
+  const find = (index: number): number => { while (parent[index] !== index) { parent[index] = parent[parent[index]]; index = parent[index]; } return index; };
+  const byCell = new Map<string, number>();
+  hits.forEach((hit, index) => byCell.set(`${hit.position.x},${hit.position.y},${hit.position.z}`, index));
+  hits.forEach((hit, index) => {
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+      const other = (dx || dy || dz) ? byCell.get(`${hit.position.x + dx},${hit.position.y + dy},${hit.position.z + dz}`) : undefined;
+      if (other !== undefined) parent[find(index)] = find(other);
+    }
+  });
+  const groups = new Map<number, LoadedBlockHit[]>();
+  hits.forEach((hit, index) => { const root = find(index); (groups.get(root) ?? groups.set(root, []).get(root)!).push(hit); });
+  return [...groups.values()].map(group => {
+    const near = group.reduce((best, hit) => (hit.distance < best.distance ? hit : best), group[0]);
+    return { nearest: cellOf(near.position), sources: group.length, distance: near.distance };
   }).sort((a, b) => a.distance - b.distance);
 }
 
@@ -144,6 +171,23 @@ function computeList(bot: Body, feet: Cell, now: number): NearbyResource[] {
       const was = list.find(entry => entry.purpose === 'bed');
       if (was) { was.count++; if (was.sites.length < SITES) was.sites.push({ ...mark.cell }); } else list.push({ purpose: 'bed', kind: 'bed', count: 1, range: 48, sites: [{ ...mark.cell }] });
     } else if (mark.kind === 'water') list.push({ purpose: 'water', kind: 'water', count: 1, range: 48, sites: [{ ...mark.cell }] });
+  }
+  // Lava pools: one scan of the loaded chunks for sources (flows are not counted, so a lake's flows do not crowd out the pools beyond it), at any height.
+  if (dimension.includes('overworld') && bot.registry?.blocksByName && typeof bot.world?.getColumns === 'function') {
+    try {
+      const scan = scanLoadedBlocks(bot as never, ['lava'], { maxDistance: LAVA_M, maxHits: LAVA_HITS, sourceOnly: true });
+      const pools = lavaPoolsOf(scan.hits);
+      if (pools.length) {
+        const covered = (cell: Cell): string => {
+          try { return bot.blockAt?.(new Vec3(cell.x, cell.y + 1, cell.z), false)?.boundingBox === 'block' ? '○' : '×'; } catch { return '?'; }
+        };
+        list.push({ purpose: 'lava', kind: 'lava', count: scan.hits.length, range: scan.hits.length >= LAVA_HITS ? Math.ceil(scan.hits[scan.hits.length - 1].distance) : LAVA_M, pools: pools.length,
+          sites: pools.slice(0, SITES).map(pool => {
+            const dy = pool.nearest.y - feet.y;
+            return { ...pool.nearest, note: `源 ${pool.sources}・足から 水平 ${Math.round(flat(pool.nearest, feet))}m・高さ ${dy > 0 ? '+' : ''}${dy}・覆い ${covered(pool.nearest)}` };
+          }) });
+      }
+    } catch { /* lava is only a list: none read, none said */ }
   }
   return list;
 }

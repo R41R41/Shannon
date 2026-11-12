@@ -57,3 +57,22 @@ export function lavaBesideOrOver(world: DropWorld, target: Vec3): Vec3 | null {
   }
   return null;
 }
+
+/**
+ * What would burn the drop of `target`, split by what puts it out (run 8, 11/13: six obsidian lost, one with lava beside it, five with a lava source right under it):
+ * `around` the lava over the block and at its four sides (a block laid in each shuts it out); `under` 'direct' when lava (or fire) lies right under it (nothing
+ * can be laid there from the body's side: water over the block is what saves the drop), 'fall' when the drop would fall through air into it (a block laid in the
+ * cell under the block holds the drop), null when nothing under it burns.
+ */
+export interface DropRisk { around: Vec3[]; under: 'direct' | 'fall' | null; below: Vec3 | null }
+export function dropRisk(world: DropWorld, target: Vec3): DropRisk {
+  const around: Vec3[] = [];
+  for (const [dx, dy, dz] of [[0, 1, 0], ...SIDES] as Array<[number, number, number]>) {
+    const cell = target.offset(dx, dy, dz);
+    try { if (isLava(world.blockAt(cell))) around.push(cell); } catch { /* unloaded: nothing known to run in */ }
+  }
+  const below = lavaBelowDrop(world, target);
+  return { around, under: !below ? null : below.y === target.y - 1 ? 'direct' : 'fall', below };
+}
+/** True when anything in the risk burns the drop. */
+export const dropBurns = (risk: DropRisk): boolean => risk.around.length > 0 || risk.under !== null;

@@ -25,7 +25,7 @@ import { blackBoxOf } from '../blackbox.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { meterProgress, round1 } from './progressUnits.js';
 import { ThreatExposedError } from '../exposureGuard.js';
-import { sealedAt, sealWetFaces, wetFaces } from './wetWall.js';
+import { harmfulWetFaces, sealedAt, sealWetFaces, wetFaces } from './wetWall.js';
 import { surfaceSwimControls, swimControls, swimPulse } from './swim.js';
 import { waterExitWords } from './waterExit.js';
 import { stanchStream } from './stanch.js';
@@ -1616,11 +1616,12 @@ export async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcom
   const countingDig = async function (this: unknown, ...rest: unknown[]) {
     const at = (rest[0] as { position?: { x: number; y: number; z: number } } | undefined)?.position;
     let result: unknown;
-    // Water behind the cell: sealed before the dig (a route dug into a lake's wall in run 7, waterOk or not). A failure here never stops the dig.
+    // Water behind the cell: sealed before the dig (a route dug into a lake's wall in run 7, waterOk or not), only the water that would reach the body (run 8: a cell under
+    // the feet lets none onto them). A failure here never stops the dig.
     if (counting && at) {
       try {
         const cell = { x: at.x, y: at.y, z: at.z };
-        if (wetFaces(bot, cell).length && !sealedAt(bot, cell)) {
+        if (harmfulWetFaces(bot, cell).length && !sealedAt(bot, cell)) {
           // The seal is the hand's own footing, not the route's: a block the server refuses here is told in the words, never counted as a refused place of the route.
           const wasCounting = counting;
           counting = false;
