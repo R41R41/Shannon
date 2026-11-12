@@ -10,6 +10,7 @@ import { withProgress } from './progressUnits.js';
 import { noteStation } from './stationLedger.js';
 import { laidLate, LATE_ANSWER_MS } from './laidLate.js';
 import { tableInReach } from './craft.js';
+import { stepIntoReach } from './getNear.js';
 
 /**
  * place: a block into each cell in order (design mb-llm-centric 2.3). The cell is the planner's: no place is chosen for it, the body
@@ -204,6 +205,7 @@ async function placeCells(ctx: StepContext, args: PlaceArgs, tally: { laid: numb
         : `${placeText(bot, cell)} は支えになる面が無い（${allAir ? '6面とも空気' : '6面とも固いブロックではない'}）`;
       return result(stopped(bot, 'nothing_to_set_against', withNearby(bot, cell, why, room), cell));
     }
+    if (eyeDistance(bot, cell) > USE_REACH) await stepIntoReach(ctx, cell, USE_REACH);
     const distance = eyeDistance(bot, cell);
     if (distance > USE_REACH) return result(stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell));
     if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }

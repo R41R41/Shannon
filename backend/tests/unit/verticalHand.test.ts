@@ -267,6 +267,14 @@ describe('vertical: shaft down (run 45 hold 5) and the clock', () => {
     expect(sim.bot.dugBlocks.every((entry: string) => Number(entry.split(',')[1]) < 63)).toBe(true);
   });
 
+  it('run 8: a stop at the clock names the natural block ahead that canDig lacks, and the pace to go on at', async () => {
+    const sim = sim0(world('stone', 63, [(x, y) => (y < 45 ? 'bone_block' : undefined)], 183, 195), [183, 63, 195], [PICK]);
+    const outcome = await drive(sim, run(sim, hand({ dir: 'down', shape: 'shaft', toY: -50, liquid: 'stop', range: 1, seconds: 6 })));
+    expect(outcome.code).toBe('limit_time');
+    expect(outcome.text).toMatch(/前方 \d+ 段目 bone_block は canDig に無い/u);
+    expect(outcome.text.length).toBeLessThanOrEqual(160);
+  });
+
   it('stops at the end of the world: world_limit under y=-64, with the levels it did take', async () => {
     const sim = sim0(world('stone', -60, [column('air', 0, -61, -58, 0)]), [0, -61, 0]);
     const outcome = await drive(sim, run(sim, hand({ dir: 'down', shape: 'shaft', toY: -70 })));

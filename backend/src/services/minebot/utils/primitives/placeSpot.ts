@@ -17,6 +17,8 @@ export function placeSpots(bot: any, avoid: readonly Cell[] = [], max = 6): Cell
   if (!at || !feet) return [];
   const own = bodyCells(at);
   const found: Array<{ cell: Cell; score: number }> = [];
+  /** Run 8: in a hole there is no air cell with a floor of its own; an air cell that has a solid face on any side (the wall) is the second choice, used only when no floored spot is found. */
+  const walled: Array<{ cell: Cell; score: number }> = [];
   const span = Math.ceil(USE_REACH);
   for (let x = feet.x - span; x <= feet.x + span; x++) for (let y = feet.y - 2; y <= feet.y + 2; y++) for (let z = feet.z - span; z <= feet.z + span; z++) {
     const cell = { x, y, z };
@@ -25,12 +27,20 @@ export function placeSpots(bot: any, avoid: readonly Cell[] = [], max = 6): Cell
     const here = blockAt(bot, cell);
     if (!here || !AIR.has(here.name)) continue;
     const floor = blockAt(bot, { x, y: y - 1, z }), over = blockAt(bot, { x, y: y + 1, z });
-    if (!floor || floor.boundingBox !== 'block' || BAD_FLOOR.test(String(floor.name)) || !over || !AIR.has(over.name)) continue;
+    if (!floor || floor.boundingBox !== 'block' || BAD_FLOOR.test(String(floor.name)) || !over || !AIR.has(over.name)) {
+      const face = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]].some(([dx, dy, dz]) => {
+        const next = blockAt(bot, { x: x + dx, y: y + dy, z: z + dz });
+        return !!next && next.boundingBox === 'block' && !BAD_FLOOR.test(String(next.name));
+      });
+      if (face && (!floor || !BAD_FLOOR.test(String(floor.name)))) walled.push({ cell, score: Math.abs(y - feet.y) * 3 + (cell.y > feet.y + 1 ? 4 : 0) + Math.hypot(x + 0.5 - at.x, z + 0.5 - at.z) });
+      continue;
+    }
     const across = Math.hypot(x + 0.5 - at.x, z + 0.5 - at.z);
     // On the level of the feet, two metres off: in reach, out of the way of the body's own steps.
     const score = Math.abs(y - feet.y) * 3 + Math.abs(across - 2) + (across < 1.4 ? 2 : 0) + (cell.y === feet.y ? 0 : 1);
     found.push({ cell, score });
   }
+  if (!found.length) found.push(...walled);
   return found.sort((a, b) => a.score - b.score || a.cell.x - b.cell.x || a.cell.z - b.cell.z || a.cell.y - b.cell.y).slice(0, max).map(entry => entry.cell);
 }
 

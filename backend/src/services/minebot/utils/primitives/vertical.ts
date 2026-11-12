@@ -211,9 +211,20 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
   };
 
   // ---- the clock, the stop, the body ----
+  /**
+   * Run 8: the stop at the clock said only "raise seconds". The levels taken so far measure the pace (msPerUnit); what is left of the way at that pace is what the seconds must be
+   * for a go-on to finish. Said from the third level on, and only when the clock is what stopped the hand.
+   */
+  const paceHint = (): string => {
+    if (moved < 3) return 'seconds を増やして続きを出す';
+    const here = feetCell(bot) ?? at;
+    const left = leftFrom(here);
+    const each = (Date.now() - startedAt) / moved / 1000;
+    return `あと ${left} 段・1 段 ${each.toFixed(1)} 秒のペースなので seconds=${Math.min(120, Math.ceil(left * each) + 5)} 前後で続きを出す`;
+  };
   const checkClock = () => {
     if (ctx.stop.aborted) throw new StepStopped(String(ctx.stop.reason ?? 'stopped'));
-    if (Date.now() >= deadline) throw new VStop('limit_time', `${seconds} 秒の上限に着いた`, undefined, 'seconds を増やして続きを出す');
+    if (Date.now() >= deadline) throw new VStop('limit_time', `${seconds} 秒の上限に着いた`, undefined, paceHint());
   };
   const away = (cell: Cell) => { const here = feetCell(bot); return here ? `自分から${relativeTo(here, cell)}` : ''; };
   const needDisplacedCheck = (expected: Cell[]) => {
@@ -222,6 +233,25 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     if (!expected.some(cell => sameCell(cell, here))) {
       throw new VStop('displaced', `予定の段 ${cellText(expected[0])} から ${cellText(here)} へずれた（落ちたか押し戻された）`, here, '今の位置から新しい手で');
     }
+  };
+
+  // ---- what lies ahead (run 8: a vertical stopped at the first block canDig did not name, 9 levels down) ----
+  /** The levels ahead that are scanned at the start. */
+  const SCAN_LEVELS = 20;
+  /** The natural blocks on the way, down to SCAN_LEVELS levels, that canDig does not name (the plan's own cells; nothing is dug or laid by the scan). Empty when the way is open to the rule. */
+  const aheadText = (origin: Cell = start): string => {
+    const found = new Map<string, number>();
+    let from: Cell = origin;
+    for (let level = 1; level <= SCAN_LEVELS && !reached(from); level++) {
+      const plan = planOf(from);
+      for (const cell of plan.clear) {
+        const block = blockAt(bot, cell);
+        if (solid(block) && !allowed(String(block.name)) && !found.has(String(block.name))) found.set(String(block.name), level);
+      }
+      from = plan.to;
+    }
+    if (!found.size) return '';
+    return `前方 ${[...found.entries()].slice(0, 3).map(([name, level]) => `${level} 段目 ${name}`).join('・')} は canDig に無い。`;
   };
 
   // ---- ore seen (told, never followed) ----
@@ -740,7 +770,10 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       try { await waitUntil(ctx, () => bot.entity?.onGround !== false, 1200); } catch { /* stopped meanwhile: told as it stands */ }
       lookAgain();
       const where = error.where ?? feetCell(bot) ?? at;
-      const head = `vertical 止まった ${error.code}: `;
+      // The way ahead that canDig does not name (a stop for another reason says it too: the next one is already known).
+      let ahead = '';
+      try { ahead = error.code === 'cannot_dig' || error.code === 'unloaded' ? '' : aheadText(feetCell(bot) ?? at); } catch { /* the stop stands without it */ }
+      const head = `vertical 止まった ${error.code}: ${ahead}`;
       const fixed = ` ${tail()}${fullText()}`;
       const room = 160 - head.length - fixed.length;
       const hint = error.hint ? `。${error.hint}` : '';

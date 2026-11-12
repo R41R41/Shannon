@@ -35,3 +35,27 @@ export async function getNear(ctx: StepContext, cell: Cell, notes: WayNotes, rea
     return { near: canWorkOn(bot, cell), timedOut: gone.timedOut, stuck: gone.stuck };
   } finally { try { if (previous) navigator.setMovements(previous); } catch { /* kept */ } }
 }
+
+/** A cell that is over the reach by no more than this many metres is stepped toward (a step or two), not refused (run 8: 5.1 m and 6.3 m stopped as out_of_reach). */
+export const REACH_SLACK_M = 2;
+/**
+ * The hands that work on a cell (dig, place, furnace) hold to the reach (5 m from the eyes). A cell just over it: the body walks the way only (nothing dug, nothing laid) to a stand
+ * within reach, in a few seconds. True when the cell is in reach afterwards; a cell farther than REACH_SLACK_M over, or no way, is false and the hand says out_of_reach as before.
+ */
+export async function stepIntoReach(ctx: StepContext, cell: Cell, reach: number): Promise<boolean> {
+  const bot = ctx.bot;
+  const distance = eyeDistance(bot, cell);
+  if (distance <= reach) return true;
+  if (distance > reach + REACH_SLACK_M) return false;
+  const navigator = bot.pathfinder as { movements?: unknown; setMovements(movements: unknown): void } | undefined;
+  if (!navigator) return false;
+  const previous = navigator.movements;
+  try {
+    navigator.setMovements(walkMovements(bot, false));
+    // The goal is a standing place (feet) near the cell: the eyes are some 1.6 m up, so the range keeps them inside the reach.
+    await goWith(ctx, new goals.GoalNear(cell.x, cell.y, cell.z, Math.max(1, reach - 2.2)), Math.max(500, Math.min(3000, ctx.deadline - Date.now())), { opened: [], leaves: 0 });
+  } catch (error) {
+    if (!(error instanceof Error) || /Action interrupted/u.test(error.message) || error.name === 'StepStopped') throw error;
+  } finally { letGo(bot); try { if (previous) navigator.setMovements(previous); } catch { /* kept */ } }
+  return eyeDistance(bot, cell) <= reach;
+}

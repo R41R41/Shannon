@@ -169,11 +169,18 @@ describe('pickaxes: the best one decides, a worn-out one is the last choice, a s
   const stone = registry.blocksByName.stone as any;
   const block = { harvestTools: stone.harvestTools, digTime: (type: number | null) => type === registry.itemsByName.stone_pickaxe.id ? 600 : type === registry.itemsByName.iron_pickaxe.id ? 400 : 7500 };
   const pick = (name: string, used: number, max: number) => ({ name, type: registry.itemsByName[name].id, count: 1, maxDurability: max, durabilityUsed: used });
-  it('chooses a sound pickaxe over the cheaper one about to break, and the worn one only when nothing else does', () => {
-    expect(nearlyBroken(pick('stone_pickaxe', 130, 131))).toBe(true);
-    expect(chooseTool(block as any, [pick('stone_pickaxe', 130, 131), pick('iron_pickaxe', 10, 250)], { requireHarvest: true })?.name).toBe('iron_pickaxe');
+  it('uses a wooden, stone or iron tool to the last use, keeps the diamond one at its last, and finishes a half-used tool first', () => {
+    expect(nearlyBroken(pick('stone_pickaxe', 130, 131))).toBe(false);
+    expect(nearlyBroken(pick('iron_pickaxe', 248, 250))).toBe(false);
+    expect(nearlyBroken(pick('diamond_pickaxe', 1559, 1561))).toBe(true);
+    expect(chooseTool(block as any, [pick('stone_pickaxe', 130, 131), pick('iron_pickaxe', 10, 250)], { requireHarvest: true })?.name).toBe('stone_pickaxe');
     expect(chooseTool(block as any, [pick('stone_pickaxe', 130, 131)], { requireHarvest: true })?.name).toBe('stone_pickaxe');
-    expect(chooseTool(block as any, [pick('stone_pickaxe', 10, 131), pick('iron_pickaxe', 10, 250)], { requireHarvest: true })?.name).toBe('stone_pickaxe');
+    // Same cost (two stone pickaxes): the one with fewer uses left, in either order.
+    expect(chooseTool(block as any, [pick('stone_pickaxe', 0, 131), pick('stone_pickaxe', 100, 131)], { requireHarvest: true })).toMatchObject({ durabilityUsed: 100 });
+    expect(chooseTool(block as any, [pick('stone_pickaxe', 100, 131), pick('stone_pickaxe', 0, 131)], { requireHarvest: true })).toMatchObject({ durabilityUsed: 100 });
+    // The diamond pickaxe at its last uses is the last choice.
+    const dblock = { harvestTools: stone.harvestTools, digTime: (type: number | null) => type === registry.itemsByName.diamond_pickaxe.id ? 100 : type === registry.itemsByName.iron_pickaxe.id ? 400 : 7500 };
+    expect(chooseTool(dblock as any, [pick('diamond_pickaxe', 1559, 1561), pick('iron_pickaxe', 10, 250)], { requireHarvest: true })?.name).toBe('iron_pickaxe');
   });
   it('stair-mine goes on while one pickaxe is sound, whatever the others', () => {
     const bot: any = { version: '1.21.11', inventory: { items: () => [pick('stone_pickaxe', 130, 131), pick('iron_pickaxe', 10, 250)] } };

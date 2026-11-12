@@ -2,7 +2,7 @@ import { captureFurnaceProperties } from './furnaceProperties.js';
 import { type Cell } from '../localMap.js';
 import { itemsPerFuel } from '../fuelValues.js';
 import pathfinder from 'mineflayer-pathfinder';
-import { getNear } from './getNear.js';
+import { getNear, stepIntoReach } from './getNear.js';
 import { goWith, walkMovements, type WayNotes } from './walk.js';
 import { noteStationContents } from './stationLedger.js';
 import { blockAt, cellText, eyeDistance, findItem, guard, inventoryCount, placeText, stopped, StepStopped, USE_REACH, wait,
@@ -89,6 +89,7 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     forgetBatch(bot, cell);
     return fail(stopped(bot, 'not_furnace', `${placeText(bot, cell)} は ${block.name}（かまどではない）`, cell));
   }
+  if (eyeDistance(bot, cell) > USE_REACH) await stepIntoReach(ctx, cell, USE_REACH);
   const distance = eyeDistance(bot, cell);
   if (distance > USE_REACH) return fail(stopped(bot, 'out_of_reach', `${placeText(bot, cell)} の ${block.name} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell));
   if (args.put && !findItem(bot, args.put.item)) return fail(stopped(bot, 'missing_item', `${args.put.item} を持っていない`, cell));
@@ -111,10 +112,19 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
   let occupiedBy: string | undefined;
   const putFuel = async () => {
     if (!args.fuel) return;
-    const current = window.fuelItem();
+    let current = window.fuelItem();
     if (current && current.name !== args.fuel.item) {
-      notes.push(`燃料の枠には既に ${current.name}×${current.count} があり、${args.fuel.item} は入れていない`);
-      return;
+      // Run 8: the slot held other fuel (planks) and the coal the body carried was left out; the slot holds one kind: the old fuel is taken back to the pack and the asked fuel goes in
+      // (a flame already burning goes on with what it has; it is the stack waiting behind it that changes).
+      const old = current;
+      const swapped = findItem(bot, args.fuel.item) ? await guard(ctx, Promise.resolve(window.takeFuel()), 3000) : null;
+      if (!swapped) {
+        notes.push(`燃料の枠には既に ${old.name}×${old.count} があり、${args.fuel.item} は入れていない`);
+        return;
+      }
+      notes.push(`枠の燃料 ${old.name}×${old.count} を取り出して入れ替えた`);
+      current = window.fuelItem();
+      if (current) return;
     }
     const have = inventoryCount(bot, args.fuel.item);
     const count = Math.min(have, Math.max(1, Math.round(args.fuel.count ?? 1)), 64 - (current?.count ?? 0));
@@ -188,11 +198,14 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     const timing = !input ? '' : burning === null || remaining === null ? '。燃焼・進みの通知が未確認（燃料切れとは判断できない）' : !(fuel || burning) ? '。燃料が無く、燃えてもいない（このままでは焼けない）'
       : unfueled > 0 ? `。燃料で焼けるのは約 ${fueled} 個まで（材料 ${input.count}）。あと ${unfueled} 個分の燃料が要る（${fuelNeedWords(unfueled)}）。約${Math.round(remaining)}秒で止まる`
         : `。焼き上がり 約${Math.round(remaining)}秒後`;
+    // Run 8: a take that came out short (the batch is still smelting): the furnace's state said in the same line, so the next hand is not a blind second take.
+    const smeltingNote = args.take && moved.took > 0 && input && remaining !== null && (args.take === 'output' || args.take === 'all')
+      ? `まだ ${input.count} 個が焼けている中（材料 ${input.name}×${input.count}・燃料 ${fuel ? `${fuel.name}×${fuel.count}` : '無し'}${burning ? '・燃焼中' : ''}・あと約${Math.round(remaining)}秒）。` : '';
     const items = [input, fuel, output].filter(Boolean).map((item: any) => `${item.name}×${item.count}`);
     const look: FurnaceLook = { kind: block.name, input: stackOf(input), fuel: stackOf(fuel), output: stackOf(output), burning, remainingSec: input ? remaining : null };
     return { moved, look, ...(occupiedBy ? { occupiedBy } : {}), outcome: { ok: true, at: cell, data: { container: { at: cell, kind: block.name, items } },
       // Run 43: the time and what the fuel will not smelt first (the hand's line is 160 characters), then what was moved and the slots.
-      text: `${args.take && moved.took === 0 && input && remaining !== null && remaining > 0 ? `まだ出来ていない（あと約${Math.round(remaining)}秒。待たずに別の作業を進め、時間が来たらもう一度 take）。` : ''}${timing ? `${timing.replace(/^。/u, '')}。` : ''}${notes.length ? `${notes.join('、')}。` : ''}${cellText(cell)} の ${block.name}: 材料 ${slotText(input)}・燃料 ${slotText(fuel)}・出来上がり ${slotText(output)}${burning ? '（燃えている）' : ''}` } };
+      text: `${smeltingNote}${args.take && moved.took === 0 && input && remaining !== null && remaining > 0 ? `まだ出来ていない（あと約${Math.round(remaining)}秒。待たずに別の作業を進め、時間が来たらもう一度 take）。` : ''}${timing ? `${timing.replace(/^。/u, '')}。` : ''}${notes.length ? `${notes.join('、')}。` : ''}${cellText(cell)} の ${block.name}: 材料 ${slotText(input)}・燃料 ${slotText(fuel)}・出来上がり ${slotText(output)}${burning ? '（燃えている）' : ''}` } };
   } finally { properties.close(); try { window.close(); } catch { /* closed */ } }
 }
 

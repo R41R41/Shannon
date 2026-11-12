@@ -164,6 +164,18 @@ describe('act: the hands and where they stop', () => {
       expect(went.lines[0].line.endsWith('そのマスは stone')).toBe(true);
     });
 
+    it('independent hands go on after a failed one, and only the hand that depends on it is left unrun (run 8)', async () => {
+      const { bot } = body();
+      const dig = { do: 'dig', at: [{ x: 9, y: 63, z: 0 }] };
+      const walk = { do: 'walk', to: { x: 1, y: 64, z: 0 } };
+      // The dig stops the act (no onFail); the hand that says it depends on nothing (dependsOn []) still goes, the one that depends on the dig does not.
+      const stopped = parse(await runAct(bot, hands([dig, { ...walk, dependsOn: [] }, { ...walk, dependsOn: [1] }])));
+      expect(stopped.lines.map((line: any) => line.status)).toEqual(['stopped', 'done', 'skipped']);
+      // With onFail continue on the dig: the independent hands go, the dependent one is still skipped.
+      const went = parse(await runAct(bot, hands([{ ...dig, onFail: 'continue' }, { ...walk, dependsOn: [] }, { ...walk, dependsOn: [1] }])));
+      expect(went.lines.map((line: any) => line.status)).toEqual(['failed', 'done', 'skipped']);
+    });
+
     it('an equip with onFail stop stops; an act of hands that all fail but go on says every line, and ok stays false', async () => {
       const { bot } = body();
       const stopped = parse(await runAct(bot, hands([{ do: 'equip', item: 'stone_sword', onFail: 'stop' }, { do: 'jump' }])));

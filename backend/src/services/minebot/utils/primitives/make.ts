@@ -123,6 +123,33 @@ export async function make(ctx: StepContext, input: MakeArgs): Promise<StepOutco
   });
 }
 
+const lastMissing = new WeakMap<object, { key: string; times: number }>();
+/**
+ * Run 8: a make that stops for want of materials said only what was short; the body then stood at the same table and tried again, with the iron in a furnace that was not done.
+ * The furnaces the body knows of (what is in them, the seconds to the batch), the way to a table, and from the second stop at the same place for the same reason, what to do instead.
+ */
+export function missingContext(bot: any, lacking: string): string {
+  const feet = feetCell(bot);
+  const parts: string[] = [];
+  const now = Date.now();
+  const dimension = String(bot.game?.dimension ?? '');
+  const furnaces = ((bot.activeFurnaces ?? []) as any[]).filter(f => f?.pos && (!f.dimension || !dimension || f.dimension === dimension));
+  let eta = 0;
+  for (const f of furnaces.slice(0, 2)) {
+    const seconds = Math.max(0, Math.round((Number(f.readyAt) - now) / 1000));
+    eta = Math.max(eta, seconds);
+    parts.push(`かまど ${cellText(f.pos)}${feet ? `（${relativeWords(feet, f.pos)}）` : ''} ${f.item}×${f.count}${seconds > 0 ? ` あと約${seconds}秒` : ' 焼き上がり済み（take で取れる）'}`);
+  }
+  const table = nearestTable(bot);
+  if (table && feet) parts.push(`作業台 ${cellText(table)} まで ${Math.round(Math.hypot(table.x - feet.x, table.y - feet.y, table.z - feet.z))}m`);
+  const key = `${feet ? `${feet.x},${feet.y},${feet.z}` : '-'}|${lacking}`;
+  const previous = lastMissing.get(bot);
+  const times = previous && previous.key === key ? previous.times + 1 : 1;
+  lastMissing.set(bot, { key, times });
+  if (times >= 2) parts.push(eta > 0 ? `同じ所・同じ理由の ${times} 回目: かまどの出来上がり（約${eta}秒後）まで別の作業を進めてから、もう一度` : `同じ所・同じ理由の ${times} 回目: 材料を先に集める（同じ make を重ねても足りないまま）`);
+  return parts.length ? `。${parts.join('。')}` : '';
+}
+
 /** When a log is what a make lacks: how much wood stands near (the frame's own scan), and the mine that would cover it. Empty when no log is lacking or nothing was scanned. */
 function woodShortWords(bot: any, short: Map<string, number>): string {
   const logName = [...short.keys()].find(part => /_log$/u.test(part));
@@ -148,7 +175,7 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
   if (!obtain(bot, name, before + count, state, [])) {
     const lacking = [...state.short.entries()].map(([part, n]) => `${part}×${n}`);
     const held = stacksOut(new Map([...stock.entries()].filter(([, n]) => n > 0).slice(0, 8)));
-    return fail(bot, 'missing', `${lacking.join('・') || '?'}（作る物 ${name}×${count} と途中の物の分。何も作っていない${held.length ? `。持っている ${held.join(' ')}` : ''}）${woodShortWords(bot, state.short)}`);
+    return fail(bot, 'missing', `${lacking.join('・') || '?'}（作る物 ${name}×${count} と途中の物の分。何も作っていない${held.length ? `。持っている ${held.join(' ')}` : ''}）${woodShortWords(bot, state.short)}${missingContext(bot, lacking.join('・'))}`);
   }
   // Room in the pack for what comes of it: a pack with no free slot takes the item only into a stack it already has.
   if (freeSlots(bot) === 0) {

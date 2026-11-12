@@ -55,7 +55,9 @@ export function chooseTool<T extends ToolLike>(block: BlockLike, items: T[], opt
     for (const item of candidates) {
       if (options.requireHarvest && !canHarvest(block, item)) continue;
       const cost = toolCost(block, item, options.effects, [], options.fastest === true);
-      if (cost < bestCost) { bestCost = cost; best = item; }
+      // Same cost: the one with fewer uses left goes first, so a half-used tool is finished before a fresh one is started.
+      const fewerLeft = cost === bestCost && best !== null && item !== null && (usesLeft(item) ?? Infinity) < (usesLeft(best) ?? Infinity);
+      if (cost < bestCost || fewerLeft) { bestCost = cost; best = item; }
     }
     return { best, bestCost };
   };
@@ -127,7 +129,13 @@ export function usesLeft(item: { maxDurability?: number; durabilityUsed?: number
 }
 /** At most this many uses left: kept for when nothing else will do. */
 export const NEARLY_BROKEN_USES = 2;
-export function nearlyBroken(item: { maxDurability?: number; durabilityUsed?: number } | null | undefined): boolean {
+/**
+ * Only the dear tiers (diamond, netherite) are held back at their last uses. A wooden, stone, golden or iron tool is
+ * used until it breaks: run 8 dropped them at 2 uses left and the pack filled with half-used pickaxes.
+ */
+const KEPT_AT_LAST_USES = /^(diamond|netherite)_/u;
+export function nearlyBroken(item: { name?: string; maxDurability?: number; durabilityUsed?: number } | null | undefined): boolean {
+  if (!item || !KEPT_AT_LAST_USES.test(String(item.name ?? ''))) return false;
   const left = usesLeft(item);
   return left !== null && left <= NEARLY_BROKEN_USES;
 }

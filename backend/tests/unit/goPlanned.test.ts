@@ -190,6 +190,46 @@ describe('go: the route search walks first; the plan walks when it stops for wan
     expect(sim.bot.dugBlocks).toEqual([]);
   });
 
+  // Run 8: the plan is asked for at the route search's first search_timeout, before the part it found is walked (args.onSearchedOut, given by goPlannedWith).
+  it('the route search asks for the plan at its first search_timeout: the plan walks through the wall before anything else, with no second walk needed', async () => {
+    const sim = makeSim(wall, { items: stacks(PICK) });
+    let asked = 0;
+    const walk: GoWalk = async (_ctx, args) => {
+      asked++;
+      const out = await args.onSearchedOut!({ dug: 0, placed: 0 });
+      return out.moved ? { ok: true, text: 'go 着いた', data: { work: { dug: 0, placed: 0, steps: 0, redraws: 0 } } } : out.stop ?? stops('search_timeout');
+    };
+    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'] }, walk));
+    expect(outcome.ok).toBe(true);
+    expect(Math.floor(sim.bot.entity.position.x)).toBe(8);
+    expect(sim.bot.dugBlocks.length).toBeGreaterThanOrEqual(3);
+    expect(asked).toBe(1);
+  });
+
+  it('a way that needs more digging than is left is not begun: the stop names the maxDig it needs, and nothing is dug', async () => {
+    const sim = makeSim(wall, { items: stacks(PICK) });
+    const walk: GoWalk = async (_ctx, args) => {
+      const out = await args.onSearchedOut!({ dug: 0, placed: 0 });
+      return out.stop ?? stops('search_timeout');
+    };
+    const outcome = await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'], maxDig: 2 }, walk));
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toBe('limit_dig');
+    expect(outcome.text).toMatch(/計画の道は掘る所が \d+ あり.*出し直しは maxDig=\d+ 以上/u);
+    expect(sim.bot.dugBlocks).toEqual([]);
+  });
+
+  it('no plan is asked for when the seconds are used up', async () => {
+    const sim = makeSim(wall, { items: stacks(PICK) });
+    const ctx = ctxOf(sim);
+    ctx.deadline = Date.now() + 300;
+    let moved: boolean | null = null;
+    const walk: GoWalk = async (_c, args) => { moved = (await args.onSearchedOut!({ dug: 0, placed: 0 })).moved; return stops('search_timeout'); };
+    await drive(sim, goPlannedWith(ctx, { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'] }, walk));
+    expect(moved).toBe(false);
+    expect(sim.bot.dugBlocks).toEqual([]);
+  });
+
   it('limit_dig: a plan that digs more than maxDig is not walked (the limit is not raised)', async () => {
     const sim = makeSim(wall, { items: stacks(PICK) });
     const { walk } = stopsOnce('limit_dig');

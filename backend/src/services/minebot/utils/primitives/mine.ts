@@ -168,6 +168,8 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   const attempts = new Map<string, number>();
   let sincePick = 0, failsInARow = 0, missedNote = '', capped = false, footNote = '';
   let pocketDug = 0, pocketMs = 0, pocketDrops = 0, treesHopped = 0, hopFound = true;
+  /** The plan's words (utils/routePlan, via go) when the last approach was walked by it: said on a failed approach's line, only then. */
+  let approachNote = '';
   const isLogKind = /_log$/u.test(block);
   const pocketTried = new Set<number>();
 
@@ -357,6 +359,11 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
    * (go's own rules), so a cell that cannot be reached is told at once.
    */
   async function approach(cell: Cell): Promise<{ fatal: boolean; reason: string; text: string } | null> {
+    const found = await approachWay(cell);
+    return found && approachNote ? { ...found, text: `${found.text}（${approachNote}）` } : found;
+  }
+  async function approachWay(cell: Cell): Promise<{ fatal: boolean; reason: string; text: string } | null> {
+    approachNote = '';
     if (Date.now() >= ctx.deadline) return { fatal: true, reason: 'limit_time', text: `${seconds} 秒の上限に着いた` };
     const beside = FACES.map(([dx, dy, dz]) => ({ x: cell.x + dx, y: cell.y + dy, z: cell.z + dz }))
       .filter(at => { const name = blockAt(bot, at)?.name; return name !== undefined && !isLiquid(name); });
@@ -365,6 +372,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     const gone = await go(ctx, { goals: beside, range: 0, canDig: roadLeft > 0 ? roadWords : undefined, maxDig: roadLeft, canPlace: undefined,
       seconds: Math.max(5, Math.min(APPROACH_SECONDS, (ctx.deadline - Date.now()) / 1000)) });
     result.road += Number(gone.data?.work?.dug ?? 0);
+    approachNote = /計画の道: [^。（）]*/u.exec(gone.text)?.[0] ?? '';
     await wait(ctx, 100);
     if (reachable(cell)) return null;
     const why = gone.ok ? `${placeText(bot, cell)} の隣まで行ったが、手が届かない・見えない` : gone.text.replace(/^go 止まった [a-z_]+: /u, '');

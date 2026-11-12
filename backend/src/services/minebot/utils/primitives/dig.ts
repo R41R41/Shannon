@@ -21,6 +21,7 @@ import { noteDugCell } from './dugCells.js';
 import { noteSealed, sealWetFaces, wetFaces } from './wetWall.js';
 import { damBlockHeld } from './stanch.js';
 import { place } from './place.js';
+import { stepIntoReach } from './getNear.js';
 
 /**
  * dig: the cells in order (design mb-llm-centric 2.3). The tool is the one asked for, else the quickest carried that makes the block
@@ -248,6 +249,7 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     const wet = footingWater(bot, cell);
     if (wet) return result(stopped(bot, 'footing', `${placeText(bot, cell)} は足の下の柱。掘ると下の水 ${cellText(wet.at)} に落ちる。落ちても傷は無いが、水の中は床が無く、`
       + `天井が石なら上がれなくなる（息も減る）。横の固い床へ動いてから横向きに掘るか、先に水を塞ぐ`, cell));
+    if (eyeDistance(bot, cell) > DIG_REACH) await stepIntoReach(ctx, cell, DIG_REACH);
     const distance = eyeDistance(bot, cell);
     if (distance > DIG_REACH) return result(stopped(bot, 'out_of_reach', `${placeText(bot, cell)} の ${block.name} に届かない（目から${distance.toFixed(1)}m、${DIG_REACH}m まで）`, cell));
     // The eye has to see a face of it (run 28: 31 digs "Digging aborted" at cells behind stone, the reason never said). Cells dug before in

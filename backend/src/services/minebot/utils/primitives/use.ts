@@ -8,6 +8,7 @@ import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, find
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { BED_HALF_WAIT_MS } from './place.js';
 import { fillFromStand } from './fillStand.js';
+import { stepIntoReach } from './getNear.js';
 import { compassOf, eyeReportOf, EYE_FATE_MS, EYE_WATCH_MS, watchEyeFlight } from '../huntEyeFlight.js';
 import { barterMany, barterWithPiglin } from '../huntBarter.js';
 import { blastAt } from '../crystalBlast.js';
@@ -257,6 +258,20 @@ async function blowBed(ctx: StepContext, cell: Cell, block: any): Promise<StepOu
   return { ok: true, at: cell, data: seen.data, text: `${cellText(cell)} のベッドが${seen.blew}` };
 }
 
+const lastUnfilled = new WeakMap<object, { key: string; times: number }>();
+/** Which way the eyes face against the cell: "向きは目標から右へ 40°" (0° is straight at it). */
+export function facingWords(bot: any, cell: Cell): string {
+  const at = bot.entity?.position;
+  const yaw = Number(bot.entity?.yaw);
+  if (!at || !Number.isFinite(yaw)) return '向き不明';
+  const target = Math.atan2(-(cell.x + 0.5 - at.x), -(cell.z + 0.5 - at.z));
+  let diff = ((yaw - target) * 180 / Math.PI) % 360;
+  if (diff > 180) diff -= 360;
+  if (diff < -180) diff += 360;
+  const degrees = Math.round(Math.abs(diff));
+  return degrees < 5 ? '向きは目標どおり' : `向きは目標から${diff > 0 ? '左' : '右'}へ ${degrees}°`;
+}
+
 export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const name = args.item ?? bot.heldItem?.name ?? null;
@@ -307,6 +322,8 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
     if (through && through.reason !== 'stand_unreachable') return through.ok ? { ...through, text: `${instead}${through.text}` } : through;
     standNote = through ? `（${through.text}）` : '';
   }
+  // Run 8: a source a step or two out of reach is stepped toward (the way only), not refused for the head to walk and ask again.
+  if (distance > USE_REACH && await stepIntoReach(ctx, cell, USE_REACH)) distance = eyeDistance(bot, cell);
   if (distance > USE_REACH) return stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）${standNote}`
     + (name === 'bucket' && (block.name === 'water' || block.name === 'lava') ? `。${USE_REACH}m 内に見えて届く${block.name === 'water' ? '水' : '溶岩'}の源は無い: 源の隣の立てる所へ go してから use` : ''), cell);
   // A bed (r8: before any item is looked at; the bed is slept in with an empty hand). In the Nether and the End it cannot be slept in: the right click is a blast, and a use hand
@@ -323,8 +340,12 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
     const ok = await waitUntil(ctx, () => inventoryCount(bot, 'bucket') < before || bot.heldItem?.name === filled, 1500);
     if (!ok) {
       const between = lineBlocker(bot, cell);
+      const key = `${cell.x},${cell.y},${cell.z}`;
+      const last = lastUnfilled.get(bot);
+      const times = last && last.key === key ? last.times + 1 : 1;
+      lastUnfilled.set(bot, { key, times });
       return stopped(bot, 'not_filled', `${placeText(bot, cell)} の ${block.name} を汲めなかった（${between
-        ? `目との間の ${cellText(between.cell)} が ${between.name}` : '視線が届かないか、手前に何かある'}。今 ${cellNow(bot, cell)}）`, cell);
+        ? `目との間の ${cellText(between.cell)} が ${between.name}` : '視線が届かないか、手前に何かある'}。目から${distance.toFixed(1)}m・${facingWords(bot, cell)}。今 ${cellNow(bot, cell)}）${times >= 2 ? `。同じ座標で ${times} 回目: 別の源を指すか、立つ位置を変えてから` : ''}`, cell);
     }
     return { ok: true, text: `${instead}${cellText(cell)} の ${block.name} 源を汲んだ（${filled}）`, at: cell };
   }

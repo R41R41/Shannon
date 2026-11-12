@@ -100,6 +100,11 @@ export interface GoArgs {
    * run on a faked clock give a search no time limit of its own (a slow machine would run it out and the line would say dead_end instead of the reason).
    */
   searchMs?: number;
+  /**
+   * Run 8: asked when a search of the road first runs out of its time, before the part it found is walked: the plan (utils/routePlan) is drawn and walked there
+   * (goPlanned gives it). `moved`: the body went somewhere by it, the route search goes on from there; `stop`: the go ends with it.
+   */
+  onSearchedOut?: (at: { dug: number; placed: number }) => Promise<{ moved: boolean; stop?: StepOutcome }>;
 }
 
 export const GO_DEFAULTS = { range: 0.5, maxDrop: 3, seconds: 60, maxDig: 40, maxPlace: 24 } as const;
@@ -1113,7 +1118,13 @@ export const PLAN_MS = 300;
 /** The plan is made again at most this many times when the body is not where it said. */
 export const PLAN_REPLANS = 3;
 /** After the pathfinder has stopped: less than this left of the go's seconds, no plan is begun. */
-const PLAN_MIN_LEFT_MS = 4000;
+const PLAN_MIN_LEFT_MS = 1500;
+/** When the route search first runs out of its time, a plan is drawn if this much of the go's seconds is left (a plan's own time and a step). */
+const PLAN_ON_SEARCH_MIN_MS = 800;
+/** The plans a go's own route search asks for when it first runs out of its time (goPlanned's onSearchedOut). */
+const PLAN_ON_SEARCH_OUT = 2;
+/** The most the plan is asked to dig, to say what a way that is over the limit would need (go's own maxDig ceiling). */
+const PLAN_NEED_PROBE_DIG = 200;
 /** Less than this left of the go's seconds: the pathfinder is not asked again. */
 const AGAIN_MIN_LEFT_MS = 1000;
 
@@ -1289,7 +1300,31 @@ export async function goPlannedWith(ctx: StepContext, args: GoArgs, walk: GoWalk
     return { ...stopped(bot, code, text, at ?? undefined), data: { work: { dug: before.dug + done.digs, placed: before.placed + done.places, steps: before.steps + done.steps, redraws: 0 } } };
   };
 
-  const first = await walk(ctx, args);
+  /**
+   * The route search's first search_timeout: the plan is drawn and walked at once (no gate on the seconds left beyond a plan's own time). A way that needs more digging than
+   * is left is not begun; the stop says the maxDig it needs, so the head sends the go again with it (run 8: a go dug 74 and spent 115 s on a way the limit did not cover).
+   */
+  const onSearchedOut = async (at: { dug: number; placed: number }): Promise<{ moved: boolean; stop?: StepOutcome }> => {
+    if (end - Date.now() < PLAN_ON_SEARCH_MIN_MS || !goalCells.length) return { moved: false };
+    const left = { dig: maxDig - at.dug, place: maxPlace - at.placed };
+    const plan = makePlan(left, PLAN_MS);
+    if (!fits(plan, left, true)) {
+      const probe = makePlan({ dig: PLAN_NEED_PROBE_DIG, place: left.place }, PLAN_MS);
+      if (probe && probe.status === 'success' && probe.steps.length > 0 && probe.totals.dig > left.dig && probe.totals.place <= left.place) {
+        const need = probe.totals.dig;
+        const text = clip(`go 止まった limit_dig: 計画の道は掘る所が ${need} あり、上限 ${maxDig} の残り ${Math.max(0, left.dig)} を超える（出し直しは maxDig=${need + 2} 以上）`, 160);
+        return { moved: false, stop: { ...stopped(bot, 'limit_dig', text, feetCell(bot) ?? undefined), data: { work: { dug: at.dug, placed: at.placed, steps: 0, redraws: 0 } } } };
+      }
+      return { moved: false };
+    }
+    if (plan.totals.place > 0 && plan.status !== 'success') return { moved: false };
+    const done = await walkPlan(plan, left, 'search_timeout');
+    const hard = guarded(done, { dug: at.dug, placed: at.placed, steps: 0 });
+    if (hard) return { moved: false, stop: hard };
+    return { moved: moved(done) };
+  };
+
+  const first = await walk(ctx, args.onSearchedOut ? args : { ...args, onSearchedOut });
   const code = first.reason ?? '';
   if (first.ok || ctx.stop?.aborted || !PLAN_STOPS.has(code)) return first;
   const before = { dug: first.data?.work?.dug ?? 0, placed: first.data?.work?.placed ?? 0, steps: first.data?.work?.steps ?? 0 };
@@ -2096,7 +2131,7 @@ export async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcom
     }
   };
 
-  let attempt = 0, noway = 0, mends = 0, partialWalks = 0;
+  let attempt = 0, noway = 0, mends = 0, partialWalks = 0, plansAsked = 0;
   /**
    * S8 (2026-11-05; S4's c1 lab: 144 m, one of four ended 44 m short on search_timeouts in a row; 249 m, four search_timeouts): the same search from the same place ran
    * out of its time twice, and the part it found comes no nearer. The body cuts the way itself: a point on the straight line 24 m on (then 12 m), any height within
@@ -2323,6 +2358,14 @@ export async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcom
         if (climbed.stop) return climbed.stop;
       }
       if (found.status === 'timeout') {
+        // Run 8 (the plan never ran: the route search spent the go's seconds on search_timeouts first): the plan is drawn now, before the part the search found is walked.
+        if (args.onSearchedOut && plansAsked < PLAN_ON_SEARCH_OUT) {
+          plansAsked++;
+          letGo(bot);
+          const planned = await args.onSearchedOut({ dug: state.dug, placed: state.placed });
+          if (planned.stop) return planned.stop;
+          if (planned.moved) { state.redraws++; noway = 0; continue; }
+        }
         // The part of the way the search had found when its time ran out: walked when its end is nearer the place by 2 m or more.
         const tip = found.path.length ? found.path[found.path.length - 1] : null;
         // Run 45 (hold 1, at y=33 with 61 of maxDig 80 dug): the part of the way the search had found broke more than the limit left, so it was
