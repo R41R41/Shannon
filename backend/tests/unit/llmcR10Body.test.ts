@@ -345,4 +345,28 @@ describe('run62 #11 #9: a skeleton\'s arrows at a bare body (02:34:22 to 37: 4, 
     expect(covers(ledger)).toHaveLength(0);
     end(); endEngagement();
   });
+  // Run 8 (11/13, E2, design-skeleton B2): a body with a sword, iron and a shield was run 19 times by the cover out of its fight's 8 m. For one skeleton it may close in on, the cover
+  // lays one block on the line and waits behind it, then gives the body to the planner for that skeleton; a second time the cover goes on as before.
+  it('run 8 B2: one block on the line and a wait behind it, then no cover hand for that skeleton (it goes to the head), once', async () => {
+    const SWORD = { name: 'iron_sword', type: 2, count: 1 };
+    const { bot, ledger, clock, skeleton } = scene(false, [COBBLE, SWORD]);
+    Object.assign(bot.inventory.slots, { 5: { name: 'iron_helmet' }, 6: { name: 'iron_chestplate' }, 45: { name: 'shield' } });
+    tick(bot);
+    clock.at += 1000; shotBy(bot, 9727, 4); tick(bot);
+    await vi.waitFor(() => expect(bot.__placed).toHaveLength(1), { timeout: 4000, interval: 5 });
+    delete bot.entities[9727];   // it goes: the wait ends
+    await vi.waitFor(() => expect(bot.floorReflexes.busy).toBeNull(), { timeout: 4000, interval: 5 });
+    expect(covers(ledger)).toHaveLength(1);
+    expect(covers(ledger)[0].detail).toContain('陰で待つ');
+    expect(covers(ledger)[0].detail).toContain('待った: 居なくなった');
+    bot.entities[9727] = skeleton;
+    bot.__blocks.clear();   // it sees the body again
+    clock.at += 500; shotBy(bot, 9727, 4); tick(bot);
+    await quiet(bot, clock, 1);
+    expect(covers(ledger)).toHaveLength(1);
+    expect(bot.floorReflexes.coverYield?.id).toBe(9727);
+    clock.at += 5000; shotBy(bot, 9727, 4); tick(bot);
+    await vi.waitFor(() => expect(covers(ledger).length).toBeGreaterThan(1), { timeout: 4000, interval: 5 });
+    expect(covers(ledger)[1].detail).not.toContain('陰で待つ');
+  });
 });

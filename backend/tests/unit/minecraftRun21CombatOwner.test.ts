@@ -259,4 +259,23 @@ describe('close in on a lone archer rather than run', () => {
     const zombie = skeletonBody(); zombie.entities[2].name = 'zombie';
     expect(closeInAdvised(zombie)).toBe(false);
   });
+
+  // Run 8 (11/13, E2): iron helmet and chestplate, golden boots and a shield (9 points), a zombie 6 m off beside the skeleton: false both times, and the skeleton took the body
+  // from 20 to 2.2 in 85 s.
+  it('is advised with a shield and eight points, with one melee enemy near; not with two, nor a creeper near, nor a witch in reach', () => {
+    const kit = { 5: { name: 'iron_helmet' }, 6: { name: 'iron_chestplate' }, 8: { name: 'golden_boots' }, 45: { name: 'shield' } };
+    expect(closeInAdvised(skeletonBody({}, kit))).toBe(true);
+    expect(closeInAdvised(skeletonBody({}, { 5: { name: 'iron_helmet' }, 6: { name: 'iron_chestplate' }, 8: { name: 'golden_boots' } }))).toBe(false);   // no shield
+    const withZombie = skeletonBody({}, kit); withZombie.entities[3] = { id: 3, name: 'zombie', position: new Vec3(6, 65, 0), isValid: true };
+    expect(closeInAdvised(withZombie)).toBe(true);
+    const twoZombies = skeletonBody({}, kit); twoZombies.entities[3] = { id: 3, name: 'zombie', position: new Vec3(6, 65, 0), isValid: true };
+    twoZombies.entities[4] = { id: 4, name: 'zombie', position: new Vec3(-5, 65, 0), isValid: true };
+    expect(closeInAdvised(twoZombies)).toBe(false);
+    const farCreeper = skeletonBody({}, kit); farCreeper.entities[3] = { id: 3, name: 'creeper', position: new Vec3(-11, 65, 0), isValid: true };
+    expect(closeInAdvised(farCreeper)).toBe(true);
+    const witch = skeletonBody({}, kit); witch.entities[3] = { id: 3, name: 'witch', position: new Vec3(-14, 65, 0), isValid: true };
+    expect(closeInAdvised(witch)).toBe(false);
+    const twoArchers = skeletonBody({}, kit); twoArchers.entities[3] = { id: 3, name: 'stray', position: new Vec3(-12, 65, 0), isValid: true };
+    expect(closeInAdvised(twoArchers)).toBe(false);
+  });
 });

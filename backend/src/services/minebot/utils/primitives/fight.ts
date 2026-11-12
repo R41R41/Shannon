@@ -2,7 +2,7 @@ import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { buildMovements } from '../setMovements.js';
 import { beginEngagement, engageFor } from '../engagement.js';
-import { HEAD_COMBAT_YIELD_HEALTH, markHeadCombat } from '../combatOwner.js';
+import { HEAD_COMBAT_YIELD_HEALTH, isSkeletonKind, markHeadCombat } from '../combatOwner.js';
 import { createLogger } from '../../../../utils/logger.js';
 import { combatFootingRisk } from '../combatFooting.js';
 import { footingAt, footingWords as voidWords, VOID_DROP } from '../voidFooting.js';
@@ -86,6 +86,17 @@ const ZONE_IN = 3.0, ZONE_OUT = 3.6;
 const TOO_NEAR = 1.0, TOO_FAR = 2.6;
 const TICK_MS = 50;
 const DEFAULT_SECONDS = 20, DEFAULT_RANGE = 8;
+/**
+ * Run 8 (11/13, E2): a skeleton keeps 7.5 to 15 m off and walks back slowly when walked at; `fight #6480` ended "range 8m の外のまま（8.7m）" while it shot on. A skeleton
+ * kind is followed to 16 m when the planner names no range (a range it names stands).
+ */
+const SHOOTER_RANGE = 16;
+export function defaultFightRange(bot: any, target: FightArgs['target']): number {
+  const text = String(target ?? '').trim();
+  const id = typeof target === 'number' ? target : /^#\d+$/u.test(text) ? Number(text.slice(1)) : null;
+  const name = id !== null ? bot?.entities?.[id]?.name : text;
+  return isSkeletonKind(name) ? SHOOTER_RANGE : DEFAULT_RANGE;
+}
 /** A creature beyond the range for this long is gone (or never came in). */
 const OUT_OF_RANGE_MS = 2500;
 /** No nearer by this much for this long, while out of reach: it cannot be reached. */
@@ -498,7 +509,7 @@ const SPLITTERS = new Set(['magma_cube', 'slime']);
 async function fightKindOn(ctx: StepContext, args: FightArgs, started: number, first: StepOutcome): Promise<StepOutcome> {
   const bot = ctx.bot;
   const kind = String(args.target).trim().toLowerCase().replace(/^minecraft:/u, '');
-  const range = Math.max(4, Math.min(16, args.range ?? DEFAULT_RANGE));
+  const range = Math.max(4, Math.min(16, args.range ?? defaultFightRange(bot, args.target)));
   const endAt = Math.min(started + Math.max(5, Math.min(60, args.seconds ?? DEFAULT_SECONDS)) * 1000, ctx.deadline);
   const kills: StepOutcome[] = [];
   let out = first;
@@ -559,7 +570,7 @@ async function fightOnce(ctx: StepContext, args: FightArgs): Promise<StepOutcome
   const host = nativeActionHost(bot);
   const stance = args.stance === 'flee' ? 'flee' : 'fight';
   const seconds = Math.max(5, Math.min(60, args.seconds ?? DEFAULT_SECONDS));
-  const range = Math.max(0, Math.min(16, args.range ?? DEFAULT_RANGE));
+  const range = Math.max(0, Math.min(16, args.range ?? defaultFightRange(bot, args.target)));
   const askedRetreatHp = stance === 'fight' && typeof args.retreatHp === 'number' ? Math.max(1, Math.min(19, Math.round(args.retreatHp))) : null;
   const started = Date.now();
   const endAt = Math.min(started + seconds * 1000, ctx.deadline);
@@ -756,10 +767,12 @@ async function fightOnce(ctx: StepContext, args: FightArgs): Promise<StepOutcome
   const aimAt = (live: any) => { try { void Promise.resolve(bot.lookAt(live.position.offset(0, (live.height ?? 1.8) * 0.6, 0), true)).catch(() => undefined); } catch { /* the port is no longer ours */ } };
 
   // The shield reflex meeting a shot takes the look and the legs: this hand holds its own while that lasts.
-  const shield = (bot as { shieldBlock?: { raised: number; up: boolean } }).shieldBlock;
+  const shield = (bot as { shieldBlock?: { raised: number; up: boolean; keepLegs?: boolean } }).shieldBlock;
   let seenRaised = shield?.raised ?? 0, shotUntil = 0;
   const meetingShot = () => {
     if (!shield) return false;
+    // Run 8 (design-skeleton B1): a shot met from in front (or the drawing skeleton this fight is after) needs no turn and no stop: the fight walks on behind the shield.
+    if (shield.keepLegs) { seenRaised = shield.raised; return false; }
     if (shield.raised !== seenRaised) { seenRaised = shield.raised; shotUntil = Date.now() + SHOT_HOLD_MS; }
     return shield.up && Date.now() < shotUntil;
   };

@@ -1,7 +1,7 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { actionLeaseStatus, actionSignal, activeActionCapabilities, cancelCapability, createMotorPort, delegateShield, executeAction, hasActiveSafetyLease, inheritedIdleShield, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, reservationOf, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
-import { armourWorn, isHeadCombatActive, isHeadCombatRunning } from './combatOwner.js';
+import { armourWorn, closeInAdvised, isHeadCombatActive, isHeadCombatRunning, isSkeletonKind } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
 import { edgeRisk, fallIsDangerous } from './edgeGuard.js';
@@ -15,7 +15,7 @@ import { holdsWater } from './waterBlocks.js';
 import { bodyReader, feetCell } from './localMap.js';
 import { climbRise, enterable, MAX_CLIMB, passable, standable } from './walkRules.js';
 import { standableAt } from './standability.js';
-import { footingAt, footingWords, type Footing } from './voidFooting.js';
+import { footingAt, footingWords, rimSafeAgainst, type Footing } from './voidFooting.js';
 import { isBurning, lavaReleasedBy } from './lavaSafety.js';
 import { beginEngagement, engagedWithAny } from './engagement.js';
 import { holdShieldForDraw, noteShieldActivation, type ShieldBlockState } from './shieldBlock.js';
@@ -241,6 +241,10 @@ export interface FloorState {
   fallSizes?: Array<{ at: number; amount: number }>;
   /** run62 #17: cover が「射線が切れた」で終わった時刻（その後しばらく低体力の逃走は陰から出ない）。 */
   coverCutAt?: number;
+  /** Run 8 (B2): the skeleton the cover cut the line of and gave the body back for (the planner's fight closes in): no cover hand for it until `until`. */
+  coverYield?: { id: number; until: number };
+  /** Run 8 (B2): when the cover last cut the line of each skeleton and waited for it behind the block (once per AMBUSH_AGAIN_MS a skeleton: then the cover as before). */
+  coverAmbushed?: Map<number, number>;
   /** r8, the melee hand: the episode (hands made, when the last ended), the next look, the last "no hand" note. */
   melee?: { since: number; hands: number; lastEnd: number; /** r9: the hands that were blows (their own allowance). */ hits?: number;
     /** Continue contracts (4): the enemy of the episode's latest hand, the kind of that hand, and when the cap was told (once per episode). */
@@ -1656,6 +1660,8 @@ export type Cover =
   | { kind: 'dig'; cell: { x: number; y: number; z: number }; detail: string }
   /** S2 (lab c1): burning with a shooter within COVER_RUN_NEAR, or after a dig that did not lower the body: a sprint away along the flee's safe heading. */
   | { kind: 'run'; ids: number[]; detail: string };
+/** Run 8 (B2): a line cut against one skeleton the body may close in on, then a short wait behind it (the skeleton walks round to a body it lost sight of, into the 4 m the engagement rule strikes in). */
+export interface CoverAmbush { id: number; ms: number }
 
 const centreOf = (cell: { x: number; y: number; z: number }) => new Vec3(cell.x + 0.5, cell.y, cell.z + 0.5);
 const cellWords = (cell: { x: number; y: number; z: number }) => `(${cell.x},${cell.y},${cell.z})`;
@@ -1966,6 +1972,27 @@ function lineChoice(bot: FloorBody, read: ReturnType<typeof bodyReader>, closed:
   return best;
 }
 
+/**
+ * Run 8 (11/13, E2, design-skeleton B2): one skeleton 8 to 10 m off, a body with a sword, iron and a shield (closeInAdvised): the cover ran 19 times out of the fight's 8 m and
+ * the planner's fight never struck (20 to 2.2 in 85 s); running stays inside a bow's 15 m. A person cuts the line with one block and waits behind it: a skeleton that loses sight
+ * of its target walks toward it and forgets it after about three seconds, so it either comes round into the 4 m the engagement rule strikes in, or goes. The block on the line
+ * only (no step, no run, no dig), then the body is the planner's. Null when no one block cuts a line (the cover as before).
+ */
+export function ambushLine(bot: FloorBody, seeing: CoverShooter[]): Extract<Cover, { kind: 'line' }> | null {
+  const feet = feetCell(bot as never);
+  if (!feet || !seeing.length) return null;
+  const block = (bot.inventory?.items() ?? []).filter(item => isPillarBlock(item.name)).sort((a, b) => ((b as { count?: number }).count ?? 1) - ((a as { count?: number }).count ?? 1))[0];
+  if (!block) return null;
+  const found = lineChoice(bot, bodyReader(bot as never), solidReader(bot), seeing.slice(0, 1), feet);
+  if (!found) return null;
+  return { kind: 'line', cell: found.cell, block: block.name, detail: `線上の ${cellWords(found.cell)} を ${block.name} で塞ぎ、陰で待つ（${seeing[0].entity.name} #${seeing[0].entity.id}、詰めて斬れる体）` };
+}
+/** The wait behind the block (the skeleton forgets a body it has not seen for about three seconds), and how soon the same skeleton is waited for again. */
+const AMBUSH_WAIT_MS = 3000;
+const AMBUSH_AGAIN_MS = 30_000;
+/** A skeleton this near ends the wait: the engagement rule strikes it. */
+const AMBUSH_NEAR_M = 4;
+
 /** Runs one hand of the cover as the work of a safety-lease action (`port` is the body's motor port). */
 export interface CoverResult {
   success: boolean;
@@ -1974,7 +2001,7 @@ export interface CoverResult {
   dig?: 'not_started' | 'failed' | 'did_not_drop' | 'dropped';
 }
 
-export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, timeoutMs = COVER_TIMEOUT_MS[cover.kind], tickMs = 50): Promise<CoverResult> {
+export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, timeoutMs = COVER_TIMEOUT_MS[cover.kind], tickMs = 50, ambush?: CoverAmbush): Promise<CoverResult> {
   if (cover.kind === 'run') return runCoverRun(bot, port, cover, tickMs);
   const base = feetCell(bot as never) ?? { x: 0, y: 0, z: 0 };
   const ctx = { bot: port, stop: new AbortController().signal, deadline: Date.now() + timeoutMs, facing: 'north' as const, base };
@@ -1986,7 +2013,20 @@ export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, ti
   if (cover.kind === 'seal' || cover.kind === 'line') {
     const { place } = await import('./primitives/place.js');
     const outcome = await place(ctx as never, { block: cover.block, at: [cover.cell] });
-    return { success: outcome.ok, result: outcome.text };
+    if (!outcome.ok || !ambush) return { success: outcome.ok, result: outcome.text };
+    // B2: behind the block, facing it (the shield's front), until the skeleton comes within AMBUSH_NEAR_M, goes, or sees the body again, at most ambush.ms.
+    const ends = Date.now() + ambush.ms;
+    let how = '来なかった';
+    while (Date.now() < ends) {
+      const skeleton = bot.entities?.[ambush.id] as FloorEntity | undefined;
+      const at = bot.entity?.position;
+      if (!skeleton?.position || (skeleton as { isValid?: boolean }).isValid === false || !at) { how = '居なくなった'; break; }
+      if (skeleton.position.distanceTo(at) <= AMBUSH_NEAR_M) { how = `${skeleton.position.distanceTo(at).toFixed(1)}m に来た`; break; }
+      try { if (seesBodyAt(bot as never, skeleton as never, at, solidReader(bot))) { how = '回り込んでまた見えた'; break; } } catch { /* unread: wait on */ }
+      try { const dx = cover.cell.x + 0.5 - at.x, dz = cover.cell.z + 0.5 - at.z; void (port as { look?: (yaw: number, pitch: number, force?: boolean) => unknown }).look?.(Math.atan2(-dx, -dz), 0, true); } catch { /* the look is a help */ }
+      await new Promise(resolve => setTimeout(resolve, tickMs));
+    }
+    return { success: true, result: `${outcome.text}。陰で待った: ${how}` };
   }
   const { dig } = await import('./primitives/dig.js');
   // Run 52: removing the floor while the body overlaps the neighbouring cell leaves it standing in the archer's line.
@@ -2980,13 +3020,33 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       seeing = shootersSeeing(bot, shooters, body.position);
     } catch { return false; }
     if (!seeing.length) return false;
+    // B2 (run 8): one skeleton the body may close in on (closeInAdvised: a sword, iron or a shield, the only shooter, health 10 or more), not burning, not in water: one block on its
+    // line and a short wait behind it, once, then the body is the planner's (its fight closes in); the cover takes no hand for that skeleton meanwhile. A second time, the cover as before.
+    let ambush: CoverAmbush | undefined;
+    let ambushCover: Cover | null = null;
+    const lone = seeing.length === 1 && isSkeletonKind(seeing[0].entity.name) && typeof seeing[0].entity.id === 'number' ? seeing[0].entity : null;
+    if (lone) {
+      const id = lone.id as number;
+      if (state.coverYield && state.coverYield.id === id && t < state.coverYield.until) return false;
+      const ambushed = state.coverAmbushed?.get(id);
+      let wet = false;
+      try { wet = (body as { isInWater?: boolean }).isInWater === true || holdsWater((bot as unknown as TerrainBody).blockAt?.(body.position.floored()) as never); } catch { wet = false; }
+      if (!burning && !wet && (ambushed === undefined || t - ambushed > AMBUSH_AGAIN_MS) && closeInAdvised(bot)) {
+        let open = true;
+        try { open = threatExposure(bot as any, lone as any, t) !== 'sealed'; } catch { open = true; }
+        if (open) {
+          try { ambushCover = ambushLine(bot, seeing); } catch { ambushCover = null; }
+          if (ambushCover) ambush = { id, ms: AMBUSH_WAIT_MS };
+        }
+      }
+    }
     let choice: ReturnType<typeof coverChoice>;
     // S2: a failed descent or a primitive refusal is not repeated this episode; a pre-dig centring miss alone is retryable within the same cap.
     const digRefused = episode?.digRefused === true;
     const noDig = episode?.digFailed === true || digRefused;
     try {
       const steps = episode?.steps ?? 0;
-      choice = coverChoice(bot, shooters, Math.max(episode?.digs ?? 0, recentEscapeDigs(state, t)),
+      choice = ambushCover ? { cover: ambushCover, why: '' } : coverChoice(bot, shooters, Math.max(episode?.digs ?? 0, recentEscapeDigs(state, t)),
         { ...(shot || noDig || steps >= COVER_MAX_STEPS ? { line: true, lines: episode?.lines ?? 0 } : {}), burning, noDig, digRefused, steps, noSeal: episode?.sealFailed === true });
     } catch { return false; }
     const lead = burning ? '燃えて射手から見えている:' : shot ? `${shooterWords(body.position, seeing)} に${SHOT_WINDOW_MS / 1000}秒で${shot.hits}回撃たれた:` : '体力が減り続け射手から見えている:';
@@ -3006,7 +3066,10 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     state.busy = 'flee';
     log.warn(`🔥 ${lead} ${cover.kind}（${shooterWords(body.position, seeing)}）`);
     const handle = ledger.begin('cover', `${lead} ${cover.detail}`, COVER_DETAIL_MAX);
-    void take('floor-cover', FLOOR_FLEE_PRIORITY, COVER_TIMEOUT_MS[cover.kind] + 500, () => runCover(bot, createMotorPort(bot), cover, COVER_TIMEOUT_MS[cover.kind], options.fleeTickMs))
+    if (ambush) (state.coverAmbushed ??= new Map()).set(ambush.id, t);
+    if (state.coverAmbushed && state.coverAmbushed.size > 32) for (const [id, at] of state.coverAmbushed) if (t - at > AMBUSH_AGAIN_MS) state.coverAmbushed.delete(id);
+    void take('floor-cover', FLOOR_FLEE_PRIORITY, COVER_TIMEOUT_MS[cover.kind] + (ambush ? ambush.ms : 0) + 500,
+      () => runCover(bot, createMotorPort(bot), cover, COVER_TIMEOUT_MS[cover.kind], options.fleeTickMs, ambush))
       .then(result => {
         if ((result as CoverResult | undefined)?.dig === 'did_not_drop') run.digFailed = true;
         if ((result as CoverResult | undefined)?.dig === 'failed') run.digRefused = true;
@@ -3023,7 +3086,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         } catch { still = []; }
         const done = !!(result as { success?: boolean } | undefined)?.success;
         const failed = done ? '' : `（できなかった: ${String((result as { result?: string } | undefined)?.result ?? '').slice(0, 50)}）`;
-        handle.detail = `${lead} ${cover.detail}${failed}。${still.length ? `まだ見えている: ${shooterWords(after!, still)}` : '射線が切れた'} 体力${Math.round((bot.health ?? 0) * 10) / 10}`.slice(0, COVER_DETAIL_MAX);
+        const waited = ambush ? /陰で待った: ([^。]+)/u.exec(String((result as { result?: string } | undefined)?.result ?? ''))?.[1] : undefined;
+        handle.detail = `${lead} ${cover.detail}${failed}${waited ? `。待った: ${waited}` : ''}。${still.length ? `まだ見えている: ${shooterWords(after!, still)}` : '射線が切れた'} 体力${Math.round((bot.health ?? 0) * 10) / 10}`.slice(0, COVER_DETAIL_MAX);
         // run62 #17: 切れた射線を、低体力の逃走がすぐ開け直さない（fleeStart の COVER_HOLD_MS）。
         if (after && !still.length) state.coverCutAt = now();
         ledger.end(handle, done ? 'done' : (result as { failureType?: string } | undefined)?.failureType === 'interrupted' ? 'cut' : 'failed');
@@ -3032,6 +3096,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       .finally(() => {
         state.busy = null;
         run.lastEnd = now();
+        // B2: the body is the planner's for that skeleton for an episode's length (its fight closes in; the shield meets the draws).
+        if (ambush) state.coverYield = { id: ambush.id, until: now() + COVER_EPISODE_MS };
         // Still burning or losing health and still seen: the next hand at once (no gap); else the usual look.
         state.coverNextAt = now();
       });
@@ -3176,8 +3242,12 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     // Outside the rule the old logic decides: at the flee's health it runs (the flee's own entry carries the counts), above it the guarded hands (or nothing) as before.
     const outside = (why: string, byCounts = false) => told(health <= FLEE_HEALTH ? 'flee' : 'skip', why, byCounts && health > FLEE_HEALTH);
     if (!read.inRule) { outside(read.why, true); return false; }
-    // At the rim of a drop a blow's knock (or a blow taken) puts the body over it: the rim hands (a step off it, a block between) come first, as before.
-    try { const feetNow = feetCell(bot as never); if (feetNow && footingAt(bodyReader(bot as never), feetNow).count > 0) { outside('空所の縁に立っている（縁の手が先）'); return false; } } catch { /* unknown footing: the rule goes on */ }
+    // At the rim of a drop a blow's knock (or a blow taken) puts the body over it: the rim hands (a step off it, a block between) come first, as before. Run 8 (E8, design-skeleton B3):
+    // two skeletons 0.8 to 1.5 m off shot the body five times on a rim and nothing struck back. On a rim (not a bridge, a pillar or beside lava) an enemy already in reach is struck
+    // when the push of its blow (from it toward the body, and 45° either side) has no drop; no step toward one is made there.
+    let rim: Footing | null = null;
+    try { const feetNow = feetCell(bot as never); const footing = feetNow ? footingAt(bodyReader(bot as never), feetNow) : null; if (footing && footing.count > 0) rim = footing; } catch { /* unknown footing: the rule goes on */ }
+    if (rim && (rim.bridge || rim.pillar || rim.lava)) { outside('空所の縁に立っている（縁の手が先）'); return false; }
     // A kind the planner is fighting by choice (a fight skill's engagement, not an act's accept) is left to that fight above the flee's health, as the melee hand does.
     const planned = health > FLEE_HEALTH ? (name: string) => engagedWithAny(bot, [name], { exceptAccepted: true }) : () => false;
     // An enemy a hand just failed to get at (across a gap, in a pit, on a wall) is left alone until it comes in reach or closer: no lease, no cut of the act for it.
@@ -3198,6 +3268,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     try { choice = engageChoice(bot, open, recheck); } catch { return false; }
     if (!choice.hand) { outside(choice.why); return false; }
     const hand = choice.hand;
+    if (rim && (!hand.reached || !rimSafeAgainst(rim, body.position, hand.target.position))) { outside('空所の縁に立っている（縁の手が先）'); return false; }
     // A flee under way (its segments follow one another) ends here: the rule says fight.
     const fleeing = state.fleeEpisode;
     if (fleeing) { state.fleeEpisode = undefined; try { fleeing.end?.('cut'); } catch { /* a report must not change what the reflex did */ } }

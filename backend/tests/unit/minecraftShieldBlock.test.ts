@@ -479,3 +479,59 @@ describe('the body\'s own arrow (end1108h13: the shield went up "arrow, in 0 tic
     expect(ownShot(eyes, new Vec3(0, 65.52, 0), new Vec3(0, -0.4, 2.8), false)).toBe(true);
   });
 });
+
+// Run 8 (11/13, design-skeleton B1): of 86 raises 8 caught an arrow; most came 0 to 4 ticks before the hit (the server counts a shield five ticks after it goes up).
+// A skeleton is seen drawing (its living-entity flags' "hand in use" bit) about twenty ticks before its arrow leaves: the shield goes up for the draw.
+describe('the shield goes up for a skeleton drawing its bow (run 8)', () => {
+  const registry = minecraftData('1.21.4');
+  function drawingScene(yaw?: number) {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_000_000);
+    const bot = body();
+    bot.registry = registry;
+    if (yaw !== undefined) bot.entity.yaw = yaw;
+    const metadata: unknown[] = []; metadata[8] = 0;
+    bot.entities[5] = { id: 5, name: 'skeleton', type: 'hostile', position: new Vec3(0.5, 64, -9.5), height: 1.99, metadata };
+    installShieldBlock(bot);
+    const draw = (on: boolean) => { metadata[8] = on ? 1 : 0; };
+    const tickFor = (ms: number) => { for (let t = 0; t < ms; t += 50) { vi.setSystemTime(Date.now() + 50); bot.emit('physicsTick'); } };
+    return { bot, draw, tickFor };
+  }
+  it('raises it about ten ticks before the arrow can come, not at the start of the draw, and turns to the skeleton behind', () => {
+    try {
+      const { bot, draw, tickFor } = drawingScene(0);   // yaw 0 faces north (-z)... the skeleton is moved behind below
+      bot.entities[5].position = new Vec3(0.5, 64, 10.5);   // south: behind a body facing north
+      draw(true); bot.emit('physicsTick');
+      expect(bot.shieldBlock.up).toBe(false);              // 20 + 10/1.6 ticks away
+      tickFor(800);
+      expect(bot.shieldBlock.up).toBe(true);
+      expect(bot.shieldBlock.drawRaised).toBe(1);
+      expect(bot.shieldBlock.keepLegs).toBe(false);
+      expect(bot.calls.some((call: string) => call.startsWith('look'))).toBe(true);
+      expect(bot.controls.forward).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+  it('does not turn or stop the legs for a skeleton in front', () => {
+    try {
+      const { bot, draw, tickFor } = drawingScene(0);   // facing north, the skeleton 10 m north
+      draw(true); tickFor(800);
+      expect(bot.shieldBlock.up).toBe(true);
+      expect(bot.shieldBlock.keepLegs).toBe(true);
+      expect(bot.calls.some((call: string) => call.startsWith('look'))).toBe(false);
+      expect(bot.controls.forward).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+  it('a draw let go early, a zombie, or a skeleton beyond 16 m raises nothing', () => {
+    try {
+      const early = drawingScene(0);
+      early.draw(true); early.tickFor(300); early.draw(false); early.tickFor(1500);
+      expect(early.bot.shieldBlock.raised).toBe(0);
+      const zombie = drawingScene(0);
+      zombie.bot.entities[5].name = 'zombie'; zombie.draw(true); zombie.tickFor(1500);
+      expect(zombie.bot.shieldBlock.raised).toBe(0);
+      const far = drawingScene(0);
+      far.bot.entities[5].position = new Vec3(0.5, 64, -20.5); far.draw(true); far.tickFor(1500);
+      expect(far.bot.shieldBlock.raised).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+});

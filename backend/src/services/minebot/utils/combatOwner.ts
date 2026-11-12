@@ -187,27 +187,46 @@ export function armourWorn(bot: { inventory?: { slots?: Array<{ name?: string } 
   return { ironPieces, points };
 }
 
+/** Melee enemies allowed within CLOSE_IN_MELEE_M beside the one archer (the engagement rule strikes a zombie at 4 m). */
+const CLOSE_IN_MELEE_M = 8;
+const CLOSE_IN_MELEE_MAX = 1;
+/** Armour points that, with a shield on the arm, are enough to close in (run 8: an iron helmet and chestplate, golden boots: 9 points and a shield). */
+const CLOSE_IN_SHIELD_POINTS = 8;
+/** Kinds whose presence makes closing in on the archer the wrong hand: a creeper near (it swells while the body chases), a witch or a blaze in reach (more shots). */
+const NOT_WITH: Readonly<Record<string, number>> = { creeper: CLOSE_IN_MELEE_M, witch: HEAD_COMBAT_NEAR, blaze: HEAD_COMBAT_NEAR };
+
 /**
- * Whether the body should close in on this one archer and fight it, not run: exactly one threat near and it is a skeleton kind, three
- * pieces of iron or better worn (or ten armour points), a sword (held or carried), and health CLOSE_IN_HEALTH or more. Said to the
- * planner in `facts.closeInAdvised`. (The floor's own flee starts only at health 8 or less, so this never makes the floor stand
- * and be shot: where it would flee, the planner's fight, when it has one, is what holds it back.)
+ * Whether the body should close in on this one archer and fight it, not run: the only shooter within HEAD_COMBAT_NEAR is one skeleton kind, at most one melee enemy within
+ * CLOSE_IN_MELEE_M (no creeper there, no witch or blaze in reach), three pieces of iron or better worn (or ten armour points, or a shield on the arm and eight), a sword (held or
+ * carried), and health CLOSE_IN_HEALTH or more. Said to the planner in `facts.closeInAdvised`, and read by the floor's cover (it cuts the line once and gives the body back).
+ * Run 8 (11/13): iron helmet and chestplate, golden boots and a shield (9 points, two pieces of iron) and a zombie 6 m off: false both times, and the skeleton that kept 8 to 10 m
+ * off took the body from 20 to 2.2 in 85 s while the cover ran it out of the fight's range. (The floor's own flee starts only at health 8 or less, so this never makes the floor
+ * stand and be shot.)
  */
 export function closeInAdvised(bot: object, now = Date.now()): boolean {
   const body = bot as CombatBody & { inventory?: { slots?: Array<{ name?: string } | null | undefined>; items?(): Array<{ name: string }> }; heldItem?: { name?: string } | null };
   if (!headCombatOwnerEnabled() || typeof body.health !== 'number' || body.health < CLOSE_IN_HEALTH) return false;
   const at = body.entity?.position;
   if (!at) return false;
-  const near: string[] = [];
+  let shooters = 0, melee = 0;
   for (const entity of Object.values(body.entities ?? {})) {
     if (!entity?.position || entity === body.entity || entity.isValid === false) continue;
     const name = String(entity.name ?? '').toLowerCase();
     if (!name || !isThreatEntity({ name, type: entity.type, metadata: entity.metadata }, body.registry?.entitiesByName?.[name]?.type, now, body as never)) continue;
-    try { if (at.distanceTo(entity.position) <= HEAD_COMBAT_NEAR) near.push(name); } catch { /* not near */ }
+    let distance = Infinity;
+    try { distance = at.distanceTo(entity.position); } catch { continue; }
+    if (distance > HEAD_COMBAT_NEAR) continue;
+    if (NOT_WITH[name] !== undefined && distance <= NOT_WITH[name]) return false;
+    if (LONE_SHOOTERS.has(name)) shooters++;
+    else if (distance <= CLOSE_IN_MELEE_M) melee++;
   }
-  if (near.length !== 1 || !LONE_SHOOTERS.has(near[0])) return false;
+  if (shooters !== 1 || melee > CLOSE_IN_MELEE_MAX) return false;
   const armour = armourWorn(body);
-  if (armour.ironPieces < 3 && armour.points < 10) return false;
+  const shield = body.inventory?.slots?.[45]?.name === 'shield';
+  if (armour.ironPieces < 3 && armour.points < 10 && !(shield && armour.points >= CLOSE_IN_SHIELD_POINTS)) return false;
   const sword = (name?: string) => !!name && name.endsWith('_sword');
   return sword(body.heldItem?.name) || (body.inventory?.items?.() ?? []).some(item => sword(item.name));
 }
+
+/** The skeleton kinds (a bow and arrows, 7.5 to 15 m kept, a slow strafe back when walked at). */
+export function isSkeletonKind(name: unknown): boolean { return LONE_SHOOTERS.has(String(name ?? '').toLowerCase().replace(/^minecraft:/u, '')); }

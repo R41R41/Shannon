@@ -70,3 +70,20 @@ export function footingWords(footing: Footing): string {
   const shape = footing.bridge ? '幅 1 の橋・左右とも空所' : footing.pillar ? '幅 1 の足場・四方とも空所' : `周り 8 マスのうち空所 ${footing.count}`;
   return `${shape}（${footing.deepest === 0 && footing.lava ? '隣が溶岩' : `落差 ${depth}${footing.lava ? '、下は溶岩' : ''}`}）`;
 }
+
+/**
+ * Run 8 (E8, design-skeleton B3): whether a blow from `from` at a body standing at `at` would push it into none of the rim's voids: the push (from the enemy toward the body,
+ * across) rounded to one of eight ways, and the ways 45° either side of it. False on a bridge, a pillar or beside lava (every push there is a fall).
+ */
+export function rimSafeAgainst(footing: Footing, at: { x: number; z: number }, from: { x: number; z: number }): boolean {
+  if (footing.bridge || footing.pillar || footing.lava) return false;
+  const dx = at.x - from.x, dz = at.z - from.z;
+  if (Math.hypot(dx, dz) < 1e-6) return !footing.count;
+  const way = Math.round(Math.atan2(dz, dx) / (Math.PI / 4));
+  for (const turn of [-1, 0, 1]) {
+    const angle = (way + turn) * (Math.PI / 4);
+    const sx = Math.round(Math.cos(angle)), sz = Math.round(Math.sin(angle));
+    if (footing.sides.some(side => side.dx === sx && side.dz === sz)) return false;
+  }
+  return true;
+}

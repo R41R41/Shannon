@@ -8,6 +8,7 @@ import { isLikelyHostileMobName, isThreatEntity } from './hostileMobHints.js';
 import { physicalActionBusy, reservationOf, shieldPort } from '../execution/ActionExecution.js';
 import { threatExposure } from './threatExposure.js';
 import { recordShieldActivation } from '../execution/shieldActivation.js';
+import { combatMarkOf, isHeadCombatRunning, isSkeletonKind } from './combatOwner.js';
 
 const log = createLogger('Minebot:ShieldBlock');
 
@@ -103,6 +104,39 @@ export function shooterAt(bot: Pick<ShieldBot, 'entities' | 'entity'>, origin: V
   return nearest;
 }
 
+/**
+ * Run 8 (11/13, design-skeleton B1): of 86 raises only 8 caught an arrow; 39 of 66 came 0 to 4 ticks before the hit, and the server counts a shield as up five ticks after it
+ * is raised. A skeleton is seen drawing its bow before the arrow exists: the server sets the "hand in use" bit of its living-entity flags (looked up by name in the registry's
+ * metadata keys) from the start of the draw, and the arrow leaves about DRAW_TICKS later. So the shield goes up for the draw: when the arrow's arrival (the draw's start, the draw, the
+ * flight at about ARROW_BLOCKS_PER_TICK) is within RAISE_AHEAD_TICKS, at a skeleton kind within DRAW_WATCH_M that has a clear line to the body.
+ */
+const DRAW_TICKS = 20;
+const DRAW_WATCH_M = 16;
+const ARROW_BLOCKS_PER_TICK = 1.6;
+const TICK_MS = 50;
+/** A shot from within this of where the body faces (horizontally) is caught without a turn: the shield takes what comes from the front half (lab of the game's rule, design R0-6). */
+const FRONT_DEGREES = 80;
+/** Whether the bit "hand in use" of this creature's living-entity flags is set (a skeleton drawing its bow). False when it cannot be read. */
+export function drawingBow(entity: { name?: string | null; metadata?: unknown[] } | null | undefined, registry?: ShieldBot['registry']): boolean {
+  const name = String(entity?.name ?? '').toLowerCase();
+  if (!Array.isArray(entity?.metadata)) return false;
+  const index = registry?.entitiesByName?.[name]?.metadataKeys?.indexOf('living_entity_flags') ?? -1;
+  const flags = index >= 0 ? entity!.metadata![index] : undefined;
+  return typeof flags === 'number' && (flags & 0x01) === 0x01;
+}
+/** Ticks until the arrow of a draw begun at `startedAt` reaches a body `distance` away (negative: it should be there already). */
+export function drawArrivalTicks(startedAt: number, now: number, distance: number): number {
+  return (startedAt - now) / TICK_MS + DRAW_TICKS + distance / ARROW_BLOCKS_PER_TICK;
+}
+/** Whether `at` lies within FRONT_DEGREES of where a body at `from` with this yaw faces, across (mineflayer's yaw: facing (-sin, -cos)). */
+export function inFront(from: Vec3, yaw: number | undefined, at: Vec3): boolean {
+  if (typeof yaw !== 'number') return false;
+  const dx = at.x - from.x, dz = at.z - from.z, length = Math.hypot(dx, dz);
+  if (length < 1e-6) return true;
+  const cos = (-Math.sin(yaw) * dx + -Math.cos(yaw) * dz) / length;
+  return cos >= Math.cos(FRONT_DEGREES * Math.PI / 180);
+}
+
 /** Whether something hostile stands within a blow's reach of the body. */
 function hostileInReach(bot: ShieldBot): boolean {
   const at = bot.entity?.position;
@@ -135,7 +169,7 @@ function idleMeleeThreat(bot: ShieldBot): any | null {
 interface ShieldBot {
   _client?: unknown;
   game?: { dimension?: unknown };
-  entity?: { id?: number; position: Vec3 };
+  entity?: { id?: number; position: Vec3; yaw?: number };
   entities?: Record<string, any>;
   health?: number;
   inventory?: { slots: Array<{ name: string; durabilityUsed?: number; maxDurability?: number; slot?: number } | null | undefined> };
@@ -170,7 +204,11 @@ export interface ShieldBlockState { enabled: boolean; guard: boolean; raised: nu
   /** When (Date.now ms) the last draw was released: an arrow seen at the eyes just after it is the body's own. */
   drewAt?: number;
   /** The last time (Date.now ms) a shot was seen coming at the body, for a draw to wait out a volley behind the shield. */
-  comingAt?: number }
+  comingAt?: number;
+  /** Run 8 (B1): the shield is up for a shot from in front, or for the skeleton the planner's fight is after: no turn and no stop of the legs (the fight walks on behind it). */
+  keepLegs?: boolean;
+  /** Run 8 (B1): the times the shield went up for a skeleton's draw (before its arrow was in the air). */
+  drawRaised?: number }
 
 /**
  * Continue contracts (4): the shield's right belongs to the owner of the body (the root action that moves it). While an owner has delegated the
@@ -294,12 +332,15 @@ export function installShieldBlock(bot: ShieldBot): void {
   answerWith(bot, kind => state.enabled && bot.inventory?.slots?.[bot.getEquipmentDestSlot?.('off-hand') ?? 45]?.name === 'shield'
     && (bot as any).shootsAtBody?.(kind) === true);
   const seen = new Map<number, { said: Vec3; saidTick: number; velocity: Vec3; shooterNoted?: boolean }>();
+  /** When each skeleton kind near began its draw (Date.now ms), while it holds it. */
+  const draws = new Map<number, number>();
   const own = new Set<number>();
   let tick = 0, lastComing = -Infinity;
   // A-6 (2): while a handover reservation holds the shield (a shield:true reservation), the resident shield does not lower it: the act that takes the body takes the shield up.
   const lower = () => {
     if (state.up && reservationOf(bot as object)?.shield) return;
     state.idleMeleeGuard = false;
+    state.keepLegs = false;
     state.activatedAt = undefined;
     if (state.up) { state.up = false; state.lowered = (state.lowered ?? 0) + 1; try { shieldHand(bot).deactivateItem?.(); } catch { /* nothing held */ } }
   };
@@ -351,6 +392,27 @@ export function installShieldBlock(bot: ShieldBot): void {
       }
       for (const id of seen.keys()) if (!alive.has(id)) seen.delete(id);
       for (const id of own) if (!alive.has(id)) own.delete(id);
+      // B1: a skeleton kind drawing at the body, met before its arrow is in the air (the one whose arrow comes first).
+      let fromDraw: { entity: any; ticks: number; position: Vec3 } | null = null;
+      const nowMs = Date.now();
+      const drawing = new Set<number>();
+      for (const entity of Object.values(bot.entities ?? {})) {
+        if (!entity?.position || entity.id === bot.entity.id || !isSkeletonKind(entity.name)) continue;
+        if (!drawingBow(entity, bot.registry)) continue;
+        drawing.add(entity.id);
+        if (!draws.has(entity.id)) draws.set(entity.id, nowMs);
+        const distance = entity.position.distanceTo(bot.entity.position);
+        if (distance > DRAW_WATCH_M) continue;
+        const ticks = drawArrivalTicks(draws.get(entity.id)!, nowMs, distance);
+        if (ticks > RAISE_AHEAD_TICKS || ticks < -HOLD_TICKS) continue;
+        let line = 'seen';
+        try { line = threatExposure(bot as never, entity, nowMs); } catch { line = 'seen'; }
+        if (line !== 'seen') continue;
+        if (!fromDraw || ticks < fromDraw.ticks) fromDraw = { entity, ticks: Math.max(0, ticks), position: entity.position.offset(0, (entity.height ?? 1.99) * 0.85, 0) };
+      }
+      for (const id of draws.keys()) if (!drawing.has(id)) draws.delete(id);
+      if (fromDraw && (!soonest || fromDraw.ticks < soonest.ticks)) soonest = fromDraw;
+      else fromDraw = null;
       if (soonest && soonest.ticks <= RAISE_AHEAD_TICKS) state.comingAt = Date.now();
       // A bow being drawn holds the hands: no raise (it would replace the draw), no lower (a release fires or wastes it), no turn.
       if ((state.drawUntil ?? 0) > Date.now()) { state.idleMeleeGuard = false; return; }
@@ -379,19 +441,26 @@ export function installShieldBlock(bot: ShieldBot): void {
       // Something is coming, or has only just passed: the shield is up and turned to it.
       state.idleMeleeGuard = false;
       if (soonest) {
+        // B1: from in front (the shield takes the front half across, whatever the height), or the skeleton the planner's fight is after (the fight faces it): no turn, no stop.
+        const mark = fromDraw ? combatMarkOf(bot as object) : null;
+        const fought = !!fromDraw && !!mark && mark.target === fromDraw.entity.id && isHeadCombatRunning(bot as object);
+        state.keepLegs = fought || inFront(bot.entity.position, bot.entity.yaw, soonest.position);
+      }
+      if (soonest && !state.keepLegs) {
         const eyes = bot.entity.position.offset(0, 1.62, 0);
         const dx = soonest.position.x - eyes.x, dy = soonest.position.y - eyes.y, dz = soonest.position.z - eyes.z;
         bot.look?.(Math.atan2(-dx, -dz), Math.atan2(dy, Math.hypot(dx, dz)), true);
       }
-      for (const control of HORIZONTAL) if (bot.getControlState?.(control)) bot.setControlState?.(control, false);
+      if (!state.keepLegs) for (const control of HORIZONTAL) if (bot.getControlState?.(control)) bot.setControlState?.(control, false);
       // Eating or drawing a bow with the other hand is left to finish; the shield goes up after it.
       if (!state.up && !bot.usingHeldItem) {
         state.up = true;
         state.raised++;
         state.last = soonest ? `${soonest.entity.name} in ${soonest.ticks.toFixed(0)} ticks` : state.last;
+        if (fromDraw) state.drawRaised = (state.drawRaised ?? 0) + 1;
         shieldHand(bot).activateItem?.(true);
         noteShieldActivation(bot);
-        log.info(`🛡 盾を構える（${soonest?.entity?.name ?? '飛来物'}、約${soonest ? soonest.ticks.toFixed(0) : '?'}tick後。累計${state.raised}回）`);
+        log.info(`🛡 盾を構える（${soonest?.entity?.name ?? '飛来物'}${fromDraw ? 'が弓を引いている' : ''}、約${soonest ? soonest.ticks.toFixed(0) : '?'}tick後${state.keepLegs ? '・向き直らず足も止めない' : ''}。累計${state.raised}回）`);
       }
       if (state.up) state.upTicks++;
     } catch { /* a reflex never breaks the tick */ }
