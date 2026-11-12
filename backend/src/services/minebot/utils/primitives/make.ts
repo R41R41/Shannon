@@ -175,7 +175,8 @@ async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> 
   if (!obtain(bot, name, before + count, state, [])) {
     const lacking = [...state.short.entries()].map(([part, n]) => `${part}×${n}`);
     const held = stacksOut(new Map([...stock.entries()].filter(([, n]) => n > 0).slice(0, 8)));
-    return fail(bot, 'missing', `${lacking.join('・') || '?'}（作る物 ${name}×${count} と途中の物の分。何も作っていない${held.length ? `。持っている ${held.join(' ')}` : ''}）${woodShortWords(bot, state.short)}${missingContext(bot, lacking.join('・'))}`);
+    // The hand's line is cut from the back at 160 (actReport.stoppedLine): what the head can act on (the furnaces' seconds, the table, the repeat) goes right after what is short, the long account of what is held after it.
+    return fail(bot, 'missing', `${lacking.join('・') || '?'}${missingContext(bot, lacking.join('・'))}（作る物 ${name}×${count} と途中の物の分。何も作っていない${held.length ? `。持っている ${held.join(' ')}` : ''}）${woodShortWords(bot, state.short)}`);
   }
   // Room in the pack for what comes of it: a pack with no free slot takes the item only into a stack it already has.
   if (freeSlots(bot) === 0) {

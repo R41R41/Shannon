@@ -18,6 +18,7 @@ import { digMsWithBestTool as bestToolDigMs } from '../utils/bestToolDigTime.js'
 import { axeAdviceNote, isWood, spareToolNote } from '../utils/toolWear.js';
 import { explainNoRoom } from '../utils/inventoryRoom.js';
 import { pickaxeUsesCheck, pickaxeUsesFor } from '../utils/toolStock.js';
+import { keptAtLastUses, usesLeft } from '../utils/toolChoice.js';
 import { solidCellsBetween } from '../utils/blockApproachCost.js';
 import { progressTrailer } from '../utils/partialProgress.js';
 import { noteUnreachable, recentlyUnreachable, THREAT_REFUSAL_MS } from '../utils/unreachableTargets.js';
@@ -822,7 +823,9 @@ class MineBlock extends InstantSkill {
       if (minRemaining === Infinity) break;
     }
     const remaining = want - mined;
-    if (Number.isFinite(minRemaining) && minRemaining <= 3 && remaining > 0) {
+    // A wooden, stone or iron pickaxe is used to its end (toolChoice; a break is the missing_tool above); the stop is for a diamond or netherite one at its last three.
+    const bestIsDear = pickaxesNow.some(p => keptAtLastUses(p as any) && usesLeft(p as any) === minRemaining);
+    if (Number.isFinite(minRemaining) && minRemaining <= (bestIsDear ? 3 : 0) && remaining > 0) {
       return {
         success: mined > 0,
         failureType: 'tool_durability_low',

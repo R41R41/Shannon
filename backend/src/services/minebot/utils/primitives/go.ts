@@ -1118,7 +1118,7 @@ export const PLAN_MS = 300;
 /** The plan is made again at most this many times when the body is not where it said. */
 export const PLAN_REPLANS = 3;
 /** After the pathfinder has stopped: less than this left of the go's seconds, no plan is begun. */
-const PLAN_MIN_LEFT_MS = 1500;
+const PLAN_MIN_LEFT_MS = 4000;
 /** When the route search first runs out of its time, a plan is drawn if this much of the go's seconds is left (a plan's own time and a step). */
 const PLAN_ON_SEARCH_MIN_MS = 800;
 /** The plans a go's own route search asks for when it first runs out of its time (goPlanned's onSearchedOut). */
@@ -1318,6 +1318,8 @@ export async function goPlannedWith(ctx: StepContext, args: GoArgs, walk: GoWalk
       return { moved: false };
     }
     if (plan.totals.place > 0 && plan.status !== 'success') return { moved: false };
+    // A way that needs no digging and no laying (an open road the search was only slow over) is the pathfinder's: its found part is walked first, as before.
+    if (plan.totals.dig + plan.totals.place === 0) return { moved: false };
     const done = await walkPlan(plan, left, 'search_timeout');
     const hard = guarded(done, { dug: at.dug, placed: at.placed, steps: 0 });
     if (hard) return { moved: false, stop: hard };

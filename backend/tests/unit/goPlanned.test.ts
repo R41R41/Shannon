@@ -206,6 +206,15 @@ describe('go: the route search walks first; the plan walks when it stops for wan
     expect(asked).toBe(1);
   });
 
+  it('an open road (a plan with no digging and no laying) is not taken over by the hook: the pathfinder walks its found part first', async () => {
+    const sim = makeSim(flat, { items: stacks(PICK) });
+    let moved: boolean | null = null;
+    const walk: GoWalk = async (_c, args) => { if (moved === null) moved = (await args.onSearchedOut?.({ dug: 0, placed: 0 }))?.moved ?? null; return stops('search_timeout'); };
+    await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(8, FLOOR, 0)], canDig: ['stone'] }, walk));
+    expect(moved).toBe(false);
+    expect(sim.bot.dugBlocks).toEqual([]);
+  });
+
   it('a way that needs more digging than is left is not begun: the stop names the maxDig it needs, and nothing is dug', async () => {
     const sim = makeSim(wall, { items: stacks(PICK) });
     const walk: GoWalk = async (_ctx, args) => {
@@ -400,5 +409,22 @@ describe('followRoute: the guard is asked before each run and ends the follow wi
     const thrown = recordingHands();
     await expect(followRoute(plan, thrown.hands, { deadline: Date.now() + 60_000, guard: () => { throw new StepStopped('reflex'); } })).rejects.toBeInstanceOf(StepStopped);
     expect(thrown.calls).toEqual([]);
+  });
+});
+
+// Through the real goWalk: the route search's own clock (performance is the real one) runs out in solid stone, its first search_timeout calls the hook,
+// and the plan the hook walks digs into the rock. (The same field as run 41's.)
+describe('go: the real route search asks for the plan at its first search_timeout', () => {
+  beforeEach(() => { vi.useRealTimers(); vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] }); });
+  it('the hook is called from goWalk, before the found part is walked, and its plan digs', async () => {
+    const rock: Ground = (x, y, z) => (Math.abs(x) > R || Math.abs(z) > R ? null : y < FLOOR ? 'stone' : x >= 2 && x <= 30 ? 'stone' : 'air');
+    const sim = makeSim(rock, { items: stacks(PICK), digMs: 50 });
+    const seen: Array<{ moved: boolean; digsBefore: number }> = [];
+    const walk: GoWalk = (ctx, args) => goWalk(ctx, { ...args, searchMs: 15, onSearchedOut: async at => { const digsBefore = sim.bot.dugBlocks.length; const out = await args.onSearchedOut!(at); seen.push({ moved: out.moved, digsBefore }); return out; } });
+    await drive(sim, goPlannedWith(ctxOf(sim), { goals: [goalAt(26, FLOOR, 0)], canDig: ['stone'], maxDig: 200 }, walk));
+    expect(seen.length).toBeGreaterThanOrEqual(1);
+    expect(seen[0].digsBefore).toBe(0);
+    expect(seen[0].moved).toBe(true);
+    expect(sim.bot.dugBlocks.length).toBeGreaterThan(0);
   });
 });

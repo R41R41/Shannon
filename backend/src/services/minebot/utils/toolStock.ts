@@ -3,7 +3,7 @@
  * itself (design mb-llm-centric): which tool to make, and when, is the planner's; the body says what is short.
  */
 import { Vec3 } from 'vec3';
-import { canHarvest, NEARLY_BROKEN_USES, usesLeft, wearCostSeconds, type BlockLike, type ToolLike } from './toolChoice.js';
+import { canHarvest, keptAtLastUses, NEARLY_BROKEN_USES, usesLeft, wearCostSeconds, type BlockLike, type ToolLike } from './toolChoice.js';
 
 type Cell = number | null | undefined | { id?: number } | Cell[];
 interface RawRecipe { inShape?: Cell[][]; ingredients?: Cell[]; result: { id: number; count?: number } | number }
@@ -175,10 +175,11 @@ function tablesNear(bot: StockBody, reach: number): Array<{ x: number; y: number
   try { return bot.findBlocks({ matching: id, maxDistance: reach, count: 8 }); } catch { return []; }
 }
 
-/** Uses a pickaxe is counted to have left for a job: its last NEARLY_BROKEN_USES are kept (toolChoice leaves them alone). */
+/** Uses a pickaxe is counted to have left for a job: every use of a wooden, stone or iron one (toolChoice uses them to the end); a diamond or netherite one less its last NEARLY_BROKEN_USES. */
 function usableUses(item: CarriedItem): number {
   const left = usesLeft(item);
-  return left === null ? Infinity : Math.max(0, left - NEARLY_BROKEN_USES);
+  if (left === null) return Infinity;
+  return keptAtLastUses(item) ? Math.max(0, left - NEARLY_BROKEN_USES) : left;
 }
 
 /**

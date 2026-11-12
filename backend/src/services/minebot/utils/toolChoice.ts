@@ -134,8 +134,9 @@ export const NEARLY_BROKEN_USES = 2;
  * used until it breaks: run 8 dropped them at 2 uses left and the pack filled with half-used pickaxes.
  */
 const KEPT_AT_LAST_USES = /^(diamond|netherite)_/u;
+export const keptAtLastUses = (item: { name?: string } | null | undefined): boolean => !!item && KEPT_AT_LAST_USES.test(String(item.name ?? ''));
 export function nearlyBroken(item: { name?: string; maxDurability?: number; durabilityUsed?: number } | null | undefined): boolean {
-  if (!item || !KEPT_AT_LAST_USES.test(String(item.name ?? ''))) return false;
+  if (!keptAtLastUses(item)) return false;
   const left = usesLeft(item);
   return left !== null && left <= NEARLY_BROKEN_USES;
 }

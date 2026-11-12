@@ -7,7 +7,7 @@ import { digBlockVerified } from '../utils/digBlockVerified.js';
 import { LavaReleaseError } from '../utils/lavaSafety.js';
 import { ThreatExposedError } from '../utils/exposureGuard.js';
 import { actionDelay } from '../execution/observedWait.js';
-import { chooseTool, usesLeft } from '../utils/toolChoice.js';
+import { chooseTool, keptAtLastUses, usesLeft } from '../utils/toolChoice.js';
 import { spareToolNote } from '../utils/toolWear.js';
 import { blocksAlong, pickaxeUsesCheck, pickaxeUsesFor } from '../utils/toolStock.js';
 import { shaftStepRefusal } from '../utils/shaftDown.js';
@@ -926,7 +926,9 @@ class StairMine extends InstantSkill {
             bestDurability = Math.max(bestDurability, left);
         }
 
-        if (hasDurabilityInfo && bestDurability <= 3) {
+        // A wooden, stone or iron pickaxe is used to its end (toolChoice); the stop is for when the best one has a single use left (a diamond one: its last three).
+        const bestIsDear = pickaxes.some(p => keptAtLastUses(p as any) && usesLeft(p as any) === bestDurability);
+        if (hasDurabilityInfo && bestDurability <= (bestIsDear ? 3 : 1)) {
             return {
                 failureType: 'tool_durability_low',
                 message: `ツルハシの残り耐久が${bestDurability}しかありません。craft-one で新しいツルハシをクラフトしてから再実行してください。`,

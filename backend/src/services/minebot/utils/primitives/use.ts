@@ -344,8 +344,8 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
       const last = lastUnfilled.get(bot);
       const times = last && last.key === key ? last.times + 1 : 1;
       lastUnfilled.set(bot, { key, times });
-      return stopped(bot, 'not_filled', `${placeText(bot, cell)} の ${block.name} を汲めなかった（${between
-        ? `目との間の ${cellText(between.cell)} が ${between.name}` : '視線が届かないか、手前に何かある'}。目から${distance.toFixed(1)}m・${facingWords(bot, cell)}。今 ${cellNow(bot, cell)}）${times >= 2 ? `。同じ座標で ${times} 回目: 別の源を指すか、立つ位置を変えてから` : ''}`, cell);
+      return stopped(bot, 'not_filled', `${placeText(bot, cell)} の ${block.name} を汲めなかった${times >= 2 ? `。同じ座標で ${times} 回目: 別の源を指すか、立つ位置を変えてから` : ''}（${between
+        ? `目との間の ${cellText(between.cell)} が ${between.name}` : '視線が届かないか、手前に何かある'}。目から${distance.toFixed(1)}m・${facingWords(bot, cell)}。今 ${cellNow(bot, cell)}）`, cell);
     }
     return { ok: true, text: `${instead}${cellText(cell)} の ${block.name} 源を汲んだ（${filled}）`, at: cell };
   }

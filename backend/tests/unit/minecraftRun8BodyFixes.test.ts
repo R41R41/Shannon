@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { furnace } from '../../src/services/minebot/utils/primitives/furnace.js';
+import { stoppedLine } from '../../src/services/minebot/utils/actReport.js';
 import { missingContext } from '../../src/services/minebot/utils/primitives/make.js';
 import { placeSpots } from '../../src/services/minebot/utils/primitives/placeSpot.js';
 import { stepIntoReach } from '../../src/services/minebot/utils/primitives/getNear.js';
@@ -44,6 +45,18 @@ describe('make: the line of a missing stop', () => {
     expect(second).toContain('同じ所・同じ理由の 2 回目');
     expect(second).toContain('まで別の作業を進めてから');
     expect(missingContext(bot, 'cobblestone×3')).not.toContain('回目');
+  });
+  it('what the head acts on survives the 160 characters of a hand line, with the long account of what is held after it', () => {
+    const bot: any = { entity: { position: new Vec3(0.5, 64, 0.5) }, game: { dimension: 'overworld' }, activeFurnaces: [{ pos: { x: 3, y: 64, z: 0 }, item: 'raw_iron', count: 5, readyAt: Date.now() + 40_000, dimension: 'overworld' }], blockAt: () => null };
+    missingContext(bot, 'iron_ingot×3');
+    // The text make builds: what is short, the context, then the account (8 stacks held) and the wood words.
+    const held = 'oak_log×12 stick×4 cobblestone×40 raw_iron×5 coal×8 bucket×1 stone_pickaxe×1 bread×3';
+    const text = `iron_ingot×3${missingContext(bot, 'iron_ingot×3')}（作る物 iron_pickaxe×1 と途中の物の分。何も作っていない。持っている ${held}）。近くに原木 20 本・木 4 本（16m 以内）`;
+    const line = stoppedLine('missing', text, 'air');
+    expect(line.length).toBeLessThanOrEqual(160);
+    expect(line).toContain('あと約');
+    expect(line).toContain('同じ所・同じ理由の 2 回目');
+    expect(line).toContain('別の作業を進めてから');
   });
   it('says nothing when there is no furnace and no table', () => {
     expect(missingContext({ entity: { position: new Vec3(0.5, 64, 0.5) }, game: {}, activeFurnaces: [], blockAt: () => null }, 'x×1')).toBe('');
@@ -90,6 +103,8 @@ describe('use: the facing words', () => {
     const bot: any = { entity: { position: new Vec3(0.5, 64, 0.5), yaw: Math.PI / 2 } };
     // yaw pi/2 faces west (-x): a target to the west is dead ahead, one to the north is a quarter turn off.
     expect(facingWords(bot, { x: -5, y: 64, z: 0 })).toBe('向きは目標どおり');
-    expect(facingWords(bot, { x: 0, y: 64, z: -5 })).toMatch(/向きは目標から(左|右)へ 90°/u);
+    // Facing west: the target to the north has the eyes turned to its left; the target to the south, to its right.
+    expect(facingWords(bot, { x: 0, y: 64, z: -5 })).toBe('向きは目標から左へ 90°');
+    expect(facingWords(bot, { x: 0, y: 64, z: 5 })).toBe('向きは目標から右へ 90°');
   });
 });

@@ -177,13 +177,13 @@ describe('the pickaxes against the work to come (run 20: the stone pickaxe broke
     return { success: true, result: 'crafted' };
   };
 
-  it('counts what each pickaxe has left (less its last two uses) for the blocks it can break', () => {
+  it('counts what each pickaxe has left (a diamond one less its last two uses) for the blocks it can break', () => {
     const iron = block('iron_ore');
-    expect(pickaxeUsesFor([item('stone_pickaxe', 1, 100), item('iron_pickaxe', 1, 0)], [iron])).toBe(29 + 248);
+    expect(pickaxeUsesFor([item('stone_pickaxe', 1, 100), item('iron_pickaxe', 1, 0)], [iron])).toBe(31 + 250);
     // A wooden pickaxe breaks no iron ore.
-    expect(pickaxeUsesFor([item('wooden_pickaxe', 1, 0), item('stone_pickaxe', 1, 100)], [iron])).toBe(29);
-    expect(pickaxeUsesFor([item('wooden_pickaxe', 1, 0)], [block('stone')])).toBe(57);
-    expect(pickaxeUsesFor([item('stone_pickaxe', 1, 130)], [iron])).toBe(0);
+    expect(pickaxeUsesFor([item('wooden_pickaxe', 1, 0), item('stone_pickaxe', 1, 100)], [iron])).toBe(31);
+    expect(pickaxeUsesFor([item('wooden_pickaxe', 1, 0)], [block('stone')])).toBe(59);
+    expect(pickaxeUsesFor([item('stone_pickaxe', 1, 130)], [iron])).toBe(1);
   });
 });
 
@@ -220,7 +220,7 @@ describe('mine-block makes room and keeps its pickaxe (run 20)', () => {
   const inAction = (bot: any, work: () => Promise<any>) => executeAction(bot, 'mine-block', 0, async () => ({ success: true, result: 'x', value: await work() } as any));
 
   it('refuses at once, digging nothing, when the pickaxe can take no ore at all', async () => {
-    const pack = [item('stone_pickaxe', 1, 129), item('dirt', 10)];
+    const pack = [item('diamond_pickaxe', 1, 1559), item('dirt', 10)];
     const { bot, skill, dig } = oreBody(pack);
     skill.callSkill = vi.fn(async () => ({ success: true }));
     let result: any;

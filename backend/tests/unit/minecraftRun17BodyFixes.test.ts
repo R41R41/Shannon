@@ -185,7 +185,13 @@ describe('pickaxes: the best one decides, a worn-out one is the last choice, a s
   it('stair-mine goes on while one pickaxe is sound, whatever the others', () => {
     const bot: any = { version: '1.21.11', inventory: { items: () => [pick('stone_pickaxe', 130, 131), pick('iron_pickaxe', 10, 250)] } };
     expect((new StairMine(bot) as any).checkPickaxeAvailable()).toBeNull();
+    // Run 17's symptom (a stone pickaxe at one use stopped the stair five times with an iron one in hand) stays out: the best one decides, and it is used down to its last use.
     bot.inventory.items = () => [pick('stone_pickaxe', 130, 131), pick('iron_pickaxe', 248, 250)];
+    expect((new StairMine(bot) as any).checkPickaxeAvailable()).toBeNull();
+    bot.inventory.items = () => [pick('stone_pickaxe', 130, 131), pick('iron_pickaxe', 249, 250)];
+    expect((new StairMine(bot) as any).checkPickaxeAvailable()).toMatchObject({ failureType: 'tool_durability_low' });
+    // A diamond pickaxe is kept at its last three.
+    bot.inventory.items = () => [pick('diamond_pickaxe', 1558, 1561)];
     expect((new StairMine(bot) as any).checkPickaxeAvailable()).toMatchObject({ failureType: 'tool_durability_low' });
   });
   it('says a spare is wanted, and what the pack makes it of', () => {
