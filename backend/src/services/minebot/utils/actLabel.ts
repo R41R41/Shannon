@@ -25,6 +25,7 @@ export function stepLabel(step: StepLike): string {
     case 'hunt': return `hunt ${step.target ?? ''}${step.count ? `×${step.count}` : ''}`.trim();
     case 'mine': return `mine ${step.block ?? ''}${step.count ? `×${step.count}` : ''} ${at}`.trim();
     case 'make': return `make ${step.item}×${step.count ?? 1}`;
+    case 'tidy': return `tidy ${(step.items ?? []).map(entry => `${entry.item}${entry.count ? `:${entry.count}` : ''}`).join(',')}`.trim();
     case 'smelt': return `smelt ${(step.items ?? []).map(entry => `${entry.item}×${entry.count ?? '?'}`).join(' ')}${at ? ` ${at}` : ''}`.trim();
     case 'vertical': return `vertical ${(step as { dir?: string }).dir ?? '?'} ${(step as { shape?: string }).shape ?? '?'}${(step as { toward?: string }).toward ? ` ${(step as { toward?: string }).toward}` : ''} y=${(step as { toY?: number }).toY ?? '?'}`;
     case 'pillarUp': return `pillarUp ${step.n ?? 1}段 ${step.block ?? ''}`.trim();

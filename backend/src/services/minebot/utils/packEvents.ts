@@ -122,6 +122,8 @@ export function handReasons(hand: { do: string; fuel?: string; item?: string; op
     case 'hunt': return { gain: 'picked' };
     case 'eat': return { loss: 'food' };
     case 'drop': return { loss: 'thrown' };
+    // tidy throws, smelts raw ore (fuel and ingredient) and makes bread of hay blocks: each loss is told by what the item is.
+    case 'tidy': return { gain: 'smelted', loss: name => /^(coal|charcoal)$/u.test(name) ? 'fuel' : /^(raw_iron|raw_gold|hay_block|wheat)$/u.test(name) ? 'ingredient' : 'thrown' };
     case 'furnace': return { gain: 'smelted', loss: name => (hand.fuel && name === hand.fuel) ? 'fuel' : 'ingredient' };
     case 'smelt': return { gain: 'smelted', loss: name => (hand.fuel && name === hand.fuel) ? 'fuel' : 'ingredient' };
     // Amendment A-1: a chest's put and take are told as stored and retrieved (the ledger shows a change of place, not a use).
