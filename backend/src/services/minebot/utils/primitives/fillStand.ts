@@ -1,5 +1,6 @@
 import { Vec3 } from 'vec3';
 import { activateItemFacing } from '../activateItemFacing.js';
+import { allSolidsBetween, rayView } from '../liquidAim.js';
 import { equipToHandVerified } from '../equipVerified.js';
 import { feetCell, type Cell } from '../localMap.js';
 import { holdsWater } from '../waterBlocks.js';
@@ -39,17 +40,9 @@ export function blockersFrom(bot: any, eye: { x: number; y: number; z: number },
 
 /** The solid blocks on the line from `eye` to the point `to` of `cell` (the cell itself excluded), nearest first. */
 function blockersTo(bot: any, eye: { x: number; y: number; z: number }, cell: Cell, to: { x: number; y: number; z: number }): Array<{ cell: Cell; name: string }> {
-  const length = Math.hypot(to.x - eye.x, to.y - eye.y, to.z - eye.z), steps = Math.max(1, Math.ceil(length / 0.1));
-  const found: Array<{ cell: Cell; name: string }> = [];
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps;
-    const at = { x: Math.floor(eye.x + (to.x - eye.x) * t), y: Math.floor(eye.y + (to.y - eye.y) * t), z: Math.floor(eye.z + (to.z - eye.z) * t) };
-    if (at.x === cell.x && at.y === cell.y && at.z === cell.z) break;
-    if (found.some(entry => entry.cell.x === at.x && entry.cell.y === at.y && entry.cell.z === at.z)) continue;
-    const block = blockAt(bot, at);
-    if (block && block.boundingBox === 'block') found.push({ cell: at, name: String(block.name) });
-  }
-  return found;
+  // A walk over every cell of the line (the corner of a block the line clips counts), the world as the server's ray sees it (utils/liquidAim).
+  return allSolidsBetween(rayView(bot), new Vec3(eye.x, eye.y, eye.z), new Vec3(to.x, to.y, to.z), new Vec3(cell.x, cell.y, cell.z))
+    .map(hit => ({ cell: { x: hit.at.x, y: hit.at.y, z: hit.at.z }, name: hit.name }));
 }
 
 /**

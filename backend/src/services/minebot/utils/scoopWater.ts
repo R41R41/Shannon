@@ -6,7 +6,7 @@ import { actionDelay } from '../execution/observedWait.js';
 import { activateItemFacing } from './activateItemFacing.js';
 import { gotoSafe } from './gotoSafe.js';
 import { chooseRockTravel } from './rockTravel.js';
-import { LIQUID_REACH, liquidAimPoints } from './liquidAim.js';
+import { LIQUID_REACH, liquidAimPoints, rayView } from './liquidAim.js';
 import { getWaterLevel } from './waterLevel.js';
 
 const { goals } = pathfinder;
@@ -52,15 +52,6 @@ const isLiquid = (block: Block) => !!block && (block.name === 'water' || block.n
 const isOpen = (block: Block) => !!block && block.boundingBox === 'empty' && !isLiquid(block);
 const isSource = (block: Block) => !!block && block.name === 'water' && getWaterLevel(block) === 0;
 
-/** Blocks the bucket's ray passes: nothing is there, or only liquid. Every other block (grass, flowers, snow, rails... which a body walks through) stops the server's ray: it is cast against outlines, not collision. */
-const RAY_PASSES = new Set(['air', 'cave_air', 'void_air', 'water', 'bubble_column']);
-/** The world as the server's ray sees it. */
-function rayView(bot: CustomBot): { entity: { position: Vec3 }; blockAt(at: Vec3): any } {
-  return { get entity() { return bot.entity; }, blockAt: (at: Vec3) => {
-    const block = bot.blockAt(at) as any;
-    return block && block.boundingBox === 'empty' && !RAY_PASSES.has(block.name) ? { ...block, boundingBox: 'block' } : block;
-  } };
-}
 /** Whether no solid block (leaves aside) roofs the cell for 24 blocks: water in the open, not in a cave. */
 export function underSky(bot: CustomBot, at: Vec3): boolean {
   for (let dy = 1; dy <= 24; dy++) {

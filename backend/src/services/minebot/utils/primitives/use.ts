@@ -8,6 +8,7 @@ import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, find
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { BED_HALF_WAIT_MS } from './place.js';
 import { fillFromStand } from './fillStand.js';
+import { firstSolidBetween, liquidAimPoints, rayView } from '../liquidAim.js';
 import { stepIntoReach } from './getNear.js';
 import { compassOf, eyeReportOf, EYE_FATE_MS, EYE_WATCH_MS, watchEyeFlight } from '../huntEyeFlight.js';
 import { barterMany, barterWithPiglin } from '../huntBarter.js';
@@ -259,6 +260,7 @@ async function blowBed(ctx: StepContext, cell: Cell, block: any): Promise<StepOu
 }
 
 const lastUnfilled = new WeakMap<object, { key: string; times: number }>();
+const lastPool = new WeakMap<object, Array<{ x: number; y: number; z: number; at: number }>>();
 /** Which way the eyes face against the cell: "向きは目標から右へ 40°" (0° is straight at it). */
 export function facingWords(bot: any, cell: Cell): string {
   const at = bot.entity?.position;
@@ -317,7 +319,7 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
   // Run 6 (49 hands, 400 s to a water bucket): the source is out of reach, a flow, or behind a wall from here. The body finds the dry floor to fill from (a clear line, or one wall block
   // opened, the bucket filled and the wall closed again) in this one hand: the head does not have to find the stand.
   let standNote = '';
-  if (name === 'bucket' && block.name === 'water' && (distance > USE_REACH || liquidLevel(block) !== 0 || lineBlocker(bot, cell))) {
+  if (name === 'bucket' && block.name === 'water' && (distance > USE_REACH || liquidLevel(block) !== 0 || bucketAim(bot, cell).length === 0)) {
     const through = await fillFromStand(ctx, cell, 'water');
     if (through && through.reason !== 'stand_unreachable') return through.ok ? { ...through, text: `${instead}${through.text}` } : through;
     standNote = through ? `（${through.text}）` : '';
@@ -335,17 +337,29 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
     const level = liquidLevel(block);
     if (level !== 0) return stopped(bot, 'not_source', `${placeText(bot, cell)} は流れる${block.name}（流れ ${level}）。汲めるのは源（レベル0）だけ`, cell);
     const before = inventoryCount(bot, 'bucket');
-    await activateItemFacing(bot, new Vec3(cell.x + 0.5, cell.y + 0.5, cell.z + 0.5));
     const filled = `${block.name}_bucket`;
-    const ok = await waitUntil(ctx, () => inventoryCount(bot, 'bucket') < before || bot.heldItem?.name === filled, 1500);
+    // Run 9: eleven refusals in a tunnel, every one at a source one block aside on both horizontal axes, aimed at its middle: the line ran between two
+    // blocks of the wall and the server's ray was stopped by one of them. The right click is aimed at each point of the cell with a clear line (up to four).
+    const aims = bucketAim(bot, cell).slice(0, 4);
+    let ok = false;
+    for (const [index, point] of (aims.length ? aims : [new Vec3(cell.x + 0.5, cell.y + 0.5, cell.z + 0.5)]).entries()) {
+      await activateItemFacing(bot, point);
+      ok = await waitUntil(ctx, () => inventoryCount(bot, 'bucket') < before || bot.heldItem?.name === filled, index === 0 ? 1500 : 900);
+      if (ok) break;
+    }
     if (!ok) {
       const between = lineBlocker(bot, cell);
       const key = `${cell.x},${cell.y},${cell.z}`;
       const last = lastUnfilled.get(bot);
       const times = last && last.key === key ? last.times + 1 : 1;
+      // The pool, not the cell: a source beside the last one is the same water from the same stand (run 9: seven different cells of one pool, each told "first time").
+      const now = Date.now();
+      const recent = (lastPool.get(bot) ?? []).filter(entry => now - entry.at < 300_000);
+      const pool = recent.filter(entry => Math.hypot(entry.x - cell.x, entry.y - cell.y, entry.z - cell.z) <= 4).length + 1;
+      lastPool.set(bot, [...recent, { x: cell.x, y: cell.y, z: cell.z, at: now }]);
       lastUnfilled.set(bot, { key, times });
-      return stopped(bot, 'not_filled', `${placeText(bot, cell)} の ${block.name} を汲めなかった${times >= 2 ? `。同じ座標で ${times} 回目: 別の源を指すか、立つ位置を変えてから` : ''}（${between
-        ? `目との間の ${cellText(between.cell)} が ${between.name}` : '視線が届かないか、手前に何かある'}。目から${distance.toFixed(1)}m・${facingWords(bot, cell)}。今 ${cellNow(bot, cell)}）`, cell);
+      return stopped(bot, 'not_filled', `${placeText(bot, cell)} の ${block.name} を汲めなかった${times >= 2 ? `。同じ座標で ${times} 回目` : ''}${pool >= 2 ? `。この水（4 マス以内の別の源を含む）で ${pool} 回目` : ''}（${between
+        ? `目との間の ${cellText(between.cell)} が ${between.name}` : aims.length ? `${aims.length} か所を狙っても汲めなかった` : '視線が届かないか、手前に何かある'}。目から${distance.toFixed(1)}m・${facingWords(bot, cell)}。今 ${cellNow(bot, cell)}）`, cell);
     }
     return { ok: true, text: `${instead}${cellText(cell)} の ${block.name} 源を汲んだ（${filled}）`, at: cell };
   }
@@ -425,16 +439,14 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
 export function lineBlocker(bot: any, cell: Cell): { cell: Cell; name: string } | null {
   const eye = bot.entity?.position;
   if (!eye) return null;
-  const from = { x: eye.x, y: eye.y + 1.62, z: eye.z }, to = { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 };
-  const length = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z), steps = Math.ceil(length / 0.1);
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps;
-    const at = { x: Math.floor(from.x + (to.x - from.x) * t), y: Math.floor(from.y + (to.y - from.y) * t), z: Math.floor(from.z + (to.z - from.z) * t) };
-    if (at.x === cell.x && at.y === cell.y && at.z === cell.z) break;
-    const block = blockAt(bot, at);
-    if (block && block.boundingBox === 'block') return { cell: at, name: String(block.name) };
-  }
-  return null;
+  const hit = firstSolidBetween(rayView(bot), new Vec3(eye.x, eye.y + 1.62, eye.z), new Vec3(cell.x + 0.5, cell.y + 0.5, cell.z + 0.5), new Vec3(cell.x, cell.y, cell.z));
+  return hit ? { cell: { x: hit.at.x, y: hit.at.y, z: hit.at.z }, name: hit.name } : null;
+}
+
+/** The points on the liquid cell a right click can reach in a straight line from the eyes (none: a wall is in the way of every one, or the cell is too far). */
+function bucketAim(bot: any, cell: Cell): Vec3[] {
+  if (!bot.entity?.position) return [];
+  return liquidAimPoints(rayView(bot), new Vec3(cell.x, cell.y, cell.z)).points;
 }
 
 /** The nearest source of `liquid` (level 0) within the use reach of her eyes with nothing solid on the line to it; null when none. */

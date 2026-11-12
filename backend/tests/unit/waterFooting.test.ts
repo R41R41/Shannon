@@ -252,6 +252,8 @@ describe('a bucket filled from a dry floor the body finds', () => {
     if (y < FLOOR) return 'stone';
     if (y >= FLOOR + 2 || Math.abs(x) >= 1) return 'stone';
     if (x === 0 && z === -2 && y === FLOOR) return 'dirt';
+    // A block over the water: its top is not seen over the wall (the line to the water's side is, through the wall only).
+    if (x === 0 && z === -3 && y === FLOOR + 1) return 'stone';
     if (x === 0 && z === -3 && y === FLOOR) return 'water~0';
     return 'air';
   };
