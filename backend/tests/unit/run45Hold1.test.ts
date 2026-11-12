@@ -54,6 +54,7 @@ describe('run 45, hold 1: a place in the air of a cave', () => {
     expect(outcome.ok).toBe(false);
     expect(outcome.reason).toBe('limit_dig');
     expect(outcome.text).not.toMatch(/search_timeout/u);
-    expect(outcome.text).toMatch(/^go 止まった limit_dig: 道探しは 0\.03 秒で終わらず、見つかった途中までの道（\(-?\d+,-?\d+,-?\d+\) まで）でも掘る所が \d+ あり、上限 1 の残り 1 を超える/u);
+    // Run 8 (6a86ba82, S3): the plan is drawn at the first search_timeout, so the stop names the plan's digs and the maxDig to ask again with.
+    expect(outcome.text).toMatch(/^go 止まった limit_dig: 計画の道は掘る所が \d+ あり、上限 1 の残り 1 を超える（出し直しは maxDig=\d+ 以上）/u);
   });
 });
