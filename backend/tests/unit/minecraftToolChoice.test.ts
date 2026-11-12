@@ -20,6 +20,16 @@ describe('tool choice by time and wear', () => {
     expect(pick('obsidian')).toBe('diamond_pickaxe');
   });
 
+  it('a stair down through stone and deepslate takes the cheapest pickaxe that can break it, and keeps the iron one for the diamond (run 9: iron 77 to 28)', () => {
+    const stairBag = [item('stone_pickaxe'), item('iron_pickaxe')];
+    for (const name of ['stone', 'deepslate', 'andesite', 'granite', 'calcite', 'amethyst_block', 'iron_ore', 'deepslate_iron_ore', 'coal_ore']) expect(pick(name, stairBag)).toBe('stone_pickaxe');
+    expect(pick('diamond_ore', stairBag)).toBe('iron_pickaxe');
+    expect(pick('deepslate_diamond_ore', stairBag)).toBe('iron_pickaxe');
+    // A half-worn stone pickaxe still goes before a fresh iron one, and a wooden one before the stone one only where it is not far slower.
+    expect(pick('deepslate', [item('stone_pickaxe', 100), item('iron_pickaxe')])).toBe('stone_pickaxe');
+    expect(pick('deepslate', [item('wooden_pickaxe'), item('stone_pickaxe'), item('iron_pickaxe')])).toBe('stone_pickaxe');
+  });
+
   it('uses a better tool when it is the only one that will do', () => {
     expect(pick('stone', [item('iron_pickaxe')])).toBe('iron_pickaxe');
     expect(pick('iron_ore', [item('wooden_pickaxe'), item('iron_pickaxe')])).toBe('iron_pickaxe');

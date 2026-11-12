@@ -170,7 +170,7 @@ const DIRT = ['dirt', 'grass_block', 'coarse_dirt', 'podzol', 'mycelium', 'mud',
 const SAND = ['sand', 'red_sand', 'gravel', 'soul_sand'];
 const WOOD = /(?:_log|_wood|_stem|_hyphae|_planks|_fence)$/u;
 /** Blocks the body does not break whatever it is told: nothing mined for itself, nothing that is a village's or a player's. */
-const NEVER_DIG = /(?:_ore$|^ancient_debris$|^obsidian$|^crying_obsidian$|^bedrock$|^spawner$|^trial_spawner$|^vault$|_door$|_fence_gate$|_trapdoor$|_bed$|^end_portal|^nether_portal$|^barrier$|^command_block|^structure_block$|^reinforced_deepslate$|^farmland$|^budding_amethyst$)/u;
+export const NEVER_DIG = /(?:_ore$|^ancient_debris$|^obsidian$|^crying_obsidian$|^bedrock$|^spawner$|^trial_spawner$|^vault$|_door$|_fence_gate$|_trapdoor$|_bed$|^end_portal|^nether_portal$|^barrier$|^command_block|^structure_block$|^reinforced_deepslate$|^farmland$|^budding_amethyst$)/u;
 /** An ore or ancient debris: dug when named by its id in `canDig`, never as part of a category word. */
 const ORE_ID = /(?:_ore$|^ancient_debris$)/u;
 /** Blocks that fall when what holds them is gone: never laid as a bridge or a step, dug under with care. */

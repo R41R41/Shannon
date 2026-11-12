@@ -7,7 +7,7 @@ import { trailOf } from '../stairLine.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { blockAt, cellText, fullPackWatch, eyeDistance, guard, inventoryCount, letGo, StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
-import { blockInHand, digRuleOf, hasFace, mayLayAt, placeNamesOf } from './go.js';
+import { blockInHand, digRuleOf, hasFace, mayLayAt, NEVER_DIG, placeNamesOf } from './go.js';
 import { PILLAR_FALL_MARGIN, shortFloor } from './pillarUp.js';
 import { ThreatExposedError } from '../exposureGuard.js';
 import { verticalProblem } from '../actHandRules.js';
@@ -79,6 +79,12 @@ export const DEFAULT_FOOTING = ['cobblestone', 'cobbled_deepslate', 'dirt'] as c
  * (run 46: a stair of 22 levels stopped at an oak fence for the planner to say it may be dug). Planks, doors, chests, beds and the rest are the planner's to allow.
  */
 export const INCIDENTAL_IN_THE_WAY = /^(?:.*_fence|.*_rail|rail|cobweb|torch|wall_torch|soul_torch|redstone_torch|ladder|vine|string|tripwire|tripwire_hook)$/u;
+/**
+ * Run 9 (1217-1384 s): a stair down met iron_ore, then amethyst_block of a geode, and stopped each time (77 s for one ore) for the planner to add the id. What a way down through rock
+ * meets is dug without being told: any ore (the pickaxe in hand breaks it; a pickaxe too weak for it is told as the tool's stop) and the geode's blocks. A budding_amethyst is never
+ * dug (it drops nothing and the body does not break it): said as that, with the way round it (toward, another column).
+ */
+export const ROCK_IN_THE_WAY = /^(?:.+_ore|amethyst_block|calcite|smooth_basalt)$/u;
 const TOWARD: Record<VerticalToward, [number, number]> = { north: [0, -1], south: [0, 1], west: [-1, 0], east: [1, 0] };
 const LIQUIDS = new Set(['water', 'lava', 'flowing_water', 'flowing_lava', 'bubble_column']);
 const FALLING = /^(?:gravel|sand|red_sand|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/u;
@@ -352,14 +358,15 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
 
   // ---- digging ----
   const broke = new Map<string, number>();
-  const allowed = (name: string) => rule.names.has(name) || INCIDENTAL_IN_THE_WAY.test(name);
+  const allowed = (name: string) => rule.names.has(name) || INCIDENTAL_IN_THE_WAY.test(name) || ROCK_IN_THE_WAY.test(name);
   const refuseDig = (cell: Cell, block: any): VStop => {
     const name = nameOf(block);
     // Run 48 (hold 1): a name the planner wrote in canDig that the body does not dig (a door, a spawner, a bed...) is said as such, not asked for again.
     const refusedByRule = (args.canDig ?? []).some(word => String(word).replace(/^minecraft:/u, '').toLowerCase() === name) && !rule.names.has(name);
-    const unbreakable = block?.diggable === false || name === 'bedrock' || refusedByRule;
-    const why = unbreakable ? `${name}${cellText(cell)} は${refusedByRule ? ' canDig に書かれているが体は壊さない決まりの' : '壊せない'}ブロック` : `${name}${cellText(cell)} は canDig に無い（${away(cell)}）`;
-    return new VStop('cannot_dig', why, cell, unbreakable ? undefined : `canDig に ${name} を足せば進む`);
+    const neverDug = NEVER_DIG.test(name);
+    const unbreakable = block?.diggable === false || name === 'bedrock' || refusedByRule || neverDug;
+    const why = unbreakable ? `${name}${cellText(cell)} は${refusedByRule ? ' canDig に書かれているが体は壊さない決まりの' : neverDug ? ' 体は壊さない決まりの' : '壊せない'}ブロック` : `${name}${cellText(cell)} は canDig に無い（${away(cell)}）`;
+    return new VStop('cannot_dig', why, cell, unbreakable ? (neverDug ? 'toward を変えるか別の列で下りる' : undefined) : `canDig に ${name} を足せば進む`);
   };
   /** Before anything of a level is dug: a cell it must open that is not allowed stops it now, not after two others were dug. */
   const precheckDig = (cells: Cell[]) => {
