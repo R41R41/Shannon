@@ -73,8 +73,32 @@ describe('planTidy', () => {
     expect(wood.smelt).toEqual([]);
     const more = planTidy(pack(['raw_iron', 8], ['oak_log', 10]), { room: 30 }, f);
     expect(more.fuel).toEqual({ item: 'oak_log', count: 6 });
-    const coal = planTidy(pack(['raw_iron', 8], ['coal', 3]), { room: 30, keep: [{ item: 'coal', count: 3 }] }, f);
-    expect(coal.smelt).toEqual([]);
+  });
+
+  it('keep= on coal never stops the smelt (the head holds coal back for the iron itself)', () => {
+    const f = { free: 5, table: false, furnace: true };
+    const coal = planTidy(pack(['raw_iron', 8], ['coal', 2]), { room: 30, keep: [{ item: 'coal', count: 2 }] }, f);
+    expect(coal.smelt).toEqual([{ item: 'raw_iron', count: 8 }]);
+    expect(coal.fuel).toEqual({ item: 'coal', count: 1 });
+  });
+
+  it('does not throw the third iron pickaxe when room is short', () => {
+    const items = pack(['iron_pickaxe', 3, { maxDurability: 250 }], ['dirt', 40], ['cobblestone', 64]);
+    const plan = planTidy(items, { room: 30 }, facts(items, { free: 1 }));
+    expect(thrown(plan).iron_pickaxe).toBeUndefined();
+  });
+
+  it('treats cobblestone and cobbled deepslate as one scaffold pool, and netherrack as scaffold only in the Nether', () => {
+    const both = pack(['cobblestone', 20], ['cobbled_deepslate', 30]);
+    const a = planTidy(both, { room: 30 }, facts(both, { free: 1 }));
+    expect(thrown(a)).toEqual({});   // 50 together are below 64: neither kind goes whole
+    const big = pack(['cobblestone', 70], ['cobbled_deepslate', 30]);
+    expect(thrown(planTidy(big, { room: 30 }, facts(big, { free: 1 })))).toEqual({ cobbled_deepslate: 30, cobblestone: 6 });   // the pool is then 70, trimmed to 64 as room is short
+    const rack = pack(['netherrack', 40], ['cobblestone', 10]);
+    const over = planTidy(rack, { room: 30 }, facts(rack, { free: 1 }));
+    expect(thrown(over)).toEqual({ netherrack: 40 });   // cobblestone (8 stay anyway) is the scaffold outside the Nether
+    const nether = planTidy(rack, { room: 30 }, facts(rack, { free: 1, nether: true }));
+    expect(thrown(nether)).toEqual({});   // in the Nether netherrack is the scaffold, below 64; the cobblestone pool is below 64 too
   });
 
   it('keeps 4 gravel always, and 16 dirt when there is no scaffold rock', () => {

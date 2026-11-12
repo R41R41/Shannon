@@ -49,7 +49,7 @@ export function readTidyFacts(bot: any): TidyFacts & { furnaceCell: Cell | null;
   const furnaceCell = nearbyFurnace(bot);
   const carried = inventoryCount(bot, 'furnace') > 0;
   const stones = inventoryCount(bot, 'cobblestone') + inventoryCount(bot, 'cobbled_deepslate');
-  return { free: freeSlots(bot), table, furnace: !!furnaceCell || carried || (table && stones >= 8), furnaceCell, tableAtHand: atHand, furnaceCarried: carried };
+  return { free: freeSlots(bot), table, furnace: !!furnaceCell || carried || (table && stones >= 8), furnaceCell, tableAtHand: atHand, furnaceCarried: carried, nether: String(bot.game?.dimension ?? '').includes('nether') };
 }
 
 const fmt = (pairs: Array<{ item: string; count: number }>) => pairs.map(entry => `${entry.item}×${entry.count}`).join('・');

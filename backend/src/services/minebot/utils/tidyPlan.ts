@@ -26,6 +26,8 @@ export interface TidyFacts {
   goldWanted?: boolean;
   /** Flint is wanted (a flint and steel to make): a little gravel is kept. */
   flintWanted?: boolean;
+  /** In the Nether: netherrack then counts as scaffold; elsewhere it is rock to throw (cobblestone is the scaffold). */
+  nether?: boolean;
 }
 export interface TidyPlan {
   smelt: Array<{ item: string; count: number }>;
@@ -42,7 +44,10 @@ export const DEFAULT_ROOM = 6;
 /** The scaffold kept at ease; with room still short it is cut to SCAFFOLD_TIGHT. */
 const SCAFFOLD_KEEP = 128;
 const SCAFFOLD_TIGHT = 64;
-const SCAFFOLD_KINDS = ['cobblestone', 'cobbled_deepslate', 'netherrack'];
+/** Cobblestone and cobbled deepslate are one pool (either is a scaffold block); netherrack is its own, the scaffold only in the Nether. */
+const COBBLE_POOL = ['cobbled_deepslate', 'cobblestone'];
+/** Cobblestone held back while a furnace or a stone tool may still be made. */
+const STONE_FOR_MAKING = 8;
 const SMALL_STACK = new Map<string, number>([['ender_pearl', 16], ['snowball', 16], ['egg', 16], ['bucket', 16], ['honey_bottle', 16]]);
 /** Ingots wanted before raw iron is no longer worth a smelt (a full set of armour, shield, bucket, flint and steel). */
 const INGOTS_ENOUGH = 24;
@@ -60,9 +65,10 @@ function chooseFuel(items: TidyStack[], n: number, keep: Map<string, number>): {
   const options: Array<{ name: string; per: number }> = [{ name: 'coal', per: 8 }, { name: 'charcoal', per: 8 }];
   for (const stack of items) if (/_log$|_planks$/u.test(stack.name)) options.push({ name: stack.name, per: 1.5 });
   for (const option of options) {
-    // What is held back (keep) is not fuel; wood keeps the wood a table, tools, a shield and a bed are made of (4 logs, 8 planks) at least.
+    // keep only stops a throw, never a smelt: coal and charcoal are all fuel (the head holds coal back for the iron itself). Wood keeps what a table, tools, a shield and a bed are made of (4 logs, 8 planks) at least.
     const wood = /_log$/u.test(option.name) ? 4 : /_planks$/u.test(option.name) ? 8 : 0;
-    const have = items.filter(stack => stack.name === option.name).reduce((sum, stack) => sum + stack.count, 0) - Math.max(keep.get(option.name) ?? 0, wood);
+    const held = wood > 0 ? Math.max(keep.get(option.name) ?? 0, wood) : 0;
+    const have = items.filter(stack => stack.name === option.name).reduce((sum, stack) => sum + stack.count, 0) - held;
     if (have <= 0) continue;
     const need = Math.max(1, Math.ceil(n / option.per - 1e-9));
     return { item: option.name, count: Math.min(have, need), covers: Math.min(n, Math.floor(Math.min(have, need) * option.per + 1e-9)) };
@@ -158,13 +164,20 @@ export function planTidy(items: TidyStack[], args: TidyArgs, facts: TidyFacts): 
       if (JUNK_ALWAYS.test(name) || FLOWERS.test(name)) push(name, count(name), false);
       else if ((name === 'emerald' || name === 'gold_nugget') && count(name) < 9) push(name, count(name), false);
     }
-    // (2) rock that is not the scaffold: the most plentiful kind of the scaffold kinds stays (SCAFFOLD_KEEP), the other scaffold kinds and every other rock go
-    const scaffold = SCAFFOLD_KINDS.filter(name => count(name) > 0).sort((a, b) => count(b) - count(a))[0] ?? null;
+    // (2) rock that is not the scaffold. Cobblestone and cobbled deepslate are one pool: a kind goes here only when the rest of the pool still holds SCAFFOLD_TIGHT;
+    // otherwise the pool is trimmed in (4). 8 cobblestone stay for a furnace and stone tools. Netherrack is scaffold only in the Nether (or when there is no cobble at all).
+    const pool = () => COBBLE_POOL.reduce((sum, name) => sum + count(name), 0);
+    const netherScaffold = !!facts.nether || pool() === 0;
     for (const name of names()) {
       if (done()) break;
-      if (!OTHER_ROCK.has(name) || name === scaffold) continue;
-      // Gravel (flint for a flint and steel) keeps 4; with no scaffold rock at all, dirt keeps 16 to stand on.
-      const stay = name === 'gravel' ? 4 : name === 'dirt' && !scaffold ? 16 : 0;
+      if (!OTHER_ROCK.has(name)) continue;
+      if (name === 'netherrack' && netherScaffold) continue;
+      let stay = 0;
+      if (COBBLE_POOL.includes(name)) {
+        stay = pool() - count(name) >= SCAFFOLD_TIGHT ? 0 : count(name);
+        if (name === 'cobblestone') stay = Math.max(stay, Math.min(count(name), STONE_FOR_MAKING));
+      } else if (name === 'gravel') stay = 4;
+      else if (name === 'dirt' && pool() === 0 && count('netherrack') === 0) stay = 16;
       push(name, count(name) - stay, false);
     }
     // (3) tools beside better ones, extra pickaxes
@@ -179,12 +192,26 @@ export function planTidy(items: TidyStack[], args: TidyArgs, facts: TidyFacts): 
         if (worthless && count(name) > 0) push(name, count(name), false);
       }
     }
-    for (const surplus of surplusPickaxes(tools.map(tool => ({ ...tool })))) { if (done()) break; push(surplus.name, surplus.count, false); }
-    // (4) scaffold above SCAFFOLD_KEEP, then above SCAFFOLD_TIGHT, only while room is short
-    if (scaffold) {
-      if (!done()) push(scaffold, count(scaffold) - SCAFFOLD_KEEP, false);
-      if (!done()) push(scaffold, count(scaffold) - SCAFFOLD_TIGHT, false);
+    // The Nether trip wants 3 pickaxes (iron one each, diamond three): iron and better are not thrown while they are 3 or fewer in all.
+    const heldPickaxes = tools.filter(tool => /^(iron|diamond|netherite)_pickaxe$/u.test(tool.name)).reduce((sum, tool) => sum + tool.count, 0);
+    for (const surplus of surplusPickaxes(tools.map(tool => ({ ...tool })))) {
+      if (done()) break;
+      if (/^(iron|diamond|netherite)_pickaxe$/u.test(surplus.name) && heldPickaxes <= 3) continue;
+      push(surplus.name, surplus.count, false);
     }
+    // (4) the scaffold above SCAFFOLD_KEEP, then above SCAFFOLD_TIGHT, only while room is short: the cobble pool (deepslate first, 8 cobblestone stay), and netherrack when it is the scaffold
+    const trimTo = (limit: number) => {
+      let over = pool() - limit;
+      for (const name of COBBLE_POOL) {
+        if (done() || over <= 0) break;
+        const floor = name === 'cobblestone' ? Math.min(count(name), STONE_FOR_MAKING) : 0;
+        const n = Math.min(over, count(name) - floor);
+        if (n > 0) { push(name, n, false); over -= n; }
+      }
+      if (netherScaffold && !done()) push('netherrack', count('netherrack') - limit, false);
+    };
+    if (!done()) trimTo(SCAFFOLD_KEEP);
+    if (!done()) trimTo(SCAFFOLD_TIGHT);
     // (5) raw copper, then (6) raw ore that cannot be smelted (ingots enough, furnace or fuel missing): a handful that would be thrown away
     if (!done() && count('raw_copper') > 0) push('raw_copper', count('raw_copper'), false);
     if (!done()) {
