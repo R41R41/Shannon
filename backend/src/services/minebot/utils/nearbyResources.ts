@@ -16,7 +16,7 @@ import { feetCell, type Cell } from './localMap.js';
  *   - ore: ore with a face open to air (the map marks' own), one place per kind; bed and water: the map marks' own;
  *   - lava: the lava pools within LAVA_M at any height (sources only, touching sources one pool), the nearest three pools by their nearest source, each with its sources, how far across
  *     and how far up or down from the feet, and whether a solid block covers it (run 8, 11/13: four pools at y 20, -19, -45 and -55 were in sight and the planner was given only the
- *     nearest source, 27 down across a cave; it took 191 s to reach). Overworld only (the Nether is a lava sea).
+ *     nearest source, 27 down across a cave; it took 191 s to reach). Overworld only (the Nether is a lava sea); a scan that found none is said too (count 0, no sites).
  * Read from the same scans as the map's marks and the wood line where it can (one more query: the village's hay and fields), kept CACHE_MS or CACHE_MOVE blocks.
  */
 export interface NearbyResource {
@@ -177,16 +177,15 @@ function computeList(bot: Body, feet: Cell, now: number): NearbyResource[] {
     try {
       const scan = scanLoadedBlocks(bot as never, ['lava'], { maxDistance: LAVA_M, maxHits: LAVA_HITS, sourceOnly: true });
       const pools = lavaPoolsOf(scan.hits);
-      if (pools.length) {
-        const covered = (cell: Cell): string => {
-          try { return bot.blockAt?.(new Vec3(cell.x, cell.y + 1, cell.z), false)?.boundingBox === 'block' ? '○' : '×'; } catch { return '?'; }
-        };
-        list.push({ purpose: 'lava', kind: 'lava', count: scan.hits.length, range: scan.hits.length >= LAVA_HITS ? Math.ceil(scan.hits[scan.hits.length - 1].distance) : LAVA_M, pools: pools.length,
-          sites: pools.slice(0, SITES).map(pool => {
-            const dy = pool.nearest.y - feet.y;
-            return { ...pool.nearest, note: `源 ${pool.sources}・足から 水平 ${Math.round(flat(pool.nearest, feet))}m・高さ ${dy > 0 ? '+' : ''}${dy}・覆い ${covered(pool.nearest)}` };
-          }) });
-      }
+      const covered = (cell: Cell): string => {
+        try { return bot.blockAt?.(new Vec3(cell.x, cell.y + 1, cell.z), false)?.boundingBox === 'block' ? '○' : '×'; } catch { return '?'; }
+      };
+      // Said even when none was seen (count 0, no sites): the head then says 「溶岩の溜まり 96m 内に見えない」 and how to look again.
+      list.push({ purpose: 'lava', kind: 'lava', count: scan.hits.length, range: scan.hits.length >= LAVA_HITS ? Math.ceil(scan.hits[scan.hits.length - 1].distance) : LAVA_M, pools: pools.length,
+        sites: pools.slice(0, SITES).map(pool => {
+          const dy = pool.nearest.y - feet.y;
+          return { ...pool.nearest, note: `源 ${pool.sources}・足から 水平 ${Math.round(flat(pool.nearest, feet))}m・高さ ${dy > 0 ? '+' : ''}${dy}・覆い ${covered(pool.nearest)}` };
+        }) });
     } catch { /* lava is only a list: none read, none said */ }
   }
   return list;

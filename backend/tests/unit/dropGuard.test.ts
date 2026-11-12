@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 import { makeHandsSim, type Ground, type HandsSim, type Stack } from '../helpers/handsSim.js';
 import { dig, worthKeeping } from '../../src/services/minebot/utils/primitives/dig.js';
+import { mine } from '../../src/services/minebot/utils/primitives/mine.js';
 import { blocksKeepDrop, guardDrop } from '../../src/services/minebot/utils/primitives/dropGuard.js';
 import { dropRisk } from '../../src/services/minebot/utils/dropFate.js';
 import type { StepContext } from '../../src/services/minebot/utils/primitives/common.js';
@@ -134,5 +135,41 @@ describe('the drop kept before the dig (run 8)', () => {
     expect(worthKeeping('deepslate_diamond_ore')).toBe(true);
     expect(worthKeeping('ancient_debris')).toBe(false);
     expect(worthKeeping('stone')).toBe(false);
+  });
+});
+
+describe('obsidian mined as the dig hand digs it (run 10)', () => {
+  it('lava right under it: with a water bucket it is poured over and dug; without one it is not dug and said (not burnt)', async () => {
+    const wet = makeHandsSim(worldWith({ '3,62,0': 'lava' }), { start: [0.5, FLOOR, 0.5], items: [PICK, WATER] });
+    const dug = await drive(wet, mine(ctxOf(wet), { block: 'obsidian', at: [OBSIDIAN], count: 1 }));
+    expect(dug.ok, dug.text).toBe(true);
+    expect(wet.bot.poured).toContain('3,64,0');
+    expect(wet.count('water_bucket')).toBe(1);
+    const dry = makeHandsSim(worldWith({ '3,62,0': 'lava' }), { start: [0.5, FLOOR, 0.5], items: [PICK, DIRT] });
+    const left = await drive(dry, mine(ctxOf(dry), { block: 'obsidian', at: [OBSIDIAN], count: 1 }));
+    expect(left.ok).toBe(false);
+    expect(left.reason).toBe('danger');
+    expect(left.text).toContain('下 (3,62,0) が溶岩で落とし物が焼ける');
+    expect(dry.nameAt(3, 63, 0)).toBe('obsidian');
+  });
+  it('a fall into lava further down: the air is filled with a block, else the obsidian is not dug', async () => {
+    const filled = makeHandsSim(worldWith({ '3,62,0': 'air', '3,61,0': 'lava' }), { start: [0.5, FLOOR, 0.5], items: [PICK, DIRT] });
+    const dug = await drive(filled, mine(ctxOf(filled), { block: 'obsidian', at: [OBSIDIAN], count: 1 }));
+    expect(dug.ok, dug.text).toBe(true);
+    expect(filled.bot.placedBlocks).toEqual(['dirt@3,62,0']);
+    const bare = makeHandsSim(worldWith({ '3,62,0': 'air', '3,61,0': 'lava' }), { start: [0.5, FLOOR, 0.5], items: [PICK] });
+    const left = await drive(bare, mine(ctxOf(bare), { block: 'obsidian', at: [OBSIDIAN], count: 1 }));
+    expect(left.ok).toBe(false);
+    expect(bare.nameAt(3, 63, 0)).toBe('obsidian');
+  });
+  it('lava beside it is filled and the obsidian dug; collect:false still leaves a cell with lava beside it', async () => {
+    const side = makeHandsSim(worldWith({ '4,63,0': 'lava' }), { start: [0.5, FLOOR, 0.5], items: [PICK, DIRT] });
+    const dug = await drive(side, mine(ctxOf(side), { block: 'obsidian', at: [OBSIDIAN], count: 1 }));
+    expect(dug.ok, dug.text).toBe(true);
+    expect(side.bot.placedBlocks).toEqual(['dirt@4,63,0']);
+    const loose = makeHandsSim(worldWith({ '4,63,0': 'lava' }), { start: [0.5, FLOOR, 0.5], items: [PICK, DIRT] });
+    const left = await drive(loose, mine(ctxOf(loose), { block: 'obsidian', at: [OBSIDIAN], count: 1, collect: false }));
+    expect(left.reason).toBe('danger');
+    expect(loose.bot.placedBlocks).toEqual([]);
   });
 });

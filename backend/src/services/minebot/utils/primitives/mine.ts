@@ -20,7 +20,8 @@ import { scanLoadedBlocks } from '../loadedBlockScan.js';
  * what falls. It looks for no other ore and no other block: the vein is what the planner's cells are joined to. A cell it cannot stand
  * near is gone to by the hand `go` (a way that digs only what `canDig` names, at most `maxDig` blocks; without them it digs no way at all), at most
  * `APPROACH_SECONDS` a cell, and the hand gives up when `UNREACHABLE_CELLS` cells have not been reached (run 40: 8 stops of 5 to 51 s, 194 s in all). It makes
- * no tunnel and no stair (those are repeat and go), and never digs a cell with lava beside it (water beside it is let in: the body steadies its feet and goes on).
+ * no tunnel and no stair (those are repeat and go), and never digs a cell with lava beside it (water beside it is let in: the body steadies its feet and goes on); obsidian
+ * collected is left to dig's drop guard instead (the lava filled, or water poured over lava under it, else not dug and said), as the dig hand does.
  */
 export interface MineArgs {
   block: string; at: Cell[]; count?: number; tool?: string; collect?: boolean; seconds?: number; canDig?: readonly string[]; maxDig?: number;
@@ -103,6 +104,8 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
   const ctx: StepContext = { ...ctx0, deadline: Math.min(ctx0.deadline, startedAt + seconds * 1000) };
   const count = clamp(Math.round(Number(args.count ?? DEFAULT_COUNT)), 1, 64);
   const collect = args.collect !== false;
+  /** Obsidian collected: its drop is kept from lava as the dig hand keeps it (never dug to burn). */
+  const keepsDrop = collect && (block === 'obsidian' || block === 'crying_obsidian');
   // Ore lies inside rock: without a dig list the way is dug through the rock and earth words of ROCK_ROAD (never an ore, a chest, a door or a bed), at most DEFAULT_MAX_DIG blocks.
   const roadWords = args.canDig?.length ? [...args.canDig] : ROCK_ROAD.split(',');
   const roadBudget = clamp(Math.round(Number(args.maxDig ?? DEFAULT_MAX_DIG)), 0, 200);
@@ -260,7 +263,8 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       if (isKind(blockAt(bot, next)?.name)) { seen.add(nextKey); open.set(nextKey, next); }
     }
     // Lava beside the cell would run into the hole (and onto the body): the cell is left. Water beside it is let in (the body's footing and dam hold it).
-    const wet = FACES.map(([dx, dy, dz]) => ({ at: { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz } })).find(face => isLava(blockAt(bot, face.at)?.name));
+    // Obsidian kept is the dig hand's to judge (keepsDrop): its guard fills that lava, waters lava under it, or leaves the cell and says why; lava it lets onto the body stops it (lava_behind).
+    const wet = keepsDrop ? undefined : FACES.map(([dx, dy, dz]) => ({ at: { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz } })).find(face => isLava(blockAt(bot, face.at)?.name));
     if (wet) {
       skipped.push({ cell, kind: 'liquid', why: `${cellText(cell)} は隣の ${cellText(wet.at)} が ${blockAt(bot, wet.at)?.name}` });
       continue;
@@ -281,7 +285,8 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
     }
     attempts.set(key, (attempts.get(key) ?? 0) + 1);
     // Run 8: an ore over lava keeps its drop where blocks can do it (dropGuard: the air it would fall through filled, at most two blocks of the cheap ones); dug anyway when they cannot.
-    const outcome = await dig(ctx, { at: [cell], tool: args.tool, collect: false, ...(collect ? { keepDrop: 'try' as const, guardMaxPlace: 2 } : {}) });
+    // Obsidian kept is dug as the dig hand digs it ('require': blocks laid, water poured over lava right under it, else not dug: drop_would_burn), not burnt.
+    const outcome = await dig(ctx, { at: [cell], tool: args.tool, collect: false, ...(keepsDrop ? { keepDrop: 'require' as const } : collect ? { keepDrop: 'try' as const, guardMaxPlace: 2 } : {}) });
     if (outcome.ok) {
       failsInARow = 0;
       result.dug++; sincePick++;
@@ -301,7 +306,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
         skipped.push({ cell, kind: 'unreachable', why: outcome.text });
         continue;
       }
-      case 'lava_behind': skipped.push({ cell, kind: 'liquid', why: outcome.text }); continue;
+      case 'lava_behind': case 'drop_would_burn': skipped.push({ cell, kind: 'liquid', why: outcome.text }); continue;
       case 'footing': case 'falling_above': skipped.push({ cell, kind: 'footing', why: outcome.text }); continue;
       case 'threat_exposed': return problem('threat_exposed', outcome.text, cell);
       // The breath cannot pay for this dig and its way back: another try at the next cell spends the same breath, so the hand ends here.

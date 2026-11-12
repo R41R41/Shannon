@@ -99,12 +99,12 @@ describe('nearby lava pools', () => {
     expect(lava.sites[2].note).toContain('源 3・');
     expect(lava.sites[2].note).toContain('高さ +20');
   });
-  it('says nothing of lava in the Nether, nor when there is none', () => {
+  it('says nothing of lava in the Nether, and says none was seen in the overworld when there is none', () => {
     const built = worldWith(pools());
     const nether = nearbyResources(bodyIn(built, new Vec3(0.5, 40, 0.5), { game: { dimension: 'the_nether' } }), 1_000);
     expect(nether.some(entry => entry.purpose === 'lava')).toBe(false);
     const dry = nearbyResources(bodyIn(worldWith([[3, 39, 3, 'stone']]), new Vec3(0.5, 40, 0.5)), 1_000);
-    expect(dry.some(entry => entry.purpose === 'lava')).toBe(false);
+    expect(dry.find(entry => entry.purpose === 'lava')).toEqual({ purpose: 'lava', kind: 'lava', count: 0, pools: 0, range: 96, sites: [] });
   });
   it('groups touching sources into one pool', () => {
     const hits = [[1, 0, 0], [2, 0, 0], [3, 1, 1], [10, 0, 0]].map(([x, y, z]) => ({ name: 'lava', position: new Vec3(x, y, z), distance: Math.hypot(x, y, z) }));
