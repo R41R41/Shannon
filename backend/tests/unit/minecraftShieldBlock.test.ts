@@ -521,6 +521,18 @@ describe('the shield goes up for a skeleton drawing its bow (run 8)', () => {
       expect(bot.controls.forward).toBe(true);
     } finally { vi.useRealTimers(); }
   });
+  it('a draw held out of sight (behind a laid block) raises the shield once the skeleton is seen again: it lets go the moment it sees', () => {
+    try {
+      const { bot, draw, tickFor } = drawingScene(0);
+      let wall = true;   // a block on the line, as the cover lays it: the skeleton walks round it with its bow drawn
+      bot.blockAt = (at: Vec3) => ({ boundingBox: at.y < 64 || (wall && at.z === -5 && Math.abs(at.x) <= 2 && at.y <= 66) ? 'block' : 'empty' });
+      draw(true); tickFor(2000);
+      expect(bot.shieldBlock.raised).toBe(0);              // not seen: nothing comes yet
+      wall = false; tickFor(50);                           // seen again: the very next tick
+      expect(bot.shieldBlock.up).toBe(true);
+      expect(bot.shieldBlock.drawRaised).toBe(1);
+    } finally { vi.useRealTimers(); }
+  });
   it('a draw let go early, a zombie, or a skeleton beyond 16 m raises nothing', () => {
     try {
       const early = drawingScene(0);

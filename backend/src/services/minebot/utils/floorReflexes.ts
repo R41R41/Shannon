@@ -2018,6 +2018,8 @@ export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, ti
     const ends = Date.now() + ambush.ms;
     let how = '来なかった';
     while (Date.now() < ends) {
+      // Another hand took the body (the lava or the breath reflex, an abort): the wait gives way at once, as the other cover loops do.
+      if (actionSignal(port as never)?.aborted || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) { how = '止められた'; break; }
       const skeleton = bot.entities?.[ambush.id] as FloorEntity | undefined;
       const at = bot.entity?.position;
       if (!skeleton?.position || (skeleton as { isValid?: boolean }).isValid === false || !at) { how = '居なくなった'; break; }

@@ -70,6 +70,15 @@ export function harmfulWetFaces(bot: any, cell: Cell, feet: Cell | null = feetCe
   return wetFaces(bot, cell).filter(face => waterReachesBody(bot, cell, feet, face.level));
 }
 
+/**
+ * Where the body will stand when a route digs `cell`: a cell under the feet is one the route goes into (a dig down, a step down a wall), so the body is taken as
+ * standing in it; any other cell is judged from the feet as they are. (dig's own cells are not a route's: a body digging obsidian from above stays over the hole.)
+ */
+export function routeFeetFor(bot: any, cell: Cell): Cell | null {
+  const feet = feetCell(bot);
+  return feet && cell.y < feet.y ? cell : feet;
+}
+
 /** The price of digging `cell` for a route, in steps: nothing dry costs 0. */
 export function wetCost(bot: any, cell: Cell): number {
   const faces = wetFaces(bot, cell);
@@ -110,13 +119,13 @@ export function wetBreakCost(bot: unknown): (block: { position?: Cell }) => numb
 }
 
 /**
- * Seals the water cells touching `cell` that would reach the body (harmfulWetFaces) before it is dug: a cheap block laid on each, nearest to the eyes first (at most MAX_FACES, FACE_MS each, nothing beyond the hand's own time).
+ * Seals the water cells touching `cell` that would reach the body (harmfulWetFaces; a route passes `routeFeetFor`) before it is dug: a cheap block laid on each, nearest to the eyes first (at most MAX_FACES, FACE_MS each, nothing beyond the hand's own time).
  * A face the hand cannot reach, a refused place or no block held is left (`left`) and said. The cell itself is written down as sealed when all its faces held.
  */
-export async function sealWetFaces(ctx: StepContext, cell: Cell): Promise<SealResult> {
+export async function sealWetFaces(ctx: StepContext, cell: Cell, feet: Cell | null = feetCell(ctx.bot)): Promise<SealResult> {
   const bot = ctx.bot;
-  // Only the water that would reach the body (run 8: the water over a block dug from above it was sealed 28 times for nothing).
-  const faces = harmfulWetFaces(bot, cell);
+  // Only the water that would reach the body standing at `feet` (run 8: the water over a block dug from above it was sealed 28 times for nothing).
+  const faces = harmfulWetFaces(bot, cell, feet);
   if (!faces.length) return { sealed: [], left: [], block: null, words: '' };
   const block = damBlockHeld(bot);
   const left: WetFace[] = [];

@@ -1,9 +1,11 @@
 import { Vec3 } from 'vec3';
-import type { Cell } from '../localMap.js';
+import { feetCell, type Cell } from '../localMap.js';
 import { dropBurns, dropRisk, type DropRisk } from '../dropFate.js';
 import { blockAt, cellText, eyeDistance, inventoryCount, isAirLike, USE_REACH, waitUntil, type StepContext } from './common.js';
 import { DAM_BLOCKS } from './stanch.js';
 import { place } from './place.js';
+import { dimensionOf } from './walk.js';
+import { waterReachesBody } from './wetWall.js';
 
 /**
  * The drop of a block kept from lava, as a person keeps it (run 8, 11/13: six obsidian lost to lava, one beside the block and five under it; the owner: "接している溶岩が流れてきて
@@ -116,7 +118,12 @@ export async function guardDrop(ctx: StepContext, cell: Cell, options: DropGuard
         const below = plain(risk.below!);
         let why = '';
         if (!options.water) why = '水をかける手ではない';
+        // Water boils away in the Nether (the bucket is emptied, the lava stays): the obsidian hand refuses the same way.
+        else if (dimensionOf(bot).includes('nether')) why = 'ネザーでは水が蒸発する';
         else if (inventoryCount(bot, 'water_bucket') <= 0) why = '水入りバケツを持っていない';
+        // A source over the block runs onto the body when it lies at the head's height or above (the lake face at the feet's height: the water
+        // falls from the head's cell onto the feet, the dig goes five times slower, the body is pushed). Dug from a step higher, it lands at the feet's height or under.
+        else if (waterReachesBody(bot, over, feetCell(bot as never), 0)) why = '上に水をかけると頭に流れる（1 段上から掘れば水をかけられる）';
         else if (!isAirLike(top)) why = `上 ${cellText(over)} が ${top?.name ?? '未ロード'} で水を置けない`;
         else if (eyeDistance(bot, over) > USE_REACH) why = `上 ${cellText(over)} に届かない`;
         else {

@@ -86,6 +86,23 @@ describe('the drop kept before the dig (run 8)', () => {
     expect(out.text).toContain('上に水をかけてから掘る');
     expect(out.text).toContain('上の水はバケツに戻した');
   });
+  it('in the Nether pours no water (it boils away and the bucket is lost): the ore over lava is not dug, the bucket kept', async () => {
+    const sim = makeHandsSim(worldWith({ '3,63,0': 'nether_quartz_ore', '3,62,0': 'lava' }), { start: [0.5, FLOOR, 0.5], items: [PICK, WATER] });
+    sim.bot.game.dimension = 'the_nether';
+    const out = await drive(sim, dig(ctxOf(sim), { at: [OBSIDIAN] }));
+    expect(out.reason).toBe('drop_would_burn');
+    expect(out.text).toContain('ネザーでは水が蒸発する');
+    expect(sim.bot.poured).toEqual([]);
+    expect(sim.count('water_bucket')).toBe(1);
+  });
+  it("pours no water that would run onto the head (the lake face at the feet's height), and says to dig it from a step higher", async () => {
+    const sim = makeHandsSim(worldWith({ '3,64,0': 'obsidian', '3,63,0': 'lava' }), { start: [0.5, FLOOR, 0.5], items: [PICK, WATER] });
+    const out = await drive(sim, dig(ctxOf(sim), { at: [{ x: 3, y: FLOOR, z: 0 }] }));
+    expect(out.reason).toBe('drop_would_burn');
+    expect(out.text).toContain('上に水をかけると頭に流れる（1 段上から掘れば水をかけられる）');
+    expect(sim.bot.poured).toEqual([]);
+    expect(sim.nameAt(3, FLOOR, 0)).toBe('obsidian');
+  });
   it('digs as before when the drop is not wanted (collect:false), and lays nothing', async () => {
     const sim = makeHandsSim(worldWith({ '4,63,0': 'lava' }), { start: [0.5, FLOOR, 0.5], items: [PICK, DIRT] });
     const out = await drive(sim, dig(ctxOf(sim), { at: [OBSIDIAN], collect: false }));

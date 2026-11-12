@@ -369,4 +369,15 @@ describe('run62 #11 #9: a skeleton\'s arrows at a bare body (02:34:22 to 37: 4, 
     await vi.waitFor(() => expect(covers(ledger).length).toBeGreaterThan(1), { timeout: 4000, interval: 5 });
     expect(covers(ledger)[1].detail).not.toContain('陰で待つ');
   });
+  it('run 8 B2: the wait behind the block gives way at once to the lava reflex (the floor is not held for three seconds)', async () => {
+    const SWORD = { name: 'iron_sword', type: 2, count: 1 };
+    const { bot, ledger, clock } = scene(false, [COBBLE, SWORD]);
+    Object.assign(bot.inventory.slots, { 5: { name: 'iron_helmet' }, 6: { name: 'iron_chestplate' }, 45: { name: 'shield' } });
+    tick(bot);
+    clock.at += 1000; shotBy(bot, 9727, 4); tick(bot);
+    await vi.waitFor(() => expect(bot.__placed).toHaveLength(1), { timeout: 4000, interval: 5 });
+    bot.lavaReflex = { engaged: true };
+    await vi.waitFor(() => expect(bot.floorReflexes.busy).toBeNull(), { timeout: 1000, interval: 5 });
+    expect(covers(ledger)[0].detail).toContain('待った: 止められた');
+  });
 });

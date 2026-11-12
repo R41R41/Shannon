@@ -25,7 +25,7 @@ import { blackBoxOf } from '../blackbox.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { meterProgress, round1 } from './progressUnits.js';
 import { ThreatExposedError } from '../exposureGuard.js';
-import { harmfulWetFaces, sealedAt, sealWetFaces, wetFaces } from './wetWall.js';
+import { harmfulWetFaces, routeFeetFor, sealedAt, sealWetFaces, wetFaces } from './wetWall.js';
 import { surfaceSwimControls, swimControls, swimPulse } from './swim.js';
 import { waterExitWords } from './waterExit.js';
 import { stanchStream } from './stanch.js';
@@ -1197,7 +1197,7 @@ function followHandsOf(ctx: StepContext, args: GoArgs, deadline: number, before?
     place: async cell => { const block = layBlock(); if (!block) return false; return (await placeAt(ctx, { block, at: [cell] })).ok; },
     dig: cell => digCell(bot, cell),
     wetAt: cell => wetFaces(bot, cell).length > 0 && !sealedAt(bot, cell),
-    seal: async cell => { const result = await sealWetFaces(ctx, cell); return { ok: result.left.length === 0, placed: result.sealed.length, words: result.words }; },
+    seal: async cell => { const result = await sealWetFaces(ctx, cell, routeFeetFor(bot, cell)); return { ok: result.left.length === 0, placed: result.sealed.length, words: result.words }; },
     feet: feetNow,
   };
 }
@@ -1616,16 +1616,19 @@ export async function goWalk(ctx: StepContext, args: GoArgs): Promise<StepOutcom
   const countingDig = async function (this: unknown, ...rest: unknown[]) {
     const at = (rest[0] as { position?: { x: number; y: number; z: number } } | undefined)?.position;
     let result: unknown;
-    // Water behind the cell: sealed before the dig (a route dug into a lake's wall in run 7, waterOk or not), only the water that would reach the body (run 8: a cell under
-    // the feet lets none onto them). A failure here never stops the dig.
+    // Water behind the cell: sealed before the dig (a route dug into a lake's wall in run 7, waterOk or not), only the water that would reach the body. A route's
+    // cell under the feet is one the body goes into (a dig down, a step down an aquifer's or a lake's wall): it is judged as the body standing in it, so a source
+    // at its side is sealed in a tunnel or a shaft (run 7's flooded stairs) and a thin flow is let be (run 8's obsidian, dug by dig from above, keeps the feet as they are).
+    // A failure here never stops the dig.
     if (counting && at) {
       try {
         const cell = { x: at.x, y: at.y, z: at.z };
-        if (harmfulWetFaces(bot, cell).length && !sealedAt(bot, cell)) {
+        const feet = routeFeetFor(bot, cell);
+        if (harmfulWetFaces(bot, cell, feet).length && !sealedAt(bot, cell)) {
           // The seal is the hand's own footing, not the route's: a block the server refuses here is told in the words, never counted as a refused place of the route.
           const wasCounting = counting;
           counting = false;
-          try { const out = await sealWetFaces(ctx, cell); state.placed += out.sealed.length; wet.sealed += out.sealed.length; wet.left += out.left.length; } finally { counting = wasCounting; }
+          try { const out = await sealWetFaces(ctx, cell, feet); state.placed += out.sealed.length; wet.sealed += out.sealed.length; wet.left += out.left.length; } finally { counting = wasCounting; }
         }
       } catch (error) { if (error instanceof StepStopped) throw error; }
     }

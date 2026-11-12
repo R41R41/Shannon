@@ -82,6 +82,7 @@ describe('the shield reads a draw by the game (B1)', () => {
     expect(drawingBow({ name: 'skeleton', metadata: [] }, registry)).toBe(false);
     expect(drawArrivalTicks(0, 0, 16)).toBeCloseTo(30);
     expect(drawArrivalTicks(0, 500, 0)).toBeCloseTo(10);
+    expect(drawArrivalTicks(0, 2000, 8)).toBeCloseTo(5);       // a draw held two seconds is ready: only the flight is left
   });
   it('front is within 80° of the facing, across', () => {
     const from = new Vec3(0, 64, 0);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeHandsSim, type Ground, type HandsSim } from '../helpers/handsSim.js';
-import { harmfulWetFaces, sealedBreakCost, sealedAt, sealWetFaces, waterReachesBody, wetBreakCost, wetCost, wetFaces, SEALED_BREAK_COST } from '../../src/services/minebot/utils/primitives/wetWall.js';
+import { harmfulWetFaces, routeFeetFor, sealedBreakCost, sealedAt, sealWetFaces, waterReachesBody, wetBreakCost, wetCost, wetFaces, SEALED_BREAK_COST } from '../../src/services/minebot/utils/primitives/wetWall.js';
 import { bodyEnclosed, dig } from '../../src/services/minebot/utils/primitives/dig.js';
 import type { StepContext } from '../../src/services/minebot/utils/primitives/common.js';
 
@@ -121,5 +121,26 @@ describe('the water that reaches the body (run 8)', () => {
     const shore = makeHandsSim(world, { start: [0.5, FLOOR, 0.5] });
     expect(harmfulWetFaces(shore.bot, { x: -1, y: FLOOR, z: 0 })).toEqual([]);
     expect(waterReachesBody(shore.bot, { x: -1, y: FLOOR, z: 0 }, null, 3)).toBe(true);   // a body not placed: as before
+  });
+  // Review of run 8's fix: a route's cell under the feet is one the body goes into (go digs down, steps down an aquifer's wall), so it is judged as the body standing in it.
+  it("a route's dig down a shaft beside a source seals it (run 7's flooded stairs); a thin flow there is let be; dig's own cell under the feet still lays nothing", async () => {
+    /** A shaft one wide at (0,·,0) down to y 62, a cell of water beside its next cell down (1,63,0). */
+    const shaft = (water: string): Ground => (x, y, z) => {
+      if (Math.abs(x) > 30 || Math.abs(z) > 30) return null;
+      if (x === 0 && z === 0 && y >= FLOOR) return 'air';
+      if (x === 1 && z === 0 && y === FLOOR - 1) return water;
+      return y > FLOOR + 1 ? 'air' : 'stone';
+    };
+    const sim = makeHandsSim(shaft('water~0'), { start: [0.5, FLOOR, 0.5], items: [{ name: 'dirt', count: 5 }] });
+    const down = { x: 0, y: FLOOR - 1, z: 0 };
+    expect(routeFeetFor(sim.bot, down)).toEqual(down);
+    expect(routeFeetFor(sim.bot, { x: 1, y: FLOOR, z: 0 })).toEqual({ x: 0, y: FLOOR, z: 0 });
+    expect(harmfulWetFaces(sim.bot, down)).toEqual([]);                                  // from the feet as they are: under them
+    expect(harmfulWetFaces(sim.bot, down, routeFeetFor(sim.bot, down))).toHaveLength(1);  // the body about to stand in it
+    const out = await drive(sim, sealWetFaces(ctxOf(sim), down, routeFeetFor(sim.bot, down)));
+    expect(out.sealed).toEqual([{ x: 1, y: FLOOR - 1, z: 0 }]);
+    const thin = makeHandsSim(shaft('water~3'), { start: [0.5, FLOOR, 0.5], items: [{ name: 'dirt', count: 5 }] });
+    expect(harmfulWetFaces(thin.bot, down, routeFeetFor(thin.bot, down))).toEqual([]);
+    expect((await drive(thin, sealWetFaces(ctxOf(thin), down, routeFeetFor(thin.bot, down)))).sealed).toEqual([]);
   });
 });

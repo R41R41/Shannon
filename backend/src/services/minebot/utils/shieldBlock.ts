@@ -6,7 +6,7 @@ import { answerWith } from './reflexAnswers.js';
 import { isEngaged } from './engagement.js';
 import { isLikelyHostileMobName, isThreatEntity } from './hostileMobHints.js';
 import { physicalActionBusy, reservationOf, shieldPort } from '../execution/ActionExecution.js';
-import { threatExposure } from './threatExposure.js';
+import { seesBodyAt, threatExposure } from './threatExposure.js';
 import { recordShieldActivation } from '../execution/shieldActivation.js';
 import { combatMarkOf, isHeadCombatRunning, isSkeletonKind } from './combatOwner.js';
 
@@ -124,9 +124,13 @@ export function drawingBow(entity: { name?: string | null; metadata?: unknown[] 
   const flags = index >= 0 ? entity!.metadata![index] : undefined;
   return typeof flags === 'number' && (flags & 0x01) === 0x01;
 }
-/** Ticks until the arrow of a draw begun at `startedAt` reaches a body `distance` away (negative: it should be there already). */
+/**
+ * Ticks until the arrow of a draw begun at `startedAt` reaches a body `distance` away. A draw held past DRAW_TICKS counts as ready, not as gone: the game's skeleton
+ * (RangedBowAttackGoal) keeps its bow drawn for up to three seconds while it cannot see its target and lets go the moment it sees it again, so a full draw is an
+ * arrow that leaves now and comes in its flight's time (the cover's wait ends just so: the skeleton walks round the laid block with its bow drawn).
+ */
 export function drawArrivalTicks(startedAt: number, now: number, distance: number): number {
-  return (startedAt - now) / TICK_MS + DRAW_TICKS + distance / ARROW_BLOCKS_PER_TICK;
+  return Math.max(0, (startedAt - now) / TICK_MS + DRAW_TICKS) + distance / ARROW_BLOCKS_PER_TICK;
 }
 /** Whether `at` lies within FRONT_DEGREES of where a body at `from` with this yaw faces, across (mineflayer's yaw: facing (-sin, -cos)). */
 export function inFront(from: Vec3, yaw: number | undefined, at: Vec3): boolean {
@@ -404,10 +408,11 @@ export function installShieldBlock(bot: ShieldBot): void {
         const distance = entity.position.distanceTo(bot.entity.position);
         if (distance > DRAW_WATCH_M) continue;
         const ticks = drawArrivalTicks(draws.get(entity.id)!, nowMs, distance);
-        if (ticks > RAISE_AHEAD_TICKS || ticks < -HOLD_TICKS) continue;
-        let line = 'seen';
-        try { line = threatExposure(bot as never, entity, nowMs); } catch { line = 'seen'; }
-        if (line !== 'seen') continue;
+        if (ticks > RAISE_AHEAD_TICKS) continue;
+        // Its line read from the blocks now, not the exposure's three-second keep: a skeleton holding a full draw behind a block lets go the tick it sees the body.
+        let sees = true;
+        try { sees = typeof (bot as any).blockAt !== 'function' || seesBodyAt(bot as never, entity, bot.entity.position); } catch { sees = true; }
+        if (!sees) continue;
         if (!fromDraw || ticks < fromDraw.ticks) fromDraw = { entity, ticks: Math.max(0, ticks), position: entity.position.offset(0, (entity.height ?? 1.99) * 0.85, 0) };
       }
       for (const id of draws.keys()) if (!drawing.has(id)) draws.delete(id);
