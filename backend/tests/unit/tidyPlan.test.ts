@@ -56,6 +56,36 @@ describe('planTidy', () => {
     expect(thrown(near).raw_iron).toBeUndefined();
   });
 
+  it('smelts every raw iron and raw gold left, and keep= never stops a smelt', () => {
+    const f = { free: 5, table: false, furnace: true };
+    const odd = planTidy(pack(['raw_iron', 2], ['iron_ingot', 30], ['coal', 3]), { room: 30 }, f);
+    expect(odd.smelt).toEqual([{ item: 'raw_iron', count: 2 }]);
+    const gold = planTidy(pack(['raw_gold', 3], ['coal', 3]), { room: 30 }, f);
+    expect(gold.smelt).toEqual([{ item: 'raw_gold', count: 3 }]);
+    const held = planTidy(pack(['raw_iron', 8], ['coal', 3]), { room: 30, keep: [{ item: 'raw_iron', count: 8 }] }, f);
+    expect(held.smelt).toEqual([{ item: 'raw_iron', count: 8 }]);
+    expect(thrown(held).raw_iron).toBeUndefined();
+  });
+
+  it('does not burn the logs and planks the pack needs, nor coal that is kept', () => {
+    const f = { free: 5, table: false, furnace: true };
+    const wood = planTidy(pack(['raw_iron', 8], ['oak_log', 4]), { room: 30 }, f);
+    expect(wood.smelt).toEqual([]);
+    const more = planTidy(pack(['raw_iron', 8], ['oak_log', 10]), { room: 30 }, f);
+    expect(more.fuel).toEqual({ item: 'oak_log', count: 6 });
+    const coal = planTidy(pack(['raw_iron', 8], ['coal', 3]), { room: 30, keep: [{ item: 'coal', count: 3 }] }, f);
+    expect(coal.smelt).toEqual([]);
+  });
+
+  it('keeps 4 gravel always, and 16 dirt when there is no scaffold rock', () => {
+    const items = pack(['gravel', 100], ['dirt', 100]);
+    const out = thrown(planTidy(items, { room: 20 }, facts(items, { free: 0 })));
+    expect(out.gravel).toBe(96);
+    expect(out.dirt).toBe(84);
+    const withRock = pack(['cobblestone', 64], ['dirt', 100]);
+    expect(thrown(planTidy(withRock, { room: 20 }, facts(withRock, { free: 0 }))).dirt).toBe(100);
+  });
+
   it('keep= holds a thing back, and a named item is thrown whole whatever room says', () => {
     const items = pack(['diorite', 15], ['dirt', 70]);
     const kept = planTidy(items, { room: 5, keep: [{ item: 'dirt', count: 16 }] }, facts(items, { free: 1 }));
@@ -83,7 +113,7 @@ describe('planTidy', () => {
     const items = pack(['wooden_pickaxe', 1, { maxDurability: 59 }], ['stone_pickaxe', 1, { maxDurability: 131 }], ['wooden_axe', 1, { maxDurability: 59 }], ['stone_sword', 1, { maxDurability: 131 }], ['iron_sword', 1, { maxDurability: 250 }]);
     const plan = planTidy(items, { room: 20 }, facts(items, { free: 0 }));
     const out = thrown(plan);
-    expect(out.wooden_pickaxe).toBe(1);
+    expect(out.wooden_pickaxe).toBeUndefined();   // the drop keeps the last pickaxe of a kind, so it would free no slot
     expect(out.stone_sword).toBe(1);
     expect(out.wooden_axe).toBeUndefined();   // no better axe
     const lone = planTidy(pack(['wooden_pickaxe', 1, { maxDurability: 59 }]), { room: 30 }, { free: 5, table: false, furnace: false });

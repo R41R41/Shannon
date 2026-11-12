@@ -22,7 +22,7 @@ export interface TidyFacts {
   table: boolean;
   /** A furnace within 16 m that is not busy, or one carried, or the cobblestone and the table to make one. */
   furnace: boolean;
-  /** Raw gold is smelted only when gold is wanted (the pack holds gold ingots or 4 raw). Default: from the pack. */
+  /** Kept for callers; raw gold is smelted whenever a furnace and fuel are there. */
   goldWanted?: boolean;
   /** Flint is wanted (a flint and steel to make): a little gravel is kept. */
   flintWanted?: boolean;
@@ -48,7 +48,7 @@ const SMALL_STACK = new Map<string, number>([['ender_pearl', 16], ['snowball', 1
 const INGOTS_ENOUGH = 24;
 const FLOWERS = /^(dandelion|poppy|blue_orchid|allium|azure_bluet|oxeye_daisy|cornflower|lily_of_the_valley|lilac|rose_bush|peony|sunflower|wither_rose|torchflower|pink_petals|[a-z]+_tulip|short_grass|tall_grass|fern|large_fern|dead_bush|vine|glow_lichen|sugar_cane_unused)$/u;
 const JUNK_ALWAYS = /^(rotten_flesh|spider_eye|poisonous_potato|leaf_litter|wheat_seeds|beetroot_seeds|pumpkin_seeds|melon_seeds|torchflower_seeds|pitcher_pod|calcite|dripstone_block|pointed_dripstone)$|_sapling$|_propagule$|_door$|_terracotta$|_banner$|_sign$|_hanging_sign$/u;
-/** Rock and soil that is not the scaffold: thrown to nothing (gravel keeps 4 when flint is wanted). */
+/** Rock and soil that is not the scaffold: thrown to nothing (gravel keeps 4, dirt 16 when there is no scaffold rock). */
 const OTHER_ROCK = new Set(['andesite', 'diorite', 'granite', 'tuff', 'deepslate', 'stone', 'dirt', 'coarse_dirt', 'rooted_dirt', 'mud', 'sand', 'red_sand', 'gravel', 'basalt', 'smooth_basalt', 'blackstone', 'cobbled_deepslate', 'cobblestone', 'netherrack']);
 const TOOL_TIER = ['wooden', 'stone', 'golden', 'iron', 'diamond', 'netherite'];
 
@@ -56,11 +56,13 @@ const stackOf = (item: TidyStack): number => item.stackSize ?? SMALL_STACK.get(i
 export const slotsFor = (count: number, stack: number): number => count <= 0 ? 0 : Math.ceil(count / Math.max(1, stack));
 
 /** The fuel to smelt `n` items with: coal and charcoal first, then logs and planks; null when none covers even one. */
-function chooseFuel(items: TidyStack[], n: number): { item: string; count: number; covers: number } | null {
+function chooseFuel(items: TidyStack[], n: number, keep: Map<string, number>): { item: string; count: number; covers: number } | null {
   const options: Array<{ name: string; per: number }> = [{ name: 'coal', per: 8 }, { name: 'charcoal', per: 8 }];
   for (const stack of items) if (/_log$|_planks$/u.test(stack.name)) options.push({ name: stack.name, per: 1.5 });
   for (const option of options) {
-    const have = items.filter(stack => stack.name === option.name).reduce((sum, stack) => sum + stack.count, 0);
+    // What is held back (keep) is not fuel; wood keeps the wood a table, tools, a shield and a bed are made of (4 logs, 8 planks) at least.
+    const wood = /_log$/u.test(option.name) ? 4 : /_planks$/u.test(option.name) ? 8 : 0;
+    const have = items.filter(stack => stack.name === option.name).reduce((sum, stack) => sum + stack.count, 0) - Math.max(keep.get(option.name) ?? 0, wood);
     if (have <= 0) continue;
     const need = Math.max(1, Math.ceil(n / option.per - 1e-9));
     return { item: option.name, count: Math.min(have, need), covers: Math.min(n, Math.floor(Math.min(have, need) * option.per + 1e-9)) };
@@ -98,17 +100,16 @@ export function planTidy(items: TidyStack[], args: TidyArgs, facts: TidyFacts): 
 
   // 2. Smelt: raw iron (and raw gold when gold is wanted) when a furnace and fuel are there. Smelting keeps the slot (raw 8 -> ingot 8) but joins an ingot stack and counts for have:iron_ingot.
   const rawIron = count('raw_iron'), rawGold = count('raw_gold');
-  const ingots = count('iron_ingot');
-  const goldWanted = facts.goldWanted ?? (count('gold_ingot') > 0 || rawGold >= 4);
-  const wantIron = rawIron > 0 && (ingots < INGOTS_ENOUGH || rawIron >= 4) && !keep.has('raw_iron');
-  const wantGold = rawGold > 0 && goldWanted && !keep.has('raw_gold');
+  // Whatever raw iron or gold is left is smelted (a furnace and fuel being there): the rest joins the ingot stack. `keep` only stops a throw, never a smelt (smelting keeps the value).
+  const wantIron = rawIron > 0;
+  const wantGold = rawGold > 0;
   let smeltable = false;
   if (args.smelt === false) plan.why.push('smelt=off で焼かない');
   else if ((wantIron || wantGold) && !facts.furnace) plan.why.push('炉が遠い（16m 超）か無いので原石は焼かず持ち続ける');
   else if (wantIron || wantGold) smeltable = true;
   if (smeltable) {
     const total = (wantIron ? rawIron : 0) + (wantGold ? rawGold : 0);
-    const fuel = chooseFuel(items, Math.min(64, total));
+    const fuel = chooseFuel(items, Math.min(64, total), keep);
     if (!fuel) { plan.why.push('燃料（石炭・木炭・原木）が無く原石は焼かない'); smeltable = false; }
     else {
       let budget = fuel.covers;
@@ -134,7 +135,8 @@ export function planTidy(items: TidyStack[], args: TidyArgs, facts: TidyFacts): 
   const explicit = (args.items ?? []).length > 0;
   const push = (name: string, n: number, force: boolean) => {
     const reserve = keep.get(name) ?? 0;
-    const n2 = Math.min(n, count(name) - reserve);
+    // The last pickaxe of a kind is never thrown (the drop keeps it), so it frees no slot.
+    const n2 = Math.min(n, count(name) - reserve - (/_pickaxe$/u.test(name) ? 1 : 0));
     if (n2 <= 0) return;
     const before = slotsOf(name);
     const after = slotsFor(count(name) - n2, stackSizes.get(name) ?? 64);
@@ -161,7 +163,8 @@ export function planTidy(items: TidyStack[], args: TidyArgs, facts: TidyFacts): 
     for (const name of names()) {
       if (done()) break;
       if (!OTHER_ROCK.has(name) || name === scaffold) continue;
-      const stay = name === 'gravel' && facts.flintWanted ? 4 : 0;
+      // Gravel (flint for a flint and steel) keeps 4; with no scaffold rock at all, dirt keeps 16 to stand on.
+      const stay = name === 'gravel' ? 4 : name === 'dirt' && !scaffold ? 16 : 0;
       push(name, count(name) - stay, false);
     }
     // (3) tools beside better ones, extra pickaxes

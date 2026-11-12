@@ -69,7 +69,7 @@ export interface OpenedPit { plan: DumpPitPlan; lyingBefore: Set<number>; dug: n
 
 /**
  * Digs the hole beside the body. Never moves the body. A reason in words when there is none: liquid near, nowhere to stand or no column to dig, a dig that failed; `threat` when
- * an enemy sees the cells (the throw is left for later: throwing at the feet is the worse trade).
+ * an enemy sees the cells (the throw is left for later: throwing at the feet is the worse trade). The hole's own cells are dug with exposeOk (below the feet, covered after): an enemy behind a wall is no reason to throw nothing.
  */
 export async function openDropPit(ctx: StepContext): Promise<OpenedPit | { reason: string; threat?: boolean; text?: string }> {
   const bot = ctx.bot;
@@ -82,7 +82,7 @@ export async function openDropPit(ctx: StepContext): Promise<OpenedPit | { reaso
   if (!plan) return { reason: '立てる床が無いか、掘れる列が無い（液体・落ちる砂利・岩盤・道具のブロック）' };
   let dug = 0;
   for (const cell of plan.dig) {
-    const outcome = await dig(ctx, { at: [{ x: cell.x, y: cell.y, z: cell.z }], collect: false });
+    const outcome = await dig(ctx, { at: [{ x: cell.x, y: cell.y, z: cell.z }], collect: false, exposeOk: true });
     if (!outcome.ok) {
       if (outcome.reason === 'threat_exposed') return { reason: '敵が近い', threat: true, text: outcome.text };
       return { reason: `穴を掘れなかった（${String(outcome.text).slice(0, 60)}）` };
