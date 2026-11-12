@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 import { createGround, stepContext, type Ground } from '../helpers/practiceGround.js';
 import { drop } from '../../src/services/minebot/utils/primitives/body.js';
@@ -93,4 +93,87 @@ describe('drop into a hole', () => {
     expect(chooseCap(bot, new Map([['cobblestone', 5], ['dirt', 3]]))).toEqual({ block: 'cobblestone', reserve: true });
     expect(chooseCap({ inventory: { items: () => [{ name: 'oak_sapling', count: 3 }] } }, new Map([['oak_sapling', 3]]))).toBeNull();
   });
+});
+
+// Design flow-1111 B: the throw is the Q key (window click mode 4), the read of the hole waits for the items to be seen to move, what came back is thrown again,
+// and raw iron and raw gold are never thrown by a drop of the planner's own.
+/** A clickWindow that takes the clicked stack out of the pack (mode 4, button 1: the whole stack) and lands it where withToss lands. */
+function withQ(g: Ground, landsInPit = true) {
+  const click = vi.fn(async (slot: number, button: number, mode: number) => {
+    const held = g.slots[slot];
+    if (!held || mode !== 4) return;
+    const count = button === 1 ? held.count : 1;
+    const name = String(held.name);
+    g.take(name, count);
+    const feet = g.bot.entity.position.floored();
+    let at = new Vec3(feet.x + 1, feet.y, feet.z);
+    if (landsInPit) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) if (g.nameAt(feet.x + dx, feet.y - 2, feet.z + dz) === 'air') { at = new Vec3(feet.x + dx, feet.y - 2, feet.z + dz); break; }
+    g.drop(name, count, at);
+  });
+  (g.bot as any).clickWindow = click;
+  return click;
+}
+
+describe('drop: the Q throw, the settle, the return, raw ore', () => {
+  it('throws whole stacks with clickWindow mode 4 and button 1, and a part of a stack with toss', async () => {
+    const g = open();
+    withToss(g);
+    const click = withQ(g);
+    g.give('stone_pickaxe', 1); g.give('cobblestone', 64 + 30); g.give('dirt', 20);
+    const out = await drop(stepContext(g.bot), { items: [{ item: 'cobblestone', count: 64 }, { item: 'dirt', count: 5 }] });
+    expect(out.ok, out.text).toBe(true);
+    expect(click).toHaveBeenCalledWith(expect.any(Number), 1, 4);
+    expect(click.mock.calls.map(call => call.join(','))).toEqual([expect.stringMatching(/,1,4$/u)]);     // the full 64 stack by Q; the 5 of dirt (part of a stack) by toss
+    expect(g.countOf('dirt')).toBe(15);
+    expect(out.text).toContain('穴の中 69 個');
+  }, 30_000);
+
+  it('does not count an item whose position was never updated as lying outside the hole (unverified, no walk away)', async () => {
+    const g = open();
+    g.bot.toss = async (type: number, _meta: unknown, count: number) => {
+      const name = String(g.mcData.items[type].name);
+      g.take(name, count);
+      const feet = g.bot.entity.position.floored();
+      g.drop(name, count, new Vec3(feet.x + 0.5, feet.y + 1, feet.z + 0.5));   // stays where it spawned, at the hand
+    };
+    g.give('stone_pickaxe', 1); g.give('cobblestone', 40); g.give('dirt', 10);
+    const out = await drop(stepContext(g.bot), { items: [{ item: 'dirt', count: 5 }] });
+    expect(out.ok, out.text).toBe(true);
+    expect(out.text).not.toContain('穴から跳ねた分');
+  }, 30_000);
+
+  it('says what was picked up again and throws it again when it threw level (no hole)', async () => {
+    const g = open();
+    g.give('dirt', 30);
+    // Standing in a spot where no hole can be dug: liquid beside the feet keeps the pit away.
+    const feet = g.bot.entity.position.floored();
+    g.set(feet.x + 1, feet.y, feet.z, 'water');
+    let first = true;
+    g.bot.toss = async (type: number, _meta: unknown, count: number) => {
+      const name = String(g.mcData.items[type].name);
+      g.take(name, count);
+      const at = g.bot.entity.position.floored();
+      g.drop(name, count, new Vec3(at.x - 6, at.y, at.z));
+      if (first) { first = false; setTimeout(() => g.give(name, 7), 600); }   // 7 are picked up again a moment later
+    };
+    const out = await drop(stepContext(g.bot), { items: [{ item: 'dirt', count: 20 }] });
+    expect(out.ok, out.text).toBe(true);
+    expect(out.text).toContain('7 個を拾い直した');
+    expect(g.countOf('dirt')).toBeLessThanOrEqual(10);
+  }, 30_000);
+
+  it('never throws raw iron or raw gold, says so, and throws the rest', async () => {
+    const g = open();
+    withToss(g);
+    g.give('stone_pickaxe', 1); g.give('cobblestone', 20); g.give('raw_iron', 5); g.give('raw_gold', 2);
+    const out = await drop(stepContext(g.bot), { items: [{ item: 'raw_iron' }, { item: 'raw_gold' }, { item: 'cobblestone', count: 10 }] });
+    expect(out.ok, out.text).toBe(true);
+    expect(out.text).toContain('焼ける原石は tidy か smelt で焼く');
+    expect(g.countOf('raw_iron')).toBe(5);
+    expect(g.countOf('raw_gold')).toBe(2);
+    expect(g.countOf('cobblestone')).toBeLessThan(20);
+    const only = await drop(stepContext(g.bot), { items: [{ item: 'raw_iron' }] });
+    expect(only.ok).toBe(false);
+    expect(only.reason).toBe('raw_kept');
+  }, 30_000);
 });

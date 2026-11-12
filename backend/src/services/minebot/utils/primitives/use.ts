@@ -358,7 +358,7 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
       const pool = recent.filter(entry => Math.hypot(entry.x - cell.x, entry.y - cell.y, entry.z - cell.z) <= 4).length + 1;
       lastPool.set(bot, [...recent, { x: cell.x, y: cell.y, z: cell.z, at: now }]);
       lastUnfilled.set(bot, { key, times });
-      return stopped(bot, 'not_filled', `${placeText(bot, cell)} の ${block.name} を汲めなかった${times >= 2 ? `。同じ座標で ${times} 回目` : ''}${pool >= 2 ? `。この水（4 マス以内の別の源を含む）で ${pool} 回目` : ''}（${between
+      return stopped(bot, 'not_filled', `${placeText(bot, cell)} の ${block.name} を汲めなかった${times >= 2 ? `。同じ座標で ${times} 回目` : ''}${pool >= 3 ? `。この水（4 マス以内の別の源を含む）へは ${pool - 1} 回汲めなかった。原因: ${between ? `間の壁 ${cellText(between.cell)}（${between.name}）` : aims.length ? `線が通る ${aims.length} 点でも汲めず` : '視線が通らない'}` : pool >= 2 ? `。この水（4 マス以内の別の源を含む）で ${pool} 回目` : ''}（${between
         ? `目との間の ${cellText(between.cell)} が ${between.name}` : aims.length ? `${aims.length} か所を狙っても汲めなかった` : '視線が届かないか、手前に何かある'}。目から${distance.toFixed(1)}m・${facingWords(bot, cell)}。今 ${cellNow(bot, cell)}）`, cell);
     }
     return { ok: true, text: `${instead}${cellText(cell)} の ${block.name} 源を汲んだ（${filled}）`, at: cell };

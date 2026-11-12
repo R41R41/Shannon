@@ -6,7 +6,9 @@ import { cellText, findItem, guard, inventoryCount, stopped, StepStopped, wait, 
 import { findEntity } from './use.js';
 import { holdShieldForDraw } from '../shieldBlock.js';
 import { noteSelfDropped } from '../selfDropped.js';
-import { chooseCap, closeDropPit, openDropPit, pitLookPoint, PIT_DEPTH, walkClear, type OpenedPit } from './dropPit.js';
+import { chooseCap, closeDropPit, openDropPit, pitLookPoint, PIT_DEPTH, settleNewItems, walkClear, watchNewItems, type OpenedPit } from './dropPit.js';
+import { lavaToThrowInto } from '../dumpPit.js';
+import { isThrowable } from '../inventoryTidy.js';
 
 /** The small parts of act (design mb-llm-centric 2.3): look, jump, sneak, equip, eat, drop. Each does what it says and reads back what came of it. */
 
@@ -122,7 +124,15 @@ export async function eat(ctx: StepContext, args: { item: string }): Promise<Ste
   return { ok: true, text: `${args.item} を食べた（満腹度 ${before.food}→${bot.food}、隠し値 ${before.saturation.toFixed(1)}→${Number(bot.foodSaturation ?? 0).toFixed(1)}、1個 ${itemFoodPoints(bot, args.item)}点、残り ${inventoryCount(bot, args.item)}）` };
 }
 
-export interface DropArgs { items: Array<{ item: string; count?: number }>; toward?: string | Cell }
+export interface DropArgs {
+  items: Array<{ item: string; count?: number }>; toward?: string | Cell;
+  /** tidy only: raw iron and raw gold may be thrown (a drop of the planner's own never throws them: they are smelted). */
+  allowRaw?: boolean;
+  /** Filled by the drop: what the hole held and what lay outside it (tidy's line). */
+  stats?: { inside: number; outside: number; unverified: number; lava: number; level: number };
+}
+/** Raw iron and raw gold are one smelt from an ingot (armour, shield, bucket): a drop does not throw them away (design flow-1111 B-6). */
+const RAW_ORE = /^raw_(iron|gold)$/u;
 
 /** How many cells ahead (at the height of the head, where a thrown item leaves) a throw wants free, and how far it looks. */
 const TOSS_WANTS = 4, TOSS_LOOKS = 6;
@@ -171,21 +181,36 @@ function tossWay(bot: any, feet: Cell): { name: string; ja: string; dx: number; 
   return best!;
 }
 
-/** How long a drop waits for the thrown items to be seen where they lay (the server tells an item's moves about once a second). */
-const TOSS_SETTLE_MS = 1500;
-
 /**
  * The last pickaxe of each kind is never thrown (run 62, 1,756 s: the two spare stone pickaxes were thrown for room, the iron one broke at
  * 2,403 s, and she climbed from y 39 to 67 bare-handed). Asked for all of a kind, the drop throws all but one and says why.
  */
 const KEEP_LAST = /_pickaxe$/u;
 
-/** Throws `count` of the kind; tools (one to a slot) go the most worn first, so the one kept is the best (bot.toss takes slot order). */
-async function tossWorstFirst(bot: any, name: string, count: number): Promise<void> {
+/**
+ * Throws `count` of the kind; tools (one to a slot) go the most worn first, so the one kept is the best.
+ * The throw is the Q key (window click mode 4, button 1: the whole stack) after the body has looked and one physics tick has passed, so it leaves along the look (run 8, 11/13:
+ * the click outside the window threw wherever, and 53-106 of the thrown items lay outside the hole). A part of a stack is thrown with bot.toss, as before. A body with no
+ * clickWindow (a stand-in) throws with toss and tossStack.
+ */
+async function tossWorstFirst(ctx: StepContext, bot: any, name: string, count: number): Promise<void> {
   const entries = (bot.inventory?.items?.() ?? []).filter((item: any) => item.name === name);
+  const left = (item: any) => item.maxDurability > 0 ? item.maxDurability - (item.durabilityUsed ?? 0) : Infinity;
+  if (typeof bot.clickWindow === 'function' && entries.every((item: any) => typeof item.slot === 'number')) {
+    await wait(ctx, 100);
+    let remaining = count;
+    for (const item of [...entries].sort((x: any, y: any) => (left(x) === left(y) ? 0 : left(x) < left(y) ? -1 : 1) || y.count - x.count)) {
+      if (remaining < item.count) continue;
+      const stack = item.count;   // read before the click: the window may change the item itself
+      await bot.clickWindow(item.slot, 1, 4);
+      remaining -= stack;
+      if (remaining <= 0) return;
+    }
+    if (remaining > 0) await bot.toss(entries[0].type, null, remaining);
+    return;
+  }
   if (typeof bot.tossStack === 'function' && entries.length > count && entries.every((item: any) => item.count === 1)) {
-    const left = (item: any) => item.maxDurability > 0 ? item.maxDurability - (item.durabilityUsed ?? 0) : Infinity;
-    for (const item of [...entries].sort((a, b) => left(a) - left(b)).slice(0, count)) await bot.tossStack(item);
+    for (const item of [...entries].sort((x: any, y: any) => (left(x) === left(y) ? 0 : left(x) < left(y) ? -1 : 1)).slice(0, count)) await bot.tossStack(item);
     return;
   }
   await bot.toss(entries[0].type, null, count);
@@ -199,6 +224,7 @@ async function tossWorstFirst(bot: any, name: string, count: number): Promise<vo
 export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   if (!args.items?.length) return stopped(bot, 'invalid_input', 'drop には items（物と数の列）が要る');
+  const stats = args.stats ?? { inside: 0, outside: 0, unverified: 0, lava: 0, level: 0 };
   // A cell given as the text "229,-52,194" is the cell, not the name of a creature.
   const cellText3 = typeof args.toward === 'string' ? /^\s*\(?(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\)?\s*$/u.exec(args.toward) : null;
   if (cellText3) args = { ...args, toward: { x: Number(cellText3[1]), y: Number(cellText3[2]), z: Number(cellText3[3]) } };
@@ -207,9 +233,11 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
   const kept: string[] = [];
   const done: string[] = [];
   const plan: Array<{ item: string; have: number; wanted: number; count: number; keepOne: boolean }> = [];
+  const rawKept: string[] = [];
   for (const want of args.items) {
     const have = inventoryCount(bot, want.item);
     if (!have) { done.push(`${want.item} を持っていない`); continue; }
+    if (RAW_ORE.test(want.item) && !args.allowRaw) { rawKept.push(`${want.item}×${have}`); continue; }
     const wanted = Math.max(1, Math.round(want.count ?? have));
     const keepOne = KEEP_LAST.test(want.item);
     const count = Math.min(have - (keepOne ? 1 : 0), wanted);
@@ -217,12 +245,16 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
     if (count <= 0) continue;
     plan.push({ item: want.item, have, wanted, count, keepOne });
   }
+  if (rawKept.length) kept.push(`${rawKept.join('・')} は投げない（焼ける原石は tidy か smelt で焼く。鉄は防具・盾・バケツに要る）`);
   // With no creature or cell asked for, the things go into a hole beside the body, two cells deep, covered after (a throw level cannot promise a distance: run 7's 33 of 36 landed within 3 m).
   // The level throw below is for a creature or a cell (a piglin's gold), and for where no hole can be dug (said, with why).
   let opened: OpenedPit | null = null;
   let cap: ReturnType<typeof chooseCap> = null;
   let pitWhy = '';
-  if (args.toward === undefined && feet && bot.entity?.position && plan.length) {
+  // Lava within a throw (2-4.8 m): what is thrown into it is gone and cannot be picked up again, so no hole is dug (only kinds that are thrown to be rid of).
+  const intoLava = args.toward === undefined && feet && bot.entity?.position && plan.length && plan.every(entry => isThrowable(entry.item))
+    ? lavaToThrowInto(bot as any, bot.entity.position.offset(0, 1.62, 0)) : null;
+  if (args.toward === undefined && feet && bot.entity?.position && plan.length && !intoLava) {
     const result = await openDropPit(ctx);
     if ('plan' in result) {
       opened = result;
@@ -237,7 +269,9 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
     } else pitWhy = result.reason;
   }
   let way: ReturnType<typeof tossWay> | null = null;
-  if (opened) {
+  if (intoLava) {
+    try { await guard(ctx, Promise.resolve(bot.lookAt(new Vec3(intoLava.x + 0.5, intoLava.y + 1, intoLava.z + 0.5), true)), 1000); } catch (error) { if (error instanceof StepStopped) throw error; }
+  } else if (opened) {
     const eyeY = bot.entity.position.y + 1.62;
     try { await guard(ctx, Promise.resolve(bot.lookAt(pitLookPoint(opened.plan, eyeY), true)), 1000); } catch (error) { if (error instanceof StepStopped) throw error; }
   } else if (args.toward === undefined && feet && bot.entity?.position) {
@@ -246,7 +280,9 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
     try { await guard(ctx, Promise.resolve(bot.lookAt(new Vec3(feet.x + 0.5 + way.dx * 8, eyeY, feet.z + 0.5 + way.dz * 8), true)), 1000); } catch (error) { if (error instanceof StepStopped) throw error; }
   }
   const itemIds = () => new Set(Object.values(bot.entities ?? {}).filter((e: any) => e?.name === 'item').map((e: any) => e.id));
-  const before = itemIds();
+  const before = opened ? opened.lyingBefore : itemIds();
+  const watch = watchNewItems(bot, before);
+  if (opened) opened.watch = watch;
   if (args.toward !== undefined) {
     if (typeof args.toward === 'object') await guard(ctx, Promise.resolve(bot.lookAt(new Vec3(args.toward.x + 0.5, args.toward.y + 0.5, args.toward.z + 0.5), true)), 1000);
     else {
@@ -257,50 +293,56 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
   }
   let thrown = 0, asked = 0;
   const thrownKinds: string[] = [];
+  const wentBy = new Map<string, number>();
   for (const entry of plan) {
     asked += entry.keepOne ? entry.count : entry.wanted;
     if (entry.count > 0) {
-      try { await guard(ctx, Promise.resolve(tossWorstFirst(bot, entry.item, entry.count)), 3000); }
+      try { await guard(ctx, Promise.resolve(tossWorstFirst(ctx, bot, entry.item, entry.count)), 4000); }
       catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
+      await wait(ctx, 80);
+      watch.read();
     }
     const went = Math.max(0, entry.have - inventoryCount(bot, entry.item));
     thrown += went;
+    wentBy.set(entry.item, went);
     if (went > 0) thrownKinds.push(entry.item);
     done.push(`${entry.item}×${went} を投げた（残り${inventoryCount(bot, entry.item)}）`);
   }
-  if (kept.length && !done.length) return stopped(bot, 'last_pickaxe_kept', kept.join('。'));
+  if (kept.length && !done.length) return stopped(bot, rawKept.length && !plan.length ? 'raw_kept' : 'last_pickaxe_kept', kept.join('。'));
   const progress = () => ({ unit: 'item' as const, done: thrown, left: Math.max(0, asked - thrown) });
+  /** What the body took up again of what it threw (a stack read at its own feet is picked up by standing there): the items now held beyond what was left after the throw. */
+  const returned = () => plan.map(entry => ({ item: entry.item, n: Math.max(0, inventoryCount(bot, entry.item) - (entry.have - (wentBy.get(entry.item) ?? 0))) })).filter(entry => entry.n > 0);
+  const takeBack = (back: Array<{ item: string; n: number }>) => { for (const entry of back) { wentBy.set(entry.item, Math.max(0, (wentBy.get(entry.item) ?? 0) - entry.n)); thrown = Math.max(0, thrown - entry.n); } };
+  const backWords = (back: Array<{ item: string; n: number }>) => `${back.reduce((sum, entry) => sum + entry.n, 0)} 個を拾い直した（${back.map(entry => `${entry.item}×${entry.n}`).join('・')}）`;
+  const keptWords = () => kept.length ? `。${kept.join('。')}` : '';
+  // Into lava: what is thrown is gone.
+  if (intoLava) {
+    await wait(ctx, 200);
+    stats.lava += thrown;
+    return { ok: true, text: `${done.join('、')}。溶岩 ${cellText(intoLava)} へ投げ入れた（物は消える。穴は掘っていない）${keptWords()}`, progress: progress() };
+  }
   // The hole: the stacks are let fall, the cover goes on, and what lies where is read (the items are the body's own from then on: no pick-up of its own looks at them).
   let where = '';
   if (opened) {
     const closed = await closeDropPit(ctx, opened, cap);
+    stats.inside += closed.inside; stats.outside += closed.outside; stats.unverified += closed.unverified;
     where = `。横の穴（深さ ${PIT_DEPTH}）に投げ入れた: ${closed.words}`;
     if (closed.outside > 0) {
       const lying = closed.entities.filter((entity: any) => entity?.position).map((entity: any) => ({ x: Math.floor(entity.position.x), y: Math.floor(entity.position.y), z: Math.floor(entity.position.z) }));
       const away = await walkClear(ctx, lying);
       if (away.words) where += `。穴から跳ねた分は ${away.words}`;
-    } else where += '。拾い直さない';
-    return { ok: true, text: `${done.join('、')}${where}${kept.length ? `。${kept.join('。')}` : ''}`, progress: progress() };
+    } else if (closed.unverified === 0) where += '。拾い直さない';
+    const back = returned();
+    if (back.length) { takeBack(back); where += `。${backWords(back)}`; }
+    return { ok: true, text: `${done.join('、')}${where}${keptWords()}`, progress: progress() };
   }
   // Where the items lay: the item entities that were not there before. mineflayer keeps a thrown item where it was spawned (at the hand) until
   // the server tells its moves, about once a second (end1109s02: read at 0.35 s, a throw with six free cells was said to lie "0.0m" off): the
-  // line waits until each new item has been seen to move, or TOSS_SETTLE_MS.
+  // line waits until each new item has been seen to move, or TOSS_SETTLE_MS (dropPit.settleNewItems, the hole's wait too).
   if (bot.entity?.position && thrown > 0) {
     try {
-      const firstSeen = new Map<number, { x: number; y: number; z: number }>();
-      const settled = () => {
-        let fresh = 0, moved = 0;
-        for (const e of Object.values(bot.entities ?? {}) as any[]) {
-          if (e?.name !== 'item' || !e.position || before.has(e.id)) continue;
-          fresh++;
-          const seen = firstSeen.get(e.id);
-          if (!seen) firstSeen.set(e.id, { x: e.position.x, y: e.position.y, z: e.position.z });
-          else if (Math.hypot(e.position.x - seen.x, e.position.y - seen.y, e.position.z - seen.z) > 0.2) moved++;
-        }
-        return fresh > 0 && moved === fresh;
-      };
       await wait(ctx, 150);
-      await waitUntil(ctx, settled, TOSS_SETTLE_MS, 100);
+      await settleNewItems(ctx, watch);
       const origin = bot.entity.position;
       const fresh = Object.values(bot.entities ?? {}).filter((e: any) => e?.name === 'item' && e.position && !before.has(e.id));
       // A throw at a creature or a cell (a trade's gold) is picked up on purpose; a throw to be rid of things is the body's own and no pick-up of its own looks at it.
@@ -319,10 +361,37 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
           where += `。近い（${TOSS_AWAY}m 未満）ので${away.words || '離れた'}`;
         } else where += `。近い（${TOSS_AWAY}m 未満）: 拾い直すなら歩いて拾う`;
       } else if (aim) where = `。${aim.replace(/。$/u, '')}（落ちた先は読めなかった）`;
+      stats.level += thrown;
+      // What came back into the pack is said, and thrown again from where the body now stands (twice at most), then it walks clear of the heap once more.
+      for (let round = 0; round < 2 && args.toward === undefined; round++) {
+        await wait(ctx, 200);
+        const back = returned();
+        if (!back.length) break;
+        takeBack(back);
+        where += `。${backWords(back)}`;
+        const here = feetCell(bot);
+        if (!here || !bot.entity?.position) break;
+        const again = tossWay(bot, here);
+        try { await guard(ctx, Promise.resolve(bot.lookAt(new Vec3(here.x + 0.5 + again.dx * 8, bot.entity.position.y + 1.62, here.z + 0.5 + again.dz * 8), true)), 1000); } catch (error) { if (error instanceof StepStopped) throw error; }
+        for (const entry of back) {
+          try { await guard(ctx, Promise.resolve(tossWorstFirst(ctx, bot, entry.item, Math.min(entry.n, inventoryCount(bot, entry.item)))), 4000); }
+          catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
+        }
+        await wait(ctx, 800);
+        const lyingNow = Object.values(bot.entities ?? {}).filter((e: any) => e?.name === 'item' && e.position && bot.entity.position.distanceTo(e.position) <= 16)
+          .map((e: any) => ({ x: Math.floor(e.position.x), y: Math.floor(e.position.y), z: Math.floor(e.position.z) }));
+        const away = await walkClear(ctx, lyingNow);
+        if (away.words) where += `。再び投げて${away.words}`;
+        for (const entry of plan) {
+          const now = Math.max(0, entry.have - inventoryCount(bot, entry.item));
+          thrown += Math.max(0, now - (wentBy.get(entry.item) ?? 0));
+          wentBy.set(entry.item, now);
+        }
+      }
     } catch (error) { if (error instanceof StepStopped) throw error; }
   }
   // Continue contracts (1): the items thrown (counted from the pack), of the items asked (a kept last pickaxe is not asked).
-  return { ok: true, text: `${done.join('、')}${where}${kept.length ? `。${kept.join('。')}` : ''}`, progress: progress() };
+  return { ok: true, text: `${done.join('、')}${where}${keptWords()}`, progress: progress() };
 }
 
 const droppedName = (entity: any): string | null => { try { return entity?.getDroppedItem?.()?.name ?? null; } catch { return null; } };

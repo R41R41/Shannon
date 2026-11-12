@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3';
 import { liquidNearPit, planDumpPit, type DumpPitPlan } from '../dumpPit.js';
 import { noteSelfDropped, type DroppedLike } from '../selfDropped.js';
 import { feetCell, type Cell } from '../localMap.js';
-import { inventoryCount, wait, type StepContext, type StepOutcome } from './common.js';
+import { inventoryCount, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { dig } from './dig.js';
 import { place } from './place.js';
 
@@ -29,7 +29,43 @@ const isItem = (entity: any) => entity && (entity.name === 'item' || entity.disp
 const kindOf = (entity: any): string | null => { try { return entity?.getDroppedItem?.()?.name ?? null; } catch { return null; } };
 const countOf = (entity: any): number => { try { return Math.max(1, Number(entity?.getDroppedItem?.()?.count ?? 1)); } catch { return 1; } };
 
-export interface OpenedPit { plan: DumpPitPlan; lyingBefore: Set<number>; dug: number }
+/** How long a throw waits for the thrown items to be seen where they lay (the server tells an item's moves about once a second). */
+export const TOSS_SETTLE_MS = 1500;
+/** An item counts as seen to move when its position has changed this much since it was first read. */
+const MOVED_M = 0.2;
+
+/**
+ * The thrown items as the body reads them (run 8, 11/13: a stack read at spawn, still at the hand, was counted outside the hole, and the body walked 5-6 m off
+ * for items that were already in it). mineflayer keeps a thrown item where it was spawned until the server tells its moves: the first position of each new item
+ * is kept, and an item has moved when its position is not the first any more.
+ */
+export function watchNewItems(bot: any, before: Set<number>): { read(): { fresh: number; moved: number }; moved(entity: any): boolean } {
+  const firstSeen = new Map<number, { x: number; y: number; z: number }>();
+  const moved = (entity: any) => {
+    const seen = firstSeen.get(entity?.id);
+    return !!seen && !!entity?.position && Math.hypot(entity.position.x - seen.x, entity.position.y - seen.y, entity.position.z - seen.z) > MOVED_M;
+  };
+  const read = () => {
+    let fresh = 0, count = 0;
+    for (const e of Object.values(bot.entities ?? {}) as any[]) {
+      if (!isItem(e) || !e.position || before.has(e.id)) continue;
+      fresh++;
+      if (!firstSeen.has(e.id)) firstSeen.set(e.id, { x: e.position.x, y: e.position.y, z: e.position.z });
+      else if (moved(e)) count++;
+    }
+    return { fresh, moved: count };
+  };
+  read();
+  return { read, moved };
+}
+
+/** Waits until every new item has been seen to move, or `ms` (the one wait of the level throw and of the hole). */
+export async function settleNewItems(ctx: StepContext, watch: ReturnType<typeof watchNewItems>, ms = TOSS_SETTLE_MS): Promise<boolean> {
+  return waitUntil(ctx, () => { const seen = watch.read(); return seen.fresh > 0 && seen.moved === seen.fresh; }, ms, 100);
+}
+
+/** `watch`: set by the drop before its first throw (the spawn position of each stack is read then, not when the hole is closed). */
+export interface OpenedPit { plan: DumpPitPlan; lyingBefore: Set<number>; dug: number; watch?: ReturnType<typeof watchNewItems> }
 
 /**
  * Digs the hole beside the body. Never moves the body. A reason in words when there is none: liquid near, nowhere to stand or no column to dig, a dig that failed; `threat` when
@@ -76,10 +112,13 @@ export function chooseCap(bot: any, thrown: Map<string, number>): { block: strin
   return null;
 }
 
-/** What the hole holds and what lies in reach of the body, of the items that fell after `lyingBefore`: the stacks' counts. */
-function tally(bot: any, plan: DumpPitPlan, lyingBefore: Set<number>): { inside: number; outside: number; entities: DroppedLike[]; names: Set<string> } {
+/**
+ * What the hole holds and what lies in reach of the body, of the items that fell after `lyingBefore`: the stacks' counts. An item whose position was never seen to change
+ * (the server has not told its moves) is not counted outside: it is `unverified` (said, not walked away from).
+ */
+function tally(bot: any, plan: DumpPitPlan, lyingBefore: Set<number>, watch?: ReturnType<typeof watchNewItems>): { inside: number; outside: number; unverified: number; entities: DroppedLike[]; names: Set<string> } {
   const here = bot.entity?.position;
-  let inside = 0, outside = 0;
+  let inside = 0, outside = 0, unverified = 0;
   const entities: DroppedLike[] = [], names = new Set<string>();
   for (const entity of Object.values(bot.entities ?? {}) as any[]) {
     if (!isItem(entity) || !entity.position || lyingBefore.has(entity.id)) continue;
@@ -88,19 +127,26 @@ function tally(bot: any, plan: DumpPitPlan, lyingBefore: Set<number>): { inside:
     if (name) names.add(name);
     const inPit = Math.abs(entity.position.x - (plan.column.x + 0.5)) < 0.9 && Math.abs(entity.position.z - (plan.column.z + 0.5)) < 0.9 && entity.position.y <= plan.column.feetY - 1.2;
     if (inPit) { inside += countOf(entity); continue; }
-    if (here && Math.hypot(entity.position.x - here.x, entity.position.z - here.z) <= REACH_M && entity.position.y - here.y >= REACH_BELOW && entity.position.y - here.y <= REACH_ABOVE) outside += countOf(entity);
+    const near = here && Math.hypot(entity.position.x - here.x, entity.position.z - here.z) <= REACH_M && entity.position.y - here.y >= REACH_BELOW && entity.position.y - here.y <= REACH_ABOVE;
+    if (!near) continue;
+    if (watch && !watch.moved(entity)) unverified += countOf(entity);
+    else outside += countOf(entity);
   }
-  return { inside, outside, entities, names };
+  return { inside, outside, unverified, entities, names };
 }
 
 /**
  * After the throws: waits for the stacks to land in the hole, covers it, reads what lies where, and remembers the items as the body's own (no pick-up of its own looks at them).
  * `outside` is what lies within reach of the body and is not in the hole (a stack that bounced out): the caller walks away from it.
  */
-export async function closeDropPit(ctx: StepContext, opened: OpenedPit, cap: { block: string; reserve: boolean } | null): Promise<{ words: string; outside: number; entities: DroppedLike[] }> {
+export async function closeDropPit(ctx: StepContext, opened: OpenedPit, cap: { block: string; reserve: boolean } | null): Promise<{ words: string; inside: number; outside: number; unverified: number; entities: DroppedLike[] }> {
   const bot = ctx.bot;
   const { plan, lyingBefore } = opened;
-  await wait(ctx, FALL_MS);
+  // The stacks are read once they have been seen to move (or after TOSS_SETTLE_MS): a read at spawn is the hand's, not the hole's (run 8).
+  const began = Date.now();
+  const watch = opened.watch ?? watchNewItems(bot, lyingBefore);
+  await settleNewItems(ctx, watch);
+  if (Date.now() - began < FALL_MS) await wait(ctx, FALL_MS - (Date.now() - began));
   const until = Date.now() + (FALL_MAX_MS - FALL_MS);
   const aloft = () => Object.values(bot.entities ?? {}).some((entity: any) => isItem(entity) && entity.position && !lyingBefore.has(entity.id)
     && Math.abs(entity.position.x - (plan.column.x + 0.5)) < 2 && Math.abs(entity.position.z - (plan.column.z + 0.5)) < 2 && entity.position.y > plan.column.feetY - 1.2);
@@ -113,10 +159,10 @@ export async function closeDropPit(ctx: StepContext, opened: OpenedPit, cap: { b
       parts.push(capped.ok ? `${cap.block} でふたをした${cap.reserve ? '（最後の 1 個をふたに残した）' : ''}` : `ふたは置けなかった（${String(capped.text).slice(0, 50)}）。穴は開けたまま`);
     }
   }
-  const seen = tally(bot, plan, lyingBefore);
+  const seen = tally(bot, plan, lyingBefore, watch);
   for (const name of seen.names) noteSelfDropped(bot, name, seen.entities.filter(entity => kindOf(entity) === name), Date.now(), true);
-  parts.unshift(`穴の中 ${seen.inside} 個・手の届く所に ${seen.outside} 個`);
-  return { words: parts.join('。'), outside: seen.outside, entities: seen.entities };
+  parts.unshift(`穴の中 ${seen.inside} 個・手の届く所に ${seen.outside} 個${seen.unverified ? `（位置が更新されず確かめられなかった ${seen.unverified} 個を除く）` : ''}`);
+  return { words: parts.join('。'), inside: seen.inside, outside: seen.outside, unverified: seen.unverified, entities: seen.entities };
 }
 
 /**
