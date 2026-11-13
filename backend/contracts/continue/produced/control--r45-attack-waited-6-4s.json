@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "6bd37e0931835019862bda3f5ba9a67b7cd7c769",
- "madeAt": "2026-11-05T10:10:39.721Z",
+ "bodyRevision": "2c1f2a1d4056a1fd3ae25da764fb1d1a7e9111a2",
+ "madeAt": "2026-11-13T00:29:24.716Z",
  "answers": "control/r45-attack-waited-6-4s",
  "fixtureSha256": "80c15732f9ba93540fe27a7083bb2a1d598bd92d6dc3d2c4a6431b67065ed525",
  "selection": {
@@ -19,15 +19,15 @@
    "trial": 1,
    "reflex": {
     "capability": "floor-melee",
-    "target": 5,
+    "target": 48,
     "shieldUp": false
    },
-   "sentToLockMs": 18,
+   "sentToLockMs": 28,
    "handover": {
     "from": "floor-melee",
-    "target": 5,
+    "target": 48,
     "waitedMs": 3,
-    "reflexSettledAt": "2026-11-05T10:10:37.887Z",
+    "reflexSettledAt": "2026-11-13T00:29:22.886Z",
     "confirmed": true,
     "shield": "none"
    },
@@ -39,7 +39,7 @@
     "goal": "done",
     "end": "finished",
     "released": true,
-    "startedAt": "2026-11-05T10:10:37.885Z"
+    "startedAt": "2026-11-13T00:29:22.884Z"
    },
    "shieldDuringHandoverRuns": null
   },
@@ -55,9 +55,9 @@
    },
    "handover": {
     "from": "floor-melee",
-    "target": 5,
+    "target": 48,
     "waitedMs": 3,
-    "reflexSettledAt": "2026-11-05T10:10:37.887Z",
+    "reflexSettledAt": "2026-11-13T00:29:22.886Z",
     "confirmed": true,
     "shield": "none"
    },
@@ -66,27 +66,27 @@
      "i": 1,
      "do": "fight",
      "status": "done",
-     "line": "fight 済 zombie #5 死んだ・落とし物 rotten_flesh×1・与えた打撃 3（振り 3）・受けた体力 0・食べた 0・体: fight（反射なし）（1.8秒）",
+     "line": "fight 済 zombie #48 死んだ・落とし物 rotten_flesh×1・与えた打撃 2（振り 3）・受けた体力 0・食べた 0・体: fight（反射なし）（1.8秒）",
      "goal": "done",
      "end": "finished",
-     "motorOps": 49,
+     "motorOps": 52,
      "code": "target_killed",
      "progress": {
       "unit": "blow",
-      "done": 3,
+      "done": 2,
       "left": null
      }
     }
    ],
    "at": {
-    "x": 1,
+    "x": 4,
     "y": 101,
     "z": 0
    },
    "hp": 20,
    "food": 20,
-   "ms": 1825,
-   "map": "地図 v1 足=(1,101,0) x=-9..11 z=-10..10 方式=surface 上=北\nz\\x 9  8  7  6  5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1\n-10 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -9 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -8 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -7 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -6 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -5 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -4 #a #a #a #a #a #a #a #a #a #a #a #a #a *a #a #a #a #a #a #a #a\n -3 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -2 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -1 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  0 #a #a #a #a #a #a #a #a *a *a @0 !a #a #a #a #a #a #a #a #a #a\n  1 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  2 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  3 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  4 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  5 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  6 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  7 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  8 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  9 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n 10 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\ny=102\nz\\x 4 3 2 1 0 1 2 3 4 5 6\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . . . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=101\nz\\x 4 3 2 1 0 1 2 3 4 5 6\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . * * @ . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=100\nz\\x 4 3 2 1 0 1 2 3 4 5 6\n -5 . . . . . . . . . . .\n -4 . . . . . . . . * . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . * * . ! . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\n縦 (1,0) 上: y=102〜117 .×16 …\n縦 (1,0) 下: y=100 . / y=99〜90 #×10 / y=89〜85 .×5 …"
+   "ms": 1824,
+   "map": "地図 v1 足=(4,101,0) x=-6..14 z=-10..10 方式=surface 上=北\nz\\x 6  5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4\n-10 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -9 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -8 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -7 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -6 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -5 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -4 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -3 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -2 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n -1 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  0 *a #a #a #a #a #a *a *a *a *a @0 #a !a #a #a #a #a #a #a #a #a\n  1 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  2 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  3 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  4 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  5 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  6 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  7 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  8 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n  9 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\n 10 #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a #a\ny=102\nz\\x 1 0 1 2 3 4 5 6 7 8 9\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . . . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=101\nz\\x 1 0 1 2 3 4 5 6 7 8 9\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . * * * * @ . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=100\nz\\x 1 0 1 2 3 4 5 6 7 8 9\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . * * * * . . ! . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\n縦 (4,0) 上: y=102〜117 .×16 …\n縦 (4,0) 下: y=100 . / y=99〜90 #×10 / y=89〜85 .×5 …"
   }
  }
 }
