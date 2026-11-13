@@ -22,7 +22,7 @@ import { findEntity, use } from '../utils/primitives/use.js';
 import { craft } from '../utils/primitives/craft.js';
 import { furnace } from '../utils/primitives/furnace.js';
 import { chest } from '../utils/primitives/chest.js';
-import { attack } from '../utils/primitives/attack.js';
+import { attack, attackBlazes, isBlazeKind } from '../utils/primitives/attack.js';
 import { firstHuntCell, hunt } from '../utils/primitives/hunt.js';
 import { drop, eat, equip, jump, look, sneak } from '../utils/primitives/body.js';
 import { pickup } from '../utils/primitives/pickup.js';
@@ -382,6 +382,8 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       if (hand.hold) return attack(ctx, { mode: 'hold', target, maxSeconds: hand.seconds ?? 20 });
       if (target === undefined) return bad('attack には target（#id か名前）が要る');
       const untilDead = hand.untilDead !== false;
+      // The kind `blaze` (no id): the nearest one in sight, then the next, for the hand's seconds (round 9: one blaze at a time cost about 120 s of the head's turns).
+      if (isBlazeKind(target) && untilDead) return attackBlazes(ctx, { seconds: hand.seconds ?? 60 });
       return attack(ctx, { target, until: untilDead ? 'dead' : hand.seconds ?? 20, maxSeconds: hand.seconds ?? 20 });
     }
     case 'fight': {

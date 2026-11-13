@@ -185,6 +185,8 @@ export async function waitUntil(ctx: Pick<StepContext, 'stop' | 'bot'>, predicat
   }
 }
 
+/** Netherrack held at most this many before more of it is dug only where the way needs it, and is not walked to for (round 9: it filled the pack). */
+export const NETHERRACK_PACK_CAP = 64;
 export function inventoryCount(bot: any, name: string): number {
   return (bot.inventory?.items?.() ?? []).filter((item: any) => item.name === name).reduce((sum: number, item: any) => sum + item.count, 0);
 }

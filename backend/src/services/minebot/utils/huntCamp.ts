@@ -16,7 +16,8 @@ import { hazardAtFeetWith } from './primitives/go.js';
 
 export interface CampCellBlock { name: string; /** A full collision box (the map reader's word); else judged by `boundingBox`. */ solid?: boolean; boundingBox?: string }
 export type CampReader = (x: number, y: number, z: number) => CampCellBlock | null | undefined;
-export interface CampCell { x: number; y: number; z: number; /** Horizontal distance from the spawner's middle. */ distance: number; /** Of the four sides, those closed by a block at the feet or head. */ walls: number; /** Sides on which, within three cells along an open way, the floor is gone for three or more (a pit). */ pits: number }
+export interface CampCell { x: number; y: number; z: number; /** Horizontal distance from the spawner's middle. */ distance: number; /** Of the four sides, those closed by a block at the feet or head. */ walls: number; /** Sides on which, within three cells along an open way, the floor is gone for three or more (a pit). */ pits: number;
+  /** The cell two above the feet (over the head) is a block: no blaze shoots down into it, and a roof laid first leaves only the window the body cuts. */ roofed: boolean }
 export interface CampSite {
   spawner: { x: number; y: number; z: number };
   cells: CampCell[];
@@ -30,6 +31,8 @@ export interface CampSite {
 export const CAMP_RANGE = 3;
 const FIRE = new Set(['fire', 'soul_fire']);
 const NOT_A_FLOOR = new Set(['magma_block', 'lava', 'water', 'soul_sand', 'soul_soil', 'cobweb']);
+/** Blocks with a collision box that is no floor to stand on in the middle of a cell (a post, a pane, a chain, a door). */
+const THIN_FLOOR = /fence|bars|_wall$|chain|trapdoor|door$|ladder/u;
 const SIDES: ReadonlyArray<readonly [number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const solid = (block: CampCellBlock | null | undefined): boolean => !!block && (block.solid ?? block.boundingBox === 'block');
 const open = (block: CampCellBlock | null | undefined): boolean => !!block && !solid(block) && !['lava', 'water', 'fire', 'soul_fire'].includes(block.name);
@@ -47,7 +50,7 @@ export function campSite(read: CampReader, spawner: { x: number; y: number; z: n
       const feet = read(x, y, z), head = read(x, y + 1, z), floor = read(x, y - 1, z);
       if (!feet || !head || !floor) { rejected.unloaded++; continue; }
       considered++;
-      if (!open(feet) || !open(head) || !solid(floor) || NOT_A_FLOOR.has(floor.name)) { rejected.notStanding++; continue; }
+      if (!open(feet) || !open(head) || !solid(floor) || NOT_A_FLOOR.has(floor.name) || THIN_FLOOR.test(floor.name)) { rejected.notStanding++; continue; }
       if (hazardAtFeetWith(names, x, y, z)) { rejected.hazard++; continue; }
       let walls = 0, edge = false, pits = 0;
       for (const [ux, uz] of SIDES) {
@@ -61,10 +64,11 @@ export function campSite(read: CampReader, spawner: { x: number; y: number; z: n
         }
       }
       if (edge) { rejected.edge++; continue; }
-      cells.push({ x, y, z, distance: Math.round(distance * 10) / 10, walls, pits });
+      cells.push({ x, y, z, distance: Math.round(distance * 10) / 10, walls, pits, roofed: solid(read(x, y + 2, z)) });
     }
   }
-  cells.sort((a, b) => a.pits - b.pits || b.walls - a.walls || Math.abs(a.distance - 2) - Math.abs(b.distance - 2));
+  // A roof over the head comes before the walls: round 9 stood 2.2 m from the spawner with the top open, five blazes shot down into it and the health went from 20 to 2.5.
+  cells.sort((a, b) => a.pits - b.pits || Number(b.roofed) - Number(a.roofed) || b.walls - a.walls || Math.abs(a.distance - 2) - Math.abs(b.distance - 2));
   let fire = 0;
   for (let dx = -5; dx <= 5; dx++) for (let dz = -5; dz <= 5; dz++) for (let dy = -3; dy <= 3; dy++) if (FIRE.has(names(spawner.x + dx, spawner.y + dy, spawner.z + dz) ?? '')) fire++;
   return { spawner, cells: cells.slice(0, limit), considered, rejected, fire };
@@ -196,9 +200,10 @@ export function hideoutWords(list: Hideout[], within = HIDEOUT_STEPS): string {
 
 /** The camp cells as the planner reads them, in one short line each. */
 export function campWords(site: CampSite): string {
+  const roofed = site.cells.filter(cell => cell.roofed).length;
   if (!site.cells.length) {
     const r = site.rejected;
     return `湧き場から${CAMP_RANGE}m以内に、縁の無い足場が無い（足場にならない ${r.notStanding}・火や溶岩の中か隣 ${r.hazard}・縁あり ${r.edge}・未ロード ${r.unloaded}）。place で足場を作るか、離れた足場から`;
   }
-  return `野営向きの足場（湧き場から${CAMP_RANGE}m以内・縁なし・火なし。壁が多い順）: ${site.cells.map(cell => `(${cell.x}, ${cell.y}, ${cell.z}) ${cell.distance}m・壁${cell.walls}面${cell.pits ? `・3歩先までに深い穴${cell.pits}方向` : ''}`).join(' / ')}`;
+  return `野営向きの足場（湧き場から${CAMP_RANGE}m以内・縁なし・火なし。上が覆われた足場、壁が多い順。上が覆われた野営マス ${roofed} 個）: ${site.cells.map(cell => `(${cell.x}, ${cell.y}, ${cell.z}) ${cell.distance}m・壁${cell.walls}面・${cell.roofed ? '上が覆われている' : '上が空いている（先に頭上へ place）'}${cell.pits ? `・3歩先までに深い穴${cell.pits}方向` : ''}`).join(' / ')}`;
 }

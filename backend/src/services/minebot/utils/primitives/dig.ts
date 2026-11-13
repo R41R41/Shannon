@@ -10,7 +10,7 @@ import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
 import { ownedAt, ownerWords } from '../ownedBlocks.js';
 import { bodyReader, cellKey, feetCell, relativeWords, type Cell } from '../localMap.js';
 import { blockInSight, eyeOf } from '../probeTools.js';
-import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, isAirLike, letGo, placeText, stopped, StepStopped, wait, waitUntil,
+import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, inventoryCount, isAirLike, letGo, NETHERRACK_PACK_CAP, placeText, stopped, StepStopped, wait, waitUntil,
   type StepContext, type StepOutcome } from './common.js';
 import { pickup } from './pickup.js';
 import { withProgress } from './progressUnits.js';
@@ -454,8 +454,10 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     await wait(ctx, 250);
     const near = Object.values(bot.entities ?? {}).filter((entity: any) => entity?.name === 'item' && !before.has(entity.id)
       && dugCells.some(cell => entity.position && Math.hypot(entity.position.x - cell.x - 0.5, entity.position.y - cell.y, entity.position.z - cell.z - 0.5) <= 2.5)) as any[];
-    if (near.length) {
-      const picked = await pickup(ctx, { ids: near.map(entity => entity.id), canDig: [] });
+    // Round 9: netherrack past the pack's cap (NETHERRACK_PACK_CAP) is left where it fell (it filled the pack, and tidy threw the roof's cobblestone away with it).
+    const wanted = near.filter(entity => { let stack: { name?: string } | null = null; try { stack = entity.getDroppedItem?.() ?? null; } catch { stack = null; } return !(stack?.name === 'netherrack' && inventoryCount(bot, 'netherrack') >= NETHERRACK_PACK_CAP); });
+    if (wanted.length) {
+      const picked = await pickup(ctx, { ids: wanted.map(entity => entity.id), canDig: [] });
       done.push(picked.text);
     }
   }

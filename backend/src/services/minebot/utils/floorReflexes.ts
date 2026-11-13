@@ -1744,6 +1744,8 @@ export function recentShots(bot: FloorBody, state: FloorState, feet: Vec3, t: nu
  * feet not to be dug. `digs` is how many the episode has made. With `options.line` (the body is being shot at from afar), a block on the
  * line that closes every open sight line is taken before the dig; one that closes some, only when no dig can be made.
  */
+/** Under this health, with two shooters or more on the body, the cover lays its block over the head before it steps (the roof ends every line; a step leaves some). */
+const CROSSFIRE_ROOF_HP = 8;
 export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, options: { line?: boolean; lines?: number; burning?: boolean; noDig?: boolean; digRefused?: boolean; steps?: number; noSeal?: boolean;
   clouds?: ReadonlyArray<{ centre: { x: number; y: number; z: number }; radius: number }> } = {}): { cover: Cover | null; why: string } {
   const feet = feetCell(bot as never);
@@ -1782,11 +1784,16 @@ export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, 
     }
   }
   steps.sort((a, b) => a.cost - b.cost);
-  const best = stepsSpent ? undefined : steps.find(step => unseen(step.cell));
-  if (best) {
+  // Round 9 (blaze fight, health 20 to 2.5 in 35 s): with the health under 8 and two or more shooters seeing the body, a step leaves most of them their line and a block over the head ends it, so the
+  // block (b) is tried first; a step is still taken when no block can be laid.
+  let crossfire = false;
+  try { crossfire = Number(bot.health) < CROSSFIRE_ROOF_HP && shootersSeeing(bot, watching, centreOf(feet)).length >= 2; } catch { crossfire = false; }
+  const stepCover = (best: { cell: { x: number; y: number; z: number } }): { cover: Cover | null; why: string } => {
     const way = `${best.cell.x - feet.x > 0 ? `東${best.cell.x - feet.x}` : best.cell.x < feet.x ? `西${feet.x - best.cell.x}` : ''}${best.cell.z > feet.z ? `南${best.cell.z - feet.z}` : best.cell.z < feet.z ? `北${feet.z - best.cell.z}` : ''}`;
     return { cover: { kind: 'step', to: best.cell, detail: `${way}へ動いた ${cellWords(feet)}→${cellWords(best.cell)}` }, why: '' };
-  }
+  };
+  const best = stepsSpent || crossfire ? undefined : steps.find(step => unseen(step.cell));
+  if (best) return stepCover(best);
   const items = bot.inventory?.items() ?? [];
   // (b) A block over the head: the body is in a hole (something solid beside the cell over its head to set the block against), and with
   // that cell solid no shooter sees it.
@@ -1816,6 +1823,7 @@ export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, 
     if (unseen(feet, sealed)) return { cover: { kind: 'seal', cell: over, block: block.name, detail: `頭の上 ${cellWords(over)} を ${block.name} で塞いだ` }, why: '' };
     sealWhy = '頭の上を塞いでも横から見える';
   }
+  if (crossfire && !stepsSpent) { const late = steps.find(step => unseen(step.cell)); if (late) return stepCover(late); }
   // (b') r10, shot at from afar: one block on the shooters' line, a cell or two from the body, in the cell that closes the most sight lines.
   let lineWhy = '', partial: { cell: { x: number; y: number; z: number }; before: number; left: number } | null = null;
   if (options.line) {

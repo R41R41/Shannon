@@ -46,8 +46,8 @@ const SCAFFOLD_KEEP = 128;
 const SCAFFOLD_TIGHT = 64;
 /** Cobblestone and cobbled deepslate are one pool (either is a scaffold block); netherrack is its own, the scaffold only in the Nether. */
 const COBBLE_POOL = ['cobbled_deepslate', 'cobblestone'];
-/** Cobblestone held back while a furnace or a stone tool may still be made. */
-const STONE_FOR_MAKING = 8;
+/** Cobblestone held back: a furnace and stone tools (8), and a roof and a window at a blaze spawner (round 9 threw 219 away, then the roof needed them): 32 stay. */
+const STONE_FOR_MAKING = 32;
 const SMALL_STACK = new Map<string, number>([['ender_pearl', 16], ['snowball', 16], ['egg', 16], ['bucket', 16], ['honey_bottle', 16]]);
 /** Ingots wanted before raw iron is no longer worth a smelt (a full set of armour, shield, bucket, flint and steel). */
 const INGOTS_ENOUGH = 24;

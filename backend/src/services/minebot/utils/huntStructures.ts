@@ -123,7 +123,7 @@ export function blazeCampReport(bot: any): CampReport {
   const text = `ブレイズの湧き場を発見: (${nearest.position.x}, ${nearest.position.y}, ${nearest.position.z})、距離${Math.floor(nearest.distance)}m`
     + `${others.length ? `（ほかに ${others.map(other => `(${other.x}, ${other.y}, ${other.z}) ${other.distance}m`).join(' ')}）` : ''}。`
     + `${campWords(site)}${site.fire ? `。湧き場の5m以内に火が${site.fire}個（火の中と隣へは go が行かない）` : ''}。`
-    + '野営マス（湧き場から 3m 以内・壁のある足場）へ go で着いたら、そこで見えている 8m 内の 1 体へ attack target=#id を続ける（S7 を通った回は湧き場から 1〜3m で 11〜17 体を斬った。死んだのは同じ所で hold・wait で待った回＝待たずに斬り続ける。床の 5〜7m の縁へ出ると数体の火の玉を浴びる）（盾は左手。盾は火の玉1つで6すり減る＝予備を持つ）。'
+    + '野営マス（湧き場から 3m 以内。上が覆われた足場を先に）へ go で着いたら、上が空いていれば先に頭上へ丸石 1 個（place）で屋根を置き、湧き場側に窓を 1 つだけ残して、見えている 8m 内の 1 体へ attack target=#id（個体を問わず最寄りなら target=blaze）を続ける（S7 を通った回は湧き場から 1〜3m で 11〜17 体を斬った。死んだのは同じ所で hold・wait で待った回＝待たずに斬り続ける。床の 5〜7m の縁へ出ると数体の火の玉を浴びる）（盾は左手。盾は火の玉1つで6すり減る＝予備を持つ）。'
     + hideoutWords(hideouts);
   return { text, found: true, spawner: { x: nearest.position.x, y: nearest.position.y, z: nearest.position.z, distance: Math.floor(nearest.distance) }, others, cells: site.cells, fire: site.fire, hideouts };
 }

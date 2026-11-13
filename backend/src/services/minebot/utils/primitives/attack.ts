@@ -210,7 +210,7 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
         // S1 lab 11/8: the cover reflex had walled a wither skeleton off (cobblestone, 2 high) and attack said 届かない six times naming the
         // creature's own cell (air): the head was not told that a wall stood between. The first solid cell on the line is named (and is the cell).
         const wall = creatureSight(bot, live).between[0];
-        const between = wall ? `。間に ${wall.name} (${wall.at.x},${wall.at.y},${wall.at.z})：掘るか回り込めば近づける` : '';
+        const between = wall ? `。間に ${wall.name} (${wall.at.x},${wall.at.y},${wall.at.z})：掘るか回り込めば近づける。壁越しが続くなら窓になる 1 マスを掘る手（dig at=[(${wall.at.x},${wall.at.y},${wall.at.z})]）を同じ act の attack の前に入れる` : '';
         const cell = wall ? wall.at : { x: Math.floor(live.position.x), y: Math.floor(live.position.y), z: Math.floor(live.position.z) };
         return { ...stopped(bot, chase ? 'cannot_reach' : 'out_of_reach', `${label} に届かない（${distance.toFixed(1)}m${chase ? `、${NO_GAIN_MS / 1000}秒近づけない` : ''}）。${blows}回振って ${hurt}回当たった${between}`,
           cell), progress: landed() };
@@ -280,6 +280,61 @@ const LANDED_WITHIN_MS = 600;
 function creatureSight(bot: any, entity: any) {
   const eye = eyeOf(bot.entity.position);
   return probeSight(bodyReader(bot), eye, { creature: { id: entity.id, name: String(entity.name ?? 'entity'), position: entity.position, height: entity.height, width: entity.width } });
+}
+
+/** Whether a hand names the blazes as a kind (not one by its id): `target: 'blaze'`. */
+export const isBlazeKind = (target: string | number | undefined): boolean => typeof target === 'string' && /^blaze$/iu.test(target.trim());
+/** How long no blaze to strike is waited for after the last one fell with a spawner at hand (a spawner draws one every 10 to 40 s), and without one. */
+const BLAZE_IDLE_AT_SPAWNER_MS = 45_000;
+const BLAZE_IDLE_ELSEWHERE_MS = 8_000;
+/** A blaze within this many metres of the eye is looked at for a strike. */
+const BLAZE_SEEN_M = 8;
+
+/**
+ * attack target=blaze (the kind: round 9's blaze fight lost about 120 s of its 285 to a head that chose one blaze at a time): the blaze nearest the eye that is in sight (nothing solid between) within
+ * 8 m is struck until it falls, and then the next, for the hand's seconds (stopIf of the act ends it sooner: its hpBelow is the hand's own). A blaze that cannot be reached (a wall, 3 s without gain) is left
+ * for the others, and said at the end. When none is in sight it waits for the spawner's next (45 s at a spawner within 8 m, 8 s elsewhere) and says so. The rod each kill leaves is said as attack says it.
+ */
+export async function attackBlazes(ctx: StepContext, args: { seconds?: number }): Promise<StepOutcome> {
+  const bot = ctx.bot;
+  const limitMs = Math.min(120, args.seconds && args.seconds > 0 ? args.seconds : 60) * 1000;
+  const started = Date.now();
+  const skipped = new Map<number, string>();
+  const rods: string[] = [];
+  let killed = 0, idleSince = Date.now(), last: StepOutcome | null = null;
+  const seen = (): any | null => {
+    const eye = bot.entity.position.offset(0, 1.6, 0);
+    const found = Object.values(bot.entities ?? {}).filter((e: any) => e?.name === 'blaze' && e.position && !skipped.has(e.id) && e.position.distanceTo(eye) <= BLAZE_SEEN_M)
+      .filter((e: any) => { try { return creatureSight(bot, e).between.length === 0; } catch { return false; } })
+      .sort((a: any, b: any) => a.position.distanceTo(eye) - b.position.distanceTo(eye));
+    return found[0] ?? null;
+  };
+  let atSpawner: boolean | null = null;
+  for (let rounds = 0; rounds < 80; rounds++) {
+    const left = limitMs - (Date.now() - started);
+    if (left < 2000) break;
+    const next = seen();
+    if (!next) {
+      if (atSpawner === null) { try { atSpawner = scanLoadedBlocks(bot, ['spawner'], { maxHits: 1, maxDistance: 8 }).hits.length > 0; } catch { atSpawner = false; } }
+      if (Date.now() - idleSince > (atSpawner ? BLAZE_IDLE_AT_SPAWNER_MS : BLAZE_IDLE_ELSEWHERE_MS)) break;
+      await wait(ctx, 400);
+      continue;
+    }
+    const result = await attack(ctx, { target: next.id, until: 'dead', maxSeconds: Math.max(2, Math.floor(left / 1000)) });
+    last = result;
+    idleSince = Date.now();
+    if (result.ok && /倒した/u.test(result.text ?? '')) {
+      killed++;
+      const rod = /。ロッドが[^。]*/u.exec(result.text ?? '')?.[0];
+      if (rod) rods.push(rod.replace(/^。/u, ''));
+    } else skipped.set(next.id, `${(result as { reason?: string }).reason ?? result.code ?? 'stopped'}`);
+  }
+  const seconds = Math.round((Date.now() - started) / 1000);
+  const left = skipped.size ? `。届かず離れた blaze ${[...skipped.entries()].map(([id, why]) => `#${id}（${why}）`).join('・')}${last && !last.ok ? `。最後の止まり: ${(last.text ?? '').slice(0, 120)}` : ''}` : '';
+  const rodWords = rods.length ? `。${rods.slice(-4).join('。')}` : '';
+  if (killed > 0) return { ok: true, text: `blaze を ${killed} 体、続けて倒した（${seconds}秒）${rodWords}${left}`, progress: { unit: 'blow', done: killed, left: null } };
+  return stopped(bot, skipped.size ? 'cannot_reach' : 'target_not_found',
+    skipped.size ? `見えている blaze に届かなかった（${seconds}秒）${left}` : `${BLAZE_SEEN_M}m 内に見える blaze がいない（${seconds}秒待った。壁の向こうなら窓になる 1 マスを dig し、離れているなら湧き場の 1〜3m の野営マスへ go）`);
 }
 
 /**

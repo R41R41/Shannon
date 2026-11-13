@@ -432,3 +432,19 @@ describe('EndermanCamp: bounded recovery inside the existing roof, for the same 
     expect(f.bot.gazeGuard.enabled).toBe(true);
   });
 });
+
+describe('campSite: a roof over the head (round 9: the open top let five blazes shoot down into the camp)', () => {
+  it('every cell says whether the cell over its head is a block, and a roofed cell is ranked before an open one of the same pits', () => {
+    const site = campSite(ground(), SPAWNER, 40);
+    for (const cell of site.cells) expect(typeof cell.roofed).toBe('boolean');
+    const firstOpen = site.cells.findIndex(cell => !cell.roofed), lastRoofedSamePits = (pits: number) => Math.max(...site.cells.map((cell, index) => (cell.roofed && cell.pits === pits ? index : -1)));
+    if (firstOpen >= 0) expect(lastRoofedSamePits(site.cells[firstOpen].pits)).toBeLessThan(site.cells.findIndex((cell, index) => index >= firstOpen && !cell.roofed && cell.pits === site.cells[firstOpen].pits) + 1);
+    expect(campWords(site)).toContain('上が覆われた野営マス');
+  });
+  it('a block laid over a cell roofs it', () => {
+    const base = campSite(ground(), SPAWNER, 40).cells.find(cell => !cell.roofed);
+    if (!base) return;
+    const roofed = campSite(ground({ [`${base.x},${base.y + 2},${base.z}`]: 'cobblestone' }), SPAWNER, 40).cells.find(cell => cell.x === base.x && cell.y === base.y && cell.z === base.z);
+    expect(roofed?.roofed).toBe(true);
+  });
+});
