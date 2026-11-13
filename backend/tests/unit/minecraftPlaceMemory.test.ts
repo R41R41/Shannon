@@ -259,3 +259,31 @@ describe('a structure is known by the blocks only it is built of', () => {
     delete (registry.blocksByName as any).nether_bricks;
   });
 });
+
+describe('a warped forest is noted where a body can stand (round 12: not at the height the body happened to walk)', () => {
+  const NYLIUM = 500, WARPED_STEM = 510;
+  const nether = (cells: Record<string, number>) => {
+    const stateOf = (x: number, y: number, z: number) => cells[`${x},${y},${z}`] ?? (y < 20 ? 1 : 0);
+    const sections = Array.from({ length: 8 }, (_, index) => ({ data: { palette: [0, 1], get: (cell: number) => stateOf(cell & 15, index * 16 + (cell >> 8), (cell >> 4) & 15) } }));
+    const column: any = { minY: 0, sections, getBiome: () => 1, biomes: sections, getBlockStateId: (p: Vec3) => stateOf(p.x, p.y, p.z) };
+    const bot: any = new EventEmitter();
+    Object.assign(bot, {
+      registry: { biomes: { 1: { name: 'warped_forest' } }, blocksByName: { air: { minStateId: 0, maxStateId: 0 }, stone: { minStateId: 1, maxStateId: 1 },
+        warped_nylium: { minStateId: NYLIUM, maxStateId: NYLIUM + 1 }, warped_stem: { minStateId: WARPED_STEM, maxStateId: WARPED_STEM + 2 } } },
+      game: { dimension: 'the_nether' }, entity: { position: new Vec3(8, 110, 8) },
+      world: { getColumns: () => [{ chunkX: 0, chunkZ: 0, column }], getColumn: (x: number, z: number) => x === 0 && z === 0 ? column : null, getBlockStateId: () => 1 },
+    });
+    return bot;
+  };
+
+  it('puts the cell on the nylium, not the body height, and notes nothing for a row with nothing to stand on', () => {
+    const bot = nether({ '8,60,8': NYLIUM });
+    installPlaceMemory(bot);
+    ticks(bot, 3);
+    expect(bot.placeMemory.recall('warped_forest')).toMatchObject([{ position: { x: 8, y: 61, z: 8 } }]);
+    const bare = nether({});
+    installPlaceMemory(bare);
+    ticks(bare, 3);
+    expect(bare.placeMemory.recall('warped_forest')).toEqual([]);
+  });
+});

@@ -271,6 +271,33 @@ function cellIn(column: any, lx: number, y: number, lz: number): number | null {
   return data ? data.get(((offset & 15) << 8) | (lz << 4) | lx) : null;
 }
 
+/**
+ * A cell to stand on in a warped forest column: the top of a warped nylium or stem (every second cell, nearest the middle first, the first
+ * that has one) with two open cells over it. Null where the column shows none.
+ */
+function warpedStand(bot: MemoryBot, column: any, baseX: number, baseZ: number): { x: number; y: number; z: number } | null {
+  try {
+    const blocks = bot.registry.blocksByName;
+    const ranges = (names: string[]) => names.map(name => blocks[name]).filter(block => typeof block?.minStateId === 'number' && typeof block?.maxStateId === 'number')
+      .map(block => [block!.minStateId!, block!.maxStateId!] as const);
+    const solid = ranges(['warped_nylium', 'warped_stem']), air = ranges(['air', 'cave_air', 'void_air']);
+    if (!solid.length || !air.length) return null;
+    const within = (list: ReadonlyArray<readonly [number, number]>, state: number | null) => state !== null && list.some(([low, high]) => state >= low && state <= high);
+    const cells: Array<[number, number]> = [];
+    for (let x = 0; x < 16; x += 2) for (let z = 0; z < 16; z += 2) cells.push([x, z]);
+    cells.sort((a, b) => Math.hypot(a[0] - 8, a[1] - 8) - Math.hypot(b[0] - 8, b[1] - 8));
+    const minY = minYOf(column);
+    for (const [x, z] of cells) {
+      for (let y = Math.min(126, minY + 255); y >= Math.max(minY, 30); y--) {
+        if (!within(solid, cellIn(column, x, y, z))) continue;
+        if (within(air, cellIn(column, x, y + 1, z)) && within(air, cellIn(column, x, y + 2, z))) return { x: baseX + x, y: y + 1, z: baseZ + z };
+        break;
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+
 function columnAt(bot: MemoryBot, job: ColumnJob, chunkX: number, chunkZ: number): any {
   if (chunkX === job.chunkX && chunkZ === job.chunkZ) return job.column;
   const key = columnKey(chunkX, chunkZ);
@@ -716,9 +743,14 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
     const biome = biomeOfColumn(done.column);
     if (biome && noteBiome(memory.state, where, done.chunkX, done.chunkZ, biome)) dirty = true;
     // A warped forest is where the pearls are got without leaving the Nether (the design of round 12): its column is a place the head is told of (direction and distance) like a fortress.
+    // The place is a cell that can be stood on (the top of a warped nylium or stem with two open cells over it), not the body's own height: a height read from where the
+    // body walked is lava, air or rock for a far row. A column with no such cell is not noted.
     if (biome === 'warped_forest' && where.includes('nether')) {
-      rememberPlace(memory.state, { kind: 'warped_forest', dimension: where, position: { x: baseX + 8, y: Math.floor(bot.entity?.position?.y ?? 64), z: baseZ + 8 }, count: 1 }, now, from());
-      dirty = true;
+      const stand = warpedStand(bot, done.column, baseX, baseZ);
+      if (stand) {
+        rememberPlace(memory.state, { kind: 'warped_forest', dimension: where, position: stand, count: 1 }, now, from());
+        dirty = true;
+      }
     }
     memory.stats.columnsRead++; memory.stats.forgotten += forgotten;
   };

@@ -210,7 +210,7 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
         // S1 lab 11/8: the cover reflex had walled a wither skeleton off (cobblestone, 2 high) and attack said 届かない six times naming the
         // creature's own cell (air): the head was not told that a wall stood between. The first solid cell on the line is named (and is the cell).
         const wall = creatureSight(bot, live).between[0];
-        const between = wall ? `。間に ${wall.name} (${wall.at.x},${wall.at.y},${wall.at.z})：掘るか回り込めば近づける。壁越しが続くなら窓になる 1 マスを掘る手（dig at=[(${wall.at.x},${wall.at.y},${wall.at.z})]）を同じ act の attack の前に入れる` : '';
+        const between = wall ? `。間に ${wall.name} (${wall.at.x},${wall.at.y},${wall.at.z})：掘るか回り込めば近づける。壁越しが続くなら窓になる 1 マスを掘る手（dig at=[(${wall.at.x},${wall.at.y},${wall.at.z})] exposeOk=true。開けると相手から見えるので exposeOk が要る）を同じ act の attack の前に入れる` : '';
         const cell = wall ? wall.at : { x: Math.floor(live.position.x), y: Math.floor(live.position.y), z: Math.floor(live.position.z) };
         return { ...stopped(bot, chase ? 'cannot_reach' : 'out_of_reach', `${label} に届かない（${distance.toFixed(1)}m${chase ? `、${NO_GAIN_MS / 1000}秒近づけない` : ''}）。${blows}回振って ${hurt}回当たった${between}`,
           cell), progress: landed() };
