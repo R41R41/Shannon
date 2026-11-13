@@ -76,7 +76,7 @@ export const MAX_PLACES = 1500;
  * blaze spawner of a fortress). Only being found gone removes them.
  */
 export const KEPT_KINDS: ReadonlySet<string> = new Set(['nether_portal', 'end_portal_frame', 'village', 'fortress', 'bastion', 'stronghold', 'spawner',
-  'ruined_portal', 'igloo', 'shipwreck', 'mineshaft', 'mansion', 'outpost']);
+  'ruined_portal', 'igloo', 'shipwreck', 'mineshaft', 'mansion', 'outpost', 'warped_forest']);
 /** The newest deaths' places are kept too (the items lie there for a while). */
 export const KEPT_DEATHS = 5;
 /** Deaths kept as records. */
@@ -94,7 +94,7 @@ export function mergeRadius(kind: string): number {
   if (kind === 'village' || kind === 'fortress' || kind === 'bastion' || kind === 'stronghold') return 96;
   // A ruined portal (its netherrack, crying obsidian and scattered frame), a cave's hollow, a shipwreck, an igloo: one place each.
   if (kind === 'ruined_portal' || kind === 'cave' || kind === 'lava_covered') return 24;
-  if (kind === 'mineshaft' || kind === 'mansion' || kind === 'outpost') return 48;
+  if (kind === 'mineshaft' || kind === 'mansion' || kind === 'outpost' || kind === 'warped_forest') return 48;
   if (kind === 'shipwreck' || kind === 'cave_entrance') return 16;
   if (kind === 'igloo') return 12;
   if (kind === 'obsidian') return 8;
@@ -322,6 +322,7 @@ const PLACE_MEANING: Record<string, string> = {
   bed: ' 置かれたベッド: dig-block-at takeEquipment=true で掘れば持てる',
   village: ' 羊・ベッド・食べ物がある見込み',
   cave_entrance: ' 歩いて地下へ下りられる洞窟の入口',
+  warped_forest: ' 歪んだ森（エンダーマンが多く、ピグリンは湧かない）',
 };
 
 /** How many were seen together. A bed is two blocks (foot and head), so its count is halved: "×2" was one bed. */
@@ -377,7 +378,7 @@ const ORE_NAMES: Array<[string, string]> = [['diamond_ore', 'ダイヤ'], ['iron
   ['nether_gold_ore', 'ネザー金'], ['nether_quartz_ore', 'クォーツ'], ['ancient_debris', '古代の残骸']];
 const STRUCTURE_NAMES: Array<[string, string]> = [['village', '村'], ['ruined_portal', '荒廃したポータル'], ['igloo', 'イグルー'],
   ['shipwreck', '難破船'], ['mineshaft', '廃坑'], ['mansion', '森の洋館'], ['outpost', '前哨基地'], ['fortress', 'ネザー要塞'], ['bastion', '砦の遺跡'], ['stronghold', '要塞'], ['spawner', 'スポナー'],
-  ['nether_portal', 'ネザーポータル'], ['end_portal_frame', 'エンドポータル']];
+  ['nether_portal', 'ネザーポータル'], ['warped_forest', '歪んだ森'], ['end_portal_frame', 'エンドポータル']];
 /** Of the map's lines, at most this many characters (the head gives its route planner 3,000). */
 export const MAP_CHARACTERS = 3000;
 /** A cave of this many open cells or more is "a large hollow". */

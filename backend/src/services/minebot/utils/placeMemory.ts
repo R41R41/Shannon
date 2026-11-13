@@ -715,6 +715,11 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
     if (markSeen(memory.state, where, done.chunkX, done.chunkZ) || sightings.length || forgotten) dirty = true;
     const biome = biomeOfColumn(done.column);
     if (biome && noteBiome(memory.state, where, done.chunkX, done.chunkZ, biome)) dirty = true;
+    // A warped forest is where the pearls are got without leaving the Nether (the design of round 12): its column is a place the head is told of (direction and distance) like a fortress.
+    if (biome === 'warped_forest' && where.includes('nether')) {
+      rememberPlace(memory.state, { kind: 'warped_forest', dimension: where, position: { x: baseX + 8, y: Math.floor(bot.entity?.position?.y ?? 64), z: baseZ + 8 }, count: 1 }, now, from());
+      dirty = true;
+    }
     memory.stats.columnsRead++; memory.stats.forgotten += forgotten;
   };
   const work = (budgetMs: number) => {

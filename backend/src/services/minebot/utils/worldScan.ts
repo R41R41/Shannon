@@ -110,6 +110,7 @@ export function netherRegionWords(x: number, z: number): string {
 export function summarizeScan(bot: ScanBody, scan: SlicedScanResult & { coverage?: number; preliminary?: boolean }, centre: { x: number; y: number; z: number }, read: BlockReader, reads: ScanReads = readScanNow(bot, scan, read)): WorldScanSummary {
   const dimension = String(bot.game?.dimension ?? 'overworld');
   const nether = dimension.includes('nether'), end = dimension.includes('end');
+  const thin0 = (scan.coverage !== undefined && scan.coverage < FULL_SHARE) || !!scan.preliminary;
   const get = (key: string) => scan.found.get(key) ?? { count: 0, hits: [] as ScanCellHit[] };
   const rows: Array<{ order: number; line: string }> = [];
   const facts: string[] = [], absent: string[] = [];
@@ -144,6 +145,23 @@ export function summarizeScan(bot: ScanBody, scan: SlicedScanResult & { coverage
   for (const entry of stems) row(0, `ネザーの幹 ${entry.kind}`, entry.count, entry.hits[0]);
   if (stems.length) facts.push(`ネザーの幹は ${wayWords(centre, stems[0].hits[0])}`);
   else if (nether) absent.push('ネザーの幹');
+  // The Nether's pearls: where a warped forest is (the columns the body's memory holds, else the stems of this scan), or that none is in view and which ways are unscanned.
+  if (nether) {
+    const memory = (bot as { placeMemory?: { recall?: (kind: string, limit?: number) => Array<{ count?: number; distance: number; direction: string }>; unseen?: () => string } }).placeMemory;
+    let forest: Array<{ count?: number; distance: number; direction: string }> = [];
+    try { forest = memory?.recall?.('warped_forest', 8) ?? []; } catch { forest = []; }
+    const warped = stems.find(entry => entry.kind === 'warped');
+    if (forest.length) {
+      const columns = forest.reduce((sum, place) => sum + (place.count ?? 1), 0);
+      const nearest = [...forest].sort((x, y) => x.distance - y.distance)[0];
+      facts.push(`歪んだ森の列: ${columns} 列、最寄り ${nearest.direction} ${nearest.distance}m`);
+    } else if (warped) facts.push(`歪んだ森の列: 幹が ${wayWords(centre, warped.hits[0])}（控えには未登録）`);
+    else {
+      let unseen = '';
+      try { unseen = memory?.unseen?.() ?? ''; } catch { unseen = ''; }
+      facts.push(`範囲（約 ${scan.reachMetres}m）に歪んだ森は見えない${thin0 ? '（この先はまだ読めていない）' : ''}${unseen ? `。未走査の向き: ${unseen}` : ''}`);
+    }
+  }
   // A village's marks.
   const village: Array<[string, string]> = [['bell', '村の鐘'], ['bed', 'ベッド'], ['chest', '箱・樽'], ['hay', '干し草'], ['farm', '畑・作物']];
   for (const [key, label] of village) {
