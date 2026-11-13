@@ -1,0 +1,33 @@
+# Halcyon mind worker (the action scheduler of halcyon-head, ADR-0008 stage 4): the common FCA task runtime that runs her Minecraft
+# body tasks takes its leases from it (mind socket ~/halcyon-head-data/mind-runtime/mind.sock). Same shape as shannon-ios-mind.service,
+# with Halcyon's tree, database and env. Installed with halcyon-minebot (2026-11-13).
+[Unit]
+Description=Halcyon mind worker and action scheduler (halcyon-head, ADR-0008 stage 4)
+After=halcyon-head.service
+
+[Service]
+Type=simple
+User=azureuser
+Group=azureuser
+WorkingDirectory=/home/azureuser/halcyon-head
+Environment=NODE_ENV=production
+Environment=SHANNON_DATABASE_PATH=/home/azureuser/halcyon-head-data/halcyon.sqlite
+EnvironmentFile=/home/azureuser/.config/halcyon-head/api.env
+ExecStart=/home/azureuser/shannon-ios-runtime/bin/node --import tsx -e "import('./services/api/src/infra/config/stage4.ts').then(m=>{if(m.stage4Enabled(process.env))return import('./services/api/src/mindWorker.ts')})"
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+InaccessiblePaths=/home/azureuser/halcyon-head-data/operator-runtime
+RestrictSUIDSGID=true
+ReadWritePaths=/home/azureuser/halcyon-head-data
+CPUQuota=25%
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

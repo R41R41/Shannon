@@ -2,9 +2,10 @@
 // production bot's companion body mode (skillAgent.ts): the speaker is the sender UUID of a player chat packet,
 // never a name parsed out of the text.
 
-const ADDRESS = /^\s*(シャノン|しゃのん|shannon)/i;
+// Halcyon copy (~/halcyon-minebot): this body is Halcyon, so a line is for her when it starts with one of her names.
+const ADDRESS = /^\s*(ハルシオン|はるしおん|halcyon|ハル様|ハルさま|はる様)/i;
 
-/** A line of game chat meant for Shannon: it starts with her name. */
+/** A line of game chat meant for this body (Halcyon in this copy): it starts with her name. The export keeps its old name. */
 export function isAddressedToShannon(message: string | null | undefined): boolean {
   return ADDRESS.test(message ?? '');
 }

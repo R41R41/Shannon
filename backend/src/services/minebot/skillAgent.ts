@@ -42,6 +42,9 @@ import {
   parseSelfTestSuiteFromUserMessage,
 } from '../llm/graph/cognitive/selfImprove/selfTestIntent.js';
 
+// Halcyon copy: her own lines are told apart by the bot name (was the production account I_am_Shannon).
+const OWN_CHAT_NAME = process.env.MINECRAFT_BOT_USER_NAME?.trim() || 'Halcyon';
+
 export { registerMinebotVoiceChatHandler } from '../runtime/minebotInboundRegistry.js';
 
 const log = createLogger('Minebot:SkillAgent');
@@ -246,7 +249,7 @@ export class SkillAgent {
       // On the companion world, who spoke is the player chat packet's sender UUID: mineflayer's 'chat' event reads
       // names out of rendered text (system chat, disguised /say, nicknames) and is not listened to there.
       listenToPlayerChat(this.bot as any, speaker => {
-        void this.handleChat(speaker.self ? 'I_am_Shannon' : speaker.name, speaker.message, speaker.self ? undefined : speaker.uuid);
+        void this.handleChat(speaker.self ? OWN_CHAT_NAME : speaker.name, speaker.message, speaker.self ? undefined : speaker.uuid);
       });
       return;
     }
@@ -258,7 +261,7 @@ export class SkillAgent {
   /** One line of game chat. `speakerUuid`: from the player chat packet (companion world only). */
   private async handleChat(username: string, message: string, speakerUuid?: string) {
     // 自分の発言は記録のみ（chatMode に関わらず）
-    if (username === 'I_am_Shannon') {
+    if (username === OWN_CHAT_NAME || username === this.bot.username) {
       const currentTime = new Date().toLocaleString('ja-JP', {
         timeZone: 'Asia/Tokyo',
       });
@@ -297,7 +300,7 @@ export class SkillAgent {
     }
 
     // 「シャノン、」で始まるメッセージのみ処理（彼女の心とつながる世界では名前で始まる発言）
-    if (this.companionBody ? !isAddressedToShannon(message) : !message.startsWith('シャノン、')) {
+    if (this.companionBody ? !isAddressedToShannon(message) : !message.startsWith('ハルシオン、')) {
       return;
     }
 

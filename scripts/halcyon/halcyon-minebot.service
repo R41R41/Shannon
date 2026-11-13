@@ -1,0 +1,54 @@
+[Unit]
+Description=Halcyon's Minecraft body (minebot common-FCA body only; head = halcyon-head 127.0.0.1:4329, server = halcyon-mc 127.0.0.1:25570)
+After=network-online.target halcyon-mc.service halcyon-head.service
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=azureuser
+Group=azureuser
+WorkingDirectory=/home/azureuser/halcyon-minebot/backend
+Environment=HOME=/home/azureuser
+Environment=PATH=/home/azureuser/.nvm/versions/node/v22.21.1/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+Environment=TS_NODE_TRANSPILE_ONLY=true
+# The body alone: no dotenv, no Mongo, no OpenAI, no model calls on the body side (the head decides).
+Environment=SHANNON_ISOLATED_MINEBOT_PROBE=true
+Environment=OPENAI_API_KEY=offline-not-used
+Environment=MONGODB_URI=mongodb://127.0.0.1:1/halcyon-offline-not-used
+Environment=MINECRAFT_COGNITION_MODE=off
+Environment=MINECRAFT_OUTAGE_NO_LLM=true
+Environment=MINECRAFT_HUNT_NO_LLM=true
+Environment=MINECRAFT_PROBE_FLOOR=default
+Environment=MINECRAFT_MODEL_BUDGET_FILE=/home/azureuser/halcyon-minebot-data/minebot-model-budget.json
+Environment=MINEBOT_UI_MOD_BASE_URL=http://127.0.0.1:25599
+Environment=MINECRAFT_BOT_USER_NAME=Halcyon
+Environment=MINEBOT_BLACKBOX_DIR=/home/azureuser/halcyon-minebot-data/blackbox
+Environment=MINEBOT_OPLOG_DIR=/home/azureuser/halcyon-minebot-data/oplog
+# Halcyon's body
+Environment=HALCYON_MC_PORT=25570
+Environment=HALCYON_BODY_NAME=Halcyon
+Environment=HALCYON_HEAD_URL=http://127.0.0.1:4329
+Environment=HALCYON_SERVER_ID=halcyon-home
+Environment=HALCYON_BODY_TOKEN_FILE=/home/azureuser/.config/halcyon-head/credentials/minecraft-body-halcyon-home.token
+Environment=HALCYON_BUDGET_GUARD=/home/azureuser/halcyon-minebot/scripts/halcyon/budget-guard.py
+Environment=HALCYON_MINECRAFT_DAILY_USD=5
+Environment=HALCYON_MINECRAFT_BUDGET_FILE=/home/azureuser/halcyon-minebot-data/minecraft-budget.json
+# Over the day's cap (3) or the head's database unreadable (2): the start is skipped (ExecCondition), not failed and retried.
+ExecCondition=/usr/bin/python3 -I /home/azureuser/halcyon-minebot/scripts/halcyon/budget-guard.py check
+ExecStart=/usr/bin/nice -n 5 /home/azureuser/.nvm/versions/node/v22.21.1/bin/node --loader ts-node/esm scripts/halcyon/body-run.ts
+StandardOutput=append:/home/azureuser/halcyon-minebot-data/logs/body.log
+StandardError=append:/home/azureuser/halcyon-minebot-data/logs/body.log
+Restart=on-failure
+RestartSec=15
+# 3: the day's budget is used up (the guard said so); 2: the guard could not read the head's database. Neither is restarted.
+RestartPreventExitStatus=2 3
+SuccessExitStatus=3
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

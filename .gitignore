@@ -76,3 +76,9 @@ node_modules
 /.dev-runtime-lock
 /backend/dist-line/
 /backend/saves/minecraft/learning/
+
+# Halcyon copy: runtime output of the body
+*.log
+backend/saves/minecraft/life.json
+backend/saves/minecraft/incident*
+backend/saves/minecraft/scenes/
