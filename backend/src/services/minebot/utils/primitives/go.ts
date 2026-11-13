@@ -8,10 +8,10 @@ import { installGroundSprint } from '../groundSprint.js';
 import { airborneGround, buriedSurface, BURIED_FAR_M, FAR_LEG_M, nextLeg } from '../farLegs.js';
 import { feetCell, type BlockReader, type Cell } from '../localMap.js';
 import { chooseTool, canHarvest, nearlyBroken, handDigForWay } from '../toolChoice.js';
-import { installDoorRules, isDoorlike, mapBlockOf, nodeCell, NO_ENTER, standable } from '../walkRules.js';
+import { installDoorRules, isDoorlike, isPortal, mapBlockOf, nodeCell, NO_ENTER, standable, standableBeside } from '../walkRules.js';
 import { clip } from '../actReport.js';
-import { blockAt, cellText, fullPackWatch, inventoryCount, isAirLike, letGo, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
-import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
+import { blockAt, cellText, fullPackWatch, inventoryCount, NETHERRACK_PACK_CAP, isAirLike, letGo, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { atGoal, avoidPortalCells, goWith, type GoOutcome, type WayNotes } from './walk.js';
 import { dig } from './dig.js';
 import { place as placeAt } from './place.js';
 import { digCell, walkCells } from '../tunnelWalk.js';
@@ -359,6 +359,7 @@ export function hazardAtFeetWith(read: (x: number, y: number, z: number) => stri
  * going round is much longer. A person runs on the netherrack and digs only what is in the way.
  */
 export const NETHER_DIG_COST = 2.5;
+const NETHERRACK_FULL_COST = 6;
 /** S8: what laying a floor over lava (lava within two under the cell laid) costs more, in steps: the way round or through the rock beside is taken when there is one. */
 export const LAVA_FLOOR_PLACE_COST = 4;
 const isNether = (bot: any) => String(bot.game?.dimension ?? '').includes('nether');
@@ -625,6 +626,7 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
   }
   installDoorRules(movements);
   installGroundSprint(movements, state.avoid);
+  avoidPortalCells(bot, movements);
   const registry = bot.registry;
   // Hazards: never entered, never dug into, whatever else is allowed.
   // (The route search avoids lava and fire of itself; lifting the hazards, to find out whether they are what shuts the way, lifts that too.)
@@ -704,6 +706,9 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
   }
   // Run 45 (hold 3): what this go dug is not laid again, what it laid is not dug again (the way does not undo its own work).
   movements.exclusionAreasBreak = [...(movements.exclusionAreasBreak ?? []), (block: any) => redoCost(state.laidCells, block)];
+  // Round 9 (blaze spawner): a go that dug netherrack all the way filled the pack (219 cobblestone and soil thrown away, 7 drops, the roof short of blocks). With NETHERRACK_PACK_CAP in the pack, a dig of more
+  // netherrack costs the search a detour (not a wall: a way that needs the tunnel is still dug), and what is dug is not walked to for (the dig hand's collect).
+  movements.exclusionAreasBreak.push((block: any) => (block?.name === 'netherrack' && inventoryCount(bot, 'netherrack') >= NETHERRACK_PACK_CAP ? NETHERRACK_FULL_COST : 0));
   // (mineflayer-pathfinder's walk forward onto a laid floor asks the place's exclusion of the cell above the one it lays: both are asked.)
   movements.exclusionAreasPlace = [...(movements.exclusionAreasPlace ?? []), (block: any) => redoCost(state.dugCells, block, true)];
   // The End: the dragon's breath that lies in the world is not stepped into (a cell of it is no move: it hurts 6 a second and pushes the body off a bridge), unless the body stands in it now (the way out is then the first thing to find).
@@ -1092,7 +1097,34 @@ export function lastGoTiming(host: object): GoTiming | null { return goTimings.g
  * search drew down a rim is not held back at it (the guard still refuses lava, the void, and any landing that leaves under 8 points).
  * Not for a body that could not climb back (strandedPack), whose drops the go itself keeps to one.
  */
+/**
+ * A place of a go that is a portal's cell (a landing portal taken for "the ground there"; round 9: the go arrived in it and was carried back in 4 s) is moved to a cell beside it a body
+ * can stand in, and the line says so. A portal is entered with walk, as its target.
+ */
+function besidePortals(bot: any, args: GoArgs): { args: GoArgs; said: string } {
+  const goals = args.goals;
+  if (!goals?.length) return { args, said: '' };
+  const read = (x: number, y: number, z: number) => { const block = bot.blockAt?.(new Vec3(x, y, z), false); return block?.name ? mapBlockOf(block) : null; };
+  const said: string[] = [];
+  const moved = goals.map(cell => {
+    if (!isPortal(read(cell.x, cell.y, cell.z))) return cell;
+    let bottom = cell;
+    for (let n = 0; n < 8 && isPortal(read(bottom.x, bottom.y - 1, bottom.z)); n++) bottom = { ...bottom, y: bottom.y - 1 };
+    const next = standableBeside(read, bottom, 1).find(beside => !isPortal(read(beside.x, beside.y, beside.z)));
+    if (!next) return cell;
+    said.push(`${cellText(cell)} はポータルのマスなので隣の ${cellText(next)} へ寄せた（ポータルは walk の的にして入る）`);
+    return next;
+  });
+  return said.length ? { args: { ...args, goals: moved }, said: said.join('。') } : { args, said: '' };
+}
+
 export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
+  const { args: moved, said } = besidePortals(ctx.bot, args);
+  const outcome = await goOnce(ctx, moved);
+  return said ? { ...outcome, text: `${outcome.text}。${said}` } : outcome;
+}
+
+async function goOnce(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const edge = (ctx.bot as { edgeGuard?: { allowedDrop?: number } }).edgeGuard;
   const asked = Math.min(10, Math.max(0, Math.floor(args.maxDrop ?? GO_DEFAULTS.maxDrop)));
   if (!edge || asked <= GO_DEFAULTS.maxDrop || strandedPack(ctx.bot, placeNamesOf(ctx.bot, args.canPlace).held)) return goPlanned(ctx, args);

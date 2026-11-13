@@ -10,6 +10,7 @@ import { cellText, guard, letGo, placeText, stopped, StepStopped, wait, waitUnti
 import { meterProgress, withProgress } from './progressUnits.js';
 import { holeUnderCentreWords, magmaAtFootprint } from '../magmaFootprint.js';
 import { flowingAt, stanchStream } from './stanch.js';
+import { isThreatEntity } from '../hostileMobHints.js';
 
 const { goals } = pathfinder;
 
@@ -161,7 +162,7 @@ export function reachFacts(bot: any, from: Cell, to: Cell): string {
 }
 
 /** The walk's movements: no tower, sprint as asked, the safe parkour, no block laid, a drop of three, water at its usual price; the walk's rules over them. */
-export function walkMovements(bot: any, sprint = true): any {
+export function walkMovements(bot: any, sprint = true, avoidPortals = true): any {
   // towers off, sprint as asked, parkour (the safe one), doors (by the walk's rules below), no digging (but leaves, below), the
   // falling-block rule, dig cost, no free motion, swim, a drop of three, water at its usual price, and no block laid.
   const movements = buildMovements(bot, false, sprint, true, false, false, true, 1, false, true, MAX_DROP, 10, false);
@@ -172,11 +173,23 @@ export function walkMovements(bot: any, sprint = true): any {
   movements.maxDropDown = MAX_DROP + 1;
   installWalkRules(movements);
   installGroundSprint(movements);
+  if (avoidPortals) avoidPortalCells(bot, movements);
   return movements;
 }
 
+/**
+ * The route search (mineflayer-pathfinder) takes a portal for open ground (no box, not in blocksToAvoid): a way that crosses one carries the body off mid-walk
+ * (round 9: a go aimed at the landing portal's cell crossed back in 4 s). A portal is entered only as a walk's last point, so for every other way it is a wall of the search.
+ */
+export function avoidPortalCells(bot: any, movements: any): void {
+  for (const name of ['nether_portal', 'end_portal', 'end_gateway']) {
+    const id = bot.registry?.blocksByName?.[name]?.id;
+    if (typeof id === 'number') movements.blocksToAvoid?.add(id);
+  }
+}
+
 /** What a stretch of walking did on the way: the doors it opened, the leaves it broke. */
-export interface WayNotes { opened: Cell[]; leaves: number; /** Where the walk began: the dimension and the feet cell (a dimension change on the way is said against it). */ from?: { dimension: string; cell: Cell }; /** The portal cell the walk was pointed at, when it entered the bottom cell of its column instead. */ pointedAt?: Cell }
+export interface WayNotes { opened: Cell[]; leaves: number; /** Where the walk began: the dimension and the feet cell (a dimension change on the way is said against it). */ from?: { dimension: string; cell: Cell }; /** The portal cell the walk was pointed at, when it entered the bottom cell of its column instead. */ pointedAt?: Cell; /** The cell the body stepped out to when it began inside the portal it was to enter. */ steppedOut?: Cell }
 export function wayWords(notes: WayNotes): string {
   const words: string[] = [];
   if (notes.opened.length) words.push(`扉を開けた ${notes.opened.slice(0, 3).map(cellText).join('・')}${notes.opened.length > 3 ? ` ほか${notes.opened.length - 3}` : ''}`);
@@ -500,8 +513,80 @@ async function walkTo(ctx: StepContext, target: Cell, range: number, notes: WayN
   }
 }
 
-/** How long a body stands in a portal for the dimension to change (a nether portal takes 4 s; a busy server more) before the walk says it did not. */
-const PORTAL_WAIT_MS = 10_000;
+/** How long a body stands in a portal for the dimension to change (a nether portal takes 4 s) before it goes out and in again. */
+const PORTAL_WAIT_MS = 6_000;
+/** A body that arrives stands inside the portal, and its cooldown runs only outside it (round 9: 203 s + 40 s standing in it). It steps out to a floor cell beside, waits this long, and walks in. */
+const PORTAL_COOLDOWN_MS = 1_500;
+/** How many times a walk goes out and in again when 6 s inside do not change the dimension. */
+const PORTAL_RETRIES = 2;
+const PORTAL_STEP_MS = 1_500;
+
+/** An enemy (the body's one rule, isThreatEntity) within `reach` metres. */
+function threatNear(bot: any, reach: number): boolean {
+  const at = bot.entity?.position; if (!at) return false;
+  return (Object.values(bot.entities ?? {}) as any[]).some(entity => {
+    if (!entity || entity === bot.entity || !entity.position || entity.position.distanceTo(at) > reach) return false;
+    const name = String(entity.name ?? '').toLowerCase();
+    try { return !!name && isThreatEntity({ name, type: entity.type, metadata: entity.metadata }, bot.registry?.entitiesByName?.[name]?.type, Date.now(), bot); } catch { return false; }
+  });
+}
+
+const inPortalCell = (bot: any): boolean => { const cell = feetCell(bot); return !!cell && isPortal(readCell(bot, cell.x, cell.y, cell.z)); };
+
+/** Hold the body walking toward a cell (by hand: no route search, one cell) until `done` or `ms`. */
+async function pushToward(ctx: StepContext, cell: Cell, done: () => boolean, ms: number): Promise<void> {
+  const bot = ctx.bot;
+  const middle = new Vec3(cell.x + 0.5, cell.y + 0.4, cell.z + 0.5);
+  const until = Date.now() + ms;
+  try { bot.pathfinder?.stop?.(); bot.pathfinder?.setGoal?.(null); } catch { /* standing */ }
+  try {
+    while (Date.now() < until && !done()) {
+      try { await guard(ctx, Promise.resolve(bot.lookAt(middle, true)), 500); } catch (error) { if (error instanceof StepStopped) throw error; }
+      bot.setControlState('sprint', false);
+      bot.setControlState('forward', true);
+      bot.setControlState('jump', cell.y > (feetCell(bot)?.y ?? cell.y));
+      await wait(ctx, 100);
+    }
+  } finally {
+    try { bot.setControlState('forward', false); bot.setControlState('jump', false); } catch { /* released */ }
+  }
+}
+
+/** Step out of the portal the feet are in, to the nearest cell a body can stand in beside it. The cell, or null when there is none (or the step did not get out). */
+async function stepOutOfPortal(ctx: StepContext): Promise<Cell | null> {
+  const bot = ctx.bot;
+  const here = feetCell(bot);
+  if (!here || !inPortalCell(bot)) return null;
+  const outside = standableBeside(reader(bot), here, 6).find(cell => !isPortal(readCell(bot, cell.x, cell.y, cell.z)));
+  if (!outside) return null;
+  await pushToward(ctx, outside, () => !inPortalCell(bot), PORTAL_STEP_MS);
+  return inPortalCell(bot) ? null : outside;
+}
+
+/** The body is inside a portal of the walk and the dimension has not changed: wait, then out, the cooldown, in again (at most PORTAL_RETRIES times). */
+async function crossByReentering(ctx: StepContext, notes: WayNotes, portalCell: Cell): Promise<StepOutcome> {
+  const bot = ctx.bot;
+  const dimension = notes.from!.dimension;
+  const crossed = () => dimensionOf(bot) !== dimension;
+  const startedAt = Date.now();
+  if (await waitUntil(ctx, crossed, Math.max(1000, Math.min(PORTAL_WAIT_MS, ctx.deadline - Date.now())), 250)) return crossedOutcome(ctx, notes);
+  let outside: Cell | null = null, tries = 0;
+  for (let n = 1; n <= PORTAL_RETRIES; n++) {
+    if (ctx.deadline - Date.now() < PORTAL_COOLDOWN_MS + 2000) break;
+    tries++;
+    outside = (await stepOutOfPortal(ctx)) ?? outside;
+    await wait(ctx, PORTAL_COOLDOWN_MS);
+    if (crossed()) return crossedOutcome(ctx, notes);
+    await pushToward(ctx, portalCell, crossed, 1500);
+    if (await waitUntil(ctx, crossed, Math.max(1000, Math.min(PORTAL_WAIT_MS, ctx.deadline - Date.now())), 250)) {
+      const arrived = await crossedOutcome(ctx, notes);
+      return { ...arrived, text: `${arrived.text}。ポータルの外（${cellText(outside ?? notes.from!.cell)}）から入り直して移った（${Math.round((Date.now() - startedAt) / 1000)}秒）` };
+    }
+  }
+  const inside = feetCell(bot)!;
+  if (!tries) return stopped(bot, 'portal_stays', `${cellText(inside)} のポータルの中に着いたが、まだ次元は変わっていない（残りの秒が足りず、外へ出て入り直す前に終わった。着いた直後の冷却は中に立ち続けても解けない: 一度ポータルの外へ出てから入り直す）`, inside);
+  return stopped(bot, 'portal_stays', `ポータルの外へ出て入り直したが移らない（${tries} 回）。次元は ${dimensionWords(dimension)} のまま（${cellText(inside)}。冷却は外に出ている間だけ進む。外で少し待ってから 1 回入る）`, inside);
+}
 
 /**
  * The End portal is a sheet over lava that a body falls through (it is three cells of `end_portal` inside a ring of frames, whose tops are a step above it): the route search will
@@ -541,10 +626,18 @@ export async function stepIntoEndPortal(ctx: StepContext, cell: Cell): Promise<v
 async function crossedOutcome(ctx: StepContext, notes: WayNotes): Promise<StepOutcome> {
   const bot = ctx.bot;
   try { await wait(ctx, 600); } catch (caught) { if (caught instanceof StepStopped) throw caught; }
-  const end = (() => { try { return feetCell(bot); } catch { return null; } })();
+  let end = (() => { try { return feetCell(bot); } catch { return null; } })();
+  // The body arrives inside the portal, whose cooldown runs only outside it: with nothing hostile near, one cell out, so the next walk into it (or back) is not held.
+  let stepped = '';
+  try {
+    if (end && inPortalCell(bot) && !threatNear(bot, 6)) {
+      const outside = await stepOutOfPortal(ctx);
+      if (outside) { stepped = `。着いた直後にポータルの外 ${cellText(outside)} へ 1 マス出た（中に立ち続けても移れない冷却のため）`; end = feetCell(bot) ?? end; }
+    }
+  } catch (caught) { if (caught instanceof StepStopped) throw caught; }
   const there = dimensionWords(dimensionOf(bot));
   const from = notes.from ? `（${dimensionWords(notes.from.dimension)}の ${cellText(notes.from.cell)} から歩いて入った${notes.pointedAt ? `。指された ${cellText(notes.pointedAt)} は柱の途中なので一番下のポータルのマスから` : ''}）` : '';
-  return { ok: true, text: `${there}へ移った${end ? ` ${cellText(end)}` : ''}${from}`, ...(end ? { at: end } : {}), data: { crossedDimension: true } };
+  return { ok: true, text: `${there}へ移った${end ? ` ${cellText(end)}` : ''}${from}${notes.steppedOut ? `。ポータルの外（${cellText(notes.steppedOut)}）から入り直して移った` : ''}${stepped}`, ...(end ? { at: end } : {}), data: { crossedDimension: true } };
 }
 
 /** Why the walk stops before it starts at a target no body can stand in: the fact, and the cells beside it a body can (none is chosen). */
@@ -600,7 +693,7 @@ async function walkInner(ctx: StepContext, args: WalkArgs): Promise<StepOutcome>
     if (atGoal(bot, goal)) return { ok: true, goal: 'already', code: 'already_there', text: `${cellText(start)} は既に行き先 ${cellText(only)} ${lastRange > 0 ? `の range ${lastRange} 内` : 'そのもの'}（既に済）`, at: start };
   }
   const previous = navigator.movements;
-  navigator.setMovements(walkMovements(bot, sprint));
+  navigator.setMovements(walkMovements(bot, sprint, lastAim?.kind !== 'enter'));
   const notes: WayNotes = { opened: [], leaves: 0, from: { dimension: dimensionOf(bot), cell: start } };
   // The last target is a portal: the walk goes into it, and its end is the dimension changed.
   const portal = lastAim?.kind === 'enter' ? lastAim.name : null;
@@ -608,6 +701,12 @@ async function walkInner(ctx: StepContext, args: WalkArgs): Promise<StepOutcome>
   if (lastAim?.kind === 'enter' && lastAim.redirected) notes.pointedAt = targets[targets.length - 1];
   const withNotes = (text: string) => { const words = wayWords(notes); return words ? `${text}（途中で${words}）` : text; };
   try {
+    // Standing in a nether portal already (a body that has just arrived has its cooldown only outside): out to a floor cell beside, the cooldown, and the walk goes in from there.
+    let steppedOut: Cell | null = null;
+    if (lastAim?.kind === 'enter' && lastAim.name === 'nether_portal' && inPortalCell(bot)) {
+      steppedOut = await stepOutOfPortal(ctx);
+      if (steppedOut) { await wait(ctx, PORTAL_COOLDOWN_MS); notes.steppedOut = steppedOut; }
+    }
     for (let i = 0; i < targets.length; i++) {
       const final = i === targets.length - 1;
       const target = final && lastAim?.kind === 'enter' ? lastAim.cell : targets[i];
@@ -629,13 +728,7 @@ async function walkInner(ctx: StepContext, args: WalkArgs): Promise<StepOutcome>
     try { if (previous) navigator.setMovements(previous); } catch { /* the walk's profile stays */ }
   }
   if (lastAim?.kind === 'enter' && lastAim.name === 'end_portal') await stepIntoEndPortal(ctx, lastAim.cell);
-  if (portal) {
-    const left = Math.max(1000, Math.min(PORTAL_WAIT_MS, ctx.deadline - Date.now()));
-    const changed = await waitUntil(ctx, () => dimensionOf(bot) !== notes.from!.dimension, left, 250);
-    if (changed) return crossedOutcome(ctx, notes);
-    const inside = feetCell(bot)!;
-    return { ok: true, text: `${cellText(inside)} の ${portal}（ポータル）の中に着いた。${Math.round(left / 1000)}秒立っていたが、まだ次元は変わっていない（ネザーポータルは中に 4 秒ほど立つと移る。続けて立つか、読み込みを待つ）`, at: inside };
-  }
+  if (portal) return crossByReentering(ctx, notes, lastAim?.kind === 'enter' ? lastAim.cell : start);
   const end = feetCell(bot)!;
   const metres = Math.hypot(end.x - start.x, end.y - start.y, end.z - start.z);
   const words = wayWords(notes);

@@ -116,9 +116,11 @@ describe('walk into a nether portal (run 37: "一歩ではない: (229,-54,196)�
     const bot = portalBody(portalWorld());
     walksInto(bot, { x: 5, y: -54, z: 0 });
     const outcome = await walkModule.walk(ctxOf(bot, 1500), { to: { x: 5, y: -54, z: 0 }, range: 0.5 });
-    expect(outcome.ok).toBe(true);
-    expect(outcome.text).toContain('(5,-54,0) の nether_portal（ポータル）の中に着いた');
+    // Standing on in the portal is no longer done (round 9: 203 s inside it): with no seconds left to go out and in again it stops and says to go out first.
+    expect(outcome).toMatchObject({ ok: false, reason: 'portal_stays' });
     expect(outcome.text).toContain('まだ次元は変わっていない');
+    expect(outcome.text).toContain('一度ポータルの外へ出てから入り直す');
+    expect(outcome.text).not.toContain('続けて立つ');
   });
 
   it('a block that is no portal is still refused as before (a cell with stone in it)', async () => {
